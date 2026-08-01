@@ -1,0 +1,23 @@
+# Codecov reporting for the scan engine.
+#
+# The gate that FAILS is scripts/coverage.sh, which CI and the manual hook both
+# run and which refuses a tree under the committed floor with no network and no
+# account. This file is the report on top of it: which lines a diff left
+# uncovered, said on the pull request where the diff can still change.
+#
+# Upload is conditional on CODECOV_TOKEN existing, so a fork and a token-less
+# run still get the floor. A gate that only holds where a secret is set is not
+# one anybody should trust the repository to.
+coverage:
+  status:
+    project:
+      default:
+        # The floor already refuses an absolute drop; this catches the slow one
+        # -- a series of changes each a rounding error below the last.
+        target: auto
+        threshold: 0.3
+    patch:
+      default:
+        # New lines arrive with their tests or they arrive uncovered, and the
+        # cheapest moment to say which is before the merge.
+        target: 100

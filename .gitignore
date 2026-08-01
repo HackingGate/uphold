@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+target/
+lcov.info
+.DS_Store
+.pytest_cache/
+.ruff_cache/

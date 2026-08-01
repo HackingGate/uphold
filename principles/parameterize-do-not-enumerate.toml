@@ -1,0 +1,43 @@
+id = "parameterize-do-not-enumerate"
+title = "Parameterize, Do Not Enumerate"
+aliases = ["Combinatorial explosion", "One entity per value", "Calculator with one_plus_one()", "Parameterize Function", "Method-per-argument"]
+kind = "principle"
+status = "seed"
+domains = ["design", "architecture", "interfaces", "APIs", "tools", "AI-harness"]
+summary = "When entities differ only in a value they carry, take the value as an argument; a name per value grows multiplicatively and each copy is a place the behaviour can drift."
+claim = "If two units of code differ only in a constant, they are one unit with an unextracted parameter. Naming the constant in the identifier moves it out of the type system and into the namespace, where the count grows as the product of the value sets rather than their sum, nothing forces the copies to stay consistent, and the next value needs an author instead of a caller."
+problem = "A general capability already exists underneath, and a caller needs one specific value of it, so a helper is written that hardcodes that value and takes its name from it. The archetype is a calculator exposing `one_plus_one()`, `one_plus_two()`, `two_plus_one()`: the operation was understood, the operands were not made arguments, and the surface is now the size of the operand set squared. The same shape at n=1 is a script named for the single key it sends, sitting directly on an interface that already accepts any key -- an explosion that has only emitted its first term, and is harder to see precisely because one file looks cheap."
+rationale = "A parameter is a closed form for an open set: one definition covers every value, including the ones nobody has needed yet. An enumeration is the same set written out, so it costs work proportional to the values, admits no value not written, and gives correctness no single place to live. The asymmetry is the point -- extracting the parameter is bounded work done once, while enumerating is unbounded work deferred to whoever needs the next value."
+applies_when = ["Two or more units differ only by a literal, an enum member, a key, or a path.", "A unit's name encodes an argument rather than the operation.", "A general method exists in a library and the surface exposing it does not accept the same range.", "A one-off helper is about to be written for scaffolding, a probe, a fixture, or a script."]
+does_not_mean = ["Collapse cases whose bodies genuinely differ; identical names with different semantics are worse than duplication.", "Prefer one function with a mode flag over two coherent operations -- a boolean parameter that selects between behaviours is enumeration wearing a signature.", "Widen a domain to whatever a string can hold; the parameter should carry the smallest type that admits every real value and no invented one.", "Treat generated enumerations as a defect: code emitted from a single source has one place to change and does not have the property this principle refuses.", "Delay shipping until the general form is found, when the specific form is honestly one case and is named as one case."]
+benefits = ["The next value costs a call rather than a commit.", "Behaviour has one definition, so a fix cannot land in three of five copies.", "The value becomes typed and visible at the call site instead of hidden in a name.", "The surface stops growing with the data, which keeps naming, documentation, and tests proportionate to the operation."]
+costs = ["Extracting the parameter demands the general form be understood, which is more work than copying at the moment of copying.", "A parameterized entity accepts combinations no enumerated one could express, so illegal states become representable unless the type prevents them.", "Call sites read less specifically: `key(Escape)` says less at a glance than `send_escape()`.", "Generic surfaces are harder to discover than a list of named things, which is why enumerated APIs often feel friendlier."]
+failure_when_overapplied = ["Parameters accumulate on one entity until its signature is the enumeration, now positional and unnamed.", "Distinct operations are merged because their bodies rhyme, and the union carries flags no caller sets together.", "Values become stringly typed to fit one signature, moving errors from compile time to run time.", "The general form is built for values nobody has, which is speculative generality with a parameter list."]
+conflicts_with = ["make-illegal-states-unrepresentable", "least-astonishment"]
+related = ["unix-composability", "single-authoritative-source", "mechanism-policy-separation", "high-cohesion-low-coupling", "information-hiding"]
+review_questions = ["What differs between these units, and is it only a value?", "Does the name contain an argument? If the value moved into the signature, what would the name become?", "Does the layer underneath already accept the range this layer does not, and why does the narrowing exist?", "If the next value is needed tomorrow, does someone call this or edit it?", "If this is deliberately one case of many, where is that written, and what refuses the second copy?"]
+
+[enforcement]
+level = "lint"
+automatable = "partially"
+observable = ["Sibling identifiers sharing a stem and differing by a suffix drawn from a small closed set of literals, numerals, or enum member names.", "Definitions whose bodies are token-identical after normalising one differing literal.", "File names of the form <verb>_<value>.<ext> where a sibling entity takes that value as an argument.", "A public surface whose accepted range is narrower than that of the function it calls, with no validation between them.", "Growth: the count of symbols matching one stem pattern, tracked over time."]
+checks = ["Refuse a set of N or more sibling definitions sharing a stem where the suffixes are drawn from one closed vocabulary; N is a tunable threshold, not a judgment.", "Refuse a new definition whose body is token-identical to an existing one after masking literals.", "Refuse a script or command whose name encodes a value that the API it wraps accepts as an argument.", "Require a wrapper that narrows its callee's domain to declare why, so the narrowing is a decision rather than an omission.", "Report stem families that grew since the last run, which catches the accumulating case that any fixed threshold passes one member at a time."]
+limits = ["A tool cannot tell an accidental enumeration from a real one: protocol opcodes, syscall wrappers, and generated bindings all look identical to this pattern and are correct.", "Whether the extracted parameter would have an honest type is a design judgment, and enforcing extraction without it produces stringly typed surfaces -- a worse outcome the checker cannot see.", "The n=1 case, one helper hardcoding one value, matches no threshold and is where the cost is cheapest to avoid.", "Sibling names may share a stem and be unrelated; stem matching is a proxy for shared meaning, not evidence of it."]
+
+[[sources]]
+title = "A Philosophy of Software Design"
+url = "https://web.stanford.edu/~ouster/cgi-bin/book.php"
+type = "book"
+notes = "Chapter 6, General-Purpose Modules are Deeper. Argues that a somewhat general-purpose interface is usually simpler than the special-purpose one it replaces, and that special-purpose helpers push complexity onto callers."
+
+[[sources]]
+title = "Parameterize Function"
+url = "https://refactoring.com/catalog/parameterizeFunction.html"
+type = "practice"
+notes = "The mechanical refactoring: functions whose bodies differ only by a literal are replaced by one function taking that literal as an argument."
+
+[[sources]]
+title = "Anti-pattern"
+url = "https://en.wikipedia.org/wiki/Anti-pattern"
+type = "documentation"
+notes = "Catalogues combinatorial explosion as the named failure -- entities differing only in the combination of parameters they handle. That name describes the growth at scale; the constraint here also binds the first copy, before there is an explosion to point at."

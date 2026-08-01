@@ -1,0 +1,37 @@
+id = "explicit-unknown"
+title = "Explicit Unknown"
+aliases = ["Distinguish not-violated from not-inspected", "No silent pass", "Report could-not-check"]
+kind = "principle"
+status = "seed"
+domains = ["operations", "security", "data", "AI-harness", "reliability"]
+summary = "A check that could not evaluate must say so, in a state distinct from pass."
+claim = "Any verification, evaluation, or measurement must be able to report that it could not observe the property it claims to judge, and that state must not be collapsed into success."
+problem = "When a checker returns pass because it found nothing, an unreadable file, a missing dependency, or a skipped path becomes indistinguishable from a clean result, and coverage silently disappears while the report stays green."
+rationale = "Pass and could-not-look are different claims about the world. Collapsing them destroys the information needed to notice that a control stopped running, which is the most common way a control ends."
+applies_when = ["A check depends on a tool, credential, network, or path that may be absent.", "Results are aggregated into a status that someone will treat as coverage.", "Coverage is expected to persist across environments and over time."]
+does_not_mean = ["Fail the build for every unavailable optional check.", "Emit an unknown state so broad that no result is ever actionable.", "Treat unknown as failure by default without deciding which error is cheaper.", "Report unknown instead of fixing an environment that should be reliable."]
+benefits = ["Lost coverage becomes visible rather than silently green.", "Environment defects are separable from real violations.", "Aggregate status means what a reader thinks it means."]
+costs = ["Three or more outcome states to model, transport, and render, not two.", "Callers must decide a policy for unknown, which is a real decision.", "More output, some of which is not immediately actionable."]
+failure_when_overapplied = ["Everything uncertain is reported as unknown until the report is noise.", "Unknown is treated as pass by every consumer, restoring the original problem one layer up.", "Teams add retries and suppressions to make unknowns disappear rather than to make checks run."]
+conflicts_with = ["psychological-acceptability", "graceful-degradation"]
+related = ["fail-fast", "observability", "complete-mediation", "fail-safe-defaults", "single-authoritative-source", "informed-consent", "least-astonishment"]
+review_questions = ["What does this check return when its tool, credential, or input is missing?", "Can a reader of the summary tell the difference between clean and not inspected?", "Which paths were skipped in this run, and is that list reported?", "Who decides whether unknown blocks, and is that decision written down or implicit in an exit code?"]
+
+[enforcement]
+level = "test"
+automatable = "yes"
+observable = ["Exit codes and result states emitted by checkers.", "Skipped paths, files, and rules per run.", "Aggregation logic that maps result states onto a single status."]
+checks = ["Require a distinct exit code or result state for infrastructure failure, separate from clean and from violation.", "Assert in tests that a missing dependency does not produce a passing result.", "Report skipped or unreadable inputs per run rather than omitting them.", "Fail aggregation that maps unknown onto pass without a declared policy."]
+limits = ["A tool can see that an unknown state exists; it cannot tell whether the caller's policy for unknown is correct.", "Whether an absent check matters depends on what it was protecting."]
+
+[[sources]]
+title = "Specification for the Extensible Configuration Checklist Description Format (XCCDF)"
+url = "https://csrc.nist.gov/pubs/ir/7275/r3/final"
+type = "standard"
+notes = "Defines rule-result values that keep pass, fail, error, unknown, notapplicable, notchecked, and notselected as separate outcomes rather than a boolean."
+
+[[sources]]
+title = "Static Analysis Results Interchange Format (SARIF)"
+url = "https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html"
+type = "standard"
+notes = "Separates a result's kind (pass, fail, notApplicable, informational, review, open) from its severity level, so an uninspected condition is representable."

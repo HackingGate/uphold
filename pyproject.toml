@@ -1,0 +1,34 @@
+# Packaging exists so a consumer does not need a Rust toolchain.
+#
+# `language: rust` builds the binary from source on first use, which is correct
+# and costs every consumer a compile of ripgrep's search stack. maturin packages
+# the SAME binary as a wheel, so `language: python` installs a prebuilt one --
+# the pattern typos, committed and ruff already use, and the reason those hooks
+# are fast on a cold cache.
+#
+# `bindings = "bin"` means there is no Python module here and nothing imports
+# this package. It is a wheel because a wheel is the artifact pre-commit knows
+# how to fetch for a platform, not because any Python runs.
+
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "uphold"
+description = "One binary for the engineering principles catalog and the rules that enforce it"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.8"
+classifiers = [
+  "Programming Language :: Rust",
+  "Topic :: Software Development :: Quality Assurance",
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/HackingGate/uphold"
+
+[tool.maturin]
+bindings = "bin"
+strip = true

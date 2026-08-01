@@ -1,0 +1,31 @@
+id = "backpressure"
+title = "Backpressure"
+aliases = ["Flow control under load"]
+kind = "tactic"
+status = "seed"
+domains = ["distributed-systems", "reliability", "streaming"]
+summary = "Make overload visible upstream so producers slow, queue within bounds, or shed work intentionally."
+claim = "When consumers cannot keep up, the system should propagate bounded capacity signals upstream rather than accept unbounded work and fail unpredictably later."
+problem = "Unbounded queues convert temporary overload into latency collapse, memory exhaustion, stale work, and cascading failure."
+rationale = "Explicit capacity limits preserve control over where waiting occurs and which work is delayed or rejected."
+applies_when = ["Production rate can exceed consumption rate.", "Work has deadlines, priorities, or bounded value.", "Producers can slow, retry later, or accept rejection."]
+does_not_mean = ["Always block producers synchronously.", "Keep every request in a larger queue.", "Retry rejected work immediately.", "Treat overload as only an infrastructure problem."]
+benefits = ["Bounded resource use.", "Predictable overload behavior.", "Reduced cascading failure."]
+costs = ["Rejected or delayed work.", "Protocol and client complexity.", "Capacity policy must reflect business priority."]
+failure_when_overapplied = ["Backpressure crosses a dependency cycle and deadlocks.", "All callers retry together and create a storm.", "Low-value work blocks critical work in one shared queue."]
+conflicts_with = ["graceful-degradation"]
+related = ["observability", "idempotency", "fail-fast"]
+review_questions = ["Where is overload first measurable?", "What is the maximum useful queue age and size?", "How do callers respond without synchronized retry?"]
+
+[enforcement]
+level = "runtime"
+automatable = "yes"
+observable = ["Queue depth and age.", "Concurrency and rate limits.", "Rejection and retry behavior."]
+checks = ["Enforce bounded queues.", "Test overload and consumer slowdown.", "Require retry delay and jitter after rejection.", "Alert on queue age before memory exhaustion."]
+limits = ["A tool cannot choose the correct admission priority or business shedding policy.", "Static limits require ongoing capacity review."]
+
+[[sources]]
+title = "Reactive Streams"
+url = "https://www.reactive-streams.org/"
+type = "specification"
+notes = "Defines asynchronous stream processing with non-blocking backpressure."

@@ -1,0 +1,31 @@
+id = "high-cohesion-low-coupling"
+title = "High Cohesion, Low Coupling"
+aliases = ["Cohesion and coupling"]
+kind = "principle"
+status = "seed"
+domains = ["architecture", "design"]
+summary = "Keep related responsibilities together and minimize unnecessary dependencies between independently changing parts."
+claim = "Components should contain behavior that belongs to one coherent responsibility and depend on other components through the smallest necessary contracts."
+problem = "Low cohesion scatters one responsibility across many places; high coupling makes one change require coordinated edits elsewhere."
+rationale = "Cohesive components localize knowledge, while limited coupling reduces the blast radius of change."
+applies_when = ["Responsibilities and change patterns can be identified.", "Dependencies can be narrowed without duplicating authority.", "The boundary corresponds to a meaningful lifecycle or ownership unit."]
+does_not_mean = ["No dependencies between components.", "All related code must be physically adjacent.", "A component should contain every operation on a domain entity.", "Small modules are automatically cohesive."]
+benefits = ["Localized reasoning and change.", "Simpler testing.", "Clearer ownership."]
+costs = ["Boundary discovery takes domain knowledge.", "Some duplication may be preferable to shared coupling.", "Overly narrow interfaces can increase coordination."]
+failure_when_overapplied = ["A god object is justified as cohesive because everything touches one entity.", "Excessive fragmentation turns local calls into distributed coordination.", "Shared abstractions are created around accidental similarity."]
+conflicts_with = ["unix-composability", "separation-of-concerns"]
+related = ["information-hiding", "mechanism-policy-separation", "parameterize-do-not-enumerate"]
+review_questions = ["Which responsibility unifies this component?", "Which dependencies are essential rather than convenient?", "Do recent changes repeatedly cross this boundary?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Dependency graph density.", "Change coupling in version history.", "Public API breadth."]
+checks = ["Flag dependency cycles.", "Report modules that change together unusually often.", "Review broad utility modules with many unrelated clients."]
+limits = ["Metrics can identify candidates but cannot prove semantic cohesion.", "A high fan-in component may be an intentional stable abstraction."]
+
+[[sources]]
+title = "Guide to the Software Engineering Body of Knowledge"
+url = "https://www.computer.org/education/bodies-of-knowledge/software-engineering"
+type = "body-of-knowledge"
+notes = "Software design knowledge areas cover cohesion, coupling, modularity, and decomposition."

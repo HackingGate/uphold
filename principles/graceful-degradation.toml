@@ -1,0 +1,31 @@
+id = "graceful-degradation"
+title = "Graceful Degradation"
+aliases = ["Degraded mode", "Partial availability"]
+kind = "principle"
+status = "seed"
+domains = ["reliability", "operations", "product"]
+summary = "Preserve truthful, bounded, useful service when full functionality is unavailable."
+claim = "When a dependency or resource fails, retain a clearly identified subset of safe and useful behavior rather than presenting total failure or false success."
+problem = "All-or-nothing systems lose all user value when a nonessential component fails."
+rationale = "Separating essential from optional capabilities allows the system to preserve value while containing uncertainty and resource pressure."
+applies_when = ["A useful subset can be served without violating safety or truthfulness.", "The degraded state can be detected and communicated.", "Recovery and reconciliation are defined."]
+does_not_mean = ["Hide failures or return stale data as current.", "Continue unsafe side effects.", "Make degraded behavior permanent by neglecting recovery.", "Pretend all dependencies are optional."]
+benefits = ["Higher practical availability.", "Smaller incident impact.", "Controlled use of stale or partial data where acceptable."]
+costs = ["More states and test cases.", "Potentially inconsistent user experience.", "Reconciliation complexity after recovery."]
+failure_when_overapplied = ["The system silently serves misleading data.", "Every feature gains a poorly tested fallback.", "Operators cannot tell degraded mode from normal operation."]
+conflicts_with = ["fail-fast", "single-authoritative-source", "least-privilege", "fail-safe-defaults", "explicit-unknown", "least-astonishment"]
+related = ["observability", "backpressure", "defense-in-depth"]
+review_questions = ["Which capabilities remain safe and truthful without this dependency?", "How is degraded mode visible to users and operators?", "What state must be reconciled after recovery?"]
+
+[enforcement]
+level = "runtime"
+automatable = "partially"
+observable = ["Dependency health.", "Feature-state transitions.", "Response metadata indicating freshness or degradation."]
+checks = ["Test declared dependency failures.", "Require degraded responses to expose status and data freshness.", "Verify recovery and reconciliation paths."]
+limits = ["A machine cannot decide whether the reduced service remains genuinely useful or acceptable.", "User communication quality requires product judgment."]
+
+[[sources]]
+title = "Site Reliability Engineering"
+url = "https://sre.google/sre-book/table-of-contents/"
+type = "book"
+notes = "Production reliability practices including handling overload, failures, and service objectives."

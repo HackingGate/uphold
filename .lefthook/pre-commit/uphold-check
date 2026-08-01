@@ -1,0 +1,15 @@
+#!/bin/sh
+# The declaration check, reachable from a lefthook consumer.
+#
+# Everything else this repository publishes is the `uphold` binary, which a
+# consumer puts on PATH. uphold_check.py is not in the binary, so it has to
+# be reached IN THIS REPOSITORY -- and lefthook's `scripts` is the one mechanism
+# that resolves against the remote clone rather than against the consumer's own
+# tree. Hence a wrapper: lefthook can only run a file it finds under source_dir,
+# and the checker is two levels up from here.
+#
+# The working directory is the CONSUMING repository, which is what the checker
+# reads. Only the script's own location comes from the clone.
+set -eu
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+exec python3 "$here/../../uphold_check.py" "$@"

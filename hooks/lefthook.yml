@@ -1,0 +1,80 @@
+# What a lefthook consumer includes.
+#
+# lefthook has no manifest format of its own to publish hooks in, the way
+# pre-commit and prek share `.pre-commit-hooks.yaml`. What it has is `remotes`:
+# a consumer names this repository and this file, lefthook clones it and merges
+# the result into their own `lefthook.yml`. So this file is the lefthook
+# equivalent of that manifest, and it is kept in step with it by the CI matrix
+# that runs all three runners over the same consumer tree.
+#
+#   # lefthook.yml, in the consuming repository
+#   remotes:
+#     - git_url: https://github.com/HackingGate/uphold
+#       ref: v1.0.0
+#       configs:
+#         - hooks/lefthook.yml
+#
+# Then `lefthook install`.
+#
+# The one difference from the other two runners is where the binary comes from.
+# pre-commit and prek build it themselves, because `language: rust` is part of
+# their manifest contract; lefthook runs commands and has no such contract, so
+# `uphold` must be on PATH:
+#
+#   cargo install --git https://github.com/HackingGate/uphold --tag v1.0.0
+#
+# The names below are prefixed `uphold-` on purpose. A remote config is
+# merged into the consumer's own, and two commands sharing a name under one hook
+# is one command silently replacing the other.
+
+pre-commit:
+  parallel: true
+  commands:
+    uphold-scan:
+      run: uphold scan
+    uphold-guard:
+      run: uphold guard --stage pre-commit
+  # The declaration check is the one part of this repository that is not the
+  # binary, so PATH cannot reach it. lefthook resolves `scripts` against the
+  # remote clone rather than the consumer's tree, which is the only mechanism
+  # here that can reach a file in THIS repository -- so the checker arrives as a
+  # script and .lefthook/pre-commit/uphold-check is a shim onto it.
+  scripts:
+    "uphold-check":
+      runner: sh
+
+commit-msg:
+  commands:
+    uphold-scan-text:
+      run: uphold scan --text {1}
+    uphold-guard:
+      run: uphold guard --stage commit-msg --message {1}
+
+pre-merge-commit:
+  commands:
+    uphold-guard:
+      run: uphold guard --stage pre-merge-commit
+
+pre-push:
+  commands:
+    # `use_stdin: true` is not optional here and its absence does not look like
+    # a bug. lefthook runs a command under a pseudo-TTY by default, and that
+    # stdin never closes -- so a reader either hangs or, worse, sees nothing and
+    # calls it an empty push. The binary refuses that third case rather than
+    # falling through to the working tree, but the refusal is a failed push and
+    # this line is what prevents it.
+    uphold-guard:
+      use_stdin: true
+      run: uphold guard --stage pre-push --remote {1} --remote-url {2}
+
+# The stages that are too slow to sit in front of a commit: the tree-wide name
+# scans and the pin check each ask the forge over the network, once per distinct
+# name or pin. `lefthook run uphold-manual` is how CI and a scheduled run
+# reach them, which is what turns "whoever pushes next finds out" into something
+# a schedule finds on its own.
+uphold-manual:
+  commands:
+    uphold-scan:
+      run: uphold scan
+    uphold-guard:
+      run: uphold guard --stage manual

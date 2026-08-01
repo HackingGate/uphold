@@ -1,0 +1,99 @@
+# lefthook configuration -- fast, cross-language Git hooks manager.
+#
+# Install:  go install github.com/evilmartians/lefthook@latest
+#           or via npm/cargo/homebrew: https://github.com/evilmartians/lefthook
+# Setup:    lefthook install
+# Run all:  lefthook run pre-commit --all-files
+
+pre-commit:
+  parallel: true
+  commands:
+    catalog-validate:
+      run: python3 scripts/validate.py
+    catalog-reference-current:
+      run: python3 scripts/build_reference.py --check
+    review-current:
+      run: python3 uphold_check.py --review --check
+    catalog-tests:
+      run: python3 -m unittest discover -s tests
+    uphold-check:
+      run: python3 uphold_check.py
+    content-policy:
+      run: cargo run --quiet -- scan
+    guards:
+      run: cargo run --quiet -- guard --stage pre-commit
+    engine-tests:
+      run: cargo test --quiet
+    # The lint profile lives in Cargo.toml, so all three runners hold the crate
+    # to the same set. What differs is when a contributor hears about it: a
+    # profile only CI reads is one whose first reader is a failed push.
+    engine-fmt:
+      run: cargo fmt --check
+    engine-clippy:
+      run: cargo clippy --quiet --all-targets
+    # Report rather than fix, which is the one difference from the ruff hook the
+    # other two runners get: pre-commit and prek own the staged file after a
+    # hook rewrites it, and a linter that edits a file lefthook has already
+    # handed to git is a commit that does not contain what was linted.
+    ruff-check:
+      glob: "*.py"
+      run: ruff check {staged_files}
+    ruff-format:
+      glob: "*.py"
+      run: ruff format --check {staged_files}
+    actionlint:
+      glob: ".github/workflows/*.{yml,yaml}"
+      run: actionlint {staged_files}
+    # The two shell files this repository ships: the consumer harness and the
+    # wrapper a lefthook consumer runs out of the clone. The brace pattern is
+    # what keeps this hook and the pre-commit one asking the same question --
+    # `*.sh` alone would miss the wrapper, which has no extension.
+    shellcheck:
+      glob: "{scripts/*.sh,.lefthook/pre-commit/*}"
+      run: shellcheck {staged_files}
+    bashate:
+      glob: "{scripts/*.sh,.lefthook/pre-commit/*}"
+      run: bashate --ignore E006 {staged_files}
+
+# Not git hooks. lefthook has no equivalent of pre-commit's manual stage, so the
+# two checks that are too slow or too host-dependent to sit in front of a commit
+# are named groups instead: `lefthook run preflight` and `lefthook run coverage`.
+# Same entry points as the manual hooks in .pre-commit-config.yaml, so the three
+# runners are still answering one question each.
+preflight:
+  commands:
+    deps-check:
+      run: scripts/deps.sh check
+
+coverage:
+  commands:
+    coverage:
+      run: scripts/coverage.sh
+
+# One `git ls-remote` per pinned repo, so not on every commit. A pin naming a
+# tag that was never cut fails at hook-init, before any hook runs, which is why
+# no hook can report it after the fact -- this one asks before the pin ships.
+commit-msg:
+  commands:
+    guards:
+      run: cargo run --quiet -- guard --stage commit-msg --message {1}
+
+pre-merge-commit:
+  commands:
+    guards:
+      run: cargo run --quiet -- guard --stage pre-merge-commit
+
+pre-push:
+  commands:
+    hook-pins-resolve:
+      run: python3 scripts/check_hook_pins.py
+    # `use_stdin: true`, which this was missing. lefthook runs a command under a
+    # pseudo-TTY by default and that stdin never closes, so git's ref lines
+    # never arrived and the guards that read the pushed range were asked about
+    # a push they could not see. They now refuse rather than fall through to
+    # the working tree, so the omission is a failed push instead of a green
+    # tick over the wrong tree -- but it is still an omission, and this repo
+    # had it in the file it publishes as the example.
+    guards:
+      use_stdin: true
+      run: cargo run --quiet -- guard --stage pre-push --remote {1} --remote-url {2}

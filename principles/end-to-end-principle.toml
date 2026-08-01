@@ -1,0 +1,31 @@
+id = "end-to-end-principle"
+title = "End-to-End Principle"
+aliases = ["End-to-end arguments in system design"]
+kind = "principle"
+status = "seed"
+domains = ["distributed-systems", "security", "reliability"]
+summary = "Place correctness guarantees at the endpoint that has enough context to verify them; lower layers may only assist."
+claim = "Functions requiring application-level knowledge should be implemented or verified end to end, even when lower layers provide performance or reliability assistance."
+problem = "A lower layer may report success while the user-level objective still fails because only endpoints know the complete meaning and state."
+rationale = "Only the endpoints possess enough context to establish certain guarantees such as complete transfer, authorization intent, or business-level deduplication."
+applies_when = ["The guarantee depends on application semantics.", "Intermediate layers cannot observe all relevant state.", "Lower-layer checks can be treated as optimization rather than proof."]
+does_not_mean = ["Move every function to the application.", "Remove checks, retries, or integrity mechanisms from lower layers.", "Ignore shared infrastructure guarantees.", "Endpoints should trust no component."]
+benefits = ["Guarantees align with user-level outcomes.", "Reduced false confidence from partial checks.", "Clearer responsibility for final verification."]
+costs = ["Duplicate checking across layers.", "Additional endpoint complexity and latency.", "Some failures are detected later."]
+failure_when_overapplied = ["Applications reimplement infrastructure badly.", "Shared controls are abandoned in favor of inconsistent endpoint logic.", "End-to-end validation is claimed but cannot observe an external side effect."]
+conflicts_with = ["unix-composability"]
+related = ["idempotency", "least-privilege", "single-authoritative-source"]
+review_questions = ["Which layer has enough context to prove the actual objective?", "Is a lower-layer guarantee being mistaken for end-to-end correctness?", "What evidence reaches the endpoint after partial failure?"]
+
+[enforcement]
+level = "test"
+automatable = "partially"
+observable = ["Endpoint assertions and acknowledgements.", "Lower-layer versus application-level checks.", "Business outcome after injected failures."]
+checks = ["Test the complete user-level operation under partial failures.", "Require final verification at the layer that owns the semantic contract.", "Distinguish transport acknowledgement from business completion."]
+limits = ["The correct endpoint is a semantic boundary, not necessarily a network endpoint.", "A tool cannot infer the user-level objective from protocol success alone."]
+
+[[sources]]
+title = "End-to-End Arguments in System Design"
+url = "https://web.mit.edu/Saltzer/www/publications/endtoend/endtoend.pdf"
+type = "paper"
+notes = "Foundational statement of the end-to-end argument."

@@ -1,0 +1,37 @@
+id = "psychological-acceptability"
+title = "Psychological Acceptability"
+aliases = ["Usable security", "A control people can keep", "Human interface must not obstruct"]
+kind = "principle"
+status = "seed"
+domains = ["security", "operations", "product", "organization", "AI-harness"]
+summary = "A control that people cannot routinely comply with is a control that gets bypassed."
+claim = "Protection mechanisms must be easy enough to apply correctly and routinely that the user's mental model of the protection matches what the mechanism actually does; otherwise compliance decays and the mechanism's real coverage falls to zero."
+problem = "Controls are evaluated by whether they would stop the attack if applied, and not by whether they survive daily use, so the strongest-looking control is often the first one disabled wholesale."
+rationale = "Enforcement coverage is the product of the rule's strength and the rate at which people leave it on. A rule nobody can keep green is switched off entirely rather than per case, which removes the cases it was right about too."
+applies_when = ["The control sits on a path a person or agent traverses many times a day.", "Bypassing is possible and cheaper than complying.", "The control produces failures on legitimate work, not only on the case it targets."]
+does_not_mean = ["Weaken a control because someone complained once.", "Accept every request for an exemption as evidence of unacceptability.", "Treat convenience as equal in weight to the harm being prevented.", "Assume a control is acceptable because its authors tolerate it."]
+benefits = ["Coverage that persists instead of eroding.", "Fewer standing exemptions and blanket overrides.", "Failure output that leads to a fix rather than to a disabled check."]
+costs = ["Escape hatches, baselines, and staged adoption are extra machinery to build and maintain.", "Some genuine violations pass while adoption is staged.", "Acceptability is measured over time, so the evidence arrives late."]
+failure_when_overapplied = ["Every friction is treated as a defect until the control no longer refuses anything.", "Exemption paths become the normal path.", "The rule is softened rather than scoped, so it now agrees with its opposite."]
+conflicts_with = ["defense-in-depth", "fail-safe-defaults", "complete-mediation", "informed-consent"]
+related = ["least-privilege", "graceful-degradation", "explicit-unknown", "reversible-decisions", "informed-consent", "least-astonishment"]
+review_questions = ["How often will this fire on legitimate work, and what does the person do next?", "Is the cheapest response to a failure a fix, or turning the check off?", "Is there a scoped way in for a tree that does not yet comply, such as a baseline or a ratchet?", "Six months from now, what evidence would show this is still enabled everywhere it was installed?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Suppression comments, skip directives, and disabled hooks in the tree.", "Rate of failures on unrelated changes.", "Growth of exemption or baseline files."]
+checks = ["Report the count and location of suppressions per rule.", "Fail when a rule's suppressions grow instead of shrink over a window.", "Track how many repositories still have the hook installed after adoption."]
+limits = ["A tool can count bypasses; it cannot tell an unreasonable control from a lazy team.", "Whether the remaining friction is worth the harm prevented is a judgment."]
+
+[[sources]]
+title = "The Protection of Information in Computer Systems"
+url = "https://doi.org/10.1109/PROC.1975.9939"
+type = "paper"
+notes = "States psychological acceptability: the human interface must be designed for ease of use so users routinely and automatically apply the protection correctly."
+
+[[sources]]
+title = "Users Are Not The Enemy"
+url = "https://doi.org/10.1145/322796.322806"
+type = "paper"
+notes = "Field evidence that unusable security mechanisms are circumvented rather than followed."

@@ -1,0 +1,31 @@
+id = "fail-fast"
+title = "Fail Fast and Explicitly"
+aliases = ["Fail fast", "Fail loudly"]
+kind = "principle"
+status = "seed"
+domains = ["reliability", "interfaces", "development"]
+summary = "Detect invalid assumptions near their source and stop before corrupted state propagates."
+claim = "When continuing cannot satisfy the contract safely, detect the condition at the earliest reliable boundary and return an explicit failure with evidence."
+problem = "Latent errors travel through the system, corrupt state, and surface far from the original cause."
+rationale = "Early, explicit failure preserves causal locality and prevents downstream work from treating invalid state as trustworthy."
+applies_when = ["The violated condition can be detected reliably.", "Continuing would corrupt state, mislead callers, or increase recovery cost.", "A caller can handle or escalate the failure."]
+does_not_mean = ["Crash every process on any error.", "Expose internal implementation details to users.", "Reject work when graceful degradation is safe.", "Treat transient dependency failure as permanent invalidity."]
+benefits = ["Smaller error propagation.", "More actionable diagnostics.", "Simpler invariants downstream."]
+costs = ["Lower apparent availability.", "Callers must implement failure handling.", "Overly strict checks can reject recoverable work."]
+failure_when_overapplied = ["A noncritical feature takes down the whole service.", "Validation duplicates across layers and disagrees.", "Transient problems trigger irreversible aborts."]
+conflicts_with = ["graceful-degradation"]
+related = ["make-illegal-states-unrepresentable", "observability", "idempotency", "explicit-unknown", "fail-safe-defaults"]
+review_questions = ["Is the failure detected at the boundary that owns the invariant?", "Would continuing preserve a truthful and safe contract?", "Does the error include enough evidence for recovery?"]
+
+[enforcement]
+level = "test"
+automatable = "partially"
+observable = ["Validation paths.", "Error handling and propagation.", "Invariant checks before side effects."]
+checks = ["Test invalid inputs at ownership boundaries.", "Reject swallowed errors and ambiguous success values.", "Require explicit handling of partial or uncertain outcomes."]
+limits = ["The correct choice between failure and degradation depends on product and safety context.", "Static analysis cannot determine whether an error is actionable."]
+
+[[sources]]
+title = "Fail Fast"
+url = "https://www.martinfowler.com/ieeeSoftware/failFast.pdf"
+type = "essay"
+notes = "A concise articulation of detecting failures close to their source."

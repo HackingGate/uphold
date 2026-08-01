@@ -1,0 +1,281 @@
+# Content policy for this repository.
+#
+# One `[rule.<id>]` section per rule: the id is the section header, and
+# `files.*`, `git.*` and `command.*` live inside it as dotted keys. Nothing
+# about a rule lives outside its header's scope, so a sub-table cannot drift
+# away from its rule during an edit -- and a duplicate id is a TOML parse
+# error rather than a runtime check.
+
+# Default script constraint for every file no scoped rule selects. Values are
+# Unicode script names, spelled as regex engines spell them: "Latin" is exactly
+# what \p{Script=Latin} matches.
+allowed_scripts = ["Latin"]
+
+[inherit]
+# The shared process-residue set -- conflict markers, home paths, dated and
+# status metadata, tracker and thread references, private data paths --
+# compiled into the binary rather than fetched from a pinned checkout of
+# another repository. `uphold rules --set process-residue` prints its
+# rules.
+sets = ["process-residue", "host-identity", "broken-links"]
+
+# The engine's own tests write Japanese, because the two rules they exercise --
+# which scripts a path may use, and which variation selectors are earned -- can
+# only be tested by carrying the script they are about. Named paths rather than
+# a global grant, which would admit Japanese everywhere and switch off the very
+# check the fixtures exist to test. Latin is in the list because this list is
+# the WHOLE truth for these paths -- it replaces the top-level declaration
+# rather than adding to it.
+[rule.engine-test-fixtures]
+allowed_scripts = ["Latin", "Han", "Hiragana", "Katakana"]
+files.include = ["tests", "src/guard/unicode.rs"]
+
+# The one kind that ships fully implemented, documented, and exercised by
+# nothing. A rule kind with no instance anywhere is indistinguishable from a
+# rule kind that does not work, which is the same argument the link kind was
+# dogfooded under.
+#
+# What it requires is real and nothing else here checks it. A workflow with no
+# top-level `permissions:` block runs with whatever the repository's default
+# grant is, and the default for a repository that has never been changed is
+# write access to contents. `least-privilege` is a record in this very catalog;
+# leaving the token's scope to a repository-wide setting is the failure it
+# describes, and neither actionlint nor any hygiene rule looks for it.
+[rule.workflow-declares-permissions]
+message = """
+A GitHub Actions workflow declares no `permissions:` block, so its GITHUB_TOKEN
+gets the repository's default grant rather than the scopes the workflow needs.
+Add a top-level `permissions:` block naming the minimum -- `contents: read` for
+a workflow that only checks out and tests.
+"""
+require_regexp = '^permissions:'
+files.include = [".github/workflows"]
+files.glob = ["*.yml", "*.yaml"]
+
+# A tracked doc states what holds; the story of how it came to hold lives in
+# git history and the tracker. Prose that says a name became another name goes
+# stale the day either name moves again, and nothing marks it stale.
+#
+# Only the cheap, high-precision slice is mechanized. Words deliberately NOT in
+# the pattern, each kept out by a present-tense use in REFERENCE.md today:
+# `replaces` (a scoped list replaces the top-level declaration -- semantics,
+# not history), `no longer` (a baselined path the rule no longer selects),
+# `becomes` (ordinary spec prose). Arrow tables and history phrased in the
+# present tense are not decidable at acceptable false-positive cost; that
+# remainder stays with the review tier.
+#
+# No document is carved out. There was one -- the page that mapped old
+# spellings to new -- and it went when the migration path did: nothing here
+# reads an old spelling, so no page has to explain one. The calibration lives
+# as a test beside the engine's pattern tests, which carries a matching fixture
+# and the excluded words.
+[rule.no-before-after-narrative]
+message = """
+State what holds, not what it replaced. A tracked doc that says a name became
+another name goes stale the day either name moves again, and the story of the
+change belongs in git history and the tracker rather than in the page.
+"""
+regexp = '(?i)\b(?:became|was renamed|renamed to|formerly|previously (?:called|named|spelled)|used to be)\b'
+files.glob = ["*.md"]
+files.exclude = ["CHANGELOG*", "**/tests/**", "**/test/**"]
+
+# ---------------------------------------------------------------------------
+# Guards -- what git is about to do.
+#
+# A content rule reads the tree and could run at any moment. A guard reads an
+# ACT: the message about to be recorded, the identity about to be stamped on it,
+# the range about to be pushed. Same `[rule.<id>]` section and the same one id
+# namespace, so a claim names a guard exactly as it names a content rule.
+#
+# There was no configuration file for these at all -- allow-lists, visibility
+# pins and owner pins were environment variables, and the per-owner prefix
+# scheme existed only because environment was the only surface while one machine
+# holds several workspaces. A per-workspace file IS the workspace scope.
+# ---------------------------------------------------------------------------
+
+[rule.prevent-ai-author]
+builtin = "prevent-ai-author"
+git.hooks = ["commit-msg"]
+
+[rule.prevent-unusual-unicode]
+builtin = "prevent-unusual-unicode"
+git.hooks = ["commit-msg"]
+
+[rule.prevent-unusual-unicode-in-files]
+builtin = "prevent-unusual-unicode-in-files"
+git.hooks = ["pre-commit", "pre-merge-commit", "pre-push", "manual"]
+
+[rule.no-merge-commit]
+builtin = "no-merge-commit"
+git.hooks = ["pre-commit"]
+
+[rule.no-local-merge]
+builtin = "no-local-merge"
+git.hooks = ["pre-merge-commit"]
+
+[rule.no-stale-hook-pins]
+builtin = "no-stale-hook-pins"
+git.hooks = ["pre-push", "manual"]
+
+[rule.prevent-public-push]
+builtin = "prevent-public-push"
+# Pinned rather than derived. Deriving the owner from `origin` is tautological
+# for the one remote most likely to be wrong: repointing origin at a public
+# upstream -- the exact accident this guard exists to prevent -- also repoints
+# the allow-list, so the push is permitted and the guard exits 0.
+owner = "HackingGate"
+git.hooks = ["pre-push"]
+
+[rule.no-private-repo-names]
+builtin = "no-private-repo-names"
+# `visibility` is declared rather than looked up, and it is a settled fact
+# rather than a placeholder: publication was considered and declined, so this
+# repository stays private and the guard stays out of scope.
+#
+# Declared rather than looked up because a lookup makes every commit wait on a
+# forge, and because the answer is a decision rather than a reading. The line to
+# change if that decision is revisited is this one -- and the check to run
+# before changing it is `uphold audit --for-publication`, which asks what a
+# flip would republish under the visibility it is flipping TO. Every guard here
+# asks "is the target public NOW", so nothing else re-examines a name that was
+# correctly allowed at write time.
+#
+# It has an answer today, and it is not clean: two retained pull-request head
+# refs carry a private organisation's name, and no history rewrite reaches them.
+visibility = "private"
+# Declared, not looked up. A forge lookup answers for `owner/repo`; these are
+# organisations, and the form that got past a hand audit of this repository was
+# an organisation named on its own, in a sentence about what it carries. A
+# declaration is also the only thing that can answer for an owner whose
+# existence is itself the thing not to disclose.
+#
+# Read from OUTSIDE the repository, which is the whole point: a list of names
+# that must not be published cannot live in a file that is about to be
+# published, and neither can a command string with a name written into it. The
+# rule stays committed and reviewable; the names do not travel with it. A
+# missing file is an error rather than an empty list, because a rule with no
+# owners refuses nothing and would report a clean tree.
+private_owners_from = "cat ${XDG_CONFIG_HOME:-$HOME/.config}/principles/private-owners"
+git.hooks = ["commit-msg"]
+
+[rule.no-private-repo-names-staged]
+builtin = "no-private-repo-names-staged"
+visibility = "private"
+git.hooks = ["pre-commit"]
+
+[rule.no-private-repo-names-in-files]
+builtin = "no-private-repo-names-in-files"
+visibility = "private"
+# Not pre-commit: this asks the forge about every distinct name anywhere in the
+# tree, not the few a commit touches, and a check that adds twenty seconds to
+# every commit is one somebody deletes. That trade-off is a line in this file
+# now rather than a `match` arm in the binary.
+git.hooks = ["pre-merge-commit", "pre-push", "manual"]
+
+# ---------------------------------------------------------------------------
+# Checkers -- the contract any executable can satisfy.
+#
+# The subject on stdin, its kind in UPHOLD_KIND, 0 to pass, 1 to refuse, 2
+# to say it could not look. cmd-shims documented this and it is the only
+# checker contract now.
+#
+# Both of these are this binary consulting itself, which is the point: the rule
+# that judges a commit message and the rule that judges a pull-request body are
+# the same rule, and a second implementation of it would agree until it did not.
+# ---------------------------------------------------------------------------
+
+[rule.no-published-host-identity]
+message = """
+Use neutral placeholders -- example-user, example-host, example.test,
+/srv/example -- instead of values read off the machine you are standing on.
+"""
+exec = "uphold scan --text -"
+# Every command a shim collects a subject from. A hostname reaches a public
+# place through a pull-request body, through a branch name in a push, and
+# through a package's metadata, and none of those is more forgiving than the
+# others.
+command.before = ["gh", "glab", "git push", "npm publish"]
+
+[rule.no-published-markers]
+message = """
+A pull-request body reaches a public API without passing a single hook, which
+is the whole reason this seam exists.
+"""
+exec = "uphold guard --text -"
+# `gh` and `glab` only, and this is what the scoping is for. The three
+# text-capable guards read prose somebody wrote -- an authorship trailer, an
+# unusual character, a private repository's name. A branch name on `git push`
+# carries none of those and a package directory on `npm publish` is not prose
+# at all, so before this field existed both were asked anyway, and every answer
+# was a pass over a subject the rule had nothing to say about.
+command.before = ["gh", "glab"]
+
+# ---------------------------------------------------------------------------
+# Shims -- what a command is about to publish.
+#
+# The bash specs were mostly data already: SPEC_MATCH and the SPEC_*_FLAGS were
+# space-separated lists. Only `spec_target` and `spec_in_scope` carried logic,
+# and both became built-ins.
+#
+# Shims keep `[[shim]]`: their fields are flat, with no sub-tables to drift,
+# so the ambiguity the rule sections existed to end never applied here.
+# ---------------------------------------------------------------------------
+
+# Subcommands are NAMED rather than pattern-matched. A shim that guesses which
+# ones carry text is one release away from either missing a new one in silence
+# or blocking one that never carried any, and only the first failure is visible.
+
+[[shim]]
+command = "gh"
+match = [
+  "pr:create", "pr:edit", "pr:comment", "pr:review",
+  "issue:create", "issue:edit", "issue:comment",
+  "release:create", "release:edit",
+  "gist:create",
+]
+text_flags = ["-t", "--title", "-b", "--body", "-n", "--notes", "-d", "--description"]
+file_flags = ["-F", "--body-file", "--notes-file"]
+target_flags = ["-R", "--repo"]
+# --fill takes the body from commit messages, which commit-msg already guarded
+# on the way in. Checking it again would refuse text that is already published
+# and cannot be edited, which teaches the wrong lesson about the guard.
+skip_flags = ["--fill", "--fill-first", "--fill-verbose"]
+web_flags = ["-w", "--web"]
+editor_env = "GH_EDITOR"
+target = "forge-repo"
+scope = "public-target"
+
+[[shim]]
+command = "glab"
+match = ["mr:create", "mr:update", "mr:note", "issue:create", "issue:update", "issue:note"]
+text_flags = ["-t", "--title", "-d", "--description", "-m", "--message"]
+file_flags = ["--description-file"]
+target_flags = ["-R", "--repo"]
+editor_env = "GLAB_EDITOR"
+target = "forge-repo"
+scope = "public-target"
+
+# The case that proves a shim is not just a flag table. git publishes text no
+# git hook is in a position to read: a branch name goes onto a public forge in
+# the ref list, in the pull request it suggests and in every notification, and
+# pre-push is handed the refs but the guards that read them judge the
+# DESTINATION and never the name. Its text is positional, so it needs its own
+# collector rather than a fork of the shim.
+[[shim]]
+command = "git"
+match = ["push:*"]
+target = "git-remote"
+scope = "public-target"
+collect = "git-refs"
+
+# And the case that proves `scope` is an enum. `npm publish` puts a directory
+# on a registry the whole world can read: there is no repository, no owner and
+# no visibility endpoint in that sentence. What decides is a field in
+# package.json and whether the registry is the public one.
+[[shim]]
+command = "npm"
+match = ["publish:*", "pack:*"]
+target_flags = ["--registry"]
+skip_flags = ["--dry-run"]
+scope = "public-registry"
+collect = "npm-package"

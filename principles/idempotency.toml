@@ -1,0 +1,31 @@
+id = "idempotency"
+title = "Idempotency"
+aliases = ["Idempotent operation"]
+kind = "principle"
+status = "seed"
+domains = ["distributed-systems", "APIs", "AI-tools"]
+summary = "Make repetition safe when callers cannot know whether an earlier attempt took effect."
+claim = "For operations likely to be retried, repeated application with the same intent should have the same externally observable effect as one successful application."
+problem = "Timeouts and partial failures leave callers uncertain whether side effects occurred, so retries can duplicate payments, messages, or state transitions."
+rationale = "Idempotent semantics separate delivery retries from business duplication and make recovery from uncertain outcomes safer."
+applies_when = ["Operations cross process or network boundaries.", "Timeouts or retries are possible.", "The caller can provide stable operation identity or the operation is naturally idempotent."]
+does_not_mean = ["The operation executes only once.", "Every response is byte-for-byte identical.", "Duplicate requests are free.", "Exactly-once delivery is guaranteed."]
+benefits = ["Safe retry behavior.", "Simpler recovery from ambiguous outcomes.", "Reduced duplicate side effects."]
+costs = ["Deduplication state and retention.", "Key design and scope complexity.", "Potential storage or contention overhead."]
+failure_when_overapplied = ["Keys are reused across distinct business operations.", "Deduplication expires before realistic retries end.", "A nominally idempotent wrapper calls non-idempotent downstream effects."]
+conflicts_with = ["fail-fast"]
+related = ["observability", "backpressure", "end-to-end-principle"]
+review_questions = ["What does the caller know after a timeout?", "What stable identity distinguishes one intent from another?", "Are downstream side effects covered by the same idempotency boundary?"]
+
+[enforcement]
+level = "test"
+automatable = "yes"
+observable = ["Operation keys.", "State changes across repeated requests.", "Downstream calls made during retries."]
+checks = ["Repeat the same request and compare externally observable state.", "Require idempotency keys for retryable side-effecting endpoints.", "Test timeout after commit but before response."]
+limits = ["Tests must define the correct business scope of sameness.", "Natural idempotency may not require stored keys."]
+
+[[sources]]
+title = "RFC 9110: HTTP Semantics"
+url = "https://www.rfc-editor.org/rfc/rfc9110"
+type = "standard"
+notes = "Defines idempotent HTTP methods and the retry reasoning behind the property."

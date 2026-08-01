@@ -1,0 +1,43 @@
+id = "enforcement-needs-a-trigger"
+title = "Enforcement Needs a Trigger"
+aliases = ["No rule without a firing condition", "Prose is not a check", "Evidence-bound enforcement", "Actionable signal"]
+kind = "principle"
+status = "seed"
+domains = ["operations", "governance", "AI-harness", "reliability", "security"]
+summary = "A rule is enforcement only when it names what fires it and cites what it observed; otherwise it is documentation."
+claim = "A constraint becomes machine enforcement only when it is expressed as a decidable predicate over an observable subject, bound to a condition that fires it and to evidence it emits when it fires. A constraint that cannot say when it applies or what it saw is guidance, and must be shipped and read as guidance."
+problem = "Guidance is put into a tool's configuration because a configuration file looks like enforcement. The tool then has no condition on which to act, so it emits the guidance always or never: always, and readers learn to skip it; never, and the rule was never enforced at all while the config implied it was."
+rationale = "A check is a function from an observed subject to a decision. Without a firing condition it has no subject, and without emitted evidence its decision cannot be acted on or disputed. Both gaps are invisible in the config file, which is why the config keeps looking healthy."
+applies_when = ["A constraint is about to be added to a linter, hook, policy file, alert rule, or a prompt assembled for a model.", "A rule's payload is prose rather than a match, a diff, or a state comparison.", "Someone proposes carrying design guidance in a runtime configuration.", "A reviewing tier is proposed for the part of a constraint no predicate captures, and the question is what stops it becoming the always-emitted prose this record refuses."]
+does_not_mean = ["Discard guidance that cannot yet be automated; write it where a person building the check will read it.", "Treat a check as valuable merely because it fires.", "Demand a trigger before the constraint is understood well enough to state.", "Confuse the design note that produces a check with the check.", "Assume a rule with a trigger is a rule that can fire; a selector naming something that no longer exists is a trigger that never matches.", "Refuse prose to a tier that conditions on a diff and bounds its own length. This record was written when the only destinations for prose were static tiers, where the argument holds without qualification: such a tier has no condition on which to emit guidance, so it emits it always or never. A reviewer that reads a change HAS a condition -- the change -- and the failure this record names arrives instead through length, since guidance long enough to be skimmed is guidance emitted always. So the carve-out is not the trigger alone: it is a per-change trigger AND a ceiling that fails the build when the compiled prose exceeds it. Without the ceiling, this record refuses the tier."]
+benefits = ["Enforcement claims become falsifiable: a rule either fires on a subject or does not.", "Output carries a location and a match, so it can be fixed or disputed.", "Guidance stops decaying into noise that readers filter out."]
+costs = ["Turning a principle into a predicate is real work, and some principles resist it entirely.", "The unautomatable remainder needs a home outside the tool, which is easy to neglect.", "Narrow triggers miss cases a vague rule appeared to cover."]
+failure_when_overapplied = ["Only the mechanizable part of a constraint survives, and the rest is dropped rather than written down.", "Triggers are added to guidance to make it shippable, producing checks that fire on proxies for the real property.", "A body of true but unenforceable knowledge is discarded because it has no adapter."]
+conflicts_with = ["defense-in-depth"]
+related = ["mechanism-policy-separation", "psychological-acceptability", "explicit-unknown", "observability", "single-authoritative-source"]
+review_questions = ["What input is this rule known to match, and is that input checked in?", "What event causes this rule to run, and over which files or subjects?", "What does it print when it refuses, and can the reader locate the cause from that alone?", "If this rule can never fire, what in the system would reveal that?", "For the part that cannot be mechanized, where does it live so that whoever builds the check reads it?"]
+
+[enforcement]
+level = "lint"
+automatable = "partially"
+observable = ["Whether a rule declares a path, glob, event, or subject selector.", "Whether a rule's output includes a location or matched content.", "Rules that have not fired over a known window.", "Configuration entries whose value is prose rather than a pattern, threshold, or identifier."]
+checks = ["Reject rule entries that carry no selector and no pattern.", "Require refusal output to include a path or subject identifier.", "Give each rule a fixture it is known to match, and fail when the rule does not match its own fixture -- this separates a dead rule from a clean tree, which counting firings cannot.", "Report rules with zero firings across a corpus, once a fixture has established the rule can fire at all.", "Fail configuration whose value is free text where the schema expects a predicate.", "Fail the build when a compiled review document exceeds its declared line ceiling, and say to shorten records or narrow the domains rather than raising it -- a deterministic refusal, because a ranking heuristic that silently drops the tail is the same always-emitted failure with a scoreboard."]
+limits = ["A tool can see that a trigger exists; it cannot tell whether the trigger selects the right subject.", "Whether the mechanized part still captures the original constraint is a judgment.", "Zero firings may mean a clean tree rather than a dead rule. A fixture separates them for the case it covers, and only for that case.", "A line ceiling is a proxy for attention, not a measure of it. It can be met by a document nobody reads, and the observed degradation range it is set against was measured on other models and other tasks."]
+
+[[sources]]
+title = "My Philosophy on Alerting"
+url = "https://docs.google.com/document/d/199PqyG3UsyXlwieHaqbGiWVa8eMWi8zzAn0YfcApr8Q/preview"
+type = "essay"
+notes = "Argues that a page must be actionable and real; a signal that cannot be acted on trains its readers to ignore the channel."
+
+[[sources]]
+title = "Your Sigma Rule Converts Cleanly and Still Never Fires"
+url = "https://ridgelinecyber.com/blog/detection-passes-every-check-still-never-fires/"
+type = "practice"
+notes = "Reports that 13 percent of deployed detection rules are broken and can never fire, while showing a green status and counting as coverage; proposes a fixture the rule must match as the separating test."
+
+[[sources]]
+title = "Monitoring Distributed Systems"
+url = "https://sre.google/sre-book/monitoring-distributed-systems/"
+type = "book"
+notes = "Site Reliability Engineering, chapter 6. Carries the same argument into rule design: every rule that pages must require intelligent action."

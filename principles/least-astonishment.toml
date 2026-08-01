@@ -1,0 +1,43 @@
+id = "least-astonishment"
+title = "Least Astonishment"
+aliases = ["Principle of least surprise", "Rule of least surprise", "No hidden side effects", "Do what it says on the tin"]
+kind = "principle"
+status = "seed"
+domains = ["product", "architecture", "operations", "interfaces", "AI-harness"]
+summary = "Where behavior and the model the user already holds diverge, the model wins; the divergence is paid in user error."
+claim = "An operation should confine its effects to what its name and context already denote to the people who invoke it, and any effect beyond that must be visible at the point of use rather than discoverable only afterwards."
+problem = "Effects attached to a familiar verb are invisible at the call site: the user reasons about the operation they asked for, not about the code that ran, so the extra behavior is discovered as damage rather than as a question."
+rationale = "Users act on a model, not on the implementation. A mismatch is not resolved by the correct side; it is resolved by whichever side the user acts from, so an undisclosed effect converts into a wrong action at a rate the author never sees. Keeping effects inside what the name denotes -- or disclosing the difference where the decision is made -- puts the correction before the action instead of after it."
+applies_when = ["The user brings an expectation from a convention, a neighbouring tool, or an earlier version of this one.", "The operation touches state the user owns and the tool does not.", "The surprising effect is paid for by the user rather than by the author.", "Discovery happens after the fact, when the cheap moment to object has passed."]
+does_not_mean = ["Unfamiliar is the same as surprising; a new idea a user has never met is not thereby astonishing.", "Match every quirk of every neighbouring tool, including the ones its own maintainers regret.", "Preserve a behavior known to be wrong because users have come to rely on it.", "Add a warning to every action; a warning on routine work discloses nothing and trains dismissal.", "Treat the loudest stated expectation as the shared one."]
+benefits = ["Errors surface as questions before the action rather than as damage after it.", "Bug reports describe the difference between two models instead of an unexplained outcome.", "Interfaces stay learnable from their names, so documentation is a reference rather than a prerequisite.", "A behavior change is a decision with a disclosure attached, not an incident."]
+costs = ["Effects the author considers obviously implied must still be stated, which is prose to write and keep true.", "Meeting an existing expectation can mean carrying a design the author would not choose today.", "Disclosure adds a step to a path that worked without one.", "Which model users actually hold is evidence to gather, not a fact available at design time."]
+failure_when_overapplied = ["Design freezes at the first shipped behavior and every correction is refused as a surprise.", "The interface accumulates aliases and compatibility modes to satisfy every expectation anyone reported.", "Confirmations and warnings multiply until they are dismissed unread, including the one that mattered.", "Novelty is avoided in places where the existing model was simply wrong."]
+conflicts_with = ["fail-safe-defaults", "graceful-degradation", "parameterize-do-not-enumerate"]
+related = ["informed-consent", "psychological-acceptability", "explicit-unknown", "separation-of-concerns", "reversible-decisions"]
+review_questions = ["What does the name of this operation promise, and what does it actually touch?", "Which of these effects would a user learn about only after they had happened?", "If this changes a default, what does a user who upgrades without reading anything experience?", "Is the extra behavior disclosed where the decision is made, or only in documentation the user reads later?", "Whose expectation is being matched, and what is the evidence that they hold it?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Operations that write outside the directory or resource their name denotes.", "Mutation of paths the tool does not own, reachable from a read-oriented or launch-oriented command.", "Default values changed in a release with no changelog entry.", "Help text that omits an effect the implementation performs."]
+checks = ["Require a command that mutates state outside its own data directory to name that state in its help text.", "Flag a changed default value in a diff with no corresponding changelog entry.", "Report entry points that reach a write path but are documented as read-only."]
+limits = ["A tool cannot read the model a user brought with them, so it cannot rank surprises.", "Whether a behavior is astonishing depends on the population invoking it, not on the code.", "The distinction between a correction and a surprise is a judgment about which model was right."]
+
+[[sources]]
+title = "The Art of Unix Programming, Rule of Least Surprise"
+url = "http://www.catb.org/~esr/writings/taoup/html/ch01s06.html"
+type = "book"
+notes = "States the rule in interface terms: in interface design, always do the least surprising thing, and read 'least surprising' relative to the user's prior knowledge rather than the designer's."
+
+[[sources]]
+title = "The Design of the REXX Language"
+url = "https://doi.org/10.1147/sj.234.0326"
+type = "paper"
+notes = "Language design report that argues from the principle of least astonishment: where a construct could behave in several defensible ways, choose the one that will not astonish the reader of the program."
+
+[[sources]]
+title = "Command Line Interface Guidelines"
+url = "https://clig.dev/"
+type = "documentation"
+notes = "Modern restatement for tools: be unsurprising, keep behavior consistent with sibling commands, and do not perform effects the invocation did not imply."

@@ -1,0 +1,313 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# A warning is a failure everywhere, not only where a step remembered to say so.
+# The lint profile in Cargo.toml denies the whole pedantic/nursery set for this
+# crate's own code; RUSTFLAGS carries the same answer into the dependency builds
+# and into the jobs below that build a throwaway consumer rather than this tree.
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  unit-tests:
+    name: catalog and checker tests
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate the catalog
+        run: python3 scripts/validate.py
+
+      - name: Generated reference and name index are current
+        run: python3 scripts/build_reference.py --check
+
+      - name: Behaviour tests
+        run: python3 -m unittest discover -s tests
+
+  engine:
+    name: scan engine
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The same preflight a contributor runs, on the runner that is supposed to
+      # satisfy it. A manifest nothing reads goes stale the first time a tool is
+      # added and declared nowhere.
+      - name: Host toolchain preflight
+        run: ./scripts/deps.sh check
+
+      - name: Build and test
+        run: cargo test --locked
+
+      - name: Lints
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+
+      # The gate this repository ships, run against this repository. A content
+      # policy whose own tree does not pass it is one nobody should adopt.
+      - name: The policy over its own tree
+        run: cargo run --locked --quiet -- scan
+
+  # `rust-version` in Cargo.toml is a promise to anyone who builds this, and the
+  # job above cannot keep it: it runs whatever `stable` is this week, so a
+  # dependency bump or a newer-than-MSRV language feature lands green and breaks
+  # for the reader on the version the manifest claims to support. The toolchain
+  # is READ from that manifest rather than written here -- a second copy of the
+  # number would be the one that goes stale, and it would go stale silently in
+  # the direction that passes.
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the MSRV from Cargo.toml
+        id: msrv
+        run: |
+          set -euo pipefail
+          version="$(python3 -c '
+          import sys, tomllib
+          with open("Cargo.toml", "rb") as fh:
+              v = tomllib.load(fh)["package"].get("rust-version")
+          if not v:
+              sys.exit("Cargo.toml declares no rust-version")
+          print(v)
+          ')"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "MSRV is $version"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-${{ steps.msrv.outputs.version }}
+
+      # `check`, not `test`: what MSRV promises is that the crate and its pinned
+      # dependency graph COMPILE on that compiler. Behaviour is the stable job's
+      # question and running it twice buys nothing.
+      - name: Compiles on the declared MSRV
+        run: cargo check --locked --all-targets
+
+  # Coverage is collected here and nowhere else, but the floor it is held to
+  # lives in scripts/coverage.sh, which the manual hook runs too -- so the number
+  # that fails a push is the number a contributor can reproduce before pushing.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-slim
+    # Lifted to the job so the upload step can ask whether it is set: the
+    # `secrets` context is not readable from a step's `if`, and a step that
+    # cannot ask is one that runs and fails on a repository with no token.
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@nextest
+
+      # nextest gives each test its own process, which is what makes the
+      # integration suites count: they spawn `uphold` rather than calling
+      # into a library -- this crate has no lib target -- and the instrumented
+      # child writes its own profile.
+      - name: Coverage, against the committed floor
+        run: ./scripts/coverage.sh --lcov lcov.info
+
+      # The report is an extra, not the gate. A fork, or a repository whose
+      # token has not been set, still gets the step above.
+      - name: Upload to codecov
+        if: ${{ env.CODECOV_TOKEN != '' }}
+        uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          fail_ci_if_error: true
+
+  hooks:
+    name: ${{ matrix.tool }}
+    runs-on: ubuntu-slim
+    # Coverage has its own job, with the toolchain it needs and a cache that
+    # survives; running it once per runner here would build the tree
+    # instrumented three more times to answer the same question. What this job
+    # asks is whether each runner can DRIVE the configuration, and the hooks
+    # left in it answer that.
+    env:
+      SKIP: coverage
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: [pre-commit, prek, lefthook]
+    steps:
+      - uses: actions/checkout@v7
+
+      # The `rg` executable is no longer a dependency: the search stack is
+      # linked into `uphold`, so there is nothing left to shell out to. A
+      # Rust toolchain is, because this repository runs its own gate from the
+      # working tree rather than from a released wheel.
+      #
+      # With the components, because the manual stage this job runs includes the
+      # host preflight and toolchain.toml requires them. A runner that cannot
+      # satisfy the manifest is not a runner this repository can be developed
+      # on, and finding that out here is the point of asking.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.tool }}
+
+      # ── pre-commit (Python) ──────────────────────────────────────
+      - if: matrix.tool == 'pre-commit'
+        uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: --all-files --hook-stage manual
+
+      # ── prek (Rust) ─────────────────────────────────────────────
+      - if: matrix.tool == 'prek'
+        uses: j178/prek-action@v2
+        with:
+          extra-args: --all-files --hook-stage manual
+
+      # ── lefthook (Go) ───────────────────────────────────────────
+      - if: matrix.tool == 'lefthook'
+        uses: actions/setup-go@v7
+        with:
+          go-version: '>=1.26'
+
+      - if: matrix.tool == 'lefthook'
+        run: |
+          go install github.com/evilmartians/lefthook/v2@v2.1.9
+          go install github.com/rhysd/actionlint/cmd/actionlint@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # lefthook has no managed environments: every command in lefthook.yml is
+      # whatever the host has on PATH. pre-commit and prek install ruff,
+      # shellcheck and bashate from the pinned hook repos, so on those two
+      # runners this step has no equivalent -- which is exactly why it is easy to
+      # forget here and find out from a green run that skipped the check.
+      - if: matrix.tool == 'lefthook'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          pipx install bashate
+          pipx install ruff
+
+      - if: matrix.tool == 'lefthook'
+        run: lefthook run pre-commit --all-files
+
+      # The manual-stage pair, at the seam lefthook has for them. Coverage is
+      # left to its own job on every runner; this proves the preflight group is
+      # reachable and passes on the runner the other two jobs also use.
+      - if: matrix.tool == 'lefthook'
+        run: lefthook run preflight
+
+  # The runner matrix above runs THIS repository's own configuration. That is a
+  # different question from whether a repository that is not this one can pin
+  # these hooks and have them work, and every bug the parity work found lived in
+  # the gap: hook ids nothing published, a seam predicate matching only this
+  # repository's own hook names, a base set resolved against a directory only
+  # this repository has, and a pre-push guard reading a channel two of the three
+  # runners do not use. All four were green here and broken there.
+  #
+  # So each runner drives a throwaway consumer through the same four questions,
+  # and "supports lefthook" means what "supports pre-commit" means.
+  runner-parity:
+    name: consumer under ${{ matrix.tool }}
+    runs-on: ubuntu-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: [pre-commit, prek, lefthook]
+    steps:
+      - uses: actions/checkout@v7
+
+      # pre-commit and prek bootstrap their own Rust; lefthook has no manifest
+      # contract and no language to bootstrap, so the binary has to be built and
+      # put on PATH the way the install instructions tell a consumer to.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: parity-${{ matrix.tool }}
+
+      # Both are on PyPI and both are installed the same way here, deliberately:
+      # what differs between them is what this job is measuring, so nothing else
+      # about the two setups should.
+      - if: matrix.tool == 'pre-commit' || matrix.tool == 'prek'
+        run: pipx install "${{ matrix.tool }}"
+
+      - if: matrix.tool == 'lefthook'
+        uses: actions/setup-go@v7
+        with:
+          go-version: '>=1.26'
+
+      - if: matrix.tool == 'lefthook'
+        run: |
+          go install github.com/evilmartians/lefthook/v2@v2.1.9
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          cargo build --release
+          echo "$GITHUB_WORKSPACE/target/release" >> "$GITHUB_PATH"
+
+      # A consumer pins a ref, so the checkout has to be reachable as one. The
+      # ref is this workspace's own HEAD: what is under test is the commit, not
+      # whatever tag happens to be newest.
+      - name: A consuming repository, driven by ${{ matrix.tool }}
+        run: |
+          git config --global user.email ci@example.test
+          git config --global user.name CI
+          ./scripts/consumer_check.sh "${{ matrix.tool }}" "$GITHUB_WORKSPACE" "$(git rev-parse HEAD)"
+
+  consumer:
+    name: consumer integration
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v7
+
+      # A hook is only proven by the path a consumer takes: a repository that
+      # is not this one, declaring a profile, running the released entry point.
+      - name: A consuming repository's declaration
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/consumer/policy
+          ./uphold_check.py --init > /tmp/consumer/policy/upheld.toml
+          cd /tmp/consumer && "$GITHUB_WORKSPACE/uphold_check.py"
+
+      - name: A declaration that cannot be read is not a pass
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/unreadable
+          cd /tmp/unreadable
+          set +e
+          "$GITHUB_WORKSPACE/uphold_check.py"
+          status=$?
+          set -e
+          test "$status" -eq 2 || { echo "expected exit 2, got $status"; exit 1; }

@@ -1,0 +1,31 @@
+id = "reversible-decisions"
+title = "Optimize for Reversible Decisions"
+aliases = ["Two-way door decisions", "Option preservation"]
+kind = "heuristic"
+status = "seed"
+domains = ["architecture", "product", "governance"]
+summary = "When uncertainty is high, prefer choices that preserve cheap paths to revise, migrate, or roll back."
+claim = "For uncertain, noncritical choices, favor designs and commitments whose consequences can be observed and reversed at acceptable cost before scaling them."
+problem = "Teams spend excessive analysis on reversible choices while making irreversible commitments without sufficient evidence."
+rationale = "Option value allows learning after action and reduces the cost of being wrong."
+applies_when = ["The decision is uncertain and can be staged.", "Rollback or migration can be designed explicitly.", "Delay has its own opportunity cost."]
+does_not_mean = ["Avoid commitments indefinitely.", "Treat safety-critical or irreversible actions as experiments.", "Build abstractions for every hypothetical future.", "Assume rollback restores external trust or leaked data."]
+benefits = ["Faster learning.", "Lower commitment risk.", "Reduced pressure for speculative generality."]
+costs = ["Abstraction, migration, or dual-running cost.", "Temporary complexity.", "Some optimizations are deferred."]
+failure_when_overapplied = ["A system accumulates permanent compatibility layers.", "No decision is ever consolidated after evidence arrives.", "A supposedly reversible action has irreversible external consequences."]
+conflicts_with = ["single-authoritative-source"]
+related = ["observability", "graceful-degradation", "mechanism-policy-separation", "informed-consent", "least-astonishment"]
+review_questions = ["What exactly would rollback restore?", "Which consequences are irreversible outside the system boundary?", "What evidence will trigger consolidation or reversal?"]
+
+[enforcement]
+level = "governance"
+automatable = "partially"
+observable = ["Rollback plans.", "Migration paths.", "Feature flags and staged rollout configuration."]
+checks = ["Require rollback criteria for high-impact changes.", "Require explicit irreversible consequences in decision records.", "Verify rollback procedures before broad rollout."]
+limits = ["Reversibility is economic and institutional, not only technical.", "A syntactic rollback may not undo data disclosure, customer harm, or market commitments."]
+
+[[sources]]
+title = "2015 Letter to Shareholders"
+url = "https://www.aboutamazon.com/news/company-news/2015-letter-to-shareholders"
+type = "essay"
+notes = "Popular articulation of one-way and two-way door decisions."

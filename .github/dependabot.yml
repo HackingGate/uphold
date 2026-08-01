@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # The hook pins were the one set of versions nothing watched: no ecosystem
+  # entry raised a pull request for them, so a pin only moved when somebody
+  # edited it by hand -- which is how one got bumped to a tag that did not
+  # exist. `no-stale-hook-pins` is the guard that fails loudly when this
+  # updater goes quiet; this is the updater it watches.
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"

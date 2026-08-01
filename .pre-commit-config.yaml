@@ -1,0 +1,229 @@
+# Shared hook configuration — works with both pre-commit and prek.
+#
+# pre-commit:  pip install pre-commit && pre-commit install
+# prek:        cargo install prek && prek install
+#
+# Both tools read this file natively.  lefthook has its own lefthook.yml.
+
+default_install_hook_types:
+  - pre-commit
+  - pre-merge-commit
+  - pre-push
+  - commit-msg
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+
+  # The content policy used to come from HackingGate/rg-policy at a pinned tag.
+  # It is this repository's own binary now, and it runs from the working tree
+  # for the same reason the catalog checks do: a gate a repository ships and
+  # does not run against itself is one nobody should be asked to adopt.
+  #
+  # `cargo run` rather than a pinned `rev:` on this repository, because pinning a
+  # repository to a release of itself means the gate a change is tested against
+  # is the gate as it was BEFORE the change -- which is exactly wrong for the
+  # commit that alters the engine.
+
+  # The guards were eleven scripts in HackingGate/git-guards at a pinned rev.
+  # They are `uphold guard` now, declared in policy/principles.toml and run
+  # from the working tree for the reason the catalog checks are: a gate this
+  # repository ships and does not run against itself is one nobody should adopt.
+  #
+  # One invocation per stage rather than one per guard. Which guards have
+  # anything to say at a stage is a property of the guards, and asking a guard
+  # at a stage it cannot observe is not a pass -- it is a check that did not
+  # happen. The binary owns that registration; a hook file repeating it would be
+  # a second copy of it to go stale.
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.2
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+
+  # The shell this repository ships is the part a consumer runs before anything
+  # else: the lefthook wrapper it publishes under `scripts:`, and the consumer
+  # harness that decides whether the three runners agree. Both were unlinted,
+  # and the first thing this hook found was a `CDPATH=` in the published wrapper
+  # that reads as an assignment and is a command prefix.
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/openstack/bashate
+    rev: 2.1.1
+    hooks:
+      - id: bashate
+        # E006 is the 79-column line limit, which no other file in this
+        # repository is held to.
+        args: ["--ignore", "E006"]
+
+  # The catalog runs its own checks over itself, from the working tree rather
+  # than from a released tag. A catalog whose generated index disagrees with its
+  # records is the generated document quietly becoming the source, which its own
+  # SCHEMA.md forbids. One gate covers both generated files -- QUICK_REFERENCE.md
+  # and name-index.json -- so a reader never has to work out which of the two is
+  # the current one.
+  - repo: local
+    hooks:
+      # Not pre-commit: the answer changes when the HOST changes, not when a
+      # file does, so there is nothing in a commit for it to react to. manual is
+      # how CI and a new contributor reach it -- `deps.sh check` before the first
+      # build, instead of a resolver error naming a dependency when the real
+      # answer is "your rustc is older than this crate's MSRV".
+      - id: deps-check
+        name: host toolchain preflight
+        entry: scripts/deps.sh check
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+      # Coverage builds the whole tree instrumented and runs every suite, which
+      # is not a thing to put in front of a commit. It is here so the floor is
+      # reproducible before a push rather than discovered after one.
+      - id: coverage
+        name: coverage against the committed floor
+        entry: scripts/coverage.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+      - id: catalog-validate
+        name: validate principle records
+        entry: python3 scripts/validate.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, manual]
+      - id: catalog-reference-current
+        name: generated reference and name index are current
+        entry: python3 scripts/build_reference.py --check
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, manual]
+      # The routing and the ceiling, on one hook. A record that changed
+      # `automatable` reroutes silently otherwise, and a compiled document over
+      # its ceiling is the always-emitted prose `enforcement-needs-a-trigger`
+      # refuses -- neither shows up in a diff of the file that caused it.
+      - id: review-current
+        name: compiled review is current and within its ceiling
+        entry: python3 uphold_check.py --review --check
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, manual]
+      # Not pre-commit: one `git ls-remote` per pinned repo is a network round
+      # trip, and a check that adds one to every commit is a check that gets
+      # commented out. pre-push is the last local moment before the work is
+      # shared; manual is how CI reaches it, which turns "whoever pushes next
+      # finds out" into something a scheduled run finds first.
+      #
+      # always_run with no filenames, because at pre-push the runner passes the
+      # files in the push and .pre-commit-config.yaml is almost never one of
+      # them. A pin whose upstream tag was deleted after it landed changes no
+      # file here, so a check gated on the pin file changing is a check that
+      # never runs against exactly that case.
+      - id: hook-pins-resolve
+        name: hook pins name refs that exist
+        entry: python3 scripts/check_hook_pins.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push, manual]
+
+      - id: catalog-tests
+        name: catalog and checker tests
+        entry: python3 -m unittest discover -s tests
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, manual]
+      - id: content-policy
+        name: content policy
+        entry: cargo run --quiet -- scan
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, manual]
+      - id: guards-commit-msg
+        name: guards (commit message)
+        entry: cargo run --quiet -- guard --stage commit-msg --message
+        language: system
+        pass_filenames: true
+        always_run: true
+        stages: [commit-msg]
+      - id: guards-pre-commit
+        name: guards
+        entry: cargo run --quiet -- guard --stage pre-commit
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, manual]
+      - id: guards-pre-merge-commit
+        name: guards (merge)
+        entry: cargo run --quiet -- guard --stage pre-merge-commit
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-merge-commit]
+      - id: guards-pre-push
+        name: guards (push)
+        entry: cargo run --quiet -- guard --stage pre-push
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      - id: engine-tests
+        name: scan engine tests
+        entry: cargo test --quiet
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, manual]
+      # The lint profile is declared in Cargo.toml, so every runner and CI hold
+      # the crate to one set. This is where a contributor hears about it: a
+      # profile only the workflow runs is one whose first reader is a failed
+      # push, which is the same argument scripts/coverage.sh makes for keeping
+      # the coverage floor out of the workflow file.
+      - id: engine-fmt
+        name: rustfmt
+        entry: cargo fmt --check
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, manual]
+      - id: engine-clippy
+        name: clippy, under the crate's own lint profile
+        entry: cargo clippy --quiet --all-targets
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, manual]
+      # Fires on the declaration and on every config it reads -- the files that
+      # can turn a true enforcement claim into a false one -- and on nothing
+      # else. A check with no firing condition is the thing this repository's
+      # `enforcement-needs-a-trigger` record refuses.
+      - id: uphold-check-here
+        name: this repo's own enforcement claims
+        entry: ./uphold_check.py
+        language: system
+        pass_filenames: false
+        stages: [pre-commit, manual]
+        files: '^(policy/upheld\.toml|policy/principles\.toml|\.pre-commit-config\.yaml|lefthook\.yml|\.cmd-shims/checks\.enabled)$'

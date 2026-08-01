@@ -1,0 +1,31 @@
+id = "unix-composability"
+title = "Unix Composability"
+aliases = ["Unix philosophy", "Do one thing well", "Pipes and filters"]
+kind = "philosophy"
+status = "seed"
+domains = ["architecture", "interfaces", "tools"]
+summary = "Build focused components with inspectable interfaces that can be composed into larger behavior."
+claim = "Prefer small, focused mechanisms connected through stable, inspectable interfaces so that complex behavior can be assembled rather than embedded in one indivisible program."
+problem = "Large components accumulate unrelated responsibilities, resist replacement, and force every workflow through one control surface."
+rationale = "Narrow components reduce local reasoning cost, and standard interfaces make their behavior reusable in combinations not anticipated by the original author."
+applies_when = ["A domain can be decomposed into transformations or tools with stable boundaries.", "Intermediate results are useful to inspect, store, or reuse.", "The operational cost of composition remains lower than the cost of integration."]
+does_not_mean = ["Create a network service for every function.", "Use untyped text when a stronger contract is required.", "Ignore transaction boundaries, locality, or end-to-end performance.", "Minimize line count or component size as an end in itself."]
+benefits = ["Replaceable components.", "Inspectable intermediate state.", "Reuse through composition.", "Reduced pressure for one universal tool."]
+costs = ["More interfaces and integration points.", "Potential serialization and coordination overhead.", "Global invariants may become harder to enforce."]
+failure_when_overapplied = ["A distributed monolith with excessive network boundaries.", "Pipelines whose textual interfaces lose semantics and validation.", "Operational fragmentation that exceeds the benefit of modularity."]
+conflicts_with = ["high-cohesion-low-coupling", "end-to-end-principle", "informed-consent"]
+related = ["separation-of-concerns", "mechanism-policy-separation", "information-hiding", "parameterize-do-not-enumerate"]
+review_questions = ["Is each component focused on one coherent transformation or capability?", "Can outputs be inspected and consumed without private knowledge?", "Would combining these components preserve a stronger transaction or invariant?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Component dependency graph.", "Interface count and shape.", "Use of standard input, output, or structured interchange formats."]
+checks = ["Flag components with unrelated entry points or dependencies.", "Require explicit schemas for machine-consumed interfaces.", "Review whether new services create operational boundaries without independent lifecycle value."]
+limits = ["Coherence and appropriate granularity are design judgments.", "A small component can still hide global coupling."]
+
+[[sources]]
+title = "The Art of Unix Programming — Basics of the Unix Philosophy"
+url = "http://www.catb.org/esr/writings/taoup/html/ch01s06.html"
+type = "book"
+notes = "A widely cited synthesis of Unix design traditions and composability."

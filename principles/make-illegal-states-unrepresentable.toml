@@ -1,0 +1,31 @@
+id = "make-illegal-states-unrepresentable"
+title = "Make Illegal States Unrepresentable"
+aliases = ["Parse, do not validate", "Type-driven design"]
+kind = "heuristic"
+status = "seed"
+domains = ["design", "types", "interfaces"]
+summary = "Represent data so invalid combinations cannot be constructed or cross trusted boundaries."
+claim = "Where practical, encode invariants in constructors, types, schemas, or state machines so downstream code receives only valid states."
+problem = "Repeated validation is forgotten, disagrees across callers, and allows invalid combinations to propagate."
+rationale = "Moving invariant enforcement to construction reduces the number of places that must remember the rule."
+applies_when = ["The invariant is stable and can be expressed in the representation.", "Construction passes through a controlled boundary.", "Invalid states do not need to be preserved for diagnosis or migration."]
+does_not_mean = ["All business rules belong in static types.", "External input becomes trustworthy without parsing.", "Complex type machinery is always clearer.", "Historical invalid data can be ignored."]
+benefits = ["Fewer downstream checks.", "Clearer state transitions.", "Smaller valid test space."]
+costs = ["More types, constructors, or schema complexity.", "Migration and serialization burden.", "Some dynamic rules cannot be encoded cleanly."]
+failure_when_overapplied = ["Type complexity obscures the domain.", "The model cannot represent temporary workflow states that genuinely exist.", "Developers bypass constructors through deserialization or reflection."]
+conflicts_with = ["mechanism-policy-separation", "parameterize-do-not-enumerate"]
+related = ["fail-fast", "information-hiding", "separation-of-concerns"]
+review_questions = ["Which invalid combinations recur in checks or incidents?", "Can the invariant be enforced once at construction?", "Does the representation include real transitional states rather than pretending they do not exist?"]
+
+[enforcement]
+level = "lint"
+automatable = "partially"
+observable = ["Type definitions, schemas, constructors, and state transitions.", "Use of primitive values across trusted boundaries."]
+checks = ["Require validated constructors for constrained values.", "Reject direct construction of declared invariant-bearing types.", "Generate schema and property tests for state transitions."]
+limits = ["A tool cannot decide whether additional type complexity improves comprehension.", "Many temporal and cross-entity invariants require runtime enforcement."]
+
+[[sources]]
+title = "Designing with types: Making illegal states unrepresentable"
+url = "https://fsharpforfunandprofit.com/posts/designing-with-types-making-illegal-states-unrepresentable/"
+type = "essay"
+notes = "A practical explanation of encoding domain constraints in types."

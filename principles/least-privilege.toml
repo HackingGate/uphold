@@ -1,0 +1,31 @@
+id = "least-privilege"
+title = "Least Privilege"
+aliases = ["Principle of least privilege", "POLP"]
+kind = "principle"
+status = "seed"
+domains = ["security", "AI-harness", "operations"]
+summary = "Grant only the capabilities required for the task, scope, and duration."
+claim = "Every user, process, agent, and tool should operate with the minimum permissions necessary to complete its authorized work for the minimum necessary time."
+problem = "Broad authority turns mistakes, compromised components, and prompt injection into larger and less recoverable incidents."
+rationale = "Reducing available capability reduces both accidental and adversarial blast radius."
+applies_when = ["Permissions can be scoped by resource, action, environment, or time.", "The system performs side effects or accesses protected data.", "Authorization boundaries can be checked independently of model intent."]
+does_not_mean = ["Remove every permission until normal work is impossible.", "Rely on a model instruction as an authorization control.", "Use one permanent credential because credential management is inconvenient.", "Assume read access is harmless."]
+benefits = ["Smaller attack and failure surface.", "Clearer authorization review.", "Reduced consequences of compromised components."]
+costs = ["More policy and credential complexity.", "Potential friction and approval latency.", "Risk of brittle workflows if permissions are underspecified."]
+failure_when_overapplied = ["Frequent manual elevation trains users to approve reflexively.", "Fragmented permissions make the system impossible to operate.", "Emergency recovery lacks a controlled break-glass path."]
+conflicts_with = ["graceful-degradation"]
+related = ["defense-in-depth", "end-to-end-principle", "observability", "complete-mediation", "fail-safe-defaults", "psychological-acceptability"]
+review_questions = ["Which exact resources and actions are required?", "Can access expire or be limited to one workflow step?", "What independent control prevents a model from granting itself authority?"]
+
+[enforcement]
+level = "runtime"
+automatable = "yes"
+observable = ["Granted permissions and scopes.", "Tool manifests and credentials.", "Runtime authorization decisions."]
+checks = ["Compare requested capabilities with an allow-list.", "Reject wildcard permissions where narrower scopes exist.", "Require approval for irreversible or high-impact actions.", "Expire temporary credentials and sessions."]
+limits = ["A tool may know the permission set but not whether each permission is truly necessary.", "Business necessity remains a review judgment."]
+
+[[sources]]
+title = "The Protection of Information in Computer Systems"
+url = "https://doi.org/10.1109/PROC.1975.9939"
+type = "paper"
+notes = "Foundational security design principles including least privilege and complete mediation."

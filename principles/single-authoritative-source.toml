@@ -1,0 +1,37 @@
+id = "single-authoritative-source"
+title = "Single Authoritative Source"
+aliases = ["Single Source of Truth", "SSOT", "System of Record"]
+kind = "principle"
+status = "seed"
+domains = ["data", "architecture", "governance"]
+summary = "Give each authoritative fact one owner and update authority; copies and projections may still exist."
+claim = "Each authoritative fact should have one explicitly designated ownership and update authority, while replicas, caches, and derived views remain subordinate to that authority."
+problem = "Independent writable copies create semantic drift, ambiguous ownership, conflicting updates, and reconciliation work."
+rationale = "When update authority is explicit, disagreements can be resolved against a known source and changes can be traced to an accountable boundary."
+applies_when = ["The same fact is represented in multiple services, stores, reports, or workflows.", "Conflicting updates would be materially expensive or unsafe.", "A responsible owner can be assigned at an appropriate domain boundary."]
+does_not_mean = ["Use one physical database for the entire system.", "Forbid replication, caching, indexes, or read models.", "Centralize unrelated domains under one team or schema.", "Treat every derived value as independently authoritative."]
+benefits = ["Clear ownership and update paths.", "Simpler reconciliation and lineage.", "Reduced semantic drift across consumers."]
+costs = ["The authority can become a latency or availability dependency.", "Cross-domain facts may resist clean ownership.", "Synchronization and versioning remain necessary."]
+failure_when_overapplied = ["An enterprise-wide shared database couples unrelated domains.", "A central team becomes a throughput bottleneck.", "Local operation is blocked even when temporary divergence would be acceptable."]
+conflicts_with = ["graceful-degradation"]
+related = ["information-hiding", "end-to-end-principle", "observability", "parameterize-do-not-enumerate"]
+review_questions = ["Which component owns the canonical meaning and writes?", "Can every copy explain its source and refresh policy?", "What happens when the authority is unavailable?"]
+
+[enforcement]
+level = "governance"
+automatable = "partially"
+observable = ["Declared data ownership metadata.", "Write paths to canonical entities.", "Lineage from projections to authoritative records."]
+checks = ["Require one declared owner for each canonical entity.", "Reject multiple writable adapters for the same fact unless conflict resolution is explicit.", "Require caches and projections to declare refresh or invalidation semantics."]
+limits = ["A tool cannot infer semantic ownership reliably from storage topology alone.", "One database may contain several authorities, and several stores may implement one authority."]
+
+[[sources]]
+title = "Systems Engineering Body of Knowledge"
+url = "https://sebokwiki.org/"
+type = "body-of-knowledge"
+notes = "General systems framing for authority, interfaces, lifecycle, and governance."
+
+[[sources]]
+title = "Designing Data-Intensive Applications"
+url = "https://dataintensive.net/"
+type = "book"
+notes = "Background on replication, derived data, consistency, and systems of record."

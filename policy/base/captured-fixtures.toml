@@ -1,0 +1,71 @@
+# Base rule set: captured-fixtures (a test fixture made of real captured data)
+#
+# Non-ASCII bytes in test fixtures, as the cheapest available proxy for a
+# fixture that was captured rather than written. Pull in with:
+#
+#   [inherit]
+#   sets = ["credentials", "captured-fixtures"]
+#
+# WHAT THE PROXY IS, stated plainly because it is a proxy and not the property.
+# The property wanted is "this fixture is synthetic". Nothing can decide that.
+# What CAN be decided is that a fixture holds text nobody typed as a
+# placeholder: a response body from a real upstream, in the language that
+# upstream writes, carrying account labels, names and addresses that came off a
+# live session. `Fixture Account A` and `[REDACTED]` are ASCII; a captured
+# document, for every upstream that does not write in English, is not.
+#
+# So the rule is one byte class, and it earns its place by being the one signal
+# that survives redaction of the obvious fields. A capture with its numbers
+# starred out still reads in its own script.
+#
+# WHY NOT `allowed_scripts`. It looks like the same check and it is not.
+# `allowed_scripts` reads the Unicode Script property of ALPHABETIC characters;
+# `Common` and `Inherited` -- punctuation, digits, symbols -- are never its
+# subject, and declaring them is refused. Fullwidth punctuation and fullwidth
+# digits are `Common`. A captured document stripped to its brackets and numbers
+# passes a Latin-only declaration in full while being unmistakably a capture.
+# The two compose rather than competing: `allowed_scripts` says which languages
+# this repository writes, and this says a fixture is not where a language
+# arrives from outside.
+#
+# WHAT THE SCOPE COVERS. The conventional fixture locations across the
+# languages, by glob rather than by a directory list, because the hand-written
+# copies this was promoted from each named the one layout their own repository
+# used -- `testdata` in some, `tests/fixtures` in others -- and a repository
+# that grew the other convention had no coverage there and nothing to say so.
+# Go's `_test.go` is included for the inline case: a table-driven test holds its
+# fixture in the source file, so a rule that reads only `testdata/` reads half
+# the fixtures. This is also why the set carries no test-path exclusion: the
+# test paths ARE the subject.
+#
+# WHEN NOT TO TAKE IT. A repository whose fixtures legitimately carry another
+# script -- a parser tested against the text it parses, an encoding test, a
+# localisation corpus -- should not inherit this set, or should shadow the rule
+# under this id with `files.exclude` naming those fixtures. The honest form of
+# that exemption is a named path; a repository that needs the whole tree
+# exempted is a repository this rule does not describe.
+#
+# PROVENANCE. Promoted here after being found hand-copied into 17 of the 46
+# policy files across the consuming fleet, with the pattern byte-identical in
+# every one and only the message and the fixture directory differing -- the
+# message in each naming the upstream that repository captures from, which is
+# what the copies were really carrying and what belongs in the repository rather
+# than here. The id is the one those copies already carry, so a repository still
+# holding its own copy shadows this rule rather than colliding with it.
+
+[rule.no-non-ascii-in-fixtures]
+message = """
+A test fixture holds non-ASCII content, which is what a capture from a live
+upstream looks like and is not what a synthetic fixture looks like. Replace it
+with ASCII placeholders -- Fixture Account A, EXAMPLE.T, [REDACTED] -- so the
+fixture states what the test needs rather than what one session returned.
+"""
+regexp = '[^\x09\x0a\x0d\x20-\x7e]'
+files.include = ["."]
+files.glob = [
+  "**/testdata/**",
+  "**/tests/fixtures/**",
+  "**/test/fixtures/**",
+  "**/fixtures/**",
+  "*_test.go",
+]

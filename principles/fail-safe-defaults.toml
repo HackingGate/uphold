@@ -1,0 +1,31 @@
+id = "fail-safe-defaults"
+title = "Fail-Safe Defaults"
+aliases = ["Default deny", "Fail closed", "Secure by default"]
+kind = "principle"
+status = "seed"
+domains = ["security", "operations", "architecture", "AI-harness"]
+summary = "Base access on explicit permission rather than explicit exclusion; the default answer is no."
+claim = "A protective decision should be made by naming what is permitted, so that omission, error, or an unanticipated case yields refusal rather than access."
+problem = "Deny-lists fail open: what nobody thought to exclude is allowed, and the gap is invisible until it is used."
+rationale = "An allow-list makes the safe state the one reached by doing nothing, so mistakes and novel inputs land on the conservative side of the boundary."
+applies_when = ["The cost of wrongly permitting exceeds the cost of wrongly refusing.", "The space of inputs is open-ended and cannot be enumerated as exclusions.", "A new component, rule, or version may arrive without the operator noticing."]
+does_not_mean = ["Every default must be the most restrictive one; a shipped rule set may default to off so that updates do not start refusing unannounced.", "Refuse without saying what would be permitted.", "Treat a default as a substitute for a decision that should be made explicitly.", "Fail closed on a path where unavailability is the larger harm."]
+benefits = ["Omissions surface as refusals rather than as silent exposure.", "The permitted set is enumerable and therefore reviewable.", "Novel inputs are handled conservatively without new code."]
+costs = ["Legitimate work is blocked until it is named, which creates approval friction.", "Allow-lists must be maintained as the system grows.", "Failing closed can convert an availability-critical dependency into an outage."]
+failure_when_overapplied = ["Operators keep a standing override because normal work is otherwise impossible.", "A newly shipped default-deny rule breaks every consumer on upgrade, so consumers pin an old version.", "Refusals carry no remedy, so users route around the control entirely."]
+conflicts_with = ["graceful-degradation", "psychological-acceptability", "least-astonishment"]
+related = ["least-privilege", "complete-mediation", "fail-fast", "explicit-unknown", "make-illegal-states-unrepresentable", "informed-consent"]
+review_questions = ["Is the permitted set named, or is the forbidden set named?", "What happens on an input nobody anticipated?", "If this control fails or cannot evaluate, does the system permit or refuse, and is that the cheaper error here?", "When this rule ships to existing consumers, does it start refusing work that was previously accepted, and was that announced?"]
+
+[enforcement]
+level = "lint"
+automatable = "yes"
+observable = ["Wildcard scopes, permissive CORS, world-readable modes, and open bind addresses in configuration.", "Rules expressed as deny-lists where an allow-list is available.", "Default branches that permit on an unmatched case."]
+checks = ["Reject wildcard permissions where a narrower scope exists.", "Require an explicit default arm on authorization switches, and require it to deny.", "Flag configuration whose shipped default is more permissive than the documented recommendation."]
+limits = ["A tool can see that a default denies; it cannot see whether denial is the cheaper error for this system.", "Availability trade-offs are a judgment about consequences, not a property of the code."]
+
+[[sources]]
+title = "The Protection of Information in Computer Systems"
+url = "https://doi.org/10.1109/PROC.1975.9939"
+type = "paper"
+notes = "States fail-safe defaults: base access decisions on permission rather than exclusion."

@@ -1,0 +1,31 @@
+id = "complete-mediation"
+title = "Complete Mediation"
+aliases = ["No bypass path", "Check every access", "Mediate every path"]
+kind = "principle"
+status = "seed"
+domains = ["security", "architecture", "AI-harness", "operations"]
+summary = "Every access to a protected effect passes a check; no path reaches the effect uncontrolled."
+claim = "Authority must be verified on every access to a protected object or effect, on every path that can reach it, and not only on the path the designer had in mind."
+problem = "A control placed on one path is read as a property of the system, while the effect it guards stays reachable by another path that meets no control at all."
+rationale = "A guard constrains only the traffic that traverses it. If an effect has several routes, the system's real policy is the weakest route, not the guarded one."
+applies_when = ["A protected effect is reachable through more than one interface, tier, or tool.", "Caching, delegation, or convenience wrappers can shortcut an earlier authorization decision.", "New surfaces are added over time to a system whose checks were written for the original surface."]
+does_not_mean = ["Re-run the identical check at every layer for its own sake.", "Assume a check exists because a rule is written down somewhere.", "Treat a check on the common path as coverage of the rare path.", "Reimplement the rule at each seam; mediate at each seam by calling the one rule body."]
+benefits = ["The stated policy and the enforced policy converge.", "New surfaces inherit the control instead of silently escaping it.", "Bypass becomes a reviewable gap rather than an unknown."]
+costs = ["Every access path must be enumerated and kept enumerated.", "Mediation costs latency and can defeat caching of authorization decisions.", "Adapters at new seams add code that must itself be maintained."]
+failure_when_overapplied = ["Checks are duplicated as separate implementations, which then disagree.", "Hot paths are slowed until someone adds an unaudited fast path.", "Mediation is added where no protected effect exists, training reviewers to ignore it."]
+conflicts_with = ["graceful-degradation", "psychological-acceptability"]
+related = ["least-privilege", "defense-in-depth", "end-to-end-principle", "fail-safe-defaults", "explicit-unknown", "single-authoritative-source"]
+review_questions = ["What are all the paths that reach this effect, including manual, scripted, and agent-driven ones?", "Which of those paths meets the control, and what evidence shows it?", "When a new interface is added, does it inherit the check or does someone have to remember to add it?", "Is the same rule body reached from every seam, or has it been reimplemented per seam?"]
+
+[enforcement]
+level = "runtime"
+automatable = "partially"
+observable = ["Call sites and entry points that reach a protected operation.", "Which entry points invoke the authorization or guard routine.", "Whether guards share one implementation or several."]
+checks = ["Require protected operations to be reachable only through a mediating port or wrapper.", "Fail the build when a new entry point calls the effect directly.", "Assert that each seam delegates to the shared rule body rather than a local copy."]
+limits = ["A tool can see the paths present in the tree; it cannot see the path a person takes outside the tree.", "Whether an effect is protection-worthy remains a judgment."]
+
+[[sources]]
+title = "The Protection of Information in Computer Systems"
+url = "https://doi.org/10.1109/PROC.1975.9939"
+type = "paper"
+notes = "States complete mediation as one of eight design principles: every access to every object must be checked for authority."

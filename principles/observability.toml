@@ -1,0 +1,31 @@
+id = "observability"
+title = "Observability"
+aliases = ["Operational observability"]
+kind = "principle"
+status = "seed"
+domains = ["operations", "reliability", "AI-harness"]
+summary = "Design systems so operators can infer internal state and causal paths from emitted evidence."
+claim = "A system should emit structured, correlated evidence sufficient to explain relevant state transitions, decisions, dependencies, latency, and failures without reproducing every incident."
+problem = "Opaque systems fail in ways that cannot be distinguished, making recovery slow and evaluation speculative."
+rationale = "Logs, metrics, traces, and decision records turn hidden execution into evidence that can support diagnosis and verification."
+applies_when = ["The system has distributed execution, asynchronous work, agents, or external dependencies.", "Operators need to distinguish failure modes.", "Evidence can be emitted without violating privacy or security."]
+does_not_mean = ["Log everything.", "Expose secrets or personal data.", "Use dashboards as a substitute for causal investigation.", "Equate monitoring known thresholds with observability of unknown failures."]
+benefits = ["Faster diagnosis and recovery.", "Better evaluation and capacity planning.", "Evidence for audits and design improvement."]
+costs = ["Storage, processing, and instrumentation overhead.", "Privacy and security risk.", "High-cardinality or noisy telemetry can obscure signal."]
+failure_when_overapplied = ["Sensitive prompts, credentials, or payloads are recorded.", "Telemetry cost exceeds product value.", "Teams collect data without ownership, retention, or questions it answers."]
+conflicts_with = ["information-hiding"]
+related = ["fail-fast", "graceful-degradation", "idempotency", "explicit-unknown", "informed-consent"]
+review_questions = ["Which failure modes can current telemetry distinguish?", "Can one user-level operation be followed across model and tool calls?", "What sensitive information must be redacted or omitted?"]
+
+[enforcement]
+level = "runtime"
+automatable = "partially"
+observable = ["Presence and structure of logs, metrics, and traces.", "Correlation identifiers.", "Coverage of declared state transitions and dependencies."]
+checks = ["Require correlation across distributed operations.", "Assert that critical decisions and tool calls produce structured events.", "Check redaction and retention policy."]
+limits = ["Telemetry presence does not prove diagnostic usefulness.", "Unknown future failures cannot be fully specified in advance."]
+
+[[sources]]
+title = "Site Reliability Engineering — Monitoring Distributed Systems"
+url = "https://sre.google/sre-book/monitoring-distributed-systems/"
+type = "book"
+notes = "Operational guidance on signals, monitoring, and diagnosis."

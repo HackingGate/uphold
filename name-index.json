@@ -1,0 +1,1055 @@
+{
+  "version": 1,
+  "generated_from": "principles/*.toml",
+  "generator": "scripts/build_reference.py",
+  "canonical": "principles/<id>.toml -- this file is generated; do not edit",
+  "analyzer": {
+    "name": "principle-name",
+    "version": 1,
+    "steps": [
+      "unicode-nfkc",
+      "casefold",
+      "strip-combining-marks",
+      "non-alphanumeric-to-space",
+      "collapse-whitespace"
+    ],
+    "token_separator": " "
+  },
+  "names": [
+    {
+      "name": "A control people can keep",
+      "key": "a control people can keep",
+      "tokens": [
+        "a",
+        "control",
+        "people",
+        "can",
+        "keep"
+      ],
+      "field": "alias",
+      "id": "psychological-acceptability",
+      "title": "Psychological Acceptability",
+      "path": "principles/psychological-acceptability.toml"
+    },
+    {
+      "name": "Actionable signal",
+      "key": "actionable signal",
+      "tokens": [
+        "actionable",
+        "signal"
+      ],
+      "field": "alias",
+      "id": "enforcement-needs-a-trigger",
+      "title": "Enforcement Needs a Trigger",
+      "path": "principles/enforcement-needs-a-trigger.toml"
+    },
+    {
+      "name": "Backpressure",
+      "key": "backpressure",
+      "tokens": [
+        "backpressure"
+      ],
+      "field": "title",
+      "id": "backpressure",
+      "title": "Backpressure",
+      "path": "principles/backpressure.toml"
+    },
+    {
+      "name": "Calculator with one_plus_one()",
+      "key": "calculator with one plus one",
+      "tokens": [
+        "calculator",
+        "with",
+        "one",
+        "plus",
+        "one"
+      ],
+      "field": "alias",
+      "id": "parameterize-do-not-enumerate",
+      "title": "Parameterize, Do Not Enumerate",
+      "path": "principles/parameterize-do-not-enumerate.toml"
+    },
+    {
+      "name": "Check every access",
+      "key": "check every access",
+      "tokens": [
+        "check",
+        "every",
+        "access"
+      ],
+      "field": "alias",
+      "id": "complete-mediation",
+      "title": "Complete Mediation",
+      "path": "principles/complete-mediation.toml"
+    },
+    {
+      "name": "Cohesion and coupling",
+      "key": "cohesion and coupling",
+      "tokens": [
+        "cohesion",
+        "and",
+        "coupling"
+      ],
+      "field": "alias",
+      "id": "high-cohesion-low-coupling",
+      "title": "High Cohesion, Low Coupling",
+      "path": "principles/high-cohesion-low-coupling.toml"
+    },
+    {
+      "name": "Combinatorial explosion",
+      "key": "combinatorial explosion",
+      "tokens": [
+        "combinatorial",
+        "explosion"
+      ],
+      "field": "alias",
+      "id": "parameterize-do-not-enumerate",
+      "title": "Parameterize, Do Not Enumerate",
+      "path": "principles/parameterize-do-not-enumerate.toml"
+    },
+    {
+      "name": "Complete Mediation",
+      "key": "complete mediation",
+      "tokens": [
+        "complete",
+        "mediation"
+      ],
+      "field": "title",
+      "id": "complete-mediation",
+      "title": "Complete Mediation",
+      "path": "principles/complete-mediation.toml"
+    },
+    {
+      "name": "Confirm destructive actions",
+      "key": "confirm destructive actions",
+      "tokens": [
+        "confirm",
+        "destructive",
+        "actions"
+      ],
+      "field": "alias",
+      "id": "informed-consent",
+      "title": "Informed Consent for Consequential Actions",
+      "path": "principles/informed-consent.toml"
+    },
+    {
+      "name": "Default deny",
+      "key": "default deny",
+      "tokens": [
+        "default",
+        "deny"
+      ],
+      "field": "alias",
+      "id": "fail-safe-defaults",
+      "title": "Fail-Safe Defaults",
+      "path": "principles/fail-safe-defaults.toml"
+    },
+    {
+      "name": "Defense in Depth",
+      "key": "defense in depth",
+      "tokens": [
+        "defense",
+        "in",
+        "depth"
+      ],
+      "field": "title",
+      "id": "defense-in-depth",
+      "title": "Defense in Depth",
+      "path": "principles/defense-in-depth.toml"
+    },
+    {
+      "name": "Degraded mode",
+      "key": "degraded mode",
+      "tokens": [
+        "degraded",
+        "mode"
+      ],
+      "field": "alias",
+      "id": "graceful-degradation",
+      "title": "Graceful Degradation",
+      "path": "principles/graceful-degradation.toml"
+    },
+    {
+      "name": "Distinguish not-violated from not-inspected",
+      "key": "distinguish not violated from not inspected",
+      "tokens": [
+        "distinguish",
+        "not",
+        "violated",
+        "from",
+        "not",
+        "inspected"
+      ],
+      "field": "alias",
+      "id": "explicit-unknown",
+      "title": "Explicit Unknown",
+      "path": "principles/explicit-unknown.toml"
+    },
+    {
+      "name": "Do one thing well",
+      "key": "do one thing well",
+      "tokens": [
+        "do",
+        "one",
+        "thing",
+        "well"
+      ],
+      "field": "alias",
+      "id": "unix-composability",
+      "title": "Unix Composability",
+      "path": "principles/unix-composability.toml"
+    },
+    {
+      "name": "Do what it says on the tin",
+      "key": "do what it says on the tin",
+      "tokens": [
+        "do",
+        "what",
+        "it",
+        "says",
+        "on",
+        "the",
+        "tin"
+      ],
+      "field": "alias",
+      "id": "least-astonishment",
+      "title": "Least Astonishment",
+      "path": "principles/least-astonishment.toml"
+    },
+    {
+      "name": "Encapsulation by design decision",
+      "key": "encapsulation by design decision",
+      "tokens": [
+        "encapsulation",
+        "by",
+        "design",
+        "decision"
+      ],
+      "field": "alias",
+      "id": "information-hiding",
+      "title": "Information Hiding",
+      "path": "principles/information-hiding.toml"
+    },
+    {
+      "name": "End-to-end arguments in system design",
+      "key": "end to end arguments in system design",
+      "tokens": [
+        "end",
+        "to",
+        "end",
+        "arguments",
+        "in",
+        "system",
+        "design"
+      ],
+      "field": "alias",
+      "id": "end-to-end-principle",
+      "title": "End-to-End Principle",
+      "path": "principles/end-to-end-principle.toml"
+    },
+    {
+      "name": "End-to-End Principle",
+      "key": "end to end principle",
+      "tokens": [
+        "end",
+        "to",
+        "end",
+        "principle"
+      ],
+      "field": "title",
+      "id": "end-to-end-principle",
+      "title": "End-to-End Principle",
+      "path": "principles/end-to-end-principle.toml"
+    },
+    {
+      "name": "Enforcement Needs a Trigger",
+      "key": "enforcement needs a trigger",
+      "tokens": [
+        "enforcement",
+        "needs",
+        "a",
+        "trigger"
+      ],
+      "field": "title",
+      "id": "enforcement-needs-a-trigger",
+      "title": "Enforcement Needs a Trigger",
+      "path": "principles/enforcement-needs-a-trigger.toml"
+    },
+    {
+      "name": "Evidence-bound enforcement",
+      "key": "evidence bound enforcement",
+      "tokens": [
+        "evidence",
+        "bound",
+        "enforcement"
+      ],
+      "field": "alias",
+      "id": "enforcement-needs-a-trigger",
+      "title": "Enforcement Needs a Trigger",
+      "path": "principles/enforcement-needs-a-trigger.toml"
+    },
+    {
+      "name": "Explicit consent",
+      "key": "explicit consent",
+      "tokens": [
+        "explicit",
+        "consent"
+      ],
+      "field": "alias",
+      "id": "informed-consent",
+      "title": "Informed Consent for Consequential Actions",
+      "path": "principles/informed-consent.toml"
+    },
+    {
+      "name": "Explicit Unknown",
+      "key": "explicit unknown",
+      "tokens": [
+        "explicit",
+        "unknown"
+      ],
+      "field": "title",
+      "id": "explicit-unknown",
+      "title": "Explicit Unknown",
+      "path": "principles/explicit-unknown.toml"
+    },
+    {
+      "name": "Fail closed",
+      "key": "fail closed",
+      "tokens": [
+        "fail",
+        "closed"
+      ],
+      "field": "alias",
+      "id": "fail-safe-defaults",
+      "title": "Fail-Safe Defaults",
+      "path": "principles/fail-safe-defaults.toml"
+    },
+    {
+      "name": "Fail fast",
+      "key": "fail fast",
+      "tokens": [
+        "fail",
+        "fast"
+      ],
+      "field": "alias",
+      "id": "fail-fast",
+      "title": "Fail Fast and Explicitly",
+      "path": "principles/fail-fast.toml"
+    },
+    {
+      "name": "Fail Fast and Explicitly",
+      "key": "fail fast and explicitly",
+      "tokens": [
+        "fail",
+        "fast",
+        "and",
+        "explicitly"
+      ],
+      "field": "title",
+      "id": "fail-fast",
+      "title": "Fail Fast and Explicitly",
+      "path": "principles/fail-fast.toml"
+    },
+    {
+      "name": "Fail loudly",
+      "key": "fail loudly",
+      "tokens": [
+        "fail",
+        "loudly"
+      ],
+      "field": "alias",
+      "id": "fail-fast",
+      "title": "Fail Fast and Explicitly",
+      "path": "principles/fail-fast.toml"
+    },
+    {
+      "name": "Fail-Safe Defaults",
+      "key": "fail safe defaults",
+      "tokens": [
+        "fail",
+        "safe",
+        "defaults"
+      ],
+      "field": "title",
+      "id": "fail-safe-defaults",
+      "title": "Fail-Safe Defaults",
+      "path": "principles/fail-safe-defaults.toml"
+    },
+    {
+      "name": "Flow control under load",
+      "key": "flow control under load",
+      "tokens": [
+        "flow",
+        "control",
+        "under",
+        "load"
+      ],
+      "field": "alias",
+      "id": "backpressure",
+      "title": "Backpressure",
+      "path": "principles/backpressure.toml"
+    },
+    {
+      "name": "Graceful Degradation",
+      "key": "graceful degradation",
+      "tokens": [
+        "graceful",
+        "degradation"
+      ],
+      "field": "title",
+      "id": "graceful-degradation",
+      "title": "Graceful Degradation",
+      "path": "principles/graceful-degradation.toml"
+    },
+    {
+      "name": "High Cohesion, Low Coupling",
+      "key": "high cohesion low coupling",
+      "tokens": [
+        "high",
+        "cohesion",
+        "low",
+        "coupling"
+      ],
+      "field": "title",
+      "id": "high-cohesion-low-coupling",
+      "title": "High Cohesion, Low Coupling",
+      "path": "principles/high-cohesion-low-coupling.toml"
+    },
+    {
+      "name": "Human interface must not obstruct",
+      "key": "human interface must not obstruct",
+      "tokens": [
+        "human",
+        "interface",
+        "must",
+        "not",
+        "obstruct"
+      ],
+      "field": "alias",
+      "id": "psychological-acceptability",
+      "title": "Psychological Acceptability",
+      "path": "principles/psychological-acceptability.toml"
+    },
+    {
+      "name": "Idempotency",
+      "key": "idempotency",
+      "tokens": [
+        "idempotency"
+      ],
+      "field": "title",
+      "id": "idempotency",
+      "title": "Idempotency",
+      "path": "principles/idempotency.toml"
+    },
+    {
+      "name": "Idempotent operation",
+      "key": "idempotent operation",
+      "tokens": [
+        "idempotent",
+        "operation"
+      ],
+      "field": "alias",
+      "id": "idempotency",
+      "title": "Idempotency",
+      "path": "principles/idempotency.toml"
+    },
+    {
+      "name": "Information Hiding",
+      "key": "information hiding",
+      "tokens": [
+        "information",
+        "hiding"
+      ],
+      "field": "title",
+      "id": "information-hiding",
+      "title": "Information Hiding",
+      "path": "principles/information-hiding.toml"
+    },
+    {
+      "name": "Informed Consent for Consequential Actions",
+      "key": "informed consent for consequential actions",
+      "tokens": [
+        "informed",
+        "consent",
+        "for",
+        "consequential",
+        "actions"
+      ],
+      "field": "title",
+      "id": "informed-consent",
+      "title": "Informed Consent for Consequential Actions",
+      "path": "principles/informed-consent.toml"
+    },
+    {
+      "name": "Layered defenses",
+      "key": "layered defenses",
+      "tokens": [
+        "layered",
+        "defenses"
+      ],
+      "field": "alias",
+      "id": "defense-in-depth",
+      "title": "Defense in Depth",
+      "path": "principles/defense-in-depth.toml"
+    },
+    {
+      "name": "Least Astonishment",
+      "key": "least astonishment",
+      "tokens": [
+        "least",
+        "astonishment"
+      ],
+      "field": "title",
+      "id": "least-astonishment",
+      "title": "Least Astonishment",
+      "path": "principles/least-astonishment.toml"
+    },
+    {
+      "name": "Least Privilege",
+      "key": "least privilege",
+      "tokens": [
+        "least",
+        "privilege"
+      ],
+      "field": "title",
+      "id": "least-privilege",
+      "title": "Least Privilege",
+      "path": "principles/least-privilege.toml"
+    },
+    {
+      "name": "Make Illegal States Unrepresentable",
+      "key": "make illegal states unrepresentable",
+      "tokens": [
+        "make",
+        "illegal",
+        "states",
+        "unrepresentable"
+      ],
+      "field": "title",
+      "id": "make-illegal-states-unrepresentable",
+      "title": "Make Illegal States Unrepresentable",
+      "path": "principles/make-illegal-states-unrepresentable.toml"
+    },
+    {
+      "name": "Mechanism versus policy",
+      "key": "mechanism versus policy",
+      "tokens": [
+        "mechanism",
+        "versus",
+        "policy"
+      ],
+      "field": "alias",
+      "id": "mechanism-policy-separation",
+      "title": "Separate Mechanism from Policy",
+      "path": "principles/mechanism-policy-separation.toml"
+    },
+    {
+      "name": "Mediate every path",
+      "key": "mediate every path",
+      "tokens": [
+        "mediate",
+        "every",
+        "path"
+      ],
+      "field": "alias",
+      "id": "complete-mediation",
+      "title": "Complete Mediation",
+      "path": "principles/complete-mediation.toml"
+    },
+    {
+      "name": "Method-per-argument",
+      "key": "method per argument",
+      "tokens": [
+        "method",
+        "per",
+        "argument"
+      ],
+      "field": "alias",
+      "id": "parameterize-do-not-enumerate",
+      "title": "Parameterize, Do Not Enumerate",
+      "path": "principles/parameterize-do-not-enumerate.toml"
+    },
+    {
+      "name": "No bypass path",
+      "key": "no bypass path",
+      "tokens": [
+        "no",
+        "bypass",
+        "path"
+      ],
+      "field": "alias",
+      "id": "complete-mediation",
+      "title": "Complete Mediation",
+      "path": "principles/complete-mediation.toml"
+    },
+    {
+      "name": "No hidden side effects",
+      "key": "no hidden side effects",
+      "tokens": [
+        "no",
+        "hidden",
+        "side",
+        "effects"
+      ],
+      "field": "alias",
+      "id": "least-astonishment",
+      "title": "Least Astonishment",
+      "path": "principles/least-astonishment.toml"
+    },
+    {
+      "name": "No rule without a firing condition",
+      "key": "no rule without a firing condition",
+      "tokens": [
+        "no",
+        "rule",
+        "without",
+        "a",
+        "firing",
+        "condition"
+      ],
+      "field": "alias",
+      "id": "enforcement-needs-a-trigger",
+      "title": "Enforcement Needs a Trigger",
+      "path": "principles/enforcement-needs-a-trigger.toml"
+    },
+    {
+      "name": "No silent mutation",
+      "key": "no silent mutation",
+      "tokens": [
+        "no",
+        "silent",
+        "mutation"
+      ],
+      "field": "alias",
+      "id": "informed-consent",
+      "title": "Informed Consent for Consequential Actions",
+      "path": "principles/informed-consent.toml"
+    },
+    {
+      "name": "No silent pass",
+      "key": "no silent pass",
+      "tokens": [
+        "no",
+        "silent",
+        "pass"
+      ],
+      "field": "alias",
+      "id": "explicit-unknown",
+      "title": "Explicit Unknown",
+      "path": "principles/explicit-unknown.toml"
+    },
+    {
+      "name": "Observability",
+      "key": "observability",
+      "tokens": [
+        "observability"
+      ],
+      "field": "title",
+      "id": "observability",
+      "title": "Observability",
+      "path": "principles/observability.toml"
+    },
+    {
+      "name": "One entity per value",
+      "key": "one entity per value",
+      "tokens": [
+        "one",
+        "entity",
+        "per",
+        "value"
+      ],
+      "field": "alias",
+      "id": "parameterize-do-not-enumerate",
+      "title": "Parameterize, Do Not Enumerate",
+      "path": "principles/parameterize-do-not-enumerate.toml"
+    },
+    {
+      "name": "Operational observability",
+      "key": "operational observability",
+      "tokens": [
+        "operational",
+        "observability"
+      ],
+      "field": "alias",
+      "id": "observability",
+      "title": "Observability",
+      "path": "principles/observability.toml"
+    },
+    {
+      "name": "Optimize for Reversible Decisions",
+      "key": "optimize for reversible decisions",
+      "tokens": [
+        "optimize",
+        "for",
+        "reversible",
+        "decisions"
+      ],
+      "field": "title",
+      "id": "reversible-decisions",
+      "title": "Optimize for Reversible Decisions",
+      "path": "principles/reversible-decisions.toml"
+    },
+    {
+      "name": "Option preservation",
+      "key": "option preservation",
+      "tokens": [
+        "option",
+        "preservation"
+      ],
+      "field": "alias",
+      "id": "reversible-decisions",
+      "title": "Optimize for Reversible Decisions",
+      "path": "principles/reversible-decisions.toml"
+    },
+    {
+      "name": "Parameterize, Do Not Enumerate",
+      "key": "parameterize do not enumerate",
+      "tokens": [
+        "parameterize",
+        "do",
+        "not",
+        "enumerate"
+      ],
+      "field": "title",
+      "id": "parameterize-do-not-enumerate",
+      "title": "Parameterize, Do Not Enumerate",
+      "path": "principles/parameterize-do-not-enumerate.toml"
+    },
+    {
+      "name": "Parameterize Function",
+      "key": "parameterize function",
+      "tokens": [
+        "parameterize",
+        "function"
+      ],
+      "field": "alias",
+      "id": "parameterize-do-not-enumerate",
+      "title": "Parameterize, Do Not Enumerate",
+      "path": "principles/parameterize-do-not-enumerate.toml"
+    },
+    {
+      "name": "Parse, do not validate",
+      "key": "parse do not validate",
+      "tokens": [
+        "parse",
+        "do",
+        "not",
+        "validate"
+      ],
+      "field": "alias",
+      "id": "make-illegal-states-unrepresentable",
+      "title": "Make Illegal States Unrepresentable",
+      "path": "principles/make-illegal-states-unrepresentable.toml"
+    },
+    {
+      "name": "Partial availability",
+      "key": "partial availability",
+      "tokens": [
+        "partial",
+        "availability"
+      ],
+      "field": "alias",
+      "id": "graceful-degradation",
+      "title": "Graceful Degradation",
+      "path": "principles/graceful-degradation.toml"
+    },
+    {
+      "name": "Pipes and filters",
+      "key": "pipes and filters",
+      "tokens": [
+        "pipes",
+        "and",
+        "filters"
+      ],
+      "field": "alias",
+      "id": "unix-composability",
+      "title": "Unix Composability",
+      "path": "principles/unix-composability.toml"
+    },
+    {
+      "name": "POLP",
+      "key": "polp",
+      "tokens": [
+        "polp"
+      ],
+      "field": "alias",
+      "id": "least-privilege",
+      "title": "Least Privilege",
+      "path": "principles/least-privilege.toml"
+    },
+    {
+      "name": "Preview before apply",
+      "key": "preview before apply",
+      "tokens": [
+        "preview",
+        "before",
+        "apply"
+      ],
+      "field": "alias",
+      "id": "informed-consent",
+      "title": "Informed Consent for Consequential Actions",
+      "path": "principles/informed-consent.toml"
+    },
+    {
+      "name": "Principle of least privilege",
+      "key": "principle of least privilege",
+      "tokens": [
+        "principle",
+        "of",
+        "least",
+        "privilege"
+      ],
+      "field": "alias",
+      "id": "least-privilege",
+      "title": "Least Privilege",
+      "path": "principles/least-privilege.toml"
+    },
+    {
+      "name": "Principle of least surprise",
+      "key": "principle of least surprise",
+      "tokens": [
+        "principle",
+        "of",
+        "least",
+        "surprise"
+      ],
+      "field": "alias",
+      "id": "least-astonishment",
+      "title": "Least Astonishment",
+      "path": "principles/least-astonishment.toml"
+    },
+    {
+      "name": "Prose is not a check",
+      "key": "prose is not a check",
+      "tokens": [
+        "prose",
+        "is",
+        "not",
+        "a",
+        "check"
+      ],
+      "field": "alias",
+      "id": "enforcement-needs-a-trigger",
+      "title": "Enforcement Needs a Trigger",
+      "path": "principles/enforcement-needs-a-trigger.toml"
+    },
+    {
+      "name": "Psychological Acceptability",
+      "key": "psychological acceptability",
+      "tokens": [
+        "psychological",
+        "acceptability"
+      ],
+      "field": "title",
+      "id": "psychological-acceptability",
+      "title": "Psychological Acceptability",
+      "path": "principles/psychological-acceptability.toml"
+    },
+    {
+      "name": "Report could-not-check",
+      "key": "report could not check",
+      "tokens": [
+        "report",
+        "could",
+        "not",
+        "check"
+      ],
+      "field": "alias",
+      "id": "explicit-unknown",
+      "title": "Explicit Unknown",
+      "path": "principles/explicit-unknown.toml"
+    },
+    {
+      "name": "Rule of least surprise",
+      "key": "rule of least surprise",
+      "tokens": [
+        "rule",
+        "of",
+        "least",
+        "surprise"
+      ],
+      "field": "alias",
+      "id": "least-astonishment",
+      "title": "Least Astonishment",
+      "path": "principles/least-astonishment.toml"
+    },
+    {
+      "name": "Secure by default",
+      "key": "secure by default",
+      "tokens": [
+        "secure",
+        "by",
+        "default"
+      ],
+      "field": "alias",
+      "id": "fail-safe-defaults",
+      "title": "Fail-Safe Defaults",
+      "path": "principles/fail-safe-defaults.toml"
+    },
+    {
+      "name": "Separate Mechanism from Policy",
+      "key": "separate mechanism from policy",
+      "tokens": [
+        "separate",
+        "mechanism",
+        "from",
+        "policy"
+      ],
+      "field": "title",
+      "id": "mechanism-policy-separation",
+      "title": "Separate Mechanism from Policy",
+      "path": "principles/mechanism-policy-separation.toml"
+    },
+    {
+      "name": "Separation of Concerns",
+      "key": "separation of concerns",
+      "tokens": [
+        "separation",
+        "of",
+        "concerns"
+      ],
+      "field": "title",
+      "id": "separation-of-concerns",
+      "title": "Separation of Concerns",
+      "path": "principles/separation-of-concerns.toml"
+    },
+    {
+      "name": "Show, then ask",
+      "key": "show then ask",
+      "tokens": [
+        "show",
+        "then",
+        "ask"
+      ],
+      "field": "alias",
+      "id": "informed-consent",
+      "title": "Informed Consent for Consequential Actions",
+      "path": "principles/informed-consent.toml"
+    },
+    {
+      "name": "Single Authoritative Source",
+      "key": "single authoritative source",
+      "tokens": [
+        "single",
+        "authoritative",
+        "source"
+      ],
+      "field": "title",
+      "id": "single-authoritative-source",
+      "title": "Single Authoritative Source",
+      "path": "principles/single-authoritative-source.toml"
+    },
+    {
+      "name": "Single Source of Truth",
+      "key": "single source of truth",
+      "tokens": [
+        "single",
+        "source",
+        "of",
+        "truth"
+      ],
+      "field": "alias",
+      "id": "single-authoritative-source",
+      "title": "Single Authoritative Source",
+      "path": "principles/single-authoritative-source.toml"
+    },
+    {
+      "name": "SOC",
+      "key": "soc",
+      "tokens": [
+        "soc"
+      ],
+      "field": "alias",
+      "id": "separation-of-concerns",
+      "title": "Separation of Concerns",
+      "path": "principles/separation-of-concerns.toml"
+    },
+    {
+      "name": "SSOT",
+      "key": "ssot",
+      "tokens": [
+        "ssot"
+      ],
+      "field": "alias",
+      "id": "single-authoritative-source",
+      "title": "Single Authoritative Source",
+      "path": "principles/single-authoritative-source.toml"
+    },
+    {
+      "name": "System of Record",
+      "key": "system of record",
+      "tokens": [
+        "system",
+        "of",
+        "record"
+      ],
+      "field": "alias",
+      "id": "single-authoritative-source",
+      "title": "Single Authoritative Source",
+      "path": "principles/single-authoritative-source.toml"
+    },
+    {
+      "name": "Two-way door decisions",
+      "key": "two way door decisions",
+      "tokens": [
+        "two",
+        "way",
+        "door",
+        "decisions"
+      ],
+      "field": "alias",
+      "id": "reversible-decisions",
+      "title": "Optimize for Reversible Decisions",
+      "path": "principles/reversible-decisions.toml"
+    },
+    {
+      "name": "Type-driven design",
+      "key": "type driven design",
+      "tokens": [
+        "type",
+        "driven",
+        "design"
+      ],
+      "field": "alias",
+      "id": "make-illegal-states-unrepresentable",
+      "title": "Make Illegal States Unrepresentable",
+      "path": "principles/make-illegal-states-unrepresentable.toml"
+    },
+    {
+      "name": "Unix Composability",
+      "key": "unix composability",
+      "tokens": [
+        "unix",
+        "composability"
+      ],
+      "field": "title",
+      "id": "unix-composability",
+      "title": "Unix Composability",
+      "path": "principles/unix-composability.toml"
+    },
+    {
+      "name": "Unix philosophy",
+      "key": "unix philosophy",
+      "tokens": [
+        "unix",
+        "philosophy"
+      ],
+      "field": "alias",
+      "id": "unix-composability",
+      "title": "Unix Composability",
+      "path": "principles/unix-composability.toml"
+    },
+    {
+      "name": "Usable security",
+      "key": "usable security",
+      "tokens": [
+        "usable",
+        "security"
+      ],
+      "field": "alias",
+      "id": "psychological-acceptability",
+      "title": "Psychological Acceptability",
+      "path": "principles/psychological-acceptability.toml"
+    }
+  ]
+}

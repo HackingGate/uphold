@@ -1,0 +1,56 @@
+# Base rule set: broken-links (a citation nothing can follow)
+#
+# Markdown links that name a path which does not exist, or that leave the
+# repository. Pull in with:
+#
+#   [inherit]
+#   sets = ["process-residue", "broken-links"]
+#
+# WHAT IT IS ABOUT. A reference that resolves to nothing is worse than no
+# reference, because it reads as though somebody checked. It also does damage
+# downstream: the next author who follows it and lands nowhere pastes a copy of
+# the content instead, and a copy is the thing a citation existed to prevent.
+# The failure is silent by construction -- a document renders exactly the same
+# whether or not its links resolve, so nothing but a check ever finds out.
+#
+# WHAT IT DOES NOT READ. A target with a scheme -- `https://`, `mailto:` -- is
+# out of scope: resolving one needs the network, and a commit-time check that
+# reaches the network is a check that fails on a train. So a cross-repository
+# citation written as an absolute forge URL passes here untouched, which is the
+# form to use when a link has to leave the tree. `allow_outside_repo = true`
+# under this id is the other answer, for a checkout that really does sit beside
+# its siblings; it is off by default because `../other-repo/doc.md` resolves for
+# whoever wrote it and for nobody who cloned one repository.
+#
+# WHY `require_any_link = true` IS THE DEFAULT, and it is the load-bearing half.
+# Without it, a rule whose selection has stopped matching anything -- docs moved
+# under a directory the glob does not reach, markdown renamed to `.mdx`, a
+# repository that has not written a link yet -- reports Passed forever, and a
+# green check over an empty selection is indistinguishable from a green check
+# over a clean one. With it, the selection going empty is itself the failure.
+#
+# The cost is stated rather than discovered: a repository whose markdown holds
+# no links at all fails this rule on the day it inherits the set. That is the
+# rule working, and the answer is either a first link or `require_any_link =
+# false` written under this id, which is a decision recorded in the policy
+# instead of a silence.
+#
+# PROVENANCE. Promoted here after being found hand-copied into 13 of the 46
+# policy files across the consuming fleet, byte-identical in 12 of them; the
+# thirteenth adds one sentence about the forge-URL form and is otherwise the
+# same rule. The id is the one those copies already carry, so a repository still
+# holding its own copy shadows this rule rather than colliding with it.
+
+[rule.no-broken-doc-links]
+message = """
+A documentation link points at a path that does not exist, or escapes the
+repository. Repoint it or drop it: a reference nothing can follow is worse than
+no reference, because it reads as though someone checked -- and it pushes the
+next author toward pasting a copy instead, which is the drift a citation exists
+to prevent. A link that has to leave this repository is an absolute forge URL
+naming the owning repository and the path within it.
+"""
+builtin = "links-resolve"
+require_any_link = true
+files.include = ["."]
+files.glob = ["*.md"]

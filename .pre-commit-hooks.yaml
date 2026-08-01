@@ -1,0 +1,154 @@
+# What a pre-commit or prek consumer can pin.
+#
+# prek reads this file, not a file of its own: it is a reimplementation of the
+# same manifest format, and every `language:` used below is one it supports. So
+# "supports prek" is not a second surface to maintain -- it is a claim about
+# which languages this file is allowed to use, and the CI matrix is what keeps
+# the claim true. lefthook has no equivalent format; it consumes `lefthook.yml`
+# from a remote repository instead, which is what `hooks/lefthook.yml` is for.
+#
+# `language: rust` throughout, and it is not a toolchain requirement being
+# pushed onto the consumer: both runners bootstrap Rust themselves when it is
+# absent. All of these hooks build ONE environment, because pre-commit and prek
+# key an environment on (repo, language, version) rather than on the hook, so
+# the compile is paid once for the whole file however many ids a repository
+# pins.
+
+# The declaration check. This fires when the declaration changes or when any
+# configuration it reads changes -- the files that can turn a true enforcement
+# claim into a false one. It does not run on every commit, and it carries no
+# principle text into any runtime: what it prints is the rule that went missing
+# and the file that says so.
+- id: uphold-check
+  name: uphold
+  description: reconcile policy/upheld.toml against the rules this repo actually runs
+  entry: uphold_check.py
+  language: script
+  stages: [pre-commit, manual]
+  pass_filenames: false
+  files: '^(policy/upheld\.toml|policy/principles\.toml|\.pre-commit-config\.yaml|lefthook\.yml|\.cmd-shims/checks\.enabled)$'
+
+# ── the content policy ───────────────────────────────────────────────
+#
+# One id, where there were two. `uphold-scan` and `uphold-scan-src`
+# described a choice between a prebuilt wheel and a source build, and the wheel
+# did not exist: this repository publishes no release, and `language: python`
+# makes a runner pip-install the CLONE, which with a maturin backend compiles
+# from source anyway. So the two ids were one program twice, and the id whose
+# name promised the faster path was the one that delivered the slower.
+- id: uphold-scan
+  name: uphold scan
+  description: run the content policy in policy/principles.toml over this repository
+  entry: uphold scan
+  language: rust
+  stages: [pre-commit, manual]
+  pass_filenames: false
+  always_run: true
+
+# Text that never becomes a file. A commit message is published the moment it is
+# written and a tree-scanning check cannot see it at all, so the host-identity
+# rules run against the message itself at commit-msg time.
+- id: uphold-scan-text
+  name: uphold scan (commit message)
+  description: run the host-identity rules over the commit message
+  entry: uphold scan --text
+  language: rust
+  stages: [commit-msg]
+
+# ── the guards ───────────────────────────────────────────────────────
+#
+# One id per stage, because the stage is an argument and not a detail. A guard
+# reads a DIFFERENT artifact at each: the index at pre-commit, the message at
+# commit-msg, and at pre-push the commit being pushed together with every blob
+# the pushed range introduces -- a file added in one pushed commit and deleted
+# in the next is on the remote permanently and is in no tip tree. A single id
+# with `stages:` left to the consumer would have to guess which artifact it was
+# being asked about, and the guess it would make is the one that reads green.
+#
+# Which of the eleven guards fires at which stage is not decided here. It is
+# decided by `guard::stages` in the binary and by which ids the repository
+# declares in policy/principles.toml -- so pinning all five costs nothing for a
+# repository that declares two guards, and a repository that declares none gets
+# "no guards declared" rather than a failure.
+
+- id: uphold-guard
+  name: uphold guard (pre-commit)
+  description: run the guards that fire at pre-commit -- author identity, staged content, merge commits
+  entry: uphold guard --stage pre-commit
+  language: rust
+  stages: [pre-commit]
+  pass_filenames: false
+  always_run: true
+
+# `pass_filenames: true`, and it is the one thing here that is easy to get wrong
+# in the direction nobody notices. The message is a FILE and the runner knows
+# which one; a commit-msg hook declaring `pass_filenames: false` is handed
+# nothing and falls back to .git/COMMIT_EDITMSG. Under `git commit` that
+# fallback happens to be the right file, which is what makes the mistake
+# survivable and therefore permanent -- and it stops being the right file the
+# moment anyone drives the hook the other way a runner offers:
+#
+#   prek run --hook-stage commit-msg --commit-msg-filename <a message file>
+#
+# With no filename forwarded the guard reads the message left behind by the last
+# commit, which is clean, and reports a pass over a file it never opened.
+- id: uphold-guard-commit-msg
+  name: uphold guard (commit message)
+  description: run the guards that fire at commit-msg -- AI-authorship trailers, unusual unicode, private repo names
+  entry: uphold guard --stage commit-msg --message
+  language: rust
+  stages: [commit-msg]
+  pass_filenames: true
+  always_run: true
+
+# git runs `pre-merge-commit` for a merge and `pre-commit` for a commit --
+# different hook types, installed by different lines -- so a branch carrying a
+# zero-width space merges into the trunk with no file guard consulted at all
+# unless this id is pinned too.
+#
+# A FAST-FORWARD merge is not covered and cannot be: git creates no commit for
+# one and runs no hook, so there is no moment to refuse at. What arrives that
+# way is judged at the next commit or push by the tree-wide guards.
+- id: uphold-guard-merge
+  name: uphold guard (merge)
+  description: run the guards that fire at pre-merge-commit
+  entry: uphold guard --stage pre-merge-commit
+  language: rust
+  stages: [pre-merge-commit]
+  pass_filenames: false
+  always_run: true
+
+# The push guards need to know what is being pushed, and under pre-commit and
+# prek that does NOT arrive on stdin -- both consume git's stdin themselves and
+# export PRE_COMMIT_FROM_REF, PRE_COMMIT_TO_REF, PRE_COMMIT_REMOTE_NAME and
+# PRE_COMMIT_REMOTE_URL instead. The binary reads those, so nothing has to be
+# forwarded here. See `runner` for why that is a correctness fix and not a
+# convenience: without it a pre-push guard scanned the working index and
+# reported on it as though it were the push.
+#
+# `always_run` with no filenames, for the reason that matters most at this
+# stage: a runner passes the files in the push, and a pin file or a policy file
+# is almost never one of them. A check that only runs when its own config
+# changes is a check that never runs.
+- id: uphold-guard-push
+  name: uphold guard (push)
+  description: run the guards that fire at pre-push -- push destination, pushed-range content, stale hook pins
+  entry: uphold guard --stage pre-push
+  language: rust
+  stages: [pre-push]
+  pass_filenames: false
+  always_run: true
+
+# How CI reaches the guards that are too slow for pre-commit. Both of the
+# tree-wide name scans and the pin check ask the forge over the network, once
+# per distinct name or pin, which is why they are not registered at commit time
+# -- a guard that adds twenty seconds to every commit is one somebody deletes.
+# At the manual stage a scheduled run finds them instead of whoever pushes next.
+- id: uphold-guard-manual
+  name: uphold guard (manual)
+  description: run the guards that fire at the manual stage, for CI and scheduled runs
+  entry: uphold guard --stage manual
+  language: rust
+  stages: [manual]
+  pass_filenames: false
+  always_run: true

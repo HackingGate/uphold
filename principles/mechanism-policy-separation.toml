@@ -1,0 +1,31 @@
+id = "mechanism-policy-separation"
+title = "Separate Mechanism from Policy"
+aliases = ["Mechanism versus policy"]
+kind = "principle"
+status = "seed"
+domains = ["architecture", "operating-systems", "AI-harness"]
+summary = "Keep general capabilities separate from the rules that decide when and for whom they are used."
+claim = "Implement stable mechanisms that provide capability, and express changeable policy separately so decisions can evolve without rewriting the machinery."
+problem = "Embedding policy in mechanism makes every rule change an implementation change and encourages duplicated, inconsistent enforcement."
+rationale = "Mechanisms and policies often change at different rates and are owned by different authorities."
+applies_when = ["The same capability serves multiple policies or environments.", "Rules change more often than the underlying mechanism.", "Policy can be represented explicitly and reviewed."]
+does_not_mean = ["Make the mechanism policy-neutral in every consequence.", "Permit arbitrary policy injection without trust boundaries.", "Move all behavior into configuration.", "Ignore performance or safety constraints imposed by the mechanism."]
+benefits = ["Policy changes without mechanism forks.", "Clearer ownership and review.", "Reuse of one enforcement seam across several rules."]
+costs = ["A policy language or configuration surface must be designed.", "Invalid combinations become possible.", "The seam itself requires compatibility discipline."]
+failure_when_overapplied = ["A universal policy engine becomes harder to understand than direct code.", "Configuration becomes an untyped programming language.", "Mechanism capabilities exceed what any safe policy should expose."]
+conflicts_with = ["make-illegal-states-unrepresentable"]
+related = ["unix-composability", "separation-of-concerns", "least-privilege", "parameterize-do-not-enumerate"]
+review_questions = ["Which behavior is stable capability and which is changeable rule?", "Who is authorized to change the policy?", "Can invalid policy be rejected before execution?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Hard-coded policy values.", "Policy configuration and ownership.", "Duplicated rule implementations across enforcement seams."]
+checks = ["Require rule identifiers to resolve to one canonical implementation.", "Flag duplicated policy literals across adapters.", "Validate policy schemas before activation."]
+limits = ["The correct seam depends on expected change and authority boundaries.", "Some safety constraints belong inside the mechanism and must not be configurable."]
+
+[[sources]]
+title = "Hints for Computer System Design"
+url = "https://www.microsoft.com/en-us/research/publication/hints-for-computer-system-design/"
+type = "paper"
+notes = "Classic systems design guidance on modularity, interfaces, and separation of concerns including policy and mechanism."

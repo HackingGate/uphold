@@ -1,0 +1,161 @@
+# toolchain.toml — host/build-toolchain manifest for uphold.
+#
+# Declares the NON-language host toolchain needed to build, test and hook this
+# repo: the rustup toolchain (cargo cannot install itself), the Python that runs
+# the catalog scripts, and the coverage tools the manual hooks shell out to.
+# Language deps (the crates in Cargo.toml) are cargo's job and out of scope.
+# Consumed by ./scripts/deps.sh {check,install,packages,tool-pin}.
+#
+# The manifest exists here for one reason the other rows only support: Cargo.toml
+# declares an MSRV, and cargo enforces it at dependency resolution rather than
+# before the build. A contributor on an older rustc reads a resolver error naming
+# a dependency, and CI -- which builds on whatever `stable` is that week -- cannot
+# fail on an MSRV the tree has outgrown. The rustc row's `want` is that same
+# claim, stated where a preflight can read it before either happens.
+
+[meta]
+name = "uphold"
+description = "Rust host toolchain: rustup toolchain (>= MSRV) + python3 (catalog scripts) + coverage tools"
+
+# rustup manages the toolchain; a fresh box ships it with NO default toolchain.
+[[tool]]
+name = "rustup"
+check = "rustup --version"
+version = "rustup --version"
+packages.arch = "rustup"
+packages.debian = "rustup"
+hint = "the rustup toolchain multiplexer; the default toolchain is set by the rust-toolchain setup step"
+
+# The compiler must satisfy the repo MSRV (Cargo.toml `rust-version`). rustc only
+# resolves once a default toolchain is set (see the rust-toolchain setup step),
+# so on a fresh box this reports missing until `deps.sh install` runs.
+#
+# Bumping this means bumping Cargo.toml's `rust-version` in the same commit: two
+# copies of one number is what `single-authoritative-source` refuses, and the
+# only reason there are two is that cargo will not read this file.
+[[tool]]
+name = "rustc"
+check = "rustc --version"
+version = "rustc --version"
+want = ">=1.88"
+hint = "no default toolchain? run: scripts/deps.sh install (rustup default stable)"
+
+# cargo fmt / clippy hooks need these components on the active toolchain.
+[[tool]]
+name = "rustfmt"
+check = "cargo fmt --version"
+hint = "component; run: scripts/deps.sh install (rustup component add rustfmt)"
+
+[[tool]]
+name = "clippy"
+check = "cargo clippy --version"
+hint = "component; run: scripts/deps.sh install (rustup component add clippy)"
+
+# scripts/validate.py, scripts/build_reference.py, uphold_check.py and this
+# preflight itself. 3.11 is the floor because deps.sh reads this file with
+# tomllib, which is what 3.11 added.
+[[tool]]
+name = "python3"
+check = "python3 --version"
+version = "python3 --version"
+want = ">=3.11"
+packages.arch = "python"
+packages.debian = "python3"
+hint = "runs the catalog checks and parses this manifest (tomllib, 3.11+)"
+
+# The coverage hook is a manual-stage check, so these are optional: a plain
+# build, the pre-commit stage and every guard work without them. They are
+# declared anyway because "cargo llvm-cov: no such subcommand" is not a message
+# that tells anyone what to install.
+[[tool]]
+name = "cargo-llvm-cov"
+check = "cargo llvm-cov --version"
+optional = true
+hint = "coverage-only; install: cargo install cargo-llvm-cov (or run: scripts/deps.sh install)"
+
+[[tool]]
+name = "cargo-nextest"
+check = "cargo nextest --version"
+optional = true
+hint = "coverage-only; install: cargo install cargo-nextest (or run: scripts/deps.sh install)"
+
+# The three runners this repository publishes hook configuration for. A
+# contributor needs ONE of them, so none of the three can be required — but a
+# repo whose whole subject is hooks should be able to say what runs them.
+[[tool]]
+name = "pre-commit"
+check = "pre-commit --version"
+optional = true
+hint = "one of pre-commit/prek/lefthook is needed to install the hooks; pipx install pre-commit"
+
+[[tool]]
+name = "prek"
+check = "prek --version"
+optional = true
+hint = "the Rust runner for .pre-commit-config.yaml; pipx install prek"
+
+[[tool]]
+name = "lefthook"
+check = "lefthook version"
+optional = true
+hint = "the runner for lefthook.yml; go install github.com/evilmartians/lefthook/v2@latest"
+
+# The Python linter, for the catalog scripts and the declaration checker. Same
+# split as the shell linters below: pre-commit and prek install their own copy
+# from the pinned hook repo, and a lefthook box runs this one.
+[[tool]]
+name = "ruff"
+check = "ruff --version"
+optional = true
+packages.arch = "ruff"
+packages.debian = "ruff"
+hint = "lefthook runs the host's copy; pre-commit and prek install their own"
+
+# The shell linters. pre-commit and prek install their own copies from the
+# pinned hook repos; lefthook has no managed environments and calls whatever is
+# on PATH, so on a lefthook box these are the version of record.
+[[tool]]
+name = "shellcheck"
+check = "shellcheck --version"
+optional = true
+packages.arch = "shellcheck"
+packages.debian = "shellcheck"
+hint = "lefthook runs the host's copy; pre-commit and prek install their own"
+
+[[tool]]
+name = "bashate"
+check = "bashate --version"
+optional = true
+hint = "lefthook runs the host's copy; pipx install bashate"
+
+# ── system packages ─────────────────────────────────────────────────────────
+#
+# None. The scan engine links nothing native — the ripgrep stack this repo used
+# to shell out to is compiled in — so `deps.sh packages` prints an empty list and
+# CI installs nothing. The section is named rather than dropped so the next
+# native dep has an obvious home, and so a reader is not left wondering whether
+# the list is empty or missing.
+
+# ── non-package setup ───────────────────────────────────────────────────────
+
+# Ensure a default rustup toolchain exists and carries rustfmt + clippy.
+[[setup]]
+name = "rust-toolchain"
+check = "rustup show active-toolchain >/dev/null 2>&1 && cargo fmt --version >/dev/null 2>&1 && cargo clippy --version >/dev/null 2>&1"
+run = """
+rustup show active-toolchain >/dev/null 2>&1 || rustup default stable
+rustup component add rustfmt clippy
+"""
+
+# Coverage tooling. Optional for the same reason the tools above are: nothing on
+# the pre-commit stage needs it, and `cargo install` of two binaries is not
+# something a plain `deps.sh install` should do without being asked -- but when
+# it is asked, this is the exact pair CI uses.
+[[setup]]
+name = "coverage-tools"
+optional = true
+check = "cargo llvm-cov --version >/dev/null 2>&1 && cargo nextest --version >/dev/null 2>&1"
+run = """
+cargo install --locked cargo-llvm-cov
+cargo install --locked cargo-nextest
+"""

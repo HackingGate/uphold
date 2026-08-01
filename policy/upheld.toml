@@ -1,0 +1,100 @@
+# What enforces which principle in this repository.
+#
+# One entry per rule that already fires. Each is checked against this repo's own
+# configuration, so a claim goes stale loudly when the rule is removed or
+# disabled -- which is the only failure mode a declaration file has.
+#
+# A rule id resolves against every seam at once, and a rule enforced at more
+# than one seam is reported at each: `prevent-ai-author` guards a commit
+# message and a pull-request body, and the claim covers both.
+#
+# Principles this repository takes seriously but does not yet enforce are not
+# listed here. They live in prose, where a reader can weigh them, rather than in
+# a config file that would have no condition on which to raise them.
+
+[[enforce]]
+principle = "explicit-unknown"
+rule = "catalog-tests"
+# tests/test_uphold_check.py asserts that an unreadable declaration exits 2
+# and not 0.
+
+[[enforce]]
+principle = "single-authoritative-source"
+rule = "catalog-reference-current"
+# QUICK_REFERENCE.md and name-index.json are generated; the hook refuses a tree
+# where either has drifted from the records it was built from.
+
+[[enforce]]
+principle = "make-illegal-states-unrepresentable"
+rule = "catalog-validate"
+# A record with an unknown kind, status, enforcement level, or a relationship to
+# an id that does not exist cannot be committed.
+
+[[enforce]]
+principle = "single-authoritative-source"
+rule = "catalog-tests"
+# The MSRV is one number cargo and the host preflight both need, in two manifest
+# formats neither tool can read across. tests/test_toolchain.py refuses a tree
+# where Cargo.toml's `rust-version` and toolchain.toml's rustc `want` have
+# drifted -- which is the only failure a copy has once it is allowed to exist.
+
+[[enforce]]
+principle = "explicit-unknown"
+rule = "hook-pins-resolve"
+# A pin that could not be checked -- unreachable remote, unreadable config, a
+# bare sha with no ref to look up -- exits 2, which is not the 0 it would exit
+# if the pin resolved. tests/test_hook_pins.py asserts the three exit codes are
+# three, and that an unreachable remote is not a pass.
+
+[[enforce]]
+principle = "single-authoritative-source"
+rule = "no-stale-hook-pins"
+# The upstream tag owns the version; a `rev:` here is a copy of it. The hook
+# refuses a copy that has drifted behind its owner, which is the only failure a
+# copy has once it exists.
+
+[[enforce]]
+principle = "complete-mediation"
+rule = "prevent-ai-author"
+# The commit-msg hook cannot see a pull-request body. This covers the path that
+# reaches a public API without passing one.
+
+[[enforce]]
+principle = "fail-safe-defaults"
+rule = "prevent-public-push"
+# Push destinations are permitted by name; anything unnamed is refused.
+
+[[enforce]]
+principle = "least-privilege"
+rule = "workflow-declares-permissions"
+# A workflow with no `permissions:` block runs on the repository's default
+# grant rather than on what the job needs. The rule refuses the workflow, not
+# the setting -- the setting is one place and the workflows are many, and the
+# one that gets edited is the workflow.
+
+# What routes to a rule, and what routes to a reviewer.
+#
+# `enforcement.automatable = "yes"` says a machine CAN decide the principle. It
+# is a property of the principle, not of this repository -- so an unclaimed one
+# is an error, and the two below are the case that error cannot express on its
+# own: this repository is a catalog and a CLI, and neither a queue nor a
+# retryable side-effecting endpoint exists in it to carry the rule.
+#
+# Recorded here with a reason rather than by amending the records. Changing
+# `backpressure` to `partially` would make the catalog describe THIS repository
+# instead of the principle, and the next consumer would read it and believe it.
+#
+# An entry goes stale the moment a rule does claim the record, and is reported
+# then -- an exemption that no longer describes the tree is the check switched
+# off for that record, and it would stay off.
+[review]
+max_lines = 900
+# Two names for one compiled document, and neither is a second source: both are
+# generated from the catalog under the same `--check` gate, so a stale one
+# cannot be committed. AGENTS.md is where an agent looks; REVIEW.md is where a
+# person does.
+emit = ["REVIEW.md", "AGENTS.md"]
+
+[review.no_subject_here]
+backpressure = "Nothing here has a queue, an admission decision, or a producer to slow down. The record's checks are about a running service; this repository is a catalog and a command-line tool."
+idempotency = "Nothing here has a retryable side-effecting endpoint. `uphold` commands read and report; the one that writes, --review --emit, is idempotent by construction because it writes a pure function of the catalog."

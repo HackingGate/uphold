@@ -1,0 +1,31 @@
+id = "information-hiding"
+title = "Information Hiding"
+aliases = ["Encapsulation by design decision"]
+kind = "principle"
+status = "seed"
+domains = ["architecture", "interfaces", "design"]
+summary = "Hide volatile design decisions behind interfaces chosen to contain change, not merely to group steps."
+claim = "Module boundaries should conceal design decisions likely to change, exposing only the stable information required by clients."
+problem = "When clients depend on internal representation or policy, one local change propagates through the system."
+rationale = "A boundary around a volatile decision limits the number of components that must understand or change with it."
+applies_when = ["A representation, algorithm, policy, or external dependency is likely to change.", "Clients can operate through a smaller stable contract.", "The hidden decision has a coherent owner."]
+does_not_mean = ["Hide all behavior from observability or review.", "Use getters and setters around every field.", "Prevent clients from expressing legitimate requirements.", "Treat secrecy as a substitute for a stable contract."]
+benefits = ["Reduced ripple effects.", "Replaceable implementations.", "Smaller client knowledge surface."]
+costs = ["Interface design effort.", "Potential mismatch between abstraction and client needs.", "Debugging may require privileged introspection."]
+failure_when_overapplied = ["Opaque wrappers expose no useful semantics.", "Clients bypass the abstraction because it cannot express required behavior.", "Hidden state makes failures impossible to diagnose."]
+conflicts_with = ["observability"]
+related = ["separation-of-concerns", "high-cohesion-low-coupling", "single-authoritative-source", "parameterize-do-not-enumerate"]
+review_questions = ["Which design decision is this boundary hiding?", "What client knowledge would cause ripple effects if exposed?", "Is diagnostic visibility preserved without making internals part of the contract?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Public API surface.", "Direct access to internal data structures.", "Imports of implementation-specific packages."]
+checks = ["Disallow dependencies on declared internal modules.", "Require public interfaces to document stability and failure semantics.", "Flag representation types crossing architectural boundaries."]
+limits = ["A private symbol is not proof of information hiding.", "The volatility of a design decision is contextual."]
+
+[[sources]]
+title = "On the Criteria To Be Used in Decomposing Systems into Modules"
+url = "https://doi.org/10.1145/361598.361623"
+type = "paper"
+notes = "Parnas distinguishes decomposition by processing steps from decomposition by hidden design decisions."

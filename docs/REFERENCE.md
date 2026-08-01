@@ -1,0 +1,513 @@
+# Configuration reference
+
+Everything below lives in one file, `policy/principles.toml`, in one flat id
+namespace — that is what lets a claim in
+[`policy/upheld.toml`](../policy/upheld.toml) name a rule by id alone.
+
+- [Rule shape](#rule-shape)
+- [`uphold scan` — the content policy](#uphold-scan--the-content-policy)
+- [`uphold guard` — the guards](#uphold-guard--the-guards)
+- [`uphold shim` — the shims](#uphold-shim--the-shims)
+- [`uphold audit --for-publication`](#uphold-audit---for-publication)
+- [`--coverage` and `--oscal`](#--coverage-and---oscal)
+- [The review tier](#the-review-tier)
+
+## Rule shape
+
+One rule is one section, and **the id is the section header**:
+
+```toml
+[rule.no-conflict-markers]
+regexp = '^<{7} '
+message = "resolve the conflict"
+files.glob = ["*.md"]
+```
+
+Everything about a rule lives inside its section — there is no `id` field and
+no detached sub-table to drift away from its rule during an edit. Two sections
+with one id are a TOML parse error. Kebab-case ids are legal bare keys; quote
+anything else (`[rule."my rule"]`).
+
+**What it checks** — one field, no discriminant beside it:
+
+| field | fails when |
+|---|---|
+| `regexp` | the regex matches anywhere in the selected files |
+| `path_regexp` | a tracked path matches the regex |
+| `require_regexp` | a selected file does **not** contain the regex |
+| `max_lines` | a selected file is longer than that, or grew past its baseline |
+| `forbidden_literals` / `forbidden_literals_from` | a runtime literal — username, hostname, route — appears in them |
+| `encoding` | a selected file does not decode cleanly under the declared charset |
+| `allowed_scripts` | a letter uses a Unicode script outside the declared list |
+| `builtin` | a check compiled in here says so — see [the guards](#uphold-guard--the-guards) |
+| `exec` | an executable you name says so |
+
+**Where it runs** — up to three key groups inside the rule's section, each in
+the vocabulary of the thing that runs it. **Absent keys are a place the rule
+does not run.**
+
+| keys | vocabulary | runs it |
+|---|---|---|
+| `files.*` | ripgrep scoping — `glob`, `multiline`, `fixed_strings` | `uphold scan` |
+| `git.hooks` | githooks(5) names — `pre-commit`, `commit-msg`, `pre-merge-commit`, `pre-push`, `manual` | `uphold guard --stage <hook>` |
+| `command.before` | the command line as typed — `"gh pr create"`, `"git push"` | `uphold shim <command>` |
+
+Both halves are checked at load. A rule naming two checks is refused, because
+one of them would be read by nothing while looking enforced. A rule naming no
+place is refused, because it runs nowhere and that reads exactly like a rule
+that passes.
+
+Exit codes: `0` clean, `1` violations, `2` the check could not be made.
+
+## `uphold scan` — the content policy
+
+Evaluates every rule over the repository's own files, using ripgrep's search
+libraries rather than a second regex engine.
+
+```toml
+allowed_scripts = ["Latin"]
+
+[inherit]
+sets = ["process-residue"]          # bundled sets, named by what they refuse
+disabled_rules = ["no-task-tracker-references"]
+
+[rule.workflow-declares-permissions]
+require_regexp = '^permissions:'
+message = "declare the token scopes the job needs"
+files.include = [".github/workflows"]
+files.glob = ["*.yml", "*.yaml"]
+```
+
+`inherit.sets` names bundled sets to inherit; it does not add settings. There
+is no `true` shorthand — naming the sets is cheap, and what a repository
+inherits should be written in the repository. Six are compiled into the
+binary and mirrored in [`policy/base/`](../policy/base), each **named by what
+it refuses** so the name predicts the rule list:
+
+| set | refuses |
+|---|---|
+| `process-residue` | authoring and process residue in committed content — conflict markers, home paths, dated and status metadata, tracker and thread references, private data paths |
+| `credentials` | credential material — private keys and service tokens, literal credential values, populated environment files, browser profile and session stores |
+| `unmanaged-pins` | a version pinned where no manifest holds it — a shell install line, a `releases/download/vX.Y.Z` URL, a versioned `curl` or `wget` |
+| `host-identity` | the machine the author is standing on — its username, home path, hostname and default route, read at scan time and searched for in content |
+| `broken-links` | a markdown link naming a path that does not exist or leaving the repository, and a selection that yields no links at all |
+| `captured-fixtures` | a test fixture holding non-ASCII content, as the one signal that a capture from a live upstream survives redaction |
+
+Each is named separately because taking one is a separate decision:
+`unmanaged-pins` refuses a shape a repository that vendors its dependencies
+has on purpose, `host-identity` shells out to read the running machine, and
+`captured-fixtures` refuses the script a parser's own test corpus is made of.
+None of those arguments should stand between anyone and `process-residue`. The
+binary answers "what is in it" directly:
+
+```sh
+uphold rules --set process-residue    # the set's rules, one per line
+```
+
+A repository's own rule of the same `id` shadows the inherited one;
+`inherit.disabled_rules` drops it, and naming an id nothing inherited defines
+is an error rather than a line that quietly does nothing. `inherit.paths`
+merges extra policy files, repository-relative, after the bundled sets.
+
+The two requests this shape exists to make writable:
+
+```toml
+# Stand in front of `gh pr create`, search the tree, install no git hook.
+[rule.no-ai-authorship-trailer]
+regexp = '(?im)^Co-Authored-By:.*<noreply@'
+message = "Remove the marker; represent the work as your own."
+files.glob = ["**/*.md"]
+command.before = ["gh pr create"]
+```
+
+```toml
+# `git push` and nothing else.
+[rule.no-published-host-identity]
+exec = "uphold scan --text -"
+message = "Use neutral placeholders."
+command.before = ["git push"]
+```
+
+```sh
+uphold scan                 # the tree
+uphold scan --text -        # a commit message, a release note, a PR body
+```
+
+`--text` exists because the content that leaks host identity most often is the
+content that never becomes a file. It runs the `forbidden_literals` rules only:
+those describe the running machine, so they mean something against any text,
+while a `regexp` rule is scoped to paths and file types and firing it at prose
+would be guesswork.
+
+### `forbidden_literals` — what must appear nowhere
+
+```toml
+[rule.no-host-identity]
+forbidden_literals = "running-os-identity"
+ignore_literals = ["nas", "lab"]     # extends the default ignore list below
+message = "use neutral placeholders"
+files.include = ["."]
+files.word = true
+```
+
+The name says what fails: a literal describing **this machine** — username,
+home path, hostname and its identifying segments, default-route addresses —
+found in content. Sources: `running-os-identity`, `running-os-metadata`
+(identity plus route), `running-default-route`. `forbidden_literals_from`
+names any command producing one literal per line (`label<TAB>value`, or a bare
+line as its own label):
+
+```toml
+[rule.no-lan-hostnames]
+forbidden_literals_from = "awk '/^[^#]/ { print $2 }' /etc/hosts"
+message = "use neutral placeholders"
+files.include = ["."]
+```
+
+**The default ignore list.** Some literals are never searched for, because
+they describe a machine's *kind* rather than its owner and would fire on every
+legitimate mention. The suppression is a documented list rather than a
+hard-coded one; `ignore_literals` extends it per rule, and the defaults are:
+
+- distribution and OS words — `alma`, `alpine`, `arch`, `archlinux`,
+  `armbian`, `bsd`, `cachyos`, `centos`, `darwin`, `debian`, `endeavour`,
+  `endeavouros`, `fedora`, `gentoo`, `kali`, `linux`, `macos`, `manjaro`,
+  `mint`, `nix`, `nixos`, `openwrt`, `opensuse`, `pop`, `popos`, `raspbian`,
+  `redhat`, `rhel`, `rocky`, `suse`, `ubuntu`, `unix`, `void`, `windows`
+- architecture words — `aarch64`, `amd64`, `arm`, `arm64`, `i386`, `i686`,
+  `riscv`, `riscv64`, `x86`, `x8664`, `x64`
+- role and form-factor words — `box`, `build`, `builder`, `cloud`, `desktop`,
+  `dev`, `gateway`, `guest`, `home`, `host`, `lab`, `laptop`, `local`,
+  `machine`, `main`, `media`, `nas`, `node`, `router`, `server`, `srv`,
+  `test`, `virt`, `workstation`
+- `runner` (a CI machine's own name), and any hostname segment shorter than
+  three characters or all digits — too collision-prone even under whole-word
+  matching
+
+### `encoding` — the bytes, not the text
+
+```toml
+[rule.scrape-output-is-shift-jis]
+encoding = "Shift_JIS"                # a WHATWG charset label
+message = "scrape output is Shift-JIS by contract"
+files.glob = ["scrape/**/ja/**"]
+```
+
+Fails when a selected file does not decode cleanly under the declared charset.
+The label is a **WHATWG encoding label** — `"UTF-8"`, `"Shift_JIS"`,
+`"EUC-JP"`, `"windows-1252"` — resolved against the registry browsers use; an
+unknown label is refused at load, not at the first file.
+
+Deliberately separate from `allowed_scripts`: encoding is a property of the
+bytes, script is a property of the decoded text. Two fields can say "UTF-8
+file containing Japanese" and "Shift-JIS file containing Japanese" apart —
+and they compose, so a Shift-JIS file covered by both is decoded under its
+declared charset and then script-checked as text.
+
+### `max_lines`, and the baseline that ratchets it
+
+A language's own linter caps the length of the files its parser opens. This one
+runs over whatever `files.*` selects, so the Markdown, the workflow YAML
+and the generated table are in scope too — and it takes a baseline, which is
+the reason it is here rather than deferred to that linter.
+
+```toml
+[rule.keep-modules-readable]
+max_lines = 400
+message = "split the module"
+files.glob = ["src/**/*.rs"]
+files.baseline = "policy/size-baseline.txt"
+```
+
+One `path count` per line. A listed file is held to **its own number** instead
+of the limit and fails when it grows, so what is already oversized is frozen
+rather than exempted — the difference between a ratchet and a suppression
+comment, which is invisible in the policy and permanent in the file.
+
+A baselined path the rule no longer selects is reported. An allowance nothing
+reports is the rule switched off for that path, and it would apply again in full
+the day something takes the name back.
+
+Not to be confused with [`[review] max_lines`](#the-review-tier), which budgets
+the compiled review document rather than a file a rule selects.
+
+### What `allowed_scripts` reads
+
+The Unicode **Script** property (UTS 24) of every alphabetic character.
+`Common`, `Inherited` and `Unknown` — punctuation, digits, combining marks —
+are never the subject, and declaring them is refused because it would be read
+by nothing.
+
+Values are **Unicode script names as regex engines spell them**:
+`allowed_scripts = ["Hiragana"]` admits exactly what `\p{Script=Hiragana}`
+matches. An engineer who knows regex already knows the whole namespace. An
+unknown or miscased name is refused at load with the standard spelling
+suggested — `latin` proposes `"Latin"`, `old italic` proposes `"Old_Italic"`.
+
+Script is the unit rather than a codepoint range because a range is the wrong
+shape for the question: Han alone is scattered over non-contiguous blocks plus
+extensions, and membership moves with the Unicode version.
+
+`allowed_scripts` at the top level constrains every file no scoped rule
+selects. A scoped rule's list is **the whole truth for the files it selects**
+— replace, not union — so what is declared beside the path is what holds for
+the path:
+
+```toml
+allowed_scripts = ["Latin"]
+
+[rule.ja-content-uses-ja-scripts]
+allowed_scripts = ["Latin", "Hiragana", "Katakana", "Han"]
+exclusive = true
+files.glob = ["docs/**/ja/**", "i18n/**/ja/**"]
+```
+
+**`exclusive` is the reverse direction.** The forward check says files in
+scope may use only these scripts; `exclusive = true` says these scripts are
+*also* refused in every file the rule does not select — Japanese text leaking
+into `src/` fails, attributed to this rule. Both directions together are the
+if-and-only-if; `false` (the default) is the forward-only check. A script
+admitted where it stands — by the top level, or by another rule selecting that
+file — stays admitted: exclusivity adds refusals where nothing admits the
+script, it does not revoke an explicit grant (Latin above passes everywhere on
+the top-level grant).
+
+**A file the check cannot read is reported, never skipped.** A non-UTF-8 file
+silently passed over would be a file nobody read, reported as clean. Bytes an
+`encoding` rule declares are decoded under that declaration and their scripts
+judged; bytes nothing declares are exit 2, with the cures named: declare the
+charset, exclude the file, or mark it not text in `.gitattributes`.
+
+**What this catches is a script with no business in the text** — a Cyrillic
+small a, `U+0430`, sitting inside an otherwise ASCII word and rendering as one
+of its letters. It is not a check on which language the prose is written in —
+it never was: `en` and `de` would both admit exactly Latin, which is why the
+field names scripts and not languages.
+
+## `uphold guard` — the guards
+
+`uphold guard --stage STAGE` runs the guards that have something to say at
+that moment. A content rule reads the tree and could run at any time; a guard
+reads an **act** — the message about to be recorded, the identity about to be
+stamped on it, the range about to be pushed.
+
+| guard | refuses |
+|---|---|
+| `prevent-ai-author` | a commit message carrying AI-authorship markers |
+| `prevent-author-mismatch` | an identity that is not your global one |
+| `prevent-unusual-unicode` | unusual characters in a commit message |
+| `prevent-unusual-unicode-in-files` | characters that draw nothing, in committed content |
+| `no-private-repo-names` | a private repository named in a public one's message |
+| `no-private-repo-names-staged` | the same, in the lines a commit adds |
+| `no-private-repo-names-in-files` | the same, anywhere in what is being introduced |
+| `prevent-public-push` | a push to somewhere off the allow-list |
+| `no-local-merge` | a merge that would make a merge commit |
+| `no-merge-commit` | a commit finishing a merge or a squash merge |
+| `no-stale-hook-pins` | a pin left behind its upstream, or naming no ref |
+
+Declared like any other rule, in the same file and the same id namespace.
+**`git.hooks` is the whole registration.**
+
+```toml
+[rule.prevent-public-push]
+builtin = "prevent-public-push"
+owner = "acme"                    # pinned, not derived from origin
+allowed_repos = ["other/thing"]
+git.hooks = ["pre-push"]
+
+[rule.prevent-unusual-unicode-in-files]
+builtin = "prevent-unusual-unicode-in-files"
+allow = ["U+00A0:docs/captured/**"]
+git.hooks = ["pre-commit", "pre-merge-commit", "pre-push", "manual"]
+```
+
+`owner` is a pin rather than a derivation: taking the owner from `origin` is
+tautological for the one remote most likely to be wrong — repointing origin at a
+public upstream, the exact accident the guard exists to prevent, also repoints
+the allow-list. Where nothing is pinned the guard still runs off origin, and
+says so at the point of refusal rather than passing itself off as the pinned
+answer.
+
+### Built-in parameters
+
+Each built-in declares the parameters it reads, and **a parameter on a rule
+whose check does not read it is refused at load** — the same refusal as a
+second check field, for the same reason: a field read by nothing looks
+enforced and is not.
+
+| parameter | read by | meaning |
+|---|---|---|
+| `owner` | `prevent-public-push` | the owner this workspace is pinned to |
+| `allowed_owners` | `prevent-public-push` | owners a push may go to; defaults to the pinned owner |
+| `allowed_repos` | `prevent-public-push` | single repositories allowed through, `"owner/repo"` |
+| `visibility` | the `no-private-repo-names` family | this repository's visibility, declared instead of looked up |
+| `private_owners` | the `no-private-repo-names` family | owners whose repositories are private regardless of what a forge says |
+| `private_owners_from` | the `no-private-repo-names` family | a command whose stdout is one private owner per line |
+| `public_repos` | the `no-private-repo-names` family | names treated as public without asking a forge |
+| `refuse_unknown` | the `no-private-repo-names` family | treat a name whose visibility could not be determined as private |
+| `allow` | `prevent-unusual-unicode-in-files` | codepoints admitted, optionally under one glob — `"U+00A0:docs/captured/**"` |
+
+The "family" is `no-private-repo-names`, `-staged` and `-in-files`. No other
+built-in reads any parameter. The same mechanism holds beside the checks:
+`exclude_cfg_test` is read only by the content searches (`regexp`, `values` —
+its job is dropping a matched *line* inside a `#[cfg(test)]` block, and no
+other check has one), and `require_any_link` / `allow_outside_repo` are read
+only by `links-resolve`.
+
+**Which bytes a guard reads: the index, unless a push says otherwise.** At a
+push there is no index at all — the artifact is the pushed commit's whole tree
+*plus every blob the pushed range introduces*. Neither half covers the other;
+see [DESIGN.md](DESIGN.md#which-bytes-a-guard-reads).
+
+### Overriding one
+
+```sh
+UPHOLD_ALLOW=prevent-ai-author git commit
+```
+
+One spelling. The id is in it, so what was switched off is legible in a shell
+history and in a CI log. It stays in the environment and is deliberately not a
+rule field: a bypass written into the policy file would be committed, reviewed
+once, and permanent.
+
+## `uphold shim` — the shims
+
+A pull-request body is typed into a CLI and goes straight to a public API
+without passing a single hook. So does an issue title, a release note, a branch
+name, and a commit message written under `--no-verify` — the one path that
+exists precisely to skip `commit-msg`.
+
+`uphold shim` stands in front of the command, checks what the invocation is
+about to publish, and **execs through**. Put a link named for the command on
+PATH ahead of the real one and `argv[0]` does the rest.
+
+```toml
+[[shim]]
+command = "gh"
+match = ["pr:create", "pr:edit", "issue:create"]   # named, never guessed
+text_flags = ["-t", "--title", "-b", "--body"]
+file_flags = ["-F", "--body-file"]
+skip_flags = ["--fill"]
+editor_env = "GH_EDITOR"
+target = "forge-repo"
+scope = "public-target"
+```
+
+`target` is `forge-repo` or `git-remote`, both built-in resolvers. `scope` is
+`public-target | public-registry | always`, with `scope = { command = "..." }`
+as the escape hatch — `npm publish` has no repository, owner or visibility
+endpoint in it. `collect = "git-refs"` replaces the argv walk for `git`, whose
+published text is positional.
+
+### The checker contract
+
+```toml
+[rule.no-published-host-identity]
+exec = "uphold scan --text -"
+message = "use neutral placeholders"
+command.before = ["gh", "glab", "git push"]
+```
+
+Any executable: the subject on stdin, its kind in `UPHOLD_KIND`, **0** to
+pass, **1** to refuse, **2** to say it could not look. Exit 2 is the third
+answer and is never folded into either of the others.
+
+**`before` is what the checker is asked about, and nothing else.** The match is
+the command, then its subcommand words in order — `"gh pr create"` catches
+`gh -R acme/x pr create`, because where a release puts its flags is not
+something a reader should have to track.
+
+**One case a shim genuinely cannot see:** no body on the command line, no
+`--web`, and a command about to open an editor. What gets typed there has not
+been written yet. The shim says so rather than reporting a pass over text it
+never saw.
+
+## `uphold audit --for-publication`
+
+Every guard across every seam conditions on *is the target public **now***. So
+content written into a private repository is correctly allowed at write time,
+and nothing re-examines that decision when the repository later goes public. A
+private→public flip is a **bulk republication event** covering the tree, every
+commit message, and every issue and comment at once — and no seam has a trigger
+for it.
+
+```sh
+uphold audit --for-publication
+```
+
+One shot, not a hook. It judges under the visibility the repository is *about
+to have*, using the repository's own `no-private-repo-names` rule with that one
+field overridden — so what counts as a private name here is what counts
+everywhere else.
+
+The names must come from outside the tree, since a public repository cannot hold
+the list of what must not be published:
+
+```toml
+[rule.no-private-repo-names]
+builtin = "no-private-repo-names"
+private_owners_from = "cat ${XDG_CONFIG_HOME:-$HOME/.config}/principles/private-owners"
+git.hooks = ["commit-msg"]
+```
+
+A literal `private_owners` list is right for a repository staying private, and
+the audit reports it as a finding for one being published.
+
+Two surfaces survive a history rewrite: `refs/pull/<n>/head` (fetched explicitly
+and scanned) and comment edit history (cannot be scanned, reported as
+unreadable). Exit `1` for something found, `2` where a surface could not be
+read, `0` only when every surface a flip would republish was read and was clean.
+
+## `--coverage` and `--oscal`
+
+```sh
+uphold_check.py --coverage    # every rule the four tiers run, vs the claims
+uphold_check.py --oscal > component-definition.json
+```
+
+`--coverage` counts the direction the reconcile cannot — a rule firing under no
+claim is invisible to a reconcile. It reports and does not refuse: `0`, or `2`
+where a tier's configuration could not be read, with a count of `?` rather than
+`0`. See [DESIGN.md](DESIGN.md#coverage-is-not-the-reconcile).
+
+`--oscal` emits a NIST OSCAL component-definition. It reconciles first and emits
+only what held. Identifiers are UUIDv5 over repository, tier and rule, so a
+re-export with nothing changed is a diff with nothing in it. Four fields ride
+along as props in this repository's namespace: the rule id, the seam, the
+record's `enforcement.level` and its `automatable`. The catalog itself does not
+cross over — see [DESIGN.md](DESIGN.md#why-oscal-and-why-only-the-mapping).
+
+## The review tier
+
+`enforcement.automatable` routes each record to a static rule, to a reviewer, or
+to both:
+
+| value | static | review tier |
+|---|---|---|
+| `yes` | **must** carry a claim — unclaimed is an error, not a statistic | excluded; a rule already refuses it |
+| `partially` | may carry claims | the remainder compiles in |
+| `no` | must carry **no** claim | compiles in |
+
+```sh
+uphold_check.py --review          # what routes where
+uphold_check.py --review --emit   # write REVIEW.md and AGENTS.md
+uphold_check.py --review --check  # refuse a stale or over-budget document
+```
+
+A compiled entry is `claim`, `applies_when` and `review_questions` — no new
+schema. `[review] max_lines` (default 900) budgets that compiled document, and
+is a different field from the [rule one](#max_lines-and-the-baseline-that-ratchets-it)
+of the same name. It is load-bearing rather than a nicety: see
+[DESIGN.md](DESIGN.md#why-the-review-tier-is-not-what-that-record-refuses).
+Over budget fails the build and says to shorten records or narrow
+`include_domains`.
+
+When a repository has no subject for a principle, say so with a reason:
+
+```toml
+[review.no_subject_here]
+backpressure = "Nothing here has a queue, an admission decision, or a producer to slow down."
+```
+
+An entry goes stale the moment a rule does claim the record, and is reported
+then.

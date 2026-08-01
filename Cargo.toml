@@ -1,0 +1,154 @@
+[package]
+name = "uphold"
+version = "1.0.0"
+edition = "2021"
+# 1.88, not 1.85: the ripgrep stack this crate embeds -- globset 0.4.20 and
+# ignore 0.4.33 in Cargo.lock -- refuses anything older. The 1.85 that stood here
+# had never been built, because CI built on whatever `stable` was that week; the
+# MSRV job added alongside this comment is what turned the claim into a check.
+# Raising it means raising toolchain.toml's rustc `want` in the same commit --
+# tests/test_toolchain.py refuses the tree where only one of the two moved.
+rust-version = "1.88"
+description = "One binary for the engineering principles catalog and the rules that enforce it"
+license = "Apache-2.0"
+repository = "https://github.com/HackingGate/uphold"
+readme = "README.md"
+keywords = ["lint", "policy", "git-hooks", "pre-commit", "governance"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "uphold"
+path = "src/main.rs"
+
+[dependencies]
+# ripgrep's own search stack. The point of embedding these rather than shelling
+# out to `rg` is that a pattern written for the old hook has to keep meaning what
+# it meant: same regex engine, same multiline handling, same glob semantics.
+grep-matcher = "0.1"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+globset = "0.4"
+ignore = "0.4"
+
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+
+# The Unicode Script property, which the Python engine could not read and
+# approximated by matching tokens in character names.
+unicode-script = "0.5"
+# The character NAME, which is the only part of this report a reader can act on.
+# A homoglyph finding shows a letter that looks exactly like the Latin one it
+# replaced, so printing the character is no help at all and "CYRILLIC SMALL
+# LETTER EN" is the whole answer.
+unicode_names2 = "3.1"
+# The WHATWG encoding registry, which is what an `encoding` rule's label
+# resolves through: "Shift_JIS" here means what it means to every browser, and
+# a hand-enumerated subset of the registry would be the failure
+# `parameterize-do-not-enumerate` names.
+encoding_rs = "0.8"
+serde_yaml_ng = "0.10.0"
+
+[profile.release]
+strip = true
+
+# The same lint profile the sibling crates run under. A repository whose
+# whole job is enforcing engineering rules should not hold its own Rust to a
+# looser standard than the projects it gates.
+[lints.rust]
+warnings = "deny"
+# Safety
+unsafe_code = "deny"
+
+# Logic & Idioms (Hardened)
+missing_debug_implementations = "deny"
+missing_copy_implementations = "deny"
+unused_qualifications = "deny"
+unused_lifetimes = "deny"
+unused_import_braces = "deny"
+trivial_casts = "deny"
+trivial_numeric_casts = "deny"
+noop_method_call = "deny"
+single_use_lifetimes = "deny"
+variant_size_differences = "deny"
+absolute_paths_not_starting_with_crate = "deny"
+elided_lifetimes_in_paths = "deny"
+explicit_outlives_requirements = "deny"
+meta_variable_misuse = "deny"
+unreachable_pub = "deny"
+missing_abi = "deny"
+macro_use_extern_crate = "deny"
+
+[lints.clippy]
+# 1. The Basics
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+
+# 2. Ban Panics
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+panic_in_result_fn = "deny"
+
+# 3. Numeric Rigor
+cast_possible_truncation = "deny"
+cast_precision_loss = "deny"
+cast_sign_loss = "deny"
+float_arithmetic = "deny"
+lossy_float_literal = "deny"
+
+# 4. Code Hygiene
+# `allow_attributes` is what makes the rest of this list self-maintaining:
+# `#[expect]` fails the build once the lint it suppresses stops firing, so a
+# suppression that has outlived its cause is reported rather than audited.
+allow_attributes = "deny"
+shadow_unrelated = "deny"
+wildcard_imports = "deny"
+let_underscore_must_use = "deny"
+ptr_as_ptr = "deny"
+borrow_as_ptr = "deny"
+case_sensitive_file_extension_comparisons = "deny"
+
+# 5. Performance & Explicit Allocations
+str_to_string = "deny"
+string_add = "deny"
+format_push_string = "deny"
+inefficient_to_string = "deny"
+
+# 6. Documentation & Attributes
+allow_attributes_without_reason = "deny"
+dbg_macro = "deny"
+empty_structs_with_brackets = "deny"
+empty_drop = "deny"
+get_unwrap = "deny"
+rc_buffer = "deny"
+rc_mutex = "deny"
+rest_pat_in_fully_bound_structs = "deny"
+same_name_method = "deny"
+tests_outside_test_module = "deny"
+undocumented_unsafe_blocks = "allow"
+unnecessary_self_imports = "deny"
+unneeded_field_pattern = "deny"
+verbose_file_reads = "deny"
+struct_excessive_bools = "deny"
+too_many_lines = "deny"
+doc_markdown = "deny"
+collapsible_if = "deny"
+redundant_closure_for_method_calls = "deny"
+
+# 7. Exceptions
+module_name_repetitions = "allow" # guard::guard, scan::scan read fine here
+missing_errors_doc = "allow"      # binary crate, not a published API
+multiple_crate_versions = "allow" # ripgrep stack pulls duplicate transitives
+missing_panics_doc = "allow"      # no panics allowed anyway
+bool_assert_comparison = "allow"  # tests
+# Every guard and every shim collector is reached through ONE signature, from a
+# match on the built-in's name or on `collect`. An arm that cannot fail today
+# still returns `Result`, because dropping the wrapper makes the table
+# inconsistent and turns the next "this can fail now" into a much bigger diff
+# than the change deserves.
+unnecessary_wraps = "allow"

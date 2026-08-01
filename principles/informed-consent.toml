@@ -1,0 +1,43 @@
+id = "informed-consent"
+title = "Informed Consent for Consequential Actions"
+aliases = ["Show, then ask", "Explicit consent", "Confirm destructive actions", "Preview before apply", "No silent mutation"]
+kind = "principle"
+status = "seed"
+domains = ["product", "security", "operations", "governance", "AI-harness"]
+summary = "Before acting consequentially on something a user owns, show the specific effects and let them decline; approval covers what was shown and nothing more."
+claim = "An effect that is hard to reverse and falls outside what the invoked operation denotes requires that the specific effects be disclosed in terms the user can evaluate, that declining be possible without abandoning the rest of the work, and that the recorded approval bound the action to what was shown."
+problem = "Consequential effects ride along with an unrelated request, so consent is inferred from the user having asked for something else; by the time the effects are visible the cheap moment to object has passed, and a later, larger action inherits an approval given for a smaller one."
+rationale = "Consent carries information only when disclosure, an ability to evaluate, and a real option to refuse are all present; remove any one and the approval records nothing about what the user wanted. A plan the user has seen also bounds the action: whatever exceeds the shown plan was never approved, which turns scope creep into a second question rather than a silent extension of the first answer."
+applies_when = ["The effects land on data or systems the user owns and the tool does not.", "Reversal is impossible, lossy, or needs knowledge the user does not have.", "The effects are not entailed by the operation the user asked for.", "A person is present to answer, or a prior approval specific to this action was recorded.", "The action is taken on the user's behalf by an agent or automation they cannot watch."]
+does_not_mean = ["Prompt on every action; a confirmation on routine work is dismissed unread and spends the attention the one that mattered needed.", "A dialog is consent regardless of what it said or whether the user could act on it.", "Consent once given covers whatever the tool later decides to do.", "A blanket agreement at install time substitutes for disclosure at the point of action.", "The absence of a terminal implies agreement.", "Disclosure alone establishes comprehension."]
+benefits = ["The user's model of what happened matches what happened, so the next step is a fix rather than an investigation.", "The plan is reviewable before it is applied, which makes both refusal and bug reports concrete.", "The scope of approval is recorded, so a later change in behavior has to ask again instead of inheriting.", "Unattended runs fail loudly rather than mutating on an assumption."]
+costs = ["A preview path must exist and stay faithful to the applying path, or the disclosure becomes a false statement.", "Interactive prompts break composition and scripting, so a non-interactive approval path is extra machinery.", "Consent state has to be stored, scoped, and invalidated, which is a small database nobody asked for.", "Users approve without reading, so the ceremony can cost real friction and buy little."]
+failure_when_overapplied = ["Every action grows a confirmation until approval is reflexive and the signal is gone.", "The prompt describes the change in the implementation's vocabulary, disclosing nothing the user can weigh.", "Per-action consent records accumulate until a global 'yes to everything' becomes the normal setting.", "Automation is made impossible, so operators run the tool with approval suppressed everywhere."]
+conflicts_with = ["psychological-acceptability", "unix-composability"]
+related = ["least-astonishment", "reversible-decisions", "explicit-unknown", "fail-safe-defaults", "observability"]
+review_questions = ["What exactly will change, and would the user recognise it from this description?", "Can the user decline this part and still get the rest of what they asked for?", "Is the previewed plan produced by the same code that applies it?", "What does this do when no one is there to answer -- refuse, or proceed?", "When the set of effects grows in a later version, what makes it ask again rather than reuse the old approval?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Mutating entry points reachable without passing a preview or an approval check.", "A preview or dry-run mode implemented by a different code path than the one that applies.", "Approval flags whose default is yes, or non-interactive paths that apply what an interactive path would prompt for.", "Consent records that do not identify the target and the effects approved."]
+checks = ["Require every mutating entry point to build its plan through the same code its preview uses.", "Fail when a non-interactive run applies changes that an interactive run would prompt for.", "Flag a stored approval that names no target or no set of effects.", "Report mutating operations whose tests do not cover the declined path."]
+limits = ["A tool can see that a prompt exists; it cannot see whether the text disclosed what mattered.", "Comprehension and voluntariness are not properties of the tree.", "Whether an effect is consequential enough to require asking is a judgment about harm, not about code."]
+
+[[sources]]
+title = "10 Usability Heuristics for User Interface Design"
+url = "https://www.nngroup.com/articles/ten-usability-heuristics/"
+type = "essay"
+notes = "Visibility of system status and user control and freedom: the system should keep users informed about what is happening and support undo, exit, and refusal at the point of action."
+
+[[sources]]
+title = "Command Line Interface Guidelines"
+url = "https://clig.dev/"
+type = "documentation"
+notes = "Practice-level statement for tools: confirm before doing anything dangerous, offer a dry run, and require an explicit flag rather than assuming agreement when there is no terminal."
+
+[[sources]]
+title = "GDPR Article 7: Conditions for consent"
+url = "https://gdpr-info.eu/art-7-gdpr/"
+type = "standard"
+notes = "Legal articulation of the same structure, cited for the conditions rather than the jurisdiction: consent must be specific, informed, distinguishable from other matters, and as easy to withdraw as to give."

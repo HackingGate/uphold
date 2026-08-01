@@ -1,0 +1,31 @@
+id = "separation-of-concerns"
+title = "Separation of Concerns"
+aliases = ["SOC"]
+kind = "principle"
+status = "seed"
+domains = ["architecture", "design", "requirements"]
+summary = "Separate dimensions that change for different reasons so they can be reasoned about independently."
+claim = "Organize a system so distinct concerns can be understood, changed, tested, and governed independently where their real dependencies permit it."
+problem = "Interleaved concerns multiply change impact and make it difficult to know which rule, stakeholder, or failure mode a component serves."
+rationale = "Reasoning about one concern at a time reduces cognitive load and localizes the consequences of change."
+applies_when = ["Concerns have different change drivers, owners, policies, or test strategies.", "A boundary can be introduced without duplicating core truth.", "Interactions can be made explicit through contracts."]
+does_not_mean = ["Every concern requires a separate process or repository.", "Cross-cutting concerns disappear.", "Duplication is always preferable to coupling.", "The system should mirror an arbitrary taxonomy."]
+benefits = ["Localized change.", "Clearer tests and ownership.", "More explicit interfaces."]
+costs = ["Additional abstractions and coordination.", "Risk of indirection without meaningful independence.", "Cross-cutting behavior still needs integration."]
+failure_when_overapplied = ["Concern boundaries become ceremonial layers.", "Simple behavior is scattered across many modules.", "The decomposition follows documentation headings rather than runtime or change structure."]
+conflicts_with = ["high-cohesion-low-coupling"]
+related = ["information-hiding", "mechanism-policy-separation", "unix-composability", "least-astonishment"]
+review_questions = ["What distinct reasons would cause this component to change?", "Which concern owns each invariant?", "Does the proposed boundary reduce or merely relocate coupling?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Dependency directions.", "Module import patterns.", "Changes that repeatedly span unrelated modules."]
+checks = ["Flag dependency cycles across declared layers.", "Track files that co-change despite belonging to different concerns.", "Require cross-cutting policies to have explicit integration points."]
+limits = ["Static dependencies do not reveal all semantic coupling.", "A tool cannot decide the correct concern taxonomy without domain knowledge."]
+
+[[sources]]
+title = "On the role of scientific thought"
+url = "https://www.cs.utexas.edu/~EWD/transcriptions/EWD04xx/EWD447.html"
+type = "essay"
+notes = "Dijkstra articulates separation of concerns as a method for reasoning."

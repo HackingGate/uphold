@@ -1,0 +1,31 @@
+id = "defense-in-depth"
+title = "Defense in Depth"
+aliases = ["Layered defenses"]
+kind = "principle"
+status = "seed"
+domains = ["security", "reliability", "AI-harness"]
+summary = "Use independent controls so one failed assumption does not become complete compromise."
+claim = "Protect critical assets and actions with multiple controls that fail differently and cover prevention, detection, containment, and recovery."
+problem = "A single control inevitably has blind spots, implementation defects, and operational bypasses."
+rationale = "Independent layers reduce common-mode failure and give the system opportunities to detect and contain a breach before irreversible harm."
+applies_when = ["Consequences justify more than one control.", "Controls can be made meaningfully independent.", "Detection and recovery matter in addition to prevention."]
+does_not_mean = ["Add many copies of the same control.", "Treat overlapping tools as evidence of security.", "Ignore usability and operational bypass incentives.", "Replace clear trust boundaries with complexity."]
+benefits = ["Reduced single-control dependency.", "Earlier detection and smaller blast radius.", "More resilient recovery paths."]
+costs = ["Operational and cognitive complexity.", "Potential inconsistent policy across layers.", "Higher latency and maintenance cost."]
+failure_when_overapplied = ["Several controls share one identity provider or parser and fail together.", "Users bypass an unusable stack of approvals.", "No owner can explain which layer is authoritative."]
+conflicts_with = ["unix-composability", "psychological-acceptability"]
+related = ["least-privilege", "observability", "graceful-degradation", "complete-mediation"]
+review_questions = ["How does each layer fail differently?", "Which layer detects failure of another?", "Can the layers be tested independently and end to end?"]
+
+[enforcement]
+level = "governance"
+automatable = "partially"
+observable = ["Declared security controls.", "Identity and authorization dependencies.", "Detection and response coverage."]
+checks = ["Require prevention, detection, and recovery controls for critical actions.", "Identify controls sharing the same dependency or trust root.", "Exercise failure of each layer in tests or game days."]
+limits = ["Counting controls does not establish independence.", "The quality and common-mode behavior of controls require architectural analysis."]
+
+[[sources]]
+title = "NIST SP 800-160 Volume 1 Revision 1"
+url = "https://csrc.nist.gov/pubs/sp/800/160/v1/r1/final"
+type = "standard"
+notes = "Systems security engineering guidance for trustworthy and resilient systems."

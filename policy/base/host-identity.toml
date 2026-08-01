@@ -1,0 +1,76 @@
+# Base rule set: host-identity (the machine an author happens to be standing on)
+#
+# The username, home path, hostname and default route of the machine that runs
+# the check, searched for in committed content. Pull in with:
+#
+#   [inherit]
+#   sets = ["process-residue", "host-identity"]
+#
+# WHY THIS IS ITS OWN SET. Every other bundled rule is a pattern that means the
+# same thing in every checkout. This one reads the RUNNING MACHINE at scan time
+# and searches for what it finds, so what it refuses is different on every host
+# -- and on a CI runner it is different again. That is a separate decision from
+# taking a fixed pattern, and it is the decision a repository makes when it
+# accepts that a scan shells out to `id`, `hostname` and the route table.
+#
+# It is also the set with the least to lose from being taken: the literals are
+# read at runtime and never written down, so nothing in this file, and nothing
+# in the repository that inherits it, carries the name of a machine. A rule that
+# refuses a hostname by spelling the hostname out has published the hostname.
+#
+# THE DEFAULT IGNORE LIST IS WHAT MAKES THIS USABLE. Distribution words, arch
+# words and role words -- `arch`, `debian`, `x86`, `server`, `laptop`, `home`,
+# `runner` -- are never searched for, because they describe a machine's KIND
+# rather than its owner and would fire on every legitimate mention. Extend it
+# per rule with `ignore_literals` when a real hostname segment is also an
+# ordinary word in the domain. `docs/REFERENCE.md` publishes the full list.
+#
+# WHAT THE SCOPE IS, AND WHY IT IS NOT A DIRECTORY LIST. `files.include = ["."]`
+# -- the whole tree, minus the shared exclusions. Every hand-written copy this
+# rule was promoted from instead named the directories that existed on the day
+# it was written: `.github`, `README.md`, `policy`, `cmd`, `internal`. A
+# directory added the week after is outside that list, the rule reports Passed
+# over it, and nothing anywhere says the coverage narrowed. The allowlist also
+# has to be re-edited in every repository each time a tree grows a directory,
+# which is thirty edits nobody makes.
+#
+# A repository that genuinely needs its own scope writes the rule under this
+# same id, which shadows this one -- and then it is a decision in one file
+# rather than the default in thirty.
+#
+# AND IT CARRIES NO SHARED exclude LIST, which is where this set departs from
+# every other one here. The other sets exempt `**/tests/**`, `policy/**` and
+# `README.md` because a fixture holds deliberate example-bad content and a
+# policy file and a README both quote the pattern they refuse -- so each would
+# match itself. Nothing in this rule can match itself: there is no pattern in
+# the file, only a source that reads the machine. A hostname in a README is a
+# published hostname; a home path in a fixture is a published home path; and
+# both are the exact defect, not an artefact of where the rule is written. An
+# exclude here would exempt the three places the leak most often lands.
+#
+# `files.word = true` because a hostname segment or a username inside a longer
+# identifier is almost always a coincidence: a user called `hg` would otherwise
+# match `hg` in every `mercurial` mention, and a host called `nas` in every
+# `nasdaq`. Whole-word matching plus the ignore list is what keeps this rule
+# from being the one that gets disabled wholesale.
+#
+# PROVENANCE. Promoted here after being found hand-copied into 29 of the 46
+# policy files across the consuming fleet, with the message text byte-identical
+# in 28 of them and only the directory allowlist differing. Twenty-nine copies
+# of a rule is one decision and twenty-eight transcriptions, and the
+# transcriptions are where the scope drifted.
+#
+# The id is the one those copies already carry, so a repository that still holds
+# its own copy shadows this rule rather than colliding with it, and deleting the
+# copy is a subtraction with nothing to rewrite.
+
+[rule.no-running-os-identity-metadata]
+message = """
+Do not commit identity metadata from the running OS. The scan reads the current
+username, home path, hostname and default route at runtime, then searches the
+tracked files for what it read. Use neutral placeholders instead --
+example-user, example-host, example.test, /srv/example.
+"""
+forbidden_literals = "running-os-identity"
+files.include = ["."]
+files.word = true
