@@ -75,7 +75,7 @@ rule = "prevent-ai-author"
 ```text
 reconciled 2 enforcement claims:
   least-privilege <- prevent-public-push  enforced by uphold
-  complete-mediation <- prevent-ai-author  enforced by uphold, cmd-shims
+  complete-mediation <- prevent-ai-author  enforced by uphold
 ```
 
 A rule enforced at more than one seam is the ordinary case; every seam is
