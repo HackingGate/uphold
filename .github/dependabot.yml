@@ -1,5 +1,19 @@
 version: 2
 updates:
+  # Cargo.toml and Cargo.lock are the crate's dependency authority. Keep both
+  # the declared requirements and the resolved graph under version updates.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # The wheel build has no Python runtime dependencies, but maturin is still a
+  # build dependency declared in this root PEP 621 pyproject.toml.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

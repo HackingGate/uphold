@@ -500,13 +500,8 @@ class OscalExport(unittest.TestCase):
         }
         self.assertIn("explicit-unknown", controls)
 
-    def test_a_rule_at_two_seams_is_a_requirement_under_both_components(self):
-        """The component is the seam, derived from what supplies the rule.
-
-        A single `tier` on the claim could only ever have named one of them, so
-        an outside reader of this export would have seen the rule implemented at
-        one seam and had no way to learn about the other.
-        """
+    def test_consolidated_rules_are_requirements_of_uphold(self):
+        """The former command-shim seam is supplied by Uphold now."""
         by_component = {
             component["title"]: {
                 requirement["props"][0]["value"]
@@ -516,7 +511,7 @@ class OscalExport(unittest.TestCase):
             for component in self.document["components"]
         }
         self.assertIn("prevent-ai-author", by_component["uphold"])
-        self.assertIn("prevent-ai-author", by_component["cmd-shims"])
+        self.assertNotIn("cmd-shims", by_component)
 
     def test_identifiers_are_stable_across_runs(self):
         """A re-export must not be a diff with no change in it.

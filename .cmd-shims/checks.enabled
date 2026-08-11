@@ -1,9 +1,0 @@
-# Which cmd-shims checks this repository runs, where a reviewer sees it.
-#
-# This repo is public and holds the record that says a control is only as wide
-# as the paths it mediates. A pull-request body or a branch name typed here
-# reaches a public API without passing a single git hook, so the guards that
-# cover that path are named here rather than assumed.
-no-os-identity
-prevent-ai-author
-prevent-unusual-unicode
