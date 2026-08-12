@@ -56,11 +56,12 @@ repos:
     hooks:
       - id: actionlint
 
-  # The shell this repository ships is the part a consumer runs before anything
-  # else: the lefthook wrapper it publishes under `scripts:`, and the consumer
-  # harness that decides whether the three runners agree. Both were unlinted,
-  # and the first thing this hook found was a `CDPATH=` in the published wrapper
-  # that reads as an assignment and is a command prefix.
+  # The shell this repository ships is the consumer harness that decides whether
+  # the three runners agree, which is the part a consumer's experience rests on.
+  # It was unlinted, alongside a published lefthook wrapper this hook found a
+  # `CDPATH=` in -- reading as an assignment where it is a command prefix. The
+  # wrapper is gone with the Python reconciler it existed to reach; the harness
+  # is not.
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1
     hooks:

@@ -45,14 +45,15 @@ pre-commit:
       glob: ".github/workflows/*.{yml,yaml}"
       run: actionlint {staged_files}
     # The two shell files this repository ships: the consumer harness and the
-    # wrapper a lefthook consumer runs out of the clone. The brace pattern is
-    # what keeps this hook and the pre-commit one asking the same question --
-    # `*.sh` alone would miss the wrapper, which has no extension.
+    # extensionless wrapper a lefthook consumer ran out of the clone, which
+    # `*.sh` alone would have missed. That wrapper existed to reach a Python
+    # reconciler PATH could not; the reconcile is `uphold check` now, the
+    # directory is gone, and the pattern is the plain one again.
     shellcheck:
-      glob: "{scripts/*.sh,.lefthook/pre-commit/*}"
+      glob: "scripts/*.sh"
       run: shellcheck {staged_files}
     bashate:
-      glob: "{scripts/*.sh,.lefthook/pre-commit/*}"
+      glob: "scripts/*.sh"
       run: bashate --ignore E006 {staged_files}
 
 # Not git hooks. lefthook has no equivalent of pre-commit's manual stage, so the
