@@ -392,3 +392,124 @@ fn an_unrelated_literal_rule_does_not_remove_the_identity_fallback() {
     let output = scan_text(&root, subject.as_bytes(), home);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
 }
+
+// ── the message guards at pre-push ───────────────────────────────────
+
+/// The two message guards, pinned at the stage that made them read the wrong
+/// file. `no-private-repo-names-in-files` above already reads the pushed range;
+/// these two asked `.git/COMMIT_EDITMSG` at every stage, so at pre-push they
+/// judged whatever the last `git commit` happened to write.
+const PUSHED_MESSAGES: &str = r#"
+[rule.prevent-ai-author]
+builtin = "prevent-ai-author"
+
+[rule.prevent-ai-author.git]
+hooks = ["commit-msg", "pre-push"]
+
+[rule.prevent-unusual-unicode]
+builtin = "prevent-unusual-unicode"
+
+[rule.prevent-unusual-unicode.git]
+hooks = ["commit-msg", "pre-push"]
+"#;
+
+fn pre_push(root: &Path, pushed: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["guard", "--stage", "pre-push"])
+        .current_dir(root)
+        .env_remove("UPHOLD_ALLOW")
+        .env("PRE_COMMIT_REMOTE_NAME", "origin")
+        .env("PRE_COMMIT_LOCAL_BRANCH", "main")
+        .env("PRE_COMMIT_REMOTE_BRANCH", "refs/heads/main")
+        .env("PRE_COMMIT_TO_REF", pushed)
+        .env("PRE_COMMIT_FROM_REF", ZERO)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn an_attribution_marker_in_a_pushed_commit_is_refused_at_pre_push() {
+    // The whole of the bug in one fixture: the marker is in the commit being
+    // pushed, and `.git/COMMIT_EDITMSG` holds a LATER, clean message -- so a
+    // guard reading the fallback found nothing and reported "1 guard(s)
+    // passed", exit 0, while the marker went to the remote.
+    let root = repository(PUSHED_MESSAGES);
+    write(&root, "a.txt", "one\n");
+    git(&root, &["add", "a.txt"]);
+    git(
+        &root,
+        &[
+            "commit",
+            "-qm",
+            "Add the thing\n\nGenerated with Claude Code\n",
+            "--no-verify",
+        ],
+    );
+    write(&root, "b.txt", "two\n");
+    git(&root, &["add", "b.txt"]);
+    git(
+        &root,
+        &["commit", "-qm", "Add another thing", "--no-verify"],
+    );
+
+    let pushed = head(&root);
+    let output = pre_push(&root, &pushed);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("prevent-ai-author"),
+        "{}",
+        stderr(&output)
+    );
+    // Named by commit, not by the path of a file it did not read.
+    assert!(stderr(&output).contains("MESSAGE"), "{}", stderr(&output));
+}
+
+#[test]
+fn an_invisible_character_in_a_pushed_commit_is_refused_at_pre_push() {
+    let root = repository(PUSHED_MESSAGES);
+    write(&root, "a.txt", "one\n");
+    git(&root, &["add", "a.txt"]);
+    git(
+        &root,
+        &["commit", "-qm", "Add the\u{200b}thing", "--no-verify"],
+    );
+    write(&root, "b.txt", "two\n");
+    git(&root, &["add", "b.txt"]);
+    git(
+        &root,
+        &["commit", "-qm", "Add another thing", "--no-verify"],
+    );
+
+    let pushed = head(&root);
+    let output = pre_push(&root, &pushed);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("prevent-unusual-unicode"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_clean_push_still_passes_when_the_last_edited_message_was_not() {
+    // The other direction, and the reason the fallback is not merely
+    // unnecessary: `.git/COMMIT_EDITMSG` outlives the commit it was written
+    // for. Reading it at pre-push refuses a push that publishes nothing wrong.
+    let root = repository(PUSHED_MESSAGES);
+    write(&root, "a.txt", "one\n");
+    git(&root, &["add", "a.txt"]);
+    git(&root, &["commit", "-qm", "Add the thing", "--no-verify"]);
+    let pushed = head(&root);
+
+    // Left behind by an attempt that was refused and never became a commit.
+    let git_dir = root.join(".git");
+    std::fs::write(
+        git_dir.join("COMMIT_EDITMSG"),
+        "Something\n\nGenerated with Claude Code\n",
+    )
+    .unwrap();
+
+    let output = pre_push(&root, &pushed);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
