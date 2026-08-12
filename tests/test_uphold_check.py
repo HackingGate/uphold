@@ -1055,11 +1055,12 @@ class UpstreamIdentity(unittest.TestCase):
         name = uphold_check.upstream_slug().rsplit("/", 1)[-1]
         # Neutral placeholders, because this repository's own
         # `no-running-os-identity-metadata` rule reads the running home path and
-        # searches the tracked files for it -- and on a CI runner the home path
-        # is `/home/runner`, so writing a realistic workspace path here refused
-        # the scan on every runner while passing on every developer's machine.
-        # `scripts/consumer_check.sh` avoids the same trap by cloning to a
-        # neutral path, and says so.
+        # searches the tracked files for it. A realistic workspace path written
+        # here passes on a developer's machine and refuses the scan on a CI
+        # runner, whose home directory it happens to name -- and a comment
+        # quoting that path to explain the trap falls into it exactly as the
+        # test data did. `scripts/consumer_check.sh` avoids the same edge by
+        # cloning to a neutral path, and says so.
         for url in (
             f"/srv/example/work/{name}",
             f"git@github.com:HackingGate/{name}.git",
