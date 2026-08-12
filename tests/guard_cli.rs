@@ -26,11 +26,19 @@ fn repository(policy: &str) -> PathBuf {
     ));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
-    std::fs::write(root.join("policy/principles.toml"), policy).unwrap();
 
+    // Git first, policy second, and the order is load-bearing on any machine
+    // where this binary is installed in front of `git`. Several fixtures here
+    // carry a policy that is MEANT to be refused at load, and the shim reads
+    // the policy of the directory the command was typed in before it knows
+    // whether anything stands in front of that command -- so writing the file
+    // first made `git init` exit 2 inside the fixture, and the failure looked
+    // like the test's own subject rather than like its setup.
     git(&root, &["init", "-q", "-b", "main"]);
     git(&root, &["config", "user.name", "Test"]);
     git(&root, &["config", "user.email", "test@example.test"]);
+
+    std::fs::write(root.join("policy/principles.toml"), policy).unwrap();
     root
 }
 
@@ -222,6 +230,49 @@ fn an_allowance_scoped_to_a_path_admits_the_character_only_there() {
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(
         stderr(&output).contains("src/main.rs"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// One file, one answer, at both seams.
+///
+/// A captured page kept byte-for-byte in the encoding its venue served is the
+/// use `.gitattributes` `-text` exists for, and `uphold scan` skips one and says
+/// so. This guard read the same file, failed to decode it, and refused -- so a
+/// repository following the documented cure got a clean tree from one seam and
+/// exit 2 from the other on every commit that touched the file.
+///
+/// The NUL test keeps its own job below: it is the guess about bytes nobody
+/// declared, and a declaration is not a guess.
+#[test]
+fn a_path_declared_not_text_is_skipped_by_the_guard_that_cannot_decode_it() {
+    let root =
+        repository("[rule.prevent-unusual-unicode-in-files]\nbuiltin = \"prevent-unusual-unicode-in-files\"\n\n[rule.prevent-unusual-unicode-in-files.git]\nhooks = [\"pre-commit\"]\n");
+    // Shift-JIS bytes: valid text in their own encoding, not UTF-8, and no NUL
+    // to make the binary guess fire.
+    std::fs::write(root.join("captured.html"), [0x93, 0xFA, 0x96, 0x7B, 0x0A]).unwrap();
+    git(&root, &["add", "-A"]);
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(
+        code(&output),
+        2,
+        "undeclared bytes that will not decode are still a surface nobody read:\n{}",
+        stderr(&output)
+    );
+
+    write(&root, ".gitattributes", "captured.html -text\n");
+    git(&root, &["add", "-A"]);
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("skipped, declared not text"),
+        "a skipped file and a clean file must not look alike:\n{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("captured.html"),
         "{}",
         stderr(&output)
     );
