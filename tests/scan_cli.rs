@@ -1154,14 +1154,18 @@ fn the_effective_rules_are_what_inheritance_resolved_to() {
     // the seam it fires at is installed.
     assert!(
         text.contains(
-            "{\"id\": \"no-local-merge\", \"git_hooks\": [\"pre-merge-commit\", \"manual\"]}"
+            "{\"id\": \"no-local-merge\", \"git_hooks\": [\"pre-merge-commit\", \"manual\"], \
+             \"seams\": [\"guard\"]}"
         ),
         "{text}"
     );
     // A content rule fires at no git hook, and says so rather than being
-    // reported under whichever stage happened to be installed.
+    // reported under whichever stage happened to be installed -- and names the
+    // seam, because an empty hook list is true of a content rule and of a
+    // checker standing in front of a command alike, and those are not the same
+    // place. A reader that has to guess between them guesses the scan.
     assert!(
-        text.contains("{\"id\": \"of-its-own\", \"git_hooks\": []}"),
+        text.contains("{\"id\": \"of-its-own\", \"git_hooks\": [], \"seams\": [\"scan\"]}"),
         "{text}"
     );
 }
@@ -1239,5 +1243,65 @@ fn a_guard_built_in_that_no_hook_runs_is_still_refused() {
         stderr(&output).contains("prevent-unusual-unicode-in-files"),
         "{}",
         stderr(&output)
+    );
+}
+
+#[test]
+fn a_rule_that_only_stands_in_front_of_a_command_names_the_shim_seam() {
+    // The seam `git_hooks` cannot express. A checker with `command.before` and
+    // no hooks looked identical to a content rule -- an empty list for both --
+    // so every reader downstream had to guess, and the reconciler guessed the
+    // scan. A claim on such a rule then reconciled green in a repository where
+    // the scan never touches it.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [[shim]]
+        command = "gh"
+        match = ["pr:create"]
+        text_flags = ["-b", "--body"]
+
+        [rule.stands-in-front]
+        message = "do not publish that"
+        exec = "uphold guard --text -"
+        command.before = ["gh"]
+
+        [rule.searches-the-tree]
+        message = "no TODO"
+        regexp = 'TODO'
+        files.include = ["."]
+"#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["rules", "--effective", "--json"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let text = stdout(&output);
+
+    assert!(
+        text.contains("{\"id\": \"stands-in-front\", \"git_hooks\": [], \"seams\": [\"shim\"]}"),
+        "{text}"
+    );
+    assert!(
+        text.contains("{\"id\": \"searches-the-tree\", \"git_hooks\": [], \"seams\": [\"scan\"]}"),
+        "{text}"
+    );
+
+    // And the human form says it too, where it used to say "no git hook" of
+    // both.
+    let human = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["rules", "--effective"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        stdout(&human).contains("stands-in-front  (shim)"),
+        "{}",
+        stdout(&human)
     );
 }

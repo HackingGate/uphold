@@ -22,6 +22,8 @@
 )]
 
 mod audit;
+mod catalog;
+mod check;
 mod config;
 mod engine;
 mod error;
@@ -47,6 +49,8 @@ usage:
   uphold scan --text [FILE|-]        run the host-identity rules over text
   uphold guard --stage STAGE         run the guards that fire at STAGE
   uphold guard --text [FILE|-]       run the text-capable guards over text
+  uphold check                       reconcile policy/upheld.toml against what runs
+  uphold check --coverage            which rules run here and carry no principle
   uphold audit --for-publication     what a private->public flip would republish
   uphold rules --set NAME            what a bundled rule set refuses, rule by rule
   uphold rules --effective [--json]  every rule this repository resolves to, and
@@ -206,6 +210,14 @@ fn run() -> Result<Exit> {
     };
 
     match text_of(first)? {
+        // The url `package.repository` holds, for the OSCAL export's property
+        // namespace. Asked of the binary because the binary is where that value
+        // is compiled in; a second copy read off `Cargo.toml` is a copy that
+        // drifts, and it can only be read in a checkout of this repository.
+        "--upstream" => {
+            println!("{}", env!("CARGO_PKG_REPOSITORY"));
+            Ok(Exit::Clean)
+        }
         "--version" | "-V" => {
             println!("uphold {}", env!("CARGO_PKG_VERSION"));
             Ok(Exit::Clean)
@@ -217,6 +229,13 @@ fn run() -> Result<Exit> {
         "scan" => scan_command(rest),
         "guard" => guard_command(rest),
         "audit" => audit_command(rest),
+        "check" => match rest {
+            [] => check_command(false),
+            [flag] if flag == "--coverage" => check_command(true),
+            _ => Err(Fatal::new(format!(
+                "usage: uphold check [--coverage]\n\n{USAGE}"
+            ))),
+        },
         "rules" => match rest {
             [flag, name] if flag == "--set" => rules_command(text_of(name)?),
             [flag] if flag == "--effective" => effective_rules_command(false),
@@ -237,6 +256,18 @@ fn run() -> Result<Exit> {
             "unknown subcommand {other:?}\n\n{USAGE}"
         ))),
     }
+}
+
+/// Reconcile the declaration against the rules this repository resolves to.
+///
+/// The loader runs first and its answer is what the reconcile reads, which is
+/// the whole point of moving this in: `uphold_check.py` re-implemented
+/// `config::load` to answer the same question and was free to disagree with it.
+fn check_command(coverage: bool) -> Result<Exit> {
+    let working = std::env::current_dir()?;
+    let (root, policy_path) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
+    let policy = config::load(&root, &policy_path)?;
+    check::run(&root, &policy, coverage)
 }
 
 fn scan_command(arguments: &[OsString]) -> Result<Exit> {
@@ -545,7 +576,13 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
         for rule in &policy.rules {
             let hooks = rule.hooks();
             let at = if hooks.is_empty() {
-                String::from("no git hook")
+                // Which seam, where there is no hook to name. "no git hook" was
+                // true of a content rule and of a checker standing in front of
+                // `gh` alike, and those are not the same place.
+                match rule.seams().as_slice() {
+                    [] => String::from("nothing runs it"),
+                    seams => seams.join(", "),
+                }
             } else {
                 hooks.join(", ")
             };
@@ -567,6 +604,17 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
                 document.push_str(", ");
             }
             json_string(hook, &mut document);
+        }
+        // `git_hooks` alone cannot answer where a hookless rule runs, and a
+        // caller that has to guess guesses the scan -- which is how a claim on
+        // a rule whose only place is `command.before` reconciled green in a
+        // repository where nothing runs it. The loader knows; it says so here.
+        document.push_str("], \"seams\": [");
+        for (position, seam) in rule.seams().iter().enumerate() {
+            if position > 0 {
+                document.push_str(", ");
+            }
+            json_string(seam, &mut document);
         }
         document.push_str("]}");
     }

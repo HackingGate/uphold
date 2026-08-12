@@ -19,14 +19,25 @@
 # claim into a false one. It does not run on every commit, and it carries no
 # principle text into any runtime: what it prints is the rule that went missing
 # and the file that says so.
+#
+# `language: rust` like every other id here, and it is the same environment.
+# This was `language: script` running `uphold_check.py`, which had to
+# re-implement `config::load` to know which rules resolve -- a second reader,
+# free to disagree with the engine, which it did. The loader answers now. The
+# script kept the catalog modes, which read no policy and so cannot disagree.
+#
+# `.cmd-shims/checks.enabled` left the trigger list with the tier: whether a
+# shim is on PATH ahead of the real command is not written in any file a
+# repository can be asked, so the reconcile reports that seam as one it could
+# not establish rather than reading a file that does not settle it.
 - id: uphold-check
   name: uphold
   description: reconcile policy/upheld.toml against the rules this repo actually runs
-  entry: uphold_check.py
-  language: script
+  entry: uphold check
+  language: rust
   stages: [pre-commit, manual]
   pass_filenames: false
-  files: '^(policy/upheld\.toml|policy/principles\.toml|\.pre-commit-config\.yaml|lefthook\.yml|\.cmd-shims/checks\.enabled)$'
+  files: '^(policy/upheld\.toml|policy/principles\.toml|\.pre-commit-config\.yaml|lefthook\.yml)$'
 
 # ── the content policy ───────────────────────────────────────────────
 #

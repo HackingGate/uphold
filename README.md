@@ -86,6 +86,12 @@ could-not-look, never as a false claim.
 
 A principle with no rule yet does not belong in this file. Build the rule first.
 
+The split is which question the mode asks. Anything that decides whether a check
+passed reads the policy, and the loader that resolves the policy is the binary,
+so it lives there — one answer, not two programs entitled to disagree. What is
+left in the script reads the catalog and renders prose for a person, and cannot
+disagree with the engine about anything.
+
 Exit codes, everywhere: `0` clean, `1` a claim is false / a violation, `2` could
 not look — see [`explicit-unknown`](principles/explicit-unknown.toml).
 
@@ -94,6 +100,8 @@ not look — see [`explicit-unknown`](principles/explicit-unknown.toml).
 ```sh
 uphold scan                     # content rules over the tree
 uphold scan --text -            # a commit message, release note, PR body
+uphold check                    # the claims in policy/upheld.toml still hold
+uphold check --coverage         # which rules here carry a principle
 uphold rules --effective        # every rule inheritance resolved to, and where each runs
 uphold guard --stage pre-push   # the guards for that git hook
 uphold shim gh pr create ...    # stand in front of a command, then exec
@@ -101,7 +109,6 @@ uphold audit --for-publication  # before flipping private -> public
 
 uphold_check.py --explain ID    # one record in full; also accepts a name
 uphold_check.py --list          # every id in the catalog
-uphold_check.py --coverage      # which rules here carry a principle
 uphold_check.py --init          # a starter declaration
 uphold_check.py --oscal         # OSCAL component-definition JSON
 uphold_check.py --review        # what routes to the review tier

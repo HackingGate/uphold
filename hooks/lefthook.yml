@@ -34,32 +34,25 @@ pre-commit:
       run: uphold scan
     uphold-guard:
       run: uphold guard --stage pre-commit
-  # The declaration check is the one part of this repository that is not the
-  # binary, so PATH cannot reach it. lefthook resolves a script against the
-  # remote clone rather than the consumer's tree, which is the only mechanism
-  # here that can reach a file in THIS repository -- so the checker arrives as a
-  # script and .lefthook/pre-commit/uphold-check is a shim onto it.
+  # The declaration check fires on a CONDITION rather than on every commit, which
+  # is why it is a job and not another command: `glob` is a job key.
   #
-  # It is a `jobs:` entry rather than a `scripts:` one for a single reason:
-  # `glob` is a job key and a script has no equivalent. A script with no firing
-  # condition runs on EVERY commit, which loads and validates the whole catalog
-  # in front of a one-line fix -- and .pre-commit-hooks.yaml publishes the
-  # opposite as the design ("It does not run on every commit") and holds itself
-  # to it with a `files:` regex. Two distribution paths that fire on different
-  # occasions are two products wearing one version number, and the one that
-  # fires more is the one a consumer switches off.
+  # It arrived as a `script:` onto `.lefthook/pre-commit/uphold-check` while the
+  # checker was a Python file in this repository that PATH could not reach --
+  # lefthook's `scripts` is the one mechanism that resolves against the remote
+  # clone rather than the consumer's tree. The reconcile is `uphold check` now,
+  # so it is on PATH like every other command here and the shim is gone.
   #
-  # The list is the same list as that regex, file for file: the declaration
-  # itself, plus every file a claim is reconciled against. Those are exactly the
-  # edits that can turn a true enforcement claim into a false one -- a rule
-  # deleted from policy/principles.toml, a hook id dropped from a runner's
-  # config, a shim check disabled. Nothing else can, which is why nothing else
-  # is worth a catalog load.
+  # .pre-commit-hooks.yaml publishes the same condition as a `files:` regex, and
+  # the two lists are the same list file for file: the declaration itself, plus
+  # every file a claim is reconciled against. Those are exactly the edits that
+  # can turn a true enforcement claim into a false one. Two distribution paths
+  # that fire on different occasions are two products wearing one version
+  # number, and the one that fires more is the one a consumer switches off.
   jobs:
     - name: uphold-check
-      script: "uphold-check"
-      runner: sh
-      glob: "{policy/upheld.toml,policy/principles.toml,.pre-commit-config.yaml,lefthook.yml,.cmd-shims/checks.enabled}"
+      run: uphold check
+      glob: "{policy/upheld.toml,policy/principles.toml,.pre-commit-config.yaml,lefthook.yml}"
 
 commit-msg:
   commands:
