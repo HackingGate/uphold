@@ -147,27 +147,53 @@ def read_text(path: Path) -> str:
 
 
 def engine(root: Path, *args: str) -> subprocess.CompletedProcess:
-    """Run the binary, wherever this checkout keeps it."""
-    candidates = [
+    """Run the binary, wherever this checkout keeps it.
+
+    Built binary first, then PATH, then `cargo run`. The last one matters and is
+    not a convenience: the modes that call this are the ones that never leave
+    this repository -- `--review` is in no consumer's manifest, and `--oscal` is
+    run by hand -- and the environment they run in is a pre-commit hook that has
+    not built anything. Without it the review hook fails in CI on a machine that
+    has cargo, a checkout, and every ingredient except the one command nobody
+    ran.
+
+    A binary that cannot be produced by any of the three is could-not-look. It
+    is not a smaller answer or an older one; see the `explicit-unknown` record.
+    """
+    attempts: list[list[str]] = []
+    for built in (
         HERE / "target" / "release" / "uphold",
         HERE / "target" / "debug" / "uphold",
-    ]
-    binary = next((path for path in candidates if path.is_file()), None)
-    found = str(binary) if binary else "uphold"
-    try:
-        return subprocess.run(
-            [found, *args],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
+    ):
+        if built.is_file():
+            attempts.append([str(built), *args])
+    attempts.append(["uphold", *args])
+    if (HERE / "Cargo.toml").is_file():
+        attempts.append(
+            [
+                "cargo",
+                "run",
+                "--quiet",
+                "--manifest-path",
+                str(HERE / "Cargo.toml"),
+                "--",
+                *args,
+            ]
         )
-    except OSError as error:
-        raise CouldNotLook(
-            f"`uphold {' '.join(args)}` could not be run ({error}), so what this "
-            f"repository enforces is unknown. Build it with `cargo build --release`, "
-            f"or install it on PATH."
-        ) from error
+
+    reasons: list[str] = []
+    for attempt in attempts:
+        try:
+            return subprocess.run(
+                attempt, cwd=root, capture_output=True, text=True, check=False
+            )
+        except OSError as error:
+            reasons.append(f"{attempt[0]}: {error}")
+    raise CouldNotLook(
+        f"`uphold {' '.join(args)}` could not be run, so what this repository "
+        f"enforces is unknown ({'; '.join(reasons)}). Build it with "
+        f"`cargo build --release`, or install it on PATH."
+    )
 
 
 @functools.cache
