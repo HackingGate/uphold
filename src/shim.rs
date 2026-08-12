@@ -790,6 +790,45 @@ fn file_identity(path: &Path) -> Option<PathBuf> {
     path.canonicalize().ok()
 }
 
+/// How this process was reached, which is the only thing that differs when
+/// nothing here declares the command.
+///
+/// Both are the same seam and the same reading. One is a command being run --
+/// through a link named for it, on a PATH that spans the whole machine -- and
+/// the other is a question asked about this repository, typed with the answer
+/// in mind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Invoked {
+    /// Through a link named for the command: argv[0] decided.
+    AsTheCommand,
+    /// As `uphold shim <command>`, with the command named as an argument.
+    ByName,
+}
+
+/// Run the command with nothing standing in front of it.
+///
+/// The transparent path, for the two answers that are not "check this": no
+/// policy where the command was typed, and a policy that declares no shim for
+/// it. Both are readings rather than failures to read, and a shim installed for
+/// the whole machine meets them constantly -- every directory outside a
+/// participating repository is one of them.
+///
+/// No stdin is replayed because none was collected: reading it belongs to the
+/// checking path, and a command whose text nothing here reads must be handed
+/// the descriptor it was given rather than a copy of what this process drained
+/// out of it.
+pub(crate) fn exec_through(name: &str, argv: &[OsString]) -> Result<Exit> {
+    let own = std::env::current_exe().ok();
+    let Some(real) = real_command(name, own.as_deref()) else {
+        return Err(Fatal::new(format!(
+            "nothing here stands in front of {name}, and there is no {name} on PATH to run"
+        )));
+    };
+    let mut command = Command::new(&real);
+    command.args(argv);
+    hand_off(&mut command, name, None)
+}
+
 /// The real command, found by walking PATH past ourselves.
 ///
 /// "Past ourselves" is a question about the FILE, not about the directory. A
@@ -1083,7 +1122,13 @@ fn hand_off(command: &mut Command, name: &str, stdin: Option<&[u8]>) -> Result<E
 /// the exec. The two cannot disagree about a decision, because every string
 /// this shim compares against is ASCII, and lossy conversion only ever replaces
 /// a sequence that was not text to begin with.
-pub(crate) fn run(root: &Path, policy: &Policy, name: &str, argv: &[OsString]) -> Result<Exit> {
+pub(crate) fn run(
+    root: &Path,
+    policy: &Policy,
+    name: &str,
+    argv: &[OsString],
+    invoked: Invoked,
+) -> Result<Exit> {
     let words: Vec<String> = argv
         .iter()
         .map(|argument| argument.to_string_lossy().into_owned())
@@ -1102,14 +1147,35 @@ pub(crate) fn run(root: &Path, policy: &Policy, name: &str, argv: &[OsString]) -
         .map(|shim| (shim.command.as_str(), shim))
         .collect();
     let Some(shim) = shims.get(name) else {
-        return Err(Fatal::new(format!(
-            "no shim declares the command {name:?}; this policy declares {}",
-            if shims.is_empty() {
-                String::from("none")
-            } else {
-                shims.keys().copied().collect::<Vec<&str>>().join(", ")
-            }
-        )));
+        // Nothing here declares this command. The reading is the same either
+        // way -- an absent declaration is a place the rule does not run, the
+        // same way an absent `[git]` table is, and it is not a could-not-look,
+        // so it is not exit 2 by the rule that governs those. What differs is
+        // what was asked.
+        //
+        // Run AS the command, the answer lets it run. The link is on PATH for
+        // the whole machine while a `[[shim]]` is a line in one repository's
+        // policy, so refusing an undeclared command meant `git` exiting 2 in
+        // every repository that had not declared one, and in every directory
+        // that is not a repository at all. What gets installed after that is
+        // nothing, which loses the seam everywhere rather than where it was
+        // undeclared.
+        //
+        // Asked for BY NAME, the answer is an error: `uphold shim faux ...`
+        // names a shim this repository does not have, nothing is standing in
+        // front of anything, and the caller is entitled to hear that rather
+        // than watch a typo run.
+        return match invoked {
+            Invoked::AsTheCommand => exec_through(name, argv),
+            Invoked::ByName => Err(Fatal::new(format!(
+                "no shim declares the command {name:?}; this policy declares {}",
+                if shims.is_empty() {
+                    String::from("none")
+                } else {
+                    shims.keys().copied().collect::<Vec<&str>>().join(", ")
+                }
+            ))),
+        };
     };
 
     // Only the rules that name THIS command line. A checker used to be
