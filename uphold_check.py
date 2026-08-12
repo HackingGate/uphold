@@ -240,8 +240,32 @@ def includes_our_lefthook_remote(text: str) -> bool:
             current.append(stripped)
     if current is not None:
         entries.append(current)
+    # `owner/name` where the url spells one, and the bare repository name where
+    # it cannot. A remote is not always a forge url: lefthook takes any git url,
+    # so a clone by filesystem path, by ssh, or by any mirror is still a remote
+    # naming THIS repository, and it carries no owner to check. Requiring the
+    # slug rejected exactly that -- the parity harness clones the hooks
+    # repository by path, and a consumer wired the documented way was reported
+    # as running no seam at all.
+    #
+    # The name alone is weaker than the slug and it is not the load-bearing half.
+    # What CodeRabbit's finding was about, and what still holds, is that the two
+    # halves must appear in the SAME entry: a repository that is ours and a
+    # config that is ours, together, rather than either one on its own.
+    name = slug.rsplit("/", 1)[-1]
+
+    def names_this_repository(line: str) -> bool:
+        if re.search(rf"{re.escape(slug)}\b", line):
+            return True
+        _, _, value = line.partition(":")
+        for word in value.split():
+            tail = word.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
+            if tail == name:
+                return True
+        return False
+
     return any(
-        any(re.search(rf"{re.escape(slug)}\b", line) for line in entry)
+        any(names_this_repository(line) for line in entry)
         and any("hooks/lefthook.yml" in line for line in entry)
         for entry in entries
     )

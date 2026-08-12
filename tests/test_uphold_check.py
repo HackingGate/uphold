@@ -1041,6 +1041,34 @@ class UpstreamIdentity(unittest.TestCase):
             )
         )
 
+    def test_a_remote_naming_this_repository_without_an_owner_is_still_ours(
+        self,
+    ) -> None:
+        """lefthook takes any git url, and most of them carry no `owner/name`.
+
+        Requiring the slug rejected a clone by filesystem path, which is exactly
+        what `scripts/consumer_check.sh` writes: the parity harness points the
+        consumer at the checkout under test. A consumer wired the way the
+        documentation describes was reported as running no seam at all, and the
+        one CI job that drives a real lefthook consumer refused a clean commit.
+        """
+        name = uphold_check.upstream_slug().rsplit("/", 1)[-1]
+        for url in (
+            f"/home/runner/work/{name}/{name}",
+            f"git@github.com:HackingGate/{name}.git",
+            f"/tmp/mirror/{name}.git",
+        ):
+            with self.subTest(url=url):
+                self.assertTrue(
+                    uphold_check.includes_our_lefthook_remote(
+                        f"remotes:\n"
+                        f"  - git_url: {url}\n"
+                        f"    ref: v1.0.0\n"
+                        f"    configs:\n"
+                        f"      - hooks/lefthook.yml\n"
+                    )
+                )
+
     def test_a_remote_is_only_ours_when_one_entry_says_both(self) -> None:
         """Neither half alone, because the branch it feeds grants every stage.
 
