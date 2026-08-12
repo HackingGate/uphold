@@ -948,10 +948,14 @@ fn the_promoted_sets_refuse_what_they_were_promoted_for() {
     );
 
     // host-identity reads the running machine, so the fixture has to be built
-    // from it. HOME is a harness precondition: without it there is no literal
-    // to plant, and a test that quietly asserted less would be the silence this
-    // set exists to end.
-    let home = std::env::var("HOME").unwrap();
+    // from it -- but from a HOME this test SETS rather than the one it happens
+    // to inherit. Reading the ambient one made the assertion depend on who ran
+    // it: a hosted runner's home belongs to a shared build account, which
+    // `KNOWN_PUBLIC_IDENTITY` deliberately does not treat as anybody's identity,
+    // so the rule correctly did not fire and the test read that as the rule
+    // having stopped working. Planting a personal home asks the question the set
+    // was promoted to answer, and asks it the same way on every machine.
+    let home = format!("/{}/fixture-person", "home");
     write(&root, "docs/setup.md", &format!("run it from {home}\n"));
     // broken-links: one target that resolves and one that does not, so the
     // failure is the missing path rather than the rule firing on everything.
@@ -968,7 +972,12 @@ fn the_promoted_sets_refuse_what_they_were_promoted_for() {
         "{\"holder\": \"\u{30c8}\u{30e8}\u{30bf}\"}\n",
     );
 
-    let output = scan(&root);
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .arg("scan")
+        .current_dir(&root)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     let text = stderr(&output);
     assert!(text.contains("no-running-os-identity-metadata"), "{text}");
