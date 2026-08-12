@@ -201,13 +201,76 @@ def upstream_slug() -> str:
     return "/".join(parts[-2:])
 
 
-@functools.cache
-def lefthook_remote() -> re.Pattern[str]:
-    return re.compile(rf"{re.escape(upstream_slug())}\b|hooks/lefthook\.yml")
+def includes_our_lefthook_remote(text: str) -> bool:
+    """Does one `remotes:` entry name THIS repository and take its config?
+
+    Both halves, in the SAME entry. This was one regex alternating between the
+    two, so either alone was enough: a remote whose url merely contained the
+    slug, or a remote pulling a file that happens to be called
+    `hooks/lefthook.yml` out of somebody else's repository. Either match granted
+    every stage this manifest publishes, because the branch it feeds assumes the
+    remote IS this repository's config -- so a fork, a mirror, or an unrelated
+    project following the same conventional filename was credited with running
+    every guard here.
+
+    Read by indentation rather than by pattern, because a `remotes:` item spells
+    its url and its config on separate lines, and the question is which lines
+    belong to the same item.
+    """
+    slug = upstream_slug()
+    entries: list[list[str]] = []
+    current: list[str] | None = None
+    marker = -1
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        stripped = line.lstrip()
+        if stripped.startswith("- "):
+            # A less-indented item ends the one before it and is not part of it.
+            if current is not None and indent <= marker:
+                entries.append(current)
+                current = None
+            if current is None:
+                current, marker = [], indent
+        elif current is not None and indent <= marker:
+            entries.append(current)
+            current = None
+        if current is not None:
+            current.append(stripped)
+    if current is not None:
+        entries.append(current)
+    return any(
+        any(re.search(rf"{re.escape(slug)}\b", line) for line in entry)
+        and any("hooks/lefthook.yml" in line for line in entry)
+        for entry in entries
+    )
 
 
 class CouldNotLook(Exception):
     """Raised where the tool cannot inspect what it claims to check (exit 2)."""
+
+
+def _string_list(value: object, field: str) -> list[str]:
+    """Every entry, or a refusal naming the one that is not a string.
+
+    The alternative -- keeping the strings and dropping the rest -- answers a
+    question nobody asked, because the engine reading the same file will not
+    silently agree. Whatever this list is short by is a rule the engine runs and
+    this reconcile has never heard of.
+    """
+    if not isinstance(value, list):
+        raise CouldNotLook(
+            f"{CONTENT_POLICY}: {field} must be a list, not {type(value).__name__}"
+        )
+    for index, entry in enumerate(value):
+        if not isinstance(entry, str):
+            raise CouldNotLook(
+                f"{CONTENT_POLICY}: {field}[{index}] is {type(entry).__name__}, not a string. "
+                f"Which rules it would have inherited cannot be resolved, so what this "
+                f"repository runs is unknown"
+            )
+    return list(value)
 
 
 def discover_root() -> Path:
@@ -407,7 +470,7 @@ def runs_principles(root: Path) -> tuple[bool, set[str], str]:
             }
             stages |= ran
             how.append(f"{LEFTHOOK_CONFIG} runs the binary directly")
-        if lefthook_remote().search(text):
+        if includes_our_lefthook_remote(text):
             # The remote config is this repository's `hooks/lefthook.yml`, which
             # wires every stage the manifest publishes. A consumer that includes
             # it has them all, which is why including it is the one form that
@@ -546,8 +609,15 @@ def content_policy_rules(
     if not isinstance(inherit, dict):
         raise CouldNotLook(f"{CONTENT_POLICY}: 'inherit' must be a table")
 
-    names = [value for value in inherit.get("sets", []) if isinstance(value, str)]
-    relatives = [value for value in inherit.get("paths", []) if isinstance(value, str)]
+    # Refused, not filtered. These two comprehensions dropped a non-string entry
+    # in silence, which turns a malformed declaration into a SHORTER list of
+    # inherited rules than the engine resolves -- and a claim on one of the rules
+    # that went missing then fails as "no seam here supplies it", exit 1, which
+    # in this tool means the claim is false. It is not false; nobody looked. The
+    # honest answer is exit 2, the same one a missing inherited file gets a few
+    # lines below.
+    names = _string_list(inherit.get("sets", []), "inherit.sets")
+    relatives = _string_list(inherit.get("paths", []), "inherit.paths")
 
     # Merged in the order the engine merges them -- bundled sets, then the
     # named paths, then the repository's own rules -- so a rule the repository

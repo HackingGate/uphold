@@ -1028,9 +1028,58 @@ class UpstreamIdentity(unittest.TestCase):
 
         self.assertEqual(uphold_check.upstream_url(), url)
         self.assertEqual(uphold_check.upstream_slug(), "/".join(url.split("/")[-2:]))
-        self.assertRegex(
-            uphold_check.lefthook_remote().pattern,
-            rf"^{uphold_check.upstream_slug()}\\b\|",
+        # Asserted through the reader rather than against its pattern: the
+        # pattern is gone, and what the drift would break is the recognition.
+        slug = uphold_check.upstream_slug()
+        self.assertTrue(
+            uphold_check.includes_our_lefthook_remote(
+                f"remotes:\n"
+                f"  - git_url: https://github.com/{slug}\n"
+                f"    ref: v1.0.0\n"
+                f"    configs:\n"
+                f"      - hooks/lefthook.yml\n"
+            )
+        )
+
+    def test_a_remote_is_only_ours_when_one_entry_says_both(self) -> None:
+        """Neither half alone, because the branch it feeds grants every stage.
+
+        This read as an alternation, so a fork of this repository pinning its own
+        config, or an unrelated project whose config happens to carry the
+        conventional filename, was credited with running every guard published
+        here.
+        """
+        slug = uphold_check.upstream_slug()
+        ours_but_another_config = (
+            f"remotes:\n"
+            f"  - git_url: https://github.com/{slug}\n"
+            f"    configs:\n"
+            f"      - hooks/something-else.yml\n"
+        )
+        our_filename_from_elsewhere = (
+            "remotes:\n"
+            "  - git_url: https://github.com/someone/unrelated\n"
+            "    configs:\n"
+            "      - hooks/lefthook.yml\n"
+        )
+        split_across_two_entries = (
+            f"remotes:\n"
+            f"  - git_url: https://github.com/{slug}\n"
+            f"    configs:\n"
+            f"      - hooks/something-else.yml\n"
+            f"  - git_url: https://github.com/someone/unrelated\n"
+            f"    configs:\n"
+            f"      - hooks/lefthook.yml\n"
+        )
+
+        self.assertFalse(
+            uphold_check.includes_our_lefthook_remote(ours_but_another_config)
+        )
+        self.assertFalse(
+            uphold_check.includes_our_lefthook_remote(our_filename_from_elsewhere)
+        )
+        self.assertFalse(
+            uphold_check.includes_our_lefthook_remote(split_across_two_entries)
         )
 
     def test_the_python_manifest_names_the_same_repository(self) -> None:
