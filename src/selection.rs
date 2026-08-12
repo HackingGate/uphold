@@ -44,15 +44,36 @@ use crate::error::{Fatal, Result};
 /// text somebody here wrote, so these are skipped -- and counted, because "we
 /// did not check these" and "these were clean" must never look the same on the
 /// way out.
-pub(crate) fn not_text_paths(root: &Path) -> Vec<String> {
+///
+/// The second half of the answer is the reason it could not be given. An empty
+/// list means the repository declares nothing `-text`; a `Some` reason means the
+/// question was never answered, and the two must not arrive looking alike --
+/// `index_bytes` in this same module carries a note saying exactly that about
+/// `None` and an empty list, and this function used to break the rule its
+/// neighbour states. The consequence of folding them was not a missed finding
+/// but an invented one: a declared binary file stops being excluded, so an
+/// `encoding` or `allowed_scripts` rule reports on bytes nobody wrote as text.
+/// That is the safe direction to fail in and still an unmeasured claim.
+pub(crate) fn not_text_paths(root: &Path) -> (Vec<String>, Option<String>) {
     let Some(listed) = index_bytes(root) else {
         // No git, or no repository. The declaration is optional, and its absence
         // means nothing is declared -- not that something failed.
-        return Vec::new();
+        return (Vec::new(), None);
     };
     if listed.is_empty() {
-        return Vec::new();
+        return (Vec::new(), None);
     }
+
+    let unmeasured = |reason: &str| {
+        (
+            Vec::new(),
+            Some(format!(
+                ".gitattributes: {reason}, so which paths this repository declares are not \
+                 text is unknown. Every tracked path was treated as text, which means a \
+                 declared binary file was searched by the content rules rather than skipped."
+            )),
+        )
+    };
 
     let Ok(mut child) = Command::new("git")
         .args(["check-attr", "--stdin", "-z", "text"])
@@ -62,10 +83,10 @@ pub(crate) fn not_text_paths(root: &Path) -> Vec<String> {
         .stderr(Stdio::null())
         .spawn()
     else {
-        return Vec::new();
+        return unmeasured("git check-attr could not be started");
     };
     let (Some(mut sink), Some(mut source)) = (child.stdin.take(), child.stdout.take()) else {
-        return Vec::new();
+        return unmeasured("git check-attr gave no pipe to speak to");
     };
 
     // The two pipes move at the same time, on two threads, and that is not a
@@ -90,8 +111,20 @@ pub(crate) fn not_text_paths(root: &Path) -> Vec<String> {
     // somebody waits for it, and its status is the only thing that separates a
     // complete answer from a truncated one.
     let finished = child.wait();
-    if drained.is_err() || !finished.is_ok_and(|status| status.success()) {
-        return Vec::new();
+    if drained.is_err() {
+        return unmeasured("its answer could not be read to the end");
+    }
+    match finished {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            return unmeasured(&format!(
+                "git check-attr exited {}",
+                status.code().unwrap_or(-1)
+            ))
+        }
+        Err(error) => {
+            return unmeasured(&format!("git check-attr could not be waited for: {error}"))
+        }
     }
 
     // `check-attr -z` emits path, attribute, value as three NUL-separated fields.
@@ -105,7 +138,7 @@ pub(crate) fn not_text_paths(root: &Path) -> Vec<String> {
             found.push(String::from_utf8_lossy(path).into_owned());
         }
     }
-    found
+    (found, None)
 }
 
 /// Every path in git's index, NUL separated, exactly as git wrote them.
@@ -656,10 +689,11 @@ mod tests {
         std::thread::spawn(move || {
             sender.send(not_text_paths(&root)).ok();
         });
-        let declared = receiver
+        let (declared, unmeasured) = receiver
             .recv_timeout(Duration::from_secs(60))
             .expect("`git check-attr` did not answer: the pipes deadlocked");
 
+        assert!(unmeasured.is_none(), "{unmeasured:?}");
         assert!(declared.contains(&"capture.bin".to_owned()), "{declared:?}");
         assert!(
             !declared.iter().any(|path| path.starts_with("tracked/")),

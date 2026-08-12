@@ -59,11 +59,20 @@ pub(crate) struct Scan<'a> {
 
 impl<'a> Scan<'a> {
     pub(crate) fn new(root: &'a Path, policy: &'a Policy) -> Self {
+        // A `.gitattributes` question that could not be answered is seeded into
+        // the unreadable list rather than dropped, because the scan continues
+        // either way and the reader has to be told which of the two answers they
+        // are holding: nothing is declared not-text, or nobody could find out.
+        let (not_text, unmeasured) = not_text_paths(root);
+        let mut unreadable = BTreeSet::new();
+        if let Some(reason) = unmeasured {
+            unreadable.insert(reason);
+        }
         Self {
             root,
             policy,
-            not_text: not_text_paths(root),
-            unreadable: RefCell::new(BTreeSet::new()),
+            not_text,
+            unreadable: RefCell::new(unreadable),
         }
     }
 
