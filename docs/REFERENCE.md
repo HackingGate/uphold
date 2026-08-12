@@ -9,7 +9,7 @@ namespace — that is what lets a claim in
 - [`uphold guard` — the guards](#uphold-guard--the-guards)
 - [`uphold shim` — the shims](#uphold-shim--the-shims)
 - [`uphold audit --for-publication`](#uphold-audit---for-publication)
-- [`--coverage` and `--oscal`](#--coverage-and---oscal)
+- [`uphold check --coverage` and `--oscal`](#uphold-check---coverage-and---oscal)
 - [The review tier](#the-review-tier)
 
 ## Rule shape
@@ -603,10 +603,10 @@ found, `2` where a surface this run tried to read could not be read, `0` when
 every surface a flip would republish was read and was clean — subject to the
 standing caveats, which the clean line says.
 
-## `--coverage` and `--oscal`
+## `uphold check --coverage` and `--oscal`
 
 ```sh
-uphold_check.py --coverage    # every rule the four tiers run, vs the claims
+uphold check --coverage       # every rule this repository runs, vs the claims
 uphold_check.py --oscal > component-definition.json
 ```
 
