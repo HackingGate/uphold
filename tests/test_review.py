@@ -224,6 +224,14 @@ class Settings(unittest.TestCase):
         policy = Path(self.tmp) / "policy"
         policy.mkdir(exist_ok=True)
         (policy / "upheld.toml").write_text(textwrap.dedent(body), encoding="utf-8")
+        # `--review` asks the binary which claims are live, and the binary needs
+        # a policy to answer. A repository with no policy is could-not-look here
+        # for the same reason it is for the reconcile.
+        (policy / "principles.toml").write_text(
+            '[rule.prevent-public-push]\nbuiltin = "prevent-public-push"\n'
+            'git.hooks = ["pre-push"]\n',
+            encoding="utf-8",
+        )
         return subprocess.run(
             [sys.executable, str(SCRIPT), "--review", *args],
             cwd=self.tmp,
