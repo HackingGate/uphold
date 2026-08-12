@@ -641,9 +641,14 @@ def content_policy_rules(
         declared |= _rule_stages(read_toml(extra))
     declared |= _rule_stages(policy)
 
-    disabled = {
-        value for value in inherit.get("disabled_rules", []) if isinstance(value, str)
-    }
+    # The third list in the same table, and it was left filtering in silence when
+    # the other two stopped. It is the one where dropping an entry is worst: the
+    # engine refuses a `disabled_rules` id that names nothing inherited, so a
+    # malformed entry that vanishes here is a load failure over there -- this
+    # tool reporting on a policy the binary will not even accept.
+    disabled = set(
+        _string_list(inherit.get("disabled_rules", []), "inherit.disabled_rules")
+    )
     return declared, disabled, names, relatives
 
 

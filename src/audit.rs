@@ -115,20 +115,33 @@ fn git_lines(root: &Path, args: &[&str]) -> Result<String> {
 /// Both readings are about what publication exposes, so both need the same
 /// answer, which means the fetch belongs before either of them rather than
 /// inside whichever happens to run first.
-fn refresh_origin(root: &Path) {
+/// A failure is not fatal and is not silent: it comes back as a note the caller
+/// puts in `unreadable`, which is what turns the run into an exit 2. Offline,
+/// the audit still has every ref this clone already holds and is worth running,
+/// so refusing outright would make the pre-publication check unavailable exactly
+/// when somebody reaches for it. What it must not do is answer "clean" about a
+/// forge it could not reach -- and returning `()` while the doc comment claimed
+/// the caller reported the staleness is how it did precisely that.
+fn refresh_origin(root: &Path) -> Option<String> {
     // Pruned, because a remote-tracking ref for a branch deleted upstream still
     // exists locally and would be read as something the forge still serves.
-    //
-    // A failure is deliberately not fatal here. Offline, the audit still has
-    // every ref this clone already holds, and refusing to run at all would make
-    // the pre-publication check unavailable exactly when a reviewer is most
-    // likely to reach for it. What must not happen is a silent success, and the
-    // caller reports the staleness instead.
-    Command::new("git")
+    let stale = |reason: String| {
+        Some(format!(
+            "git fetch --prune origin: {reason}. Every reading below is of the refs this \
+             clone already had, so an object the forge holds and this clone has never seen \
+             was not walked, and a branch deleted upstream was still read as one the forge \
+             serves."
+        ))
+    };
+    match Command::new("git")
         .args(["fetch", "-q", "--prune", "origin"])
         .current_dir(root)
         .output()
-        .ok();
+    {
+        Ok(output) if output.status.success() => None,
+        Ok(output) => stale(format!("exited {}", output.status.code().unwrap_or(-1))),
+        Err(error) => stale(error.to_string()),
+    }
 }
 
 fn history(root: &Path) -> Result<Vec<Surface>> {
@@ -607,12 +620,16 @@ pub(crate) fn for_publication(root: &Path, policy: &Policy) -> Result<Exit> {
     // wants the same ref set: fetched, and pruned of branches the forge no
     // longer has. This ran inside `history`, three lines further down, which
     // left `reachable_blobs` walking whatever the last fetch happened to leave.
-    refresh_origin(root);
+    let stale_refs = refresh_origin(root);
 
     // The pull refs are fetched FIRST, because `reachable_blobs` walks them:
     // a blob that only ever existed on a pull-request head is served by the
     // forge for good, and it is in no branch this clone has otherwise.
     let (retained, mut unreadable) = retained_pull_refs(root)?;
+    // Ahead of the readings it qualifies, because it qualifies all of them: what
+    // follows is an audit of the refs this clone happens to hold rather than of
+    // what the forge will serve.
+    unreadable.extend(stale_refs);
     let (mut surfaces, blob_unreadable) = reachable_blobs(root)?;
     unreadable.extend(blob_unreadable);
     surfaces.extend(history(root)?);
