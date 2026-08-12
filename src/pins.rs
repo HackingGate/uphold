@@ -129,8 +129,9 @@ const LEFTHOOK_CONFIGS: &[&str] = &[
 /// reviewer can see or a runner will find in a fresh clone. Sorted, because a
 /// report whose order depends on directory iteration diffs against itself
 /// between two runs that found the same thing.
-fn hook_configs(root: &Path) -> Vec<PathBuf> {
+fn hook_configs(root: &Path) -> Result<Vec<PathBuf>> {
     let mut found = Vec::new();
+    let mut unreadable: Vec<String> = Vec::new();
     let mut walker = WalkBuilder::new(root);
     walker
         // Hook configuration is dotted by convention -- `.pre-commit-config.yaml`
@@ -141,11 +142,43 @@ fn hook_configs(root: &Path) -> Vec<PathBuf> {
         .git_global(true)
         .git_exclude(true)
         .parents(true)
-        // The object database is not the work tree. With `hidden` off the walk
-        // would descend into `.git` and read a few thousand files that no hook
-        // manager has ever looked at.
-        .filter_entry(|entry| entry.file_name() != std::ffi::OsStr::new(".git"));
-    for entry in walker.build().flatten() {
+        .filter_entry(|entry| {
+            // The object database is not the work tree. With `hidden` off the
+            // walk would descend into `.git` and read a few thousand files that
+            // no hook manager has ever looked at.
+            if entry.file_name() == std::ffi::OsStr::new(".git") {
+                return false;
+            }
+            // A submodule is another repository, and its pins are its own. The
+            // name test above does not stop the walk entering one: an
+            // initialized submodule carries `.git` as a FILE, so excluding that
+            // name excludes the file and leaves the directory around it
+            // traversable. The walk then read the submodule's configs and this
+            // guard asked a remote about every pin in them -- work charged to
+            // the wrong repository, and a stale pin reported against a tree that
+            // does not own it. A gitlink is what git itself calls the boundary.
+            if entry.depth() > 0 && entry.file_type().is_some_and(|kind| kind.is_dir()) {
+                let dot_git = entry.path().join(".git");
+                if dot_git.is_file() {
+                    return false;
+                }
+            }
+            true
+        });
+    // Not `.flatten()`. A directory the walk cannot enter yields an `Err` and
+    // nothing else, so flattening it away hid a configuration behind a
+    // permission and let this guard report a clean pin set for a tree it had not
+    // finished reading. That is the same defect `selection::by_walking` carries
+    // a note about, and the same answer: a walk that did not finish is a
+    // could-not-look, not a pass.
+    for result in walker.build() {
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(error) => {
+                unreadable.push(error.to_string());
+                continue;
+            }
+        };
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
             continue;
         }
@@ -156,8 +189,18 @@ fn hook_configs(root: &Path) -> Vec<PathBuf> {
             found.push(entry.into_path());
         }
     }
+    if !unreadable.is_empty() {
+        return Err(Fatal::new(format!(
+            "{} director{} under {} could not be read, so the hook configurations inside \
+             them were never looked for and no pin in them was checked:\n  {}",
+            unreadable.len(),
+            if unreadable.len() == 1 { "y" } else { "ies" },
+            root.display(),
+            unreadable.join("\n  ")
+        )));
+    }
     found.sort();
-    found
+    Ok(found)
 }
 
 /// A `rev:` that names nothing is not a pin, in either manager's spelling.
@@ -240,7 +283,7 @@ pub(crate) fn read_pins(root: &Path) -> Result<Pins> {
     let mut pins = Vec::new();
     let mut notes = Vec::new();
     let mut saw_pre_commit = false;
-    for path in hook_configs(root) {
+    for path in hook_configs(root)? {
         let source = path
             .strip_prefix(root)
             .unwrap_or(&path)
@@ -533,6 +576,71 @@ mod tests {
                 source: PRE_COMMIT_CONFIG.to_owned(),
             }]
         );
+    }
+
+    /// A submodule's pins are the submodule's, and asking about them here spends
+    /// a network round trip per pin on a tree this repository does not own -- and
+    /// reports the answer against the wrong repository.
+    ///
+    /// The walk excluded the NAME `.git`, which is a directory in an ordinary
+    /// checkout and a FILE in an initialized submodule. Excluding the file left
+    /// the directory around it perfectly traversable, so the walk went straight
+    /// in. `.git` as a file is what git itself calls the boundary.
+    #[test]
+    fn a_submodules_configs_belong_to_the_submodule() {
+        let dir = tree("gitlink");
+        write(
+            &dir,
+            ".pre-commit-config.yaml",
+            "repos:\n  - repo: https://example.test/a\n    rev: v1.0.0\n    hooks:\n      - id: x\n",
+        );
+        write(&dir, "vendored/.git", "gitdir: ../.git/modules/vendored\n");
+        write(
+            &dir,
+            "vendored/.pre-commit-config.yaml",
+            "repos:\n  - repo: https://example.test/b\n    rev: v2.0.0\n    hooks:\n      - id: y\n",
+        );
+
+        let found = read_pins(&dir).unwrap().pins;
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].repo, "https://example.test/a");
+    }
+
+    /// A directory the walk cannot enter is a could-not-look, not a clean tree.
+    ///
+    /// `walker.build().flatten()` dropped the `Err` and the walk carried on, so a
+    /// configuration behind a permission was never found and this guard reported
+    /// every pin it did manage to read as the whole answer.
+    #[test]
+    #[cfg(unix)]
+    fn a_directory_that_cannot_be_entered_is_not_a_clean_pin_set() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tree("unreadable");
+        write(
+            &dir,
+            ".pre-commit-config.yaml",
+            "repos:\n  - repo: https://example.test/a\n    rev: v1.0.0\n    hooks:\n      - id: x\n",
+        );
+        write(
+            &dir,
+            "closed/.pre-commit-config.yaml",
+            "repos:\n  - repo: https://example.test/b\n    rev: v2.0.0\n    hooks:\n      - id: y\n",
+        );
+        let closed = dir.join("closed");
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let read = read_pins(&dir);
+        // Root, or a filesystem that ignores the mode, can read it anyway; there
+        // is nothing to assert about a walk that did in fact finish.
+        if std::fs::read_dir(&closed).is_ok() {
+            std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o755)).ok();
+            return;
+        }
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o755)).ok();
+
+        let error = read.expect_err("an unreadable directory read as a complete answer");
+        assert!(error.to_string().contains("could not be read"), "{error}");
     }
 
     #[test]
