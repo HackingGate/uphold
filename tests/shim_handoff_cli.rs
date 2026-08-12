@@ -102,7 +102,14 @@ impl Run<'_> {
             root.join("bin").display(),
             std::env::var("PATH").unwrap_or_default()
         );
-        let mut command = if self.guarded {
+        // `timeout` is GNU coreutils and is not on a stock macOS or BSD, where
+        // `Command::new("timeout")` fails to spawn and every guarded case would
+        // fail for the environment rather than for the shim. Its whole job here
+        // is to turn a deadlock into a failure instead of a suite that hangs, so
+        // where it is missing the test still runs and a regression shows up as a
+        // hang rather than as a named failure -- worse, and better than a red
+        // suite on a machine that has nothing wrong with it.
+        let mut command = if self.guarded && has_timeout() {
             let mut guarded = Command::new("timeout");
             guarded.arg("60").arg(env!("CARGO_BIN_EXE_uphold"));
             guarded
@@ -149,6 +156,16 @@ impl Run<'_> {
     }
 }
 
+/// Is GNU `timeout` on this machine to wrap a case that could hang?
+fn has_timeout() -> bool {
+    Command::new("timeout")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
+}
+
 fn code(output: &Output) -> i32 {
     // 124 is `timeout` saying the run never finished, which is a deadlock
     // reported rather than waited on.
@@ -181,7 +198,11 @@ scope = "always"
         ),
         &[(
             "faux",
-            "#!/bin/sh\necho \"faux ran: $*\"\necho \"faux body bytes: $(wc -c)\"\n",
+            // `tr -d ' '` because BSD and macOS `wc` pad the count with leading
+            // spaces where GNU does not, so the printed line would not match the
+            // length asserted below for a reason that has nothing to do with the
+            // shim.
+            "#!/bin/sh\necho \"faux ran: $*\"\necho \"faux body bytes: $(wc -c | tr -d ' ')\"\n",
         )],
     );
 

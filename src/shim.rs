@@ -635,27 +635,39 @@ fn forge_field(program: &str, args: &[&str], field: Option<&str>) -> Option<Stri
     (!value.is_empty() && value != "null").then_some(value)
 }
 
+/// Parse the document and read a TOP-LEVEL key, rather than scan for a needle.
+///
+/// These two were `text.find("\"field\"")` and a walk forwards from there, which
+/// answers with the first textual occurrence of the name anywhere in the
+/// document -- inside a nested object, inside a string value, inside a
+/// description that happens to quote the word. On the visibility question that
+/// is a `public-target` decision made from somebody else's field, and the shim
+/// stands in front of publication on the strength of it. The parser is already a
+/// dependency: YAML 1.2 is a superset of JSON, so `serde_yaml_ng` reads a forge
+/// response without adding one.
+fn json_value(text: &str) -> Option<serde_yaml_ng::Value> {
+    serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text).ok()
+}
+
 fn json_string_field(text: &str, field: &str) -> Option<String> {
-    let needle = format!("\"{field}\"");
-    let start = text.find(&needle)? + needle.len();
-    let rest = text.get(start..)?;
-    let colon = rest.find(':')? + 1;
-    let rest = rest.get(colon..)?.trim_start();
-    let rest = rest.strip_prefix('"')?;
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
+    let parsed = json_value(text)?;
+    let value = parsed.get(field)?;
+    // A number or a bool spelled where a string was expected is still an answer
+    // the caller can use; a nested object is not.
+    match value {
+        serde_yaml_ng::Value::String(found) => Some(found.clone()),
+        serde_yaml_ng::Value::Number(found) => Some(found.to_string()),
+        serde_yaml_ng::Value::Bool(found) => Some(found.to_string()),
+        _ => None,
+    }
 }
 
 fn json_bool_field(text: &str, field: &str) -> bool {
-    let needle = format!("\"{field}\"");
-    let Some(start) = text.find(&needle) else {
-        return false;
-    };
-    let rest = &text[start + needle.len()..];
-    let Some(colon) = rest.find(':') else {
-        return false;
-    };
-    rest[colon + 1..].trim_start().starts_with("true")
+    json_value(text)
+        .as_ref()
+        .and_then(|parsed| parsed.get(field))
+        .and_then(serde_yaml_ng::Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Run one checker over one subject.
@@ -878,13 +890,21 @@ fn install_editor(
     variable: &str,
     own: Option<&Path>,
     argv: &[String],
-) {
+) -> Result<()> {
     let Some(exe) = own else {
-        eprintln!(
+        // Refused, not warned. This printed the sentence below and then returned,
+        // and the caller went on to exec the command -- so the one path the
+        // editor re-entry exists to close stayed open, and the run that could
+        // not check the text still published it. The warning even said "This is
+        // not a pass" while exiting 0, which is the shape `explicit-unknown`
+        // names. There is no safe way to continue: the body does not exist yet,
+        // so it cannot be checked now, and after the hand-off there is no
+        // process left here to check it later.
+        return Err(Fatal::new(format!(
             "{name}: the body will be composed in an editor, and this shim could not find its \
-             own path to stand in front of it, so nothing was checked. This is not a pass."
-        );
-        return;
+             own path to stand in front of that editor. Nothing was published, because \
+             nothing could be checked."
+        )));
     };
     let editor = nonempty_env(variable)
         .or_else(|| nonempty_env("GIT_EDITOR"))
@@ -909,6 +929,7 @@ fn install_editor(
         "{name}: the body will be composed in an editor, so the editor is the checkpoint: what \
          it leaves in the file is checked when it closes."
     );
+    Ok(())
 }
 
 /// Run the user's editor, then judge what it produced.
@@ -1000,8 +1021,15 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
 /// every death by a signal, so a command killed by SIGINT reported a plain exit
 /// 1, which in this tool's own vocabulary is a policy violation.
 #[cfg(unix)]
-fn hand_off(command: &mut Command, name: &str) -> Result<Exit> {
+fn hand_off(command: &mut Command, name: &str, stdin: Option<&[u8]>) -> Result<Exit> {
     use std::os::unix::process::CommandExt;
+    // A file rather than a pipe, and only here. After `exec` there is no process
+    // left to feed a pipe, so the bytes have to be somewhere the kernel can hand
+    // over on its own -- and the file is unlinked while still open, which leaves
+    // the contents reachable through the descriptor and through no name at all.
+    if let Some(bytes) = stdin {
+        command.stdin(Stdio::from(replayed(bytes)?));
+    }
     // `arg0` so the command sees the name it was invoked under rather than the
     // path this shim found it at.
     let error = command.arg0(name).exec();
@@ -1009,11 +1037,34 @@ fn hand_off(command: &mut Command, name: &str) -> Result<Exit> {
 }
 
 #[cfg(not(unix))]
-fn hand_off(command: &mut Command, name: &str) -> Result<Exit> {
+fn hand_off(command: &mut Command, name: &str, stdin: Option<&[u8]>) -> Result<Exit> {
+    // A pipe rather than a file, and for a reason that is not symmetry: this
+    // branch does not exec, it spawns and waits, so there IS a process left to
+    // write the bytes -- and unlink-on-open is a Unix property. Windows refuses
+    // to remove a file while a handle is open, so the temp file the Unix branch
+    // relies on would survive the run holding the exact body the command
+    // published, in a directory every account on the machine can read.
+    let fed = stdin.is_some();
+    if fed {
+        command.stdin(Stdio::piped());
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| Fatal::new(format!("{name}: {error}")))?;
+    if let (true, Some(bytes)) = (fed, stdin) {
+        let mut sink = child
+            .stdin
+            .take()
+            .ok_or_else(|| Fatal::new(format!("{name}: no stdin to replay the body into")))?;
+        let owned = bytes.to_vec();
+        std::thread::spawn(move || {
+            sink.write_all(&owned).ok();
+        });
+    }
     // No exec to hand off to, so the closest thing: run it and carry its code
     // out. What this platform cannot preserve, it cannot preserve.
-    let status = command
-        .status()
+    let status = child
+        .wait()
         .map_err(|error| Fatal::new(format!("{name}: {error}")))?;
     std::process::exit(status.code().unwrap_or(1));
 }
@@ -1130,17 +1181,14 @@ pub(crate) fn run(root: &Path, policy: &Policy, name: &str, argv: &[OsString]) -
     // Everything the command needs that this shim took from it, arranged before
     // the hand-off because after it there is no arranging anything: the body
     // read off stdin, and the editor it is about to open.
-    if let Some(bytes) = collected.stdin.as_deref() {
-        command.stdin(Stdio::from(replayed(bytes)?));
-    }
     let editor_env = shim
         .editor_env
         .as_deref()
         .filter(|_| in_scope && !collected.body_given && !collected.web);
     if let Some(variable) = editor_env {
-        install_editor(&mut command, name, variable, own.as_deref(), &words);
+        install_editor(&mut command, name, variable, own.as_deref(), &words)?;
     }
-    hand_off(&mut command, name)
+    hand_off(&mut command, name, collected.stdin.as_deref())
 }
 
 #[cfg(test)]
