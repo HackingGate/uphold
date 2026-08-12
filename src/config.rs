@@ -13,7 +13,7 @@
 //! repository describing a constant in another. One enum in one crate makes the
 //! whole class of drift unrepresentable, and [`Kind::ALL`] is the only list.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::Deserialize;
@@ -860,6 +860,42 @@ impl Rule {
             )));
         }
 
+        // And the third place, missing for exactly the reason the second one
+        // was. `shim::run` filters the rules it consults to `Check::Exec`, so a
+        // built-in -- or a regexp, or anything else -- whose only declared
+        // place is `command.before` is consulted by nothing, runs nowhere, and
+        // reports clean. The refusal below makes it worse rather than catching
+        // it: "nothing says where it runs" is SATISFIED by the very field that
+        // cannot be used, so the one check that exists to find a rule with no
+        // place is the check this rule slips past.
+        if check != Check::Exec && self.command.is_some() {
+            return Err(Fatal::new(format!(
+                "rule {:?}: only an `exec` checker stands in front of a command, so \
+                 `command.before` on a `{check}` rule would be read by nothing and would \
+                 look like configuration that works.\n\
+                 A rule that searches the tree says so with `files.*`, and a built-in \
+                 that fires at a git hook says so with `git.hooks`.",
+                self.id
+            )));
+        }
+
+        // The same idea one level down: a `command` table that names no command
+        // line stands in front of nothing, because `CommandWhere::matches`
+        // answers false for an empty list -- while the refusal below reads the
+        // table as a declared place and lets the rule through.
+        if self
+            .command
+            .as_ref()
+            .is_some_and(|where_| where_.before.is_empty())
+        {
+            return Err(Fatal::new(format!(
+                "rule {:?}: `command.before` names no command line, so this rule stands \
+                 in front of nothing. Name the command as typed -- \
+                 `command.before = [\"gh pr create\"]`",
+                self.id
+            )));
+        }
+
         if self.files.is_none() && self.git.is_none() && self.command.is_none() {
             return Err(Fatal::new(format!(
                 "rule {:?}: nothing says where it runs, so it runs nowhere -- which \
@@ -967,6 +1003,17 @@ impl Policy {
         self.rules.iter().filter(move |rule| rule.is(check))
     }
 
+    /// Whether any rule uses one check kind.
+    ///
+    /// Test-only, and it is worth saying why rather than deleting it. Its one
+    /// caller in the binary was `text::check`, which used "does any
+    /// `forbidden_literals` rule exist?" to decide whether to add the built-in
+    /// host-identity fallback -- so a repository that declared a literal rule
+    /// about something else silently lost the identity check. That question was
+    /// the defect, and the fix asks about the identity rule itself instead.
+    /// What remains is a fair question for a test about what a set inherits,
+    /// and a helper that reads a policy's shape belongs beside the policy.
+    #[cfg(test)]
     pub(crate) fn has_check(&self, check: Check) -> bool {
         self.of_check(check).next().is_some()
     }
@@ -1081,6 +1128,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     for rule in &rules {
         rule.validate()?;
     }
+    validate_shims(policy_path, &rules, &file.shims)?;
 
     Ok(Policy {
         redact_matches: file.redact_matches,
@@ -1139,6 +1187,65 @@ fn validate_unique(policy_path: &Path, rules: &[Rule]) -> Result<()> {
                     rule.id,
                     named(first),
                     named(rule.check())
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every shim has a checker, and every checker has a shim.
+///
+/// The two halves of one seam, and neither end was checked. A `[[shim]]` no
+/// `exec` rule names collects the subjects of an invocation, consults an empty
+/// list of checkers, refuses nothing and execs the command: a publication that
+/// passed because nothing looked at it, reported as a pass. A
+/// `command.before` naming a command no `[[shim]]` declares is the mirror --
+/// the shim is the only thing that invokes a checker, so the rule runs nowhere,
+/// and `uphold shim` refuses that command outright as undeclared.
+///
+/// Refused here, beside the refusal of an unknown built-in name and for the
+/// same reason: a name that resolves to nothing is a decision that looks made.
+/// A load-time refusal is also the only place either can be seen at all --
+/// at run time both are silence.
+fn validate_shims(policy_path: &Path, rules: &[Rule], shims: &[crate::shim::Shim]) -> Result<()> {
+    let declared: BTreeSet<&str> = shims.iter().map(|shim| shim.command.as_str()).collect();
+    // The first word of a `before` entry is the command itself; the rest is as
+    // much of the subcommand path as the rule wanted to scope itself to, which
+    // is not the shim's business -- `[[shim]] command = "gh"` stands in front
+    // of `gh pr create` and of every other `gh`.
+    let checked: BTreeSet<&str> = rules
+        .iter()
+        .filter(|rule| rule.is(Check::Exec))
+        .filter_map(|rule| rule.command.as_ref())
+        .flat_map(|where_| where_.before.iter())
+        .filter_map(|line| line.split_whitespace().next())
+        .collect();
+
+    for shim in shims {
+        if !checked.contains(shim.command.as_str()) {
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "the shim for {:?} is named by no checker, so that command would be \
+                     collected, checked by nothing, and run anyway -- an invocation that \
+                     passed because nothing looked at it. Name it in an `exec` rule's \
+                     `command.before`, or delete the shim",
+                    shim.command
+                ),
+            ));
+        }
+    }
+
+    for name in checked {
+        if !declared.contains(name) {
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "`command.before` names {name:?}, which no `[[shim]]` declares. A \
+                     shim is the only thing that invokes a checker, so this rule runs \
+                     nowhere -- which reads exactly like a rule that passes. Declare \
+                     `[[shim]]` with `command = {name:?}`, or drop the entry"
                 ),
             ));
         }
@@ -1294,6 +1401,12 @@ mod tests {
 
             [rule.body.command]
             before = ["gh pr create"]
+
+            [[shim]]
+            command = "gh"
+            match = ["pr:create"]
+            text_flags = ["-b"]
+            scope = "always"
             "#,
         )
         .unwrap();
@@ -1404,6 +1517,103 @@ mod tests {
                 "{check}: {error}"
             );
         }
+    }
+
+    #[test]
+    /// `command.before` on a check no shim can consult.
+    ///
+    /// The third member of the same family, and the one that was missing.
+    /// `shim::run` filters its checkers to `exec` rules, so a built-in whose
+    /// only declared place is `command.before` is consulted by nothing and runs
+    /// nowhere -- and the "nothing says where it runs" refusal is satisfied by
+    /// the very field that cannot be used, so the check meant to catch a rule
+    /// with no place is the one this rule walked past.
+    fn a_command_place_the_check_cannot_use_is_refused() {
+        // The regexp case carries `files.*` too: it is a rule that really does
+        // run, by the scan, and the `command.before` beside it is the part that
+        // reaches nothing.
+        for check in [
+            "builtin = \"prevent-ai-author\"",
+            "message = \"no\"\nregexp = \"TODO\"\nfiles.include = [\".\"]",
+        ] {
+            let error = policy_from(&format!(
+                "[rule.wrong]\n{check}\n\n[rule.wrong.command]\nbefore = [\"gh\"]\n"
+            ))
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("read by nothing"),
+                "{check}: {error}"
+            );
+        }
+    }
+
+    /// A `command` table that names no command line is a place that selects
+    /// nothing, and the "where does it run" check reads it as a place.
+    #[test]
+    fn a_command_before_that_names_nothing_is_refused() {
+        let error = policy_from(
+            r#"
+            [rule.body]
+            message = "no"
+            exec = "checker"
+
+            [rule.body.command]
+            before = []
+            "#,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("names no command line"),
+            "{error}"
+        );
+    }
+
+    /// A shim with no checker execs the command with nothing checked.
+    ///
+    /// Silence at run time -- the subjects are collected, the empty checker
+    /// list is iterated, and the command runs -- so the only place this can be
+    /// said is here, at load.
+    #[test]
+    fn a_shim_no_checker_names_is_refused() {
+        let error = policy_from(
+            r#"
+            [[shim]]
+            command = "gh"
+            match = ["pr:create"]
+            text_flags = ["-b"]
+            scope = "always"
+            "#,
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("named by no checker"), "{text}");
+        assert!(text.contains("gh"), "{text}");
+    }
+
+    /// And the mirror: a checker standing in front of a command nothing shims
+    /// is never invoked, because the shim is what invokes it.
+    #[test]
+    fn a_checker_naming_a_command_no_shim_declares_is_refused() {
+        let error = policy_from(
+            r#"
+            [rule.body]
+            message = "no"
+            exec = "checker"
+
+            [rule.body.command]
+            before = ["gh pr create", "glab mr create"]
+
+            [[shim]]
+            command = "gh"
+            match = ["pr:create"]
+            text_flags = ["-b"]
+            scope = "always"
+            "#,
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("glab"), "{text}");
+        assert!(text.contains("no `[[shim]]` declares"), "{text}");
     }
 
     /// The verified bug: two parameters that look enforced, read by nothing.

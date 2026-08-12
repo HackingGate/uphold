@@ -20,6 +20,11 @@ use crate::error::{Exit, Fatal, Result};
 use crate::report::Failure;
 use crate::sources;
 
+/// The built-in literal source that reads the running host: its username, its
+/// home path, its hostname. Named once, because the fallback below and the test
+/// for whether anything already covers it have to mean the same string.
+const RUNNING_OS_IDENTITY: &str = "running-os-identity";
+
 /// Used when the caller's repository declares no dynamic rules of its own, or
 /// has no policy file at all.
 ///
@@ -37,19 +42,42 @@ fn fallback_rule() -> Rule {
          send. Use neutral placeholders such as example-user, example-host, example.test, \
          and /srv/example instead.",
     ));
-    rule.forbidden_literals = Some(String::from("running-os-identity"));
+    rule.forbidden_literals = Some(String::from(RUNNING_OS_IDENTITY));
     rule
+}
+
+/// The text to judge, or a refusal.
+///
+/// `from_utf8_lossy` stood here, and it is the quiet version of the failure
+/// this whole tool is about: an invalid sequence became U+FFFD without a word,
+/// so `printf 'caf\xe9 latin1\n' | uphold scan --text -` printed "policy checks
+/// passed (text)" and exited 0 over bytes that were never the text they were
+/// searched as. Every other reader in this binary already refuses this --
+/// `scan` says "clean would mean unexamined" about a non-UTF-8 file, and
+/// `guard --text` errors out -- so this is the one place the answer differed.
+///
+/// It is exit 2 rather than exit 1: nothing was found and nothing was cleared.
+/// The bytes could not be looked at.
+fn decode(bytes: Vec<u8>, source: &str) -> Result<String> {
+    String::from_utf8(bytes).map_err(|error| {
+        Fatal::new(format!(
+            "{source}: is not UTF-8 (invalid byte at offset {}), so it cannot be searched \
+             as text and \"clean\" would mean \"unexamined\". Re-encode it as UTF-8, or \
+             hand this checker the text rather than the bytes",
+            error.utf8_error().valid_up_to()
+        ))
+    })
 }
 
 fn read(source: &str) -> Result<String> {
     if source == "-" {
         let mut buffer = Vec::new();
         std::io::stdin().read_to_end(&mut buffer)?;
-        return Ok(String::from_utf8_lossy(&buffer).into_owned());
+        return decode(buffer, "standard input");
     }
     let path = PathBuf::from(source);
     let bytes = std::fs::read(&path).map_err(|error| Fatal::at(&path, error))?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    decode(bytes, source)
 }
 
 pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<Exit> {
@@ -60,11 +88,22 @@ pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<
         None => (std::env::current_dir()?, Policy::default()),
     };
 
-    let owned: Vec<Rule> = if policy.has_check(Check::ForbiddenLiterals) {
-        policy.of_check(Check::ForbiddenLiterals).cloned().collect()
-    } else {
-        vec![fallback_rule()]
-    };
+    // The test is for the identity rule itself, not for the CHECK KIND it
+    // happens to use. Asking whether any `forbidden_literals` rule existed made
+    // an unrelated one -- a repository's own list of literals, a command
+    // source, anything at all -- silently remove the fallback, which exists per
+    // its own docstring so that the guard is not absent "in exactly the places
+    // nobody thought to configure it, which is how identity gets published".
+    // Declaring a rule about something else is not a decision to stop checking
+    // this, so both run: the declared rules, and the fallback when nothing
+    // among them reads the running host's identity.
+    let mut owned: Vec<Rule> = policy.of_check(Check::ForbiddenLiterals).cloned().collect();
+    if !owned
+        .iter()
+        .any(|rule| rule.forbidden_literals.as_deref() == Some(RUNNING_OS_IDENTITY))
+    {
+        owned.push(fallback_rule());
+    }
 
     let mut failures: Vec<Failure> = Vec::new();
     for rule in &owned {
