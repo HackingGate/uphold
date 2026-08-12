@@ -196,3 +196,48 @@ fn a_forge_that_cannot_be_listed_is_named_with_its_reason() {
     assert!(report.contains("could not be listed"), "{report}");
     assert!(report.contains("not the same as clean"), "{report}");
 }
+
+/// A literal owner in the SECOND variant is refused, not merely searched for.
+///
+/// The three `no-private-repo-names` variants carry different fields, and which
+/// one a policy file lists first is not a decision anybody makes. The owner list
+/// is taken off all of them; the disclosure refusal read `rules.first()` only.
+/// So a name written literally into the second or third variant was handed to
+/// the scan as something to look for, in a file the audit then declined to
+/// object to -- the audit hunting for a name it had just been given, in the
+/// place it was given it.
+#[test]
+fn a_literal_owner_in_a_later_variant_is_still_refused() {
+    let root = repository();
+    let policy = root.join("policy/principles.toml");
+    let existing = std::fs::read_to_string(&policy).unwrap();
+    // Appended, so the variant carrying the literal is deliberately NOT first.
+    std::fs::write(
+        &policy,
+        format!(
+            r#"{existing}
+[rule.no-private-repo-names-staged]
+builtin = "no-private-repo-names-staged"
+visibility = "private"
+private_owners = ["PrivateOrg"]
+
+[rule.no-private-repo-names-staged.git]
+hooks = ["pre-commit"]
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+
+    let output = audit(&root);
+    let report = text(&output);
+    // The refusal can only have come from the appended variant: the first one
+    // carries `private_owners_from` and no literal list at all, so there is
+    // nothing there to object to.
+    assert!(
+        report.contains("private owner(s) literally"),
+        "a literal owner outside the first variant was never objected to:\n{report}"
+    );
+}

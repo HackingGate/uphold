@@ -647,16 +647,28 @@ pub(crate) fn for_publication(root: &Path, policy: &Policy) -> Result<Exit> {
     // Reported here rather than found by the scan below, because the scan would
     // report it as an ordinary mention in an ordinary file and the reader would
     // fix it by deleting the declaration -- which switches the rule off.
-    if !rule.private_owners().is_empty() {
+    //
+    // Every variant, not `rules.first()`. The owner LIST was taken off all of
+    // them forty lines above, for the reason written there -- the three variants
+    // carry different fields and which one a file lists first is not a decision
+    // anybody made. This check kept reading only the first, so a literal owner
+    // written into the second or the third was scanned FOR and never refused:
+    // the audit went looking for names it had just been handed, in a file it
+    // declined to object to.
+    for candidate in &rules {
+        let literal = candidate.private_owners();
+        if literal.is_empty() {
+            continue;
+        }
         refusals.push(Refusal {
-            id: rule.id.clone(),
+            id: candidate.id.clone(),
             report: format!(
                 "the rule declares {} private owner(s) literally, in a file this flip \
                  would publish. A public repository cannot hold the list of what must not \
                  be published. Move them out with `private_owners_from = \"...\"`, a \
                  command whose stdout is one owner per line, and keep the rule committed \
                  without the names.",
-                rule.private_owners().len()
+                literal.len()
             ),
         });
     }
