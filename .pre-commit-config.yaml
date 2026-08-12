@@ -129,25 +129,6 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit, manual]
-      # Not pre-commit: one `git ls-remote` per pinned repo is a network round
-      # trip, and a check that adds one to every commit is a check that gets
-      # commented out. pre-push is the last local moment before the work is
-      # shared; manual is how CI reaches it, which turns "whoever pushes next
-      # finds out" into something a scheduled run finds first.
-      #
-      # always_run with no filenames, because at pre-push the runner passes the
-      # files in the push and .pre-commit-config.yaml is almost never one of
-      # them. A pin whose upstream tag was deleted after it landed changes no
-      # file here, so a check gated on the pin file changing is a check that
-      # never runs against exactly that case.
-      - id: hook-pins-resolve
-        name: hook pins name refs that exist
-        entry: python3 scripts/check_hook_pins.py
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-push, manual]
-
       - id: catalog-tests
         name: catalog and checker tests
         entry: python3 -m unittest discover -s tests
@@ -190,6 +171,29 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      # The pin check used to be a second hook, `hook-pins-resolve`, running a
+      # Python script that asked whether every `rev:` still named a ref that
+      # exists while the `no-stale-hook-pins` guard asked whether the pin had
+      # fallen behind. Two checkers over one answer are two verdicts free to
+      # disagree, and they did: the guard counted a pin it could not reach as
+      # passed while the script called the same pin unresolvable. The guard asks
+      # both questions now, over one `git ls-remote`, and a pin it could not
+      # check is exit 2 -- so the script is gone and the guard stages carry it.
+      #
+      # It stays off pre-commit for the reason the script did: one network round
+      # trip per pinned repository in front of every commit is a check that gets
+      # commented out. pre-push is the last local moment before the work is
+      # shared; manual is how CI and a scheduled run reach it, which is what
+      # turns "whoever pushes next finds out" into something a schedule finds
+      # first -- and losing that sweep is why this entry exists rather than
+      # leaving `guards-pre-push` alone.
+      - id: guards-manual
+        name: guards (manual sweep)
+        entry: cargo run --quiet -- guard --stage manual
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
       - id: engine-tests
         name: scan engine tests
         entry: cargo test --quiet

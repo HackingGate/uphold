@@ -17,6 +17,18 @@
 //! A pin ahead of every tag that exists has not fallen behind, so the first
 //! question answers `pass` for it. Both are asked here.
 //!
+//! And a THIRD state, which is neither: a pin whose remote could not be reached
+//! is not up to date, it is unestablished. That exits 2, the same way
+//! `audit --for-publication` exits 2 over a surface it could not read, because
+//! the alternative -- what this did -- is to print the pin to stderr and exit 0
+//! with the guard counted among the ones that passed.
+//!
+//! Both managers are read. pre-commit writes `repos:` with a `rev:`; lefthook
+//! writes `remotes:` with a `ref:`, and that entry is the single version a
+//! lefthook consumer pins. It was read by nothing here and there is no
+//! Dependabot ecosystem for it either, so it was the one pin in the tree with
+//! nobody watching it at all.
+//!
 //! The configuration is parsed rather than scanned. A line regex over
 //! `.pre-commit-config.yaml` reads the block form and silently yields nothing
 //! for a flow-style file -- an absent pin and an unreadable one looking the
@@ -25,9 +37,10 @@
 //! dependencies; a binary has no such constraint.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use ignore::WalkBuilder;
 use serde::Deserialize;
 
 use crate::error::{read_to_string, Fatal, Result};
@@ -35,8 +48,14 @@ use crate::guard::{Refusal, Request};
 
 #[derive(Debug, Deserialize)]
 struct HookConfig {
-    #[serde(default)]
-    repos: Vec<RepoEntry>,
+    /// `Option`, not `#[serde(default)]`, and the difference is a whole
+    /// finding. A file with no `repos:` in it deserialized as a config with no
+    /// repositories in it, so a `.pre-commit-config.yaml` whose top-level key
+    /// had been renamed, indented into another mapping, or typed as `repo:`
+    /// reported zero pins and passed. Zero pins and "this is not a file I can
+    /// read pins out of" are different answers, and only one of them is
+    /// something a reader can act on.
+    repos: Option<Vec<RepoEntry>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,46 +65,212 @@ struct RepoEntry {
     rev: Option<String>,
 }
 
-/// One pin, as written.
+/// lefthook's own remote-config block: another repository's hook definitions,
+/// fetched at run time.
+#[derive(Debug, Deserialize)]
+struct LefthookConfig {
+    #[serde(default)]
+    remotes: Vec<LefthookRemote>,
+    /// lefthook's older singular spelling, still accepted by lefthook and still
+    /// in the wild. Read for the reason the plural one is: the pin a consumer
+    /// wrote is the pin that runs, whichever key they wrote it under.
+    #[serde(default)]
+    remote: Option<LefthookRemote>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LefthookRemote {
+    git_url: String,
+    /// `ref` is a keyword here and a field name there.
+    #[serde(rename = "ref", default)]
+    reference: Option<String>,
+}
+
+/// One pin, as written, and the file it was written in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Pin {
     pub repo: String,
     pub rev: String,
+    /// Repository-relative, because a report that says a pin is behind without
+    /// saying which file holds it sends the reader looking through a tree that
+    /// may hold several.
+    pub source: String,
 }
 
-pub(crate) fn read_pins(root: &Path) -> Result<Vec<Pin>> {
-    let path = root.join(".pre-commit-config.yaml");
-    let text = read_to_string(&path)?;
+/// Every pin in the tree, and what could not be read while collecting them.
+#[derive(Debug)]
+pub(crate) struct Pins {
+    pub pins: Vec<Pin>,
+    /// Facts about coverage rather than about pins: which of the two hook
+    /// managers this tree even uses. Said aloud, never counted as a pass.
+    pub notes: Vec<String>,
+}
+
+const PRE_COMMIT_CONFIG: &str = ".pre-commit-config.yaml";
+
+/// The names lefthook itself looks for. Enumerated because lefthook's loader
+/// enumerates them; there is no pattern to parameterize over.
+const LEFTHOOK_CONFIGS: &[&str] = &[
+    "lefthook.yml",
+    "lefthook.yaml",
+    ".lefthook.yml",
+    ".lefthook.yaml",
+];
+
+/// Every hook configuration in the WORK TREE, sorted.
+///
+/// The tree, not the root. This read `root/.pre-commit-config.yaml` and nothing
+/// else, where the guard it replaced read every `.pre-commit-config.yaml` under
+/// the tree on the stated grounds that a pin in `sub/.pre-commit-config.yaml` is
+/// a pin a run touches -- a monorepo with a config per package had exactly one
+/// of them checked, and which one depended on where the file happened to sit.
+///
+/// gitignored files are skipped, since a config no commit carries is not one a
+/// reviewer can see or a runner will find in a fresh clone. Sorted, because a
+/// report whose order depends on directory iteration diffs against itself
+/// between two runs that found the same thing.
+fn hook_configs(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut walker = WalkBuilder::new(root);
+    walker
+        // Hook configuration is dotted by convention -- `.pre-commit-config.yaml`
+        // is the whole point of this walk -- so the default that skips hidden
+        // files would skip everything being looked for.
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .parents(true)
+        // The object database is not the work tree. With `hidden` off the walk
+        // would descend into `.git` and read a few thousand files that no hook
+        // manager has ever looked at.
+        .filter_entry(|entry| entry.file_name() != std::ffi::OsStr::new(".git"));
+    for entry in walker.build().flatten() {
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str() else {
+            continue;
+        };
+        if name == PRE_COMMIT_CONFIG || LEFTHOOK_CONFIGS.contains(&name) {
+            found.push(entry.into_path());
+        }
+    }
+    found.sort();
+    found
+}
+
+/// A `rev:` that names nothing is not a pin, in either manager's spelling.
+fn unpinned(path: &Path, repo: &str, field: &str) -> Fatal {
+    // Dropped here by a `?`, once per manager, so the one state this guard
+    // exists to catch -- a hook repository nothing pins -- was the one state it
+    // could not see. It is not a stale pin; it is no pin, which is strictly
+    // worse, and it read as a config with one fewer repository in it.
+    Fatal::at(
+        path,
+        format!(
+            "{repo} is listed with no `{field}:`. An unpinned hook repository is not a pin \
+             this guard can check -- it is code that can change under you between two runs \
+             with no diff anywhere"
+        ),
+    )
+}
+
+fn pre_commit_pins(path: &Path, source: &str, text: &str) -> Result<Vec<Pin>> {
     let config: HookConfig =
-        serde_yaml_ng::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
+        serde_yaml_ng::from_str(text).map_err(|error| Fatal::at(path, error))?;
+    let Some(repos) = config.repos else {
+        return Err(Fatal::at(
+            path,
+            "has no top-level `repos:` key, so this is not a file pins can be read out of. \
+             Reporting zero pins here would be an empty answer where the honest one is \
+             could-not-look",
+        ));
+    };
     let mut pins = Vec::new();
-    for entry in config.repos {
+    for entry in repos {
         // `repo: local` and `repo: meta` name no remote and carry no rev.
         if entry.repo == "local" || entry.repo == "meta" {
             continue;
         }
-        // A remote with no `rev:` was dropped here by a `?`, so the one state
-        // this guard exists to catch -- a hook repository nothing pins -- was
-        // the one state it could not see. It is not a stale pin; it is no pin,
-        // which is strictly worse, and it read as a config with one fewer repo
-        // in it.
         let Some(rev) = entry.rev else {
-            return Err(Fatal::at(
-                &path,
-                std::io::Error::other(format!(
-                    "{} is listed with no `rev:`. An unpinned hook repository is not a \
-                     pin this guard can check -- it is code that can change under you \
-                     between two runs with no diff anywhere",
-                    entry.repo
-                )),
-            ));
+            return Err(unpinned(path, &entry.repo, "rev"));
         };
         pins.push(Pin {
             repo: entry.repo,
             rev,
+            source: source.to_owned(),
         });
     }
     Ok(pins)
+}
+
+/// lefthook's `remotes:` are pins, and nothing was reading them.
+///
+/// A lefthook consumer pins exactly one thing -- the remote config they inherit
+/// their hooks from -- and it was invisible to this guard and to Dependabot
+/// alike, which has no ecosystem for a lefthook remote. So the single version a
+/// whole class of consumers pins was the one version nobody watched.
+///
+/// An ABSENT `remotes:` is not the ambiguity a missing `repos:` is: it is
+/// optional in lefthook and a config without one is an ordinary local
+/// configuration, so it reads as zero pins rather than as unreadable.
+fn lefthook_pins(path: &Path, source: &str, text: &str) -> Result<Vec<Pin>> {
+    let config: LefthookConfig =
+        serde_yaml_ng::from_str(text).map_err(|error| Fatal::at(path, error))?;
+    let mut pins = Vec::new();
+    for remote in config.remotes.into_iter().chain(config.remote) {
+        // No `ref:` means lefthook takes the remote's default branch, which is
+        // the moving-target state the `rev:` arm above refuses in the same
+        // words. Refused here rather than reported as a pin naming a branch,
+        // because there is no branch written down to report.
+        let Some(reference) = remote.reference else {
+            return Err(unpinned(path, &remote.git_url, "ref"));
+        };
+        pins.push(Pin {
+            repo: remote.git_url,
+            rev: reference,
+            source: source.to_owned(),
+        });
+    }
+    Ok(pins)
+}
+
+pub(crate) fn read_pins(root: &Path) -> Result<Pins> {
+    let mut pins = Vec::new();
+    let mut notes = Vec::new();
+    let mut saw_pre_commit = false;
+    for path in hook_configs(root) {
+        let source = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        let text = read_to_string(&path)?;
+        if path
+            .file_name()
+            .is_some_and(|name| name == PRE_COMMIT_CONFIG)
+        {
+            saw_pre_commit = true;
+            pins.extend(pre_commit_pins(&path, &source, &text)?);
+        } else {
+            pins.extend(lefthook_pins(&path, &source, &text)?);
+        }
+    }
+    // An absent file, reported as a fact rather than as an io error. This
+    // opened `root/.pre-commit-config.yaml` unconditionally and `read_to_string`
+    // turns ENOENT into a `Fatal`, so this guard exited 2 -- "could not look" --
+    // on every consumer who followed the documented lefthook-only install path.
+    // They have no pre-commit config because they were told not to make one, and
+    // that is an answer, not a failure to obtain one.
+    if !saw_pre_commit {
+        notes.push(format!(
+            "no `{PRE_COMMIT_CONFIG}` anywhere in this tree, so there are no pre-commit pins \
+             to check. That is the documented lefthook-only install path, not a hole in the \
+             answer; any `remotes:` a lefthook config pins were read."
+        ));
+    }
+    Ok(Pins { pins, notes })
 }
 
 /// Compare two tags the way a person reads them.
@@ -180,7 +365,10 @@ fn remote_refs(repo: &str) -> Result<Option<Refs>> {
 
 /// Both questions, over every pin.
 pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
-    let pins = read_pins(request.root)?;
+    let Pins { pins, notes } = read_pins(request.root)?;
+    for note in &notes {
+        println!("{}: {note}", request.rule.id);
+    }
     let mut behind: Vec<String> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
     let mut unchecked: Vec<String> = Vec::new();
@@ -195,7 +383,11 @@ pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
             looked
         };
         let Some(Refs { tags, heads }) = refs else {
-            unchecked.push(format!("{}: could not reach the remote", pin.repo));
+            unchecked.push(format!(
+                "{} (pinned in {}): could not reach the remote, so neither question was \
+                 answered about it",
+                pin.repo, pin.source
+            ));
             continue;
         };
         // A branch resolves; it just does not stay put. Reported as its own
@@ -205,8 +397,8 @@ pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
             missing.push(format!(
                 "{} pins {}, which is a BRANCH on the remote and moves. A pin that \
                  moves is not a pin: the hook you reviewed and the hook that runs \
-                 next month are different code. Name a tag or a sha",
-                pin.repo, pin.rev
+                 next month are different code. Name a tag or a sha (in {})",
+                pin.repo, pin.rev, pin.source
             ));
             continue;
         }
@@ -218,31 +410,19 @@ pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
         }
         if !tags.contains(&pin.rev) {
             missing.push(format!(
-                "{} pins {}, which names no tag on the remote",
-                pin.repo, pin.rev
+                "{} pins {}, which names no tag on the remote (in {})",
+                pin.repo, pin.rev, pin.source
             ));
             continue;
         }
         if let Some(newest) = tags.last() {
             if newest != &pin.rev {
                 behind.push(format!(
-                    "{} pins {}, and {} is newer",
-                    pin.repo, pin.rev, newest
+                    "{} pins {}, and {} is newer (in {})",
+                    pin.repo, pin.rev, newest, pin.source
                 ));
             }
         }
-    }
-
-    // Said aloud whatever else happened. A pin nobody could check is a hole in
-    // the answer, and reporting it only when something else also failed makes
-    // the hole invisible exactly when the rest is clean.
-    if !unchecked.is_empty() {
-        eprintln!(
-            "{}: {} pin(s) could not be checked:\n{}",
-            request.rule.id,
-            unchecked.len(),
-            unchecked.join("\n")
-        );
     }
 
     let mut report = String::new();
@@ -260,13 +440,50 @@ pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
         report.push_str(&behind.join("\n"));
         report.push_str("\n\nThe upstream tag owns the version; a `rev:` here is a copy of it.");
     }
-    if report.is_empty() {
-        return Ok(None);
+    if !report.is_empty() {
+        // Said aloud beside the violation. The refusal below exits 1 on what was
+        // checked, and a reader has to know that number was measured over fewer
+        // pins than the file holds.
+        if !unchecked.is_empty() {
+            eprintln!(
+                "{}: {} pin(s) could not be checked, on top of the finding(s) below:\n{}",
+                request.rule.id,
+                unchecked.len(),
+                unchecked.join("\n")
+            );
+        }
+        return Ok(Some(Refusal {
+            id: request.rule.id.clone(),
+            report,
+        }));
     }
-    Ok(Some(Refusal {
-        id: request.rule.id.clone(),
-        report,
-    }))
+
+    // COULD NOT LOOK, which is exit 2, and it used to be exit 0.
+    //
+    // `remote_refs` returns `Ok(None)` for a remote it could not reach and says
+    // in a comment that this is never a pass -- and then the caller made it one.
+    // The pin went into `unchecked`, `unchecked` was printed to stderr and
+    // dropped, `stale` returned `Ok(None)`, and `guard::run` counted the guard
+    // among the ones that passed and exited 0. A network that was down, a token
+    // that had expired, a remote that had been renamed: every one of them read
+    // as a pin that was up to date.
+    //
+    // A `Fatal` rather than a `Refusal`, because this is not a violation: the
+    // repository may be perfectly pinned. It is this run failing to establish
+    // that, which is the same thing `audit --for-publication` reports with
+    // `Exit::Broken` over a surface it could not read.
+    if !unchecked.is_empty() {
+        return Err(Fatal::new(format!(
+            "{}: {} pin(s) could not be checked, so this guard established nothing about \
+             them:\n{}\n\nCould not look is not a pass. Restore the remote's reachability, \
+             or bypass this run deliberately with UPHOLD_ALLOW={}.",
+            request.rule.id,
+            unchecked.len(),
+            unchecked.join("\n"),
+            request.rule.id
+        )));
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -282,35 +499,146 @@ mod tests {
         assert_eq!(tags.last().unwrap(), "v10.0.0");
     }
 
+    /// A directory of its own per test, since `read_pins` now walks one.
+    fn tree(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("uphold-pins-{name}-{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write(dir: &Path, relative: &str, contents: &str) {
+        let path = dir.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, contents).unwrap();
+    }
+
     #[test]
     fn a_flow_style_config_parses_rather_than_reading_as_empty() {
-        let dir = std::env::temp_dir().join(format!("uphold-pins-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join(".pre-commit-config.yaml"),
+        let dir = tree("flow");
+        write(
+            &dir,
+            ".pre-commit-config.yaml",
             "{repos: [{repo: \"https://example.test/a\", rev: v1.0.0, hooks: [{id: x}]}]}\n",
-        )
-        .unwrap();
-        let pins = read_pins(&dir).unwrap();
+        );
         assert_eq!(
-            pins,
+            read_pins(&dir).unwrap().pins,
             vec![Pin {
                 repo: "https://example.test/a".to_owned(),
-                rev: "v1.0.0".to_owned()
+                rev: "v1.0.0".to_owned(),
+                source: PRE_COMMIT_CONFIG.to_owned(),
             }]
         );
     }
 
     #[test]
     fn a_local_repo_has_no_pin_to_check() {
-        let dir = std::env::temp_dir().join(format!("uphold-pins-l-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join(".pre-commit-config.yaml"),
+        let dir = tree("local");
+        write(
+            &dir,
+            ".pre-commit-config.yaml",
             "repos:\n  - repo: local\n    hooks:\n      - id: x\n",
-        )
-        .unwrap();
-        assert!(read_pins(&dir).unwrap().is_empty());
+        );
+        assert!(read_pins(&dir).unwrap().pins.is_empty());
+    }
+
+    /// The documented lefthook-only install path is not a broken repository.
+    ///
+    /// `read_pins` opened `root/.pre-commit-config.yaml` unconditionally and
+    /// `read_to_string` turns ENOENT into a `Fatal`, so this guard exited 2 for
+    /// every consumer who installed the way the documentation tells them to.
+    #[test]
+    fn an_absent_pre_commit_config_is_an_answer_and_not_an_error() {
+        let dir = tree("absent");
+        let read = read_pins(&dir).unwrap();
+        assert!(read.pins.is_empty());
+        assert_eq!(read.notes.len(), 1, "{:?}", read.notes);
+        assert!(
+            read.notes
+                .first()
+                .is_some_and(|note| note.contains("lefthook")),
+            "{:?}",
+            read.notes
+        );
+    }
+
+    /// A pin in `sub/` is a pin a run touches.
+    ///
+    /// The retired upstream read every `.pre-commit-config.yaml` in the work
+    /// tree and this read only the root one, so a monorepo with a config per
+    /// package had exactly one of them checked.
+    #[test]
+    fn a_config_below_the_root_is_read_too() {
+        let dir = tree("nested");
+        write(
+            &dir,
+            ".pre-commit-config.yaml",
+            "repos:\n  - repo: https://example.test/a\n    rev: v1.0.0\n    hooks:\n      - id: x\n",
+        );
+        write(
+            &dir,
+            "sub/.pre-commit-config.yaml",
+            "repos:\n  - repo: https://example.test/b\n    rev: v2.0.0\n    hooks:\n      - id: y\n",
+        );
+        let pins = read_pins(&dir).unwrap().pins;
+        assert_eq!(pins.len(), 2, "{pins:?}");
+        assert!(
+            pins.iter()
+                .any(|pin| pin.repo == "https://example.test/b" && pin.source.contains("sub")),
+            "{pins:?}"
+        );
+    }
+
+    /// A config with no `repos:` is not a config with no pins in it.
+    #[test]
+    fn a_config_without_a_repos_key_is_unreadable_rather_than_empty() {
+        let dir = tree("norepos");
+        write(
+            &dir,
+            ".pre-commit-config.yaml",
+            "default_stages: [commit]\n",
+        );
+        let error = read_pins(&dir).unwrap_err().to_string();
+        assert!(error.contains("repos"), "{error}");
+        assert!(error.contains("could-not-look"), "{error}");
+    }
+
+    /// The one version a lefthook consumer pins, which nothing read.
+    #[test]
+    fn a_lefthook_remote_is_a_pin() {
+        let dir = tree("lefthook");
+        write(
+            &dir,
+            "lefthook.yml",
+            "remotes:\n  - git_url: https://example.test/hooks\n    ref: v1.2.3\n    configs:\n      - lefthook.yml\n",
+        );
+        let read = read_pins(&dir).unwrap();
+        assert_eq!(
+            read.pins,
+            vec![Pin {
+                repo: "https://example.test/hooks".to_owned(),
+                rev: "v1.2.3".to_owned(),
+                source: "lefthook.yml".to_owned(),
+            }]
+        );
+    }
+
+    /// A lefthook remote with no `ref:` follows the default branch, which is the
+    /// moving target the `rev:` arm refuses in the same words.
+    #[test]
+    fn a_lefthook_remote_with_no_ref_is_not_a_pin() {
+        let dir = tree("lefthook-unpinned");
+        write(
+            &dir,
+            "lefthook.yml",
+            "remotes:\n  - git_url: https://example.test/hooks\n    configs:\n      - lefthook.yml\n",
+        );
+        let error = read_pins(&dir).unwrap_err().to_string();
+        assert!(error.contains("no `ref:`"), "{error}");
     }
 
     /// A prerelease precedes the release it leads to.

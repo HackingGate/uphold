@@ -40,11 +40,15 @@ rule = "catalog-tests"
 
 [[enforce]]
 principle = "explicit-unknown"
-rule = "hook-pins-resolve"
+rule = "no-stale-hook-pins"
 # A pin that could not be checked -- unreachable remote, unreadable config, a
 # bare sha with no ref to look up -- exits 2, which is not the 0 it would exit
-# if the pin resolved. tests/test_hook_pins.py asserts the three exit codes are
-# three, and that an unreachable remote is not a pass.
+# if the pin resolved. The claim used to name `hook-pins-resolve`, a separate
+# script asking that half of the question while this guard asked the other and
+# counted a pin it could not reach as passed; one rule asks both now, so the
+# claim moves to the rule that carries it. src/pins.rs::stale returns the
+# "Could not look is not a pass" refusal, and tests/hook_pins_cli.rs asserts
+# that an unreachable remote is exit 2 rather than the exit 0 it used to be.
 
 [[enforce]]
 principle = "single-authoritative-source"

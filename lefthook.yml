@@ -56,10 +56,11 @@ pre-commit:
       run: bashate --ignore E006 {staged_files}
 
 # Not git hooks. lefthook has no equivalent of pre-commit's manual stage, so the
-# two checks that are too slow or too host-dependent to sit in front of a commit
-# are named groups instead: `lefthook run preflight` and `lefthook run coverage`.
-# Same entry points as the manual hooks in .pre-commit-config.yaml, so the three
-# runners are still answering one question each.
+# checks that are too slow or too host-dependent to sit in front of a commit are
+# named groups instead: `lefthook run preflight`, `lefthook run coverage` and
+# `lefthook run uphold-manual`. Same entry points as the manual hooks in
+# .pre-commit-config.yaml, so the three runners are still answering one question
+# each.
 preflight:
   commands:
     deps-check:
@@ -70,9 +71,18 @@ coverage:
     coverage:
       run: scripts/coverage.sh
 
-# One `git ls-remote` per pinned repo, so not on every commit. A pin naming a
-# tag that was never cut fails at hook-init, before any hook runs, which is why
-# no hook can report it after the fact -- this one asks before the pin ships.
+# The guards that ask a network the same question once per distinct name or pin:
+# too slow for a commit, and too important to leave to whoever pushes next. This
+# group is what a scheduled run invokes, and it is the seam the retired
+# `hook-pins-resolve` script used to hold at pre-commit's manual stage -- named
+# `uphold-manual` because that is what hooks/lefthook.yml publishes to consumers,
+# and a repository that runs itself under a different name is documenting a
+# workflow nobody else has.
+uphold-manual:
+  commands:
+    guards:
+      run: cargo run --quiet -- guard --stage manual
+
 commit-msg:
   commands:
     guards:
@@ -85,8 +95,14 @@ pre-merge-commit:
 
 pre-push:
   commands:
-    hook-pins-resolve:
-      run: python3 scripts/check_hook_pins.py
+    # The pin check is not a command of its own any more. It was
+    # `hook-pins-resolve`, a Python script asking whether every `rev:` still
+    # named a ref that exists, beside a `no-stale-hook-pins` guard asking
+    # whether the pin had fallen behind -- two checkers over one answer, free to
+    # disagree, and they did: the guard counted a pin it could not reach as
+    # passed. One `git ls-remote` answers both questions now, inside the guard
+    # the `guards` command below runs, and a pin it could not check is exit 2.
+    #
     # `use_stdin: true`, which this was missing. lefthook runs a command under a
     # pseudo-TTY by default and that stdin never closes, so git's ref lines
     # never arrived and the guards that read the pushed range were asked about
