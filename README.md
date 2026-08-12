@@ -94,7 +94,7 @@ not look — see [`explicit-unknown`](principles/explicit-unknown.toml).
 ```sh
 uphold scan                     # content rules over the tree
 uphold scan --text -            # a commit message, release note, PR body
-uphold rules --effective        # every rule inheritance resolved to
+uphold rules --effective        # every rule inheritance resolved to, and where each runs
 uphold guard --stage pre-push   # the guards for that git hook
 uphold shim gh pr create ...    # stand in front of a command, then exec
 uphold audit --for-publication  # before flipping private -> public
@@ -118,8 +118,9 @@ tables — an absent table is a place the rule does not run. Full field referenc
 using ripgrep's search libraries, so a pattern written against `rg` keeps
 meaning what it meant. "Its own files" is **what git tracks**, not a directory
 walk: a tracked file some ignore pattern also matches is still pushed and still
-cloned, and a rule that cannot see a file reports it clean. `--text -` runs it
-over prose that never becomes a file. `uphold rules --effective` prints what
+cloned, and walking the tree hid exactly those from every rule. A selected file
+that cannot be read is **not** reported clean — it is named, with its reason, and
+the run exits `2`. `--text -` runs it over prose that never becomes a file. `uphold rules --effective` prints what
 inheritance actually resolved to, so nothing has to re-derive it.
 
 **`uphold guard --stage STAGE`** reads an *act* rather than a tree: the

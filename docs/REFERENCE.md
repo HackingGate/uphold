@@ -535,8 +535,14 @@ rather than a flag because the re-entry has to work whether the binary is
 installed under its own name or as a link named for the command it shims.
 
 Where `current_exe()` cannot be resolved there is nothing to install as the
-editor. That case warns loudly and execs anyway, the way an unresolvable target
-does: a guard that becomes the reason work stops is a guard that gets removed.
+editor, and the invocation is refused with exit `2`. It warned and execed anyway,
+on the argument that a guard which stops work gets removed — but that argument
+belongs to a guard that *looked* and found nothing, and this one never looked.
+The body does not exist yet, so it cannot be checked now, and after the hand-off
+there is no process left here to check it later. The text would be published
+unexamined by the one path the editor re-entry exists to close. This is the only
+place the shim refuses without having read anything, and `explicit-unknown` is
+why: an unobserved property must not resolve to success.
 
 ## `uphold audit --for-publication`
 
