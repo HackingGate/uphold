@@ -64,6 +64,25 @@ Exit codes: `0` clean, `1` violations, `2` the check could not be made.
 Evaluates every rule over the repository's own files, using ripgrep's search
 libraries rather than a second regex engine.
 
+**What "the repository's own files" means is what git tracks.** The globs in
+`[rule.files]` are applied to `git ls-files`, not to a directory walk. A tracked
+file that some ignore pattern also matches — a `.gitignore` line, a
+`.git/info/exclude` entry, or the operator's *global* ignore file, which is not
+in the repository at all — is still tracked, still pushed, and still read by
+everyone who clones it, and a walker that honoured those patterns could not see
+it. In a directory git has no index for, the tree is walked instead with **no**
+ignore file consulted, which selects a superset of what would be tracked.
+Over-reporting is the direction a checker may fail in; hiding a file is not.
+
+A path a rule selected and could not open — an unstaged deletion, a sparse
+checkout, a directory this process may not enter — is **named on stderr and is
+exit `2`**, after every other rule has reported. It is not dropped from the
+list, because a rule that searched what was left and found nothing there would
+otherwise print `policy checks passed` over a tree it never finished reading.
+A finding outranks it: `1` when something was found, `2` when nothing was found
+and something could not be read, `0` only when the whole selection was read and
+was clean.
+
 ```toml
 allowed_scripts = ["Latin"]
 
@@ -109,6 +128,21 @@ A repository's own rule of the same `id` shadows the inherited one;
 is an error rather than a line that quietly does nothing. `inherit.paths`
 merges extra policy files, repository-relative, after the bundled sets.
 
+Those five fields interact, so "which rules does this repository run" is not a
+question anyone can answer by reading the `[rule.*]` tables. The loader answers
+it:
+
+```sh
+uphold rules --effective          # every resolved rule, and where it fires
+uphold rules --effective --json   # the same, for a program
+```
+
+The JSON is one array of `{"id": ..., "git_hooks": [...]}`, in the order the
+engine resolved them. It exists so that nothing has to re-implement the loader
+to find out what runs — a second reader of these fields is a reader free to
+disagree with the engine, and it will disagree exactly where somebody used a
+field it does not know about.
+
 The two requests this shape exists to make writable:
 
 ```toml
@@ -118,6 +152,10 @@ regexp = '(?im)^Co-Authored-By:.*<noreply@'
 message = "Remove the marker; represent the work as your own."
 files.glob = ["**/*.md"]
 command.before = ["gh pr create"]
+
+[[shim]]
+command = "gh"
+match = ["pr:create"]
 ```
 
 ```toml
@@ -126,7 +164,18 @@ command.before = ["gh pr create"]
 exec = "uphold scan --text -"
 message = "Use neutral placeholders."
 command.before = ["git push"]
+
+[[shim]]
+command = "git"
+collect = "git-refs"
 ```
+
+**A `command.before` and a `[[shim]]` are two halves of one seam, and the load
+refuses either half on its own.** A checker naming a command no `[[shim]]`
+declares is never invoked by anything; a shim no checker names collects the
+subject, consults an empty list of checkers and execs anyway — reporting a pass
+over text nothing read. Both failures are silence at run time, so load is the
+only place they can be said.
 
 ```sh
 uphold scan                 # the tree
@@ -138,6 +187,14 @@ content that never becomes a file. It runs the `forbidden_literals` rules only:
 those describe the running machine, so they mean something against any text,
 while a `regexp` rule is scoped to paths and file types and firing it at prose
 would be guesswork.
+
+Two things it does not do. It does not decode: text that is not UTF-8 is exit
+`2` naming the offset, because a lossy decode searches U+FFFD where the bytes
+were and calls the result clean. And a repository declaring `forbidden_literals`
+rules of its own does not switch the built-in host-identity rule off — the
+built-in is added unless one of the declared rules is itself
+`forbidden_literals = "running-os-identity"`. Declaring a rule about something
+else is not a decision to stop checking this.
 
 ### `forbidden_literals` — what must appear nowhere
 
@@ -296,14 +353,14 @@ stamped on it, the range about to be pushed.
 | `prevent-ai-author` | a commit message carrying AI-authorship markers |
 | `prevent-author-mismatch` | an identity that is not your global one |
 | `prevent-unusual-unicode` | unusual characters in a commit message |
-| `prevent-unusual-unicode-in-files` | characters that draw nothing, in committed content |
+| `prevent-unusual-unicode-in-files` | characters that draw nothing, in committed content **and in the paths that carry it** |
 | `no-private-repo-names` | a private repository named in a public one's message |
 | `no-private-repo-names-staged` | the same, in the lines a commit adds |
-| `no-private-repo-names-in-files` | the same, anywhere in what is being introduced |
+| `no-private-repo-names-in-files` | the same, anywhere in what is being introduced — content, **path names**, and at a push the **commit messages** the push publishes |
 | `prevent-public-push` | a push to somewhere off the allow-list |
 | `no-local-merge` | a merge that would make a merge commit |
 | `no-merge-commit` | a commit finishing a merge or a squash merge |
-| `no-stale-hook-pins` | a pin left behind its upstream, or naming no ref |
+| `no-stale-hook-pins` | a pin left behind its upstream, or naming no ref — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree; a pin it **could not check** is exit `2` |
 
 Declared like any other rule, in the same file and the same id namespace.
 **`git.hooks` is the whole registration.**
@@ -359,6 +416,29 @@ push there is no index at all — the artifact is the pushed commit's whole tree
 *plus every blob the pushed range introduces*. Neither half covers the other;
 see [DESIGN.md](DESIGN.md#which-bytes-a-guard-reads).
 
+**A path is committed text too.** A file name is published exactly as a file's
+contents are, so the tree-wide guards read the path as well as the blob under
+it: a repository name in a directory name, a zero-width character in a file
+name. A tab and a newline are legal inside a file and never inside a path, so
+the same `allow` list means something slightly stricter there. At a push the
+guards also read the **commit messages** the push publishes, which no earlier
+seam can reach for a commit written under `--no-verify`.
+
+**A blob a guard could not read is exit `2`, never a skip.** The one honest
+skip is a genuinely binary file — a NUL in the first 8000 bytes. Anything else
+that will not decode is a surface this run did not examine, and saying so is
+the whole contract. A submodule is enumerated by path and never read as a blob:
+its content is another repository's.
+
+`no-stale-hook-pins` reaches every `.pre-commit-config.yaml` and every
+`lefthook.yml` in the tree, not just the ones at the root, and reads lefthook
+`remotes:` entries as pins alongside pre-commit `repo:`/`rev:` pairs. A tree
+with no pin file at all is a pass that says why — the lefthook-only install path
+is documented and pins nothing. A pin whose remote could not be reached is exit
+`2`: a runner with no network fails this guard where it used to pass it, and
+`UPHOLD_ALLOW=no-stale-hook-pins` is the deliberate bypass, named in the
+refusal.
+
 ### Overriding one
 
 ```sh
@@ -399,6 +479,18 @@ as the escape hatch — `npm publish` has no repository, owner or visibility
 endpoint in it. `collect = "git-refs"` replaces the argv walk for `git`, whose
 published text is positional.
 
+`editor_env` names the variable the command consults for its editor —
+`GH_EDITOR` for `gh`, `GLAB_EDITOR` for `glab`. The shim sets it to itself
+before exec'ing, which is what closes the editor path below; without it there
+is nothing to re-enter through, and the shim can only say it did not see the
+body.
+
+The shim finds the subcommand by walking argv for the first two words that are
+neither an option nor an option's *value*, honouring `--`, `--flag=value`, and
+its own `text_flags`/`file_flags`/`skip_flags` as value-taking. `gh --repo
+owner/name issue create` matches `issue:create`; where a release puts its flags
+is not something a policy author should have to track.
+
 ### The checker contract
 
 ```toml
@@ -412,15 +504,39 @@ Any executable: the subject on stdin, its kind in `UPHOLD_KIND`, **0** to
 pass, **1** to refuse, **2** to say it could not look. Exit 2 is the third
 answer and is never folded into either of the others.
 
+**A checker must read stdin to the end.** One that exits 0 having consumed part
+of a long subject — a bare `grep -q`, a `head -c` — is answering about text it
+did not finish reading, and the short write is now exit `2` rather than a pass.
+A refusal after a short read still stands as a refusal: the checker saw enough
+to say no. Both shipped checkers (`uphold guard --text -`, `uphold scan --text
+-`) read to EOF.
+
 **`before` is what the checker is asked about, and nothing else.** The match is
 the command, then its subcommand words in order — `"gh pr create"` catches
 `gh -R acme/x pr create`, because where a release puts its flags is not
 something a reader should have to track.
 
-**One case a shim genuinely cannot see:** no body on the command line, no
-`--web`, and a command about to open an editor. What gets typed there has not
-been written yet. The shim says so rather than reporting a pass over text it
-never saw.
+**The editor is a checkpoint, not a blind spot.** No body on the command line,
+no `--web`, and a command about to open an editor is the case where the text has
+not been written yet at the moment the shim runs — so there is nothing in argv
+to hand a checker. The shim sets the command's own editor variable
+(`editor_env`, above) to itself: the command opens *this binary* as the editor,
+the binary runs the real editor, reads the file back when it closes, and
+consults the same checkers over what was actually typed. A refusal exits 1,
+which is what makes `gh` or `glab` abandon the publication; an editor that
+itself fails is exit `2`, not a pass.
+
+Three environment variables carry the re-entry, all set by the shim on the
+command it execs: `UPHOLD_SHIM_EDITOR` (whose presence routes the re-entered
+binary into the editor path), `UPHOLD_SHIM_EDITOR_REAL` (the user's actual
+editor command line) and `UPHOLD_SHIM_EDITOR_ARGV` (the original argv words,
+read only to decide which `command.before` rules apply). They are environment
+rather than a flag because the re-entry has to work whether the binary is
+installed under its own name or as a link named for the command it shims.
+
+Where `current_exe()` cannot be resolved there is nothing to install as the
+editor. That case warns loudly and execs anyway, the way an unresolvable target
+does: a guard that becomes the reason work stops is a guard that gets removed.
 
 ## `uphold audit --for-publication`
 
@@ -453,10 +569,26 @@ git.hooks = ["commit-msg"]
 A literal `private_owners` list is right for a repository staying private, and
 the audit reports it as a finding for one being published.
 
-Two surfaces survive a history rewrite: `refs/pull/<n>/head` (fetched explicitly
-and scanned) and comment edit history (cannot be scanned, reported as
-unreadable). Exit `1` for something found, `2` where a surface could not be
-read, `0` only when every surface a flip would republish was read and was clean.
+What it reads is **every blob reachable** from `HEAD`, from `origin`'s branches
+and from the retained pull-request refs — not `HEAD`'s tree. A name committed
+and deleted before `HEAD` is served by the forge forever and survives the
+default-branch rewrite, so a tree-only audit answered the wrong question. On the
+forge side it reads issue and pull-request **titles** as well as bodies, plus
+review bodies and review-thread comments, and a listing that comes back at the
+request cap is reported as truncated rather than quietly cut short.
+
+Two surfaces survive a history rewrite: `refs/pull/<n>/head`, which is fetched
+explicitly and scanned, and comment **edit history**, which no API exposes.
+
+The edit history is a **standing caveat**, not an unreadable surface. It is true
+of every run, on every repository, and nothing about this run could change it —
+so it is stated in the body of every report and is *not* counted as something
+this run failed to read. Counting it there makes the unreadable list
+unconditionally non-empty, which makes exit `0` unreachable and takes away the
+clean answer this command exists to be able to give. Exit `1` for something
+found, `2` where a surface this run tried to read could not be read, `0` when
+every surface a flip would republish was read and was clean — subject to the
+standing caveats, which the clean line says.
 
 ## `--coverage` and `--oscal`
 

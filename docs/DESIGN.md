@@ -242,8 +242,18 @@ This repository defines **why and when** a rule exists; the seams implement it.
 The same rule should not acquire a second, drifting definition merely because it
 is enforced at another seam.
 
-`check_hook_pins.py` and `no-stale-hook-pins` ask opposite questions of the same
-answer: whether a pin is behind the newest upstream tag, and whether the tag it
-names exists at all. A pin bumped ahead of a release that was never cut fails at
-hook-init, before any hook runs, so nothing downstream of the clone can report
-it.
+`no-stale-hook-pins` asks both halves of one question of one answer: whether a
+pin has fallen behind the newest upstream tag, and whether the ref it names
+exists at all. They were two checkers for a while -- a `check_hook_pins.py`
+script beside the guard -- and that arrangement is the drift this section warns
+about: the two read the same `rev:` lines, reached the same remote, and were
+free to return different verdicts. They did. The guard counted a pin whose
+remote it could not reach as passed, while the script called the same pin
+unresolvable, so which answer a repository got depended on which seam ran. One
+`git ls-remote` now answers both, and a pin that could not be checked is exit 2
+rather than either verdict.
+
+A pin bumped ahead of a release that was never cut still fails at hook-init,
+before any hook runs, so nothing downstream of the clone can report it -- which
+is why the guard is installed at pre-push and at the manual stage, the last two
+moments that are still upstream of somebody else's clone.
