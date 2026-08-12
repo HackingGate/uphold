@@ -385,3 +385,71 @@ fn an_argument_that_is_not_text_reaches_the_command_it_was_typed_for() {
         stdout(&output)
     );
 }
+
+/// A text-capable built-in standing in front of a command, with no `exec`
+/// checker anywhere and no git hook.
+///
+/// The seam some guards belong at and could not name. `no-private-repo-names`
+/// reads a commit message at every git hook, which refuses the issue citations
+/// a repository's own prose is full of -- so a repository that wants it over a
+/// pull-request body and NOWHERE else had no field to say it in, and three
+/// wrote `command.before` on the built-in independently while the loader
+/// refused all three.
+const BUILTIN_CHECKER: &str = r#"
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-t", "--title", "-b", "--body"]
+scope = "always"
+
+[rule.no-private-repo-names]
+builtin = "no-private-repo-names"
+visibility = "public"
+private_owners = ["acme-private"]
+
+[rule.no-private-repo-names.command]
+before = ["faux"]
+"#;
+
+#[test]
+fn a_text_capable_builtin_refuses_the_body_it_stands_in_front_of() {
+    let root = workspace(BUILTIN_CHECKER);
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "pr",
+            "create",
+            "-b",
+            "this fixes acme-private/thing",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("acme-private"),
+        "{}",
+        stderr(&output)
+    );
+    // Refused means not published: the real command must not have run.
+    assert!(!stdout(&output).contains("faux ran"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_clean_body_reaches_the_real_command_through_a_builtin_checker() {
+    let root = workspace(BUILTIN_CHECKER);
+    let output = shim(&root, &["faux", "pr", "create", "-b", "an ordinary change"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_builtin_checker_satisfies_the_shim_that_would_otherwise_check_nothing() {
+    // The load refuses a shim no checker names, because a command collected and
+    // consulted by nothing runs anyway -- an invocation that passed because
+    // nothing looked at it. A built-in is a checker, and counting only `exec`
+    // rules refused a policy whose shim WAS checked, by a guard rather than a
+    // script.
+    let root = workspace(BUILTIN_CHECKER);
+    let output = shim(&root, &["faux", "--version"]);
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+}
