@@ -1,5 +1,6 @@
 //! The seven rule kinds.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -45,19 +46,50 @@ pub(crate) struct Scan<'a> {
     root: &'a Path,
     policy: &'a Policy,
     not_text: Vec<String>,
+    /// Every path any rule's selection knew about and could not open.
+    ///
+    /// Interior mutability because `run` takes `&self` and every check arm
+    /// under it does too, and because this is the one thing a scan accumulates
+    /// that is not a finding. A `BTreeSet` because the rules overlap: one
+    /// unreadable file is one line in the report however many rules selected
+    /// it, and sorted because a report whose order depends on rule order diffs
+    /// against itself between runs.
+    unreadable: RefCell<BTreeSet<String>>,
 }
 
 impl<'a> Scan<'a> {
     pub(crate) fn new(root: &'a Path, policy: &'a Policy) -> Self {
+        // A `.gitattributes` question that could not be answered is seeded into
+        // the unreadable list rather than dropped, because the scan continues
+        // either way and the reader has to be told which of the two answers they
+        // are holding: nothing is declared not-text, or nobody could find out.
+        let (not_text, unmeasured) = not_text_paths(root);
+        let mut unreadable = BTreeSet::new();
+        if let Some(reason) = unmeasured {
+            unreadable.insert(reason);
+        }
         Self {
             root,
             policy,
-            not_text: not_text_paths(root),
+            not_text,
+            unreadable: RefCell::new(unreadable),
         }
     }
 
     pub(crate) fn not_text(&self) -> &[String] {
         &self.not_text
+    }
+
+    /// The paths this scan could not read, each with its reason.
+    ///
+    /// Reported beside the findings rather than instead of them, and that is
+    /// the point of collecting rather than failing: a tree with one unreadable
+    /// path still has an answer for every other rule, and refusing to give it
+    /// makes the fix for the unreadable path the only thing anybody ever sees.
+    /// Non-empty is exit 2 -- "could not look" is not a pass -- but every rule
+    /// has already reported by the time the caller asks.
+    pub(crate) fn unreadable(&self) -> Vec<String> {
+        self.unreadable.borrow().iter().cloned().collect()
     }
 
     /// Evaluate every rule that declares `[rule.files]`, in check order.
@@ -124,7 +156,14 @@ impl<'a> Scan<'a> {
     }
 
     fn select(&self, rule: &Rule) -> Result<Vec<String>> {
-        Selection::build(self.root, rule, &self.not_text).map(|selection| selection.files())
+        let selection = Selection::build(self.root, rule, &self.not_text)?;
+        // Gathered here, at the one place every rule's selection passes
+        // through, so no future check kind can acquire its own way of dropping
+        // a path it could not open.
+        self.unreadable
+            .borrow_mut()
+            .extend(selection.unreadable().iter().cloned());
+        Ok(selection.files())
     }
 
     const fn redact(&self) -> bool {

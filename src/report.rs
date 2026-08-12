@@ -35,22 +35,40 @@ impl Failure {
 }
 
 /// Strip the common leading indentation a TOML multi-line string carries.
+///
+/// The indent is counted in CHARACTERS and never in bytes. It used to be a byte
+/// count minimised over the non-blank lines while `trim_start` stripped Unicode
+/// whitespace, so one line indented with a wide space -- U+3000 is three bytes
+/// and one character -- put the minimum inside a character of another line, and
+/// `&line[indent..]` panicked. That is exit 101 out of the function whose whole
+/// job is printing a violation: the report the run exists to produce, replaced
+/// by a crash, on text a policy author is free to write. Whitespace-only lines
+/// were the second way in -- excluded from the minimum and sliced anyway.
 fn dedent(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let indent = lines
         .iter()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| line.len() - line.trim_start().len())
+        .map(|line| line.chars().count() - line.trim_start().chars().count())
         .min()
         .unwrap_or(0);
     lines
         .iter()
         .map(|line| {
-            if line.len() >= indent {
-                &line[indent..]
-            } else {
-                line
+            // Walking the characters and keeping what is left is what makes
+            // this safe where the slice was not: the remainder always begins on
+            // a character boundary, whatever the line is made of. A line with
+            // fewer characters than the indent is whitespace-only by
+            // construction -- every other line carries at least this much
+            // leading whitespace -- so running the iterator out and keeping the
+            // empty remainder is the right answer for it.
+            let mut characters = line.chars();
+            for _ in 0..indent {
+                if characters.next().is_none() {
+                    break;
+                }
             }
+            characters.as_str()
         })
         .collect::<Vec<&str>>()
         .join("\n")
@@ -121,6 +139,26 @@ mod tests {
         let body = redacted_body(&[hit("a.txt", 3)]);
         assert_eq!(body, "a.txt:3: [REDACTED_MATCH]");
         assert!(!body.contains("secret"));
+    }
+
+    /// The verified crash: a byte index into a character.
+    ///
+    /// U+3000 IDEOGRAPHIC SPACE is one character, three bytes, and stripped by
+    /// `trim_start`, so the byte minimum taken from the ASCII line landed in
+    /// the middle of it and the slice panicked. A message is policy-author
+    /// text, so this is a message a rule may legitimately carry -- and the
+    /// panic replaced the violation report with exit 101.
+    #[test]
+    fn a_wide_whitespace_indent_does_not_split_a_character() {
+        assert_eq!(dedent("  ascii\n\u{3000}wide"), "ascii\nwide");
+    }
+
+    /// The second way in: a whitespace-only line is excluded from the minimum
+    /// and was sliced by it anyway.
+    #[test]
+    fn a_whitespace_only_line_shorter_than_the_indent_survives() {
+        assert_eq!(dedent("  ascii\n\u{3000}\n  more"), "ascii\n\nmore");
+        assert_eq!(dedent("    first\n \n    second"), "first\n\nsecond");
     }
 
     #[test]

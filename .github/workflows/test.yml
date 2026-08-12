@@ -253,9 +253,27 @@ jobs:
       # pre-commit and prek bootstrap their own Rust; lefthook has no manifest
       # contract and no language to bootstrap, so the binary has to be built and
       # put on PATH the way the install instructions tell a consumer to.
-      - uses: dtolnay/rust-toolchain@stable
+      #
+      # Which is why the toolchain is gated rather than installed for the whole
+      # matrix. "No Rust toolchain needed -- `language: rust` bootstraps" is a
+      # claim README.md makes to consumers and .pre-commit-hooks.yaml repeats,
+      # and a step that puts a compiler on PATH before either runner starts is
+      # the one thing that makes the claim untestable: both legs would find
+      # cargo already there and pass whether or not the bootstrap works. The
+      # only leg that may have a toolchain handed to it is the one whose install
+      # instructions say to build the binary yourself.
+      #
+      # The cache is gated on the same condition and not on taste. Swatinem's
+      # action shells out to cargo to key itself, so on a leg that is
+      # deliberately without one it is a step that fails for a reason unrelated
+      # to what this job asks -- and it has nothing to cache there either,
+      # because pre-commit and prek build inside their own environment
+      # directories rather than into this workspace's target/.
+      - if: matrix.tool == 'lefthook'
+        uses: dtolnay/rust-toolchain@stable
 
-      - uses: Swatinem/rust-cache@v2
+      - if: matrix.tool == 'lefthook'
+        uses: Swatinem/rust-cache@v2
         with:
           key: parity-${{ matrix.tool }}
 

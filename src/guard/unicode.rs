@@ -208,6 +208,56 @@ fn refused(character: char, base: Option<char>, next: Option<char>) -> bool {
     false
 }
 
+/// What a blob's bytes turned out to be.
+///
+/// Three answers rather than two, because "there is no text here" and "the text
+/// here could not be read" are the difference between a skip and a refusal. A
+/// binary file has no lines for a codepoint to hide in and is skipped on
+/// purpose; a file that is text except for one byte is the most literal
+/// could-not-look there is, and treating it as a skip buys the whole file a
+/// pass on the strength of the very byte that should have stopped it.
+#[derive(Debug)]
+enum Decoded {
+    Text(String),
+    Binary,
+    Unreadable(String),
+}
+
+/// A blob's text, or the reason there is none.
+///
+/// The byte-order mark is consulted first because a UTF-16 file is full of NUL
+/// bytes: read as UTF-8 it fails, and the NUL test below would then dismiss a
+/// perfectly ordinary text file as an image, taking its content out of the scan
+/// while looking exactly like a skipped binary.
+///
+/// A UTF-8 mark is deliberately NOT consumed there. It decodes as U+FEFF, which
+/// this guard already refuses by name, and stripping it would quietly grant an
+/// exemption to the one invisible codepoint that turns up in committed files
+/// most often.
+fn decode_for_scan(bytes: &[u8]) -> Decoded {
+    if let Some((encoding, _)) = encoding_rs::Encoding::for_bom(bytes) {
+        if encoding != encoding_rs::UTF_8 {
+            let (text, _, had_errors) = encoding.decode(bytes);
+            if had_errors {
+                return Decoded::Unreadable(format!(
+                    "declares a {} byte-order mark and does not decode as one",
+                    encoding.name()
+                ));
+            }
+            return Decoded::Text(text.into_owned());
+        }
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Decoded::Text(text.to_owned()),
+        // git's own test for a binary file, and the reason it is applied to the
+        // BYTES rather than to git's verdict: a `diff` or `text` attribute is a
+        // claim about how to render a change, and whether there is readable
+        // text in here is a question about the object.
+        Err(_) if bytes.contains(&0) => Decoded::Binary,
+        Err(_) => Decoded::Unreadable(String::from("not valid UTF-8, and not binary either")),
+    }
+}
+
 pub(crate) fn in_files(request: &Request<'_>) -> Result<Option<Refusal>> {
     let allowances: Vec<Allowance> = request
         .rule
@@ -234,14 +284,36 @@ pub(crate) fn in_files(request: &Request<'_>) -> Result<Option<Refusal>> {
         if !scope::in_file_scope(request.rule, &blob.path)? {
             continue;
         }
-        let bytes = scope::read(request.root, blob)?;
-        // A blob that is not UTF-8 is not text somebody typed, and the
-        // characters this guard is about cannot be identified in it.
-        let Ok(text) = String::from_utf8(bytes) else {
+        // THE NAME, before anything is opened and whatever the content turns
+        // out to be. A filename is committed text: it is read by reviewers, by
+        // importers and by build rules, and a zero-width space in one is the
+        // same attack in the one place nobody thinks to look. It is also the
+        // only thing a gitlink has here -- the submodule's content is its own
+        // repository's business, and its guards run there.
+        findings.extend(scan_name(&blob.path, &allowances));
+        if !blob.has_content() {
             continue;
-        };
-        looked += 1;
-        findings.extend(scan(&text, &blob.path, &allowances));
+        }
+        let bytes = scope::read(request.root, blob)?;
+        match decode_for_scan(&bytes) {
+            Decoded::Text(text) => {
+                looked += 1;
+                findings.extend(scan(&text, &blob.path, &allowances));
+            }
+            // No lines for a character to hide in. The one skip this guard
+            // makes, and it is made on the bytes.
+            Decoded::Binary => {}
+            // Silently skipped before this, which is a file nobody read
+            // reported as a file with nothing in it -- `explicit-unknown` by
+            // name, in the guard that reports it about everyone else.
+            Decoded::Unreadable(why) => {
+                return Err(Fatal::new(format!(
+                    "{}: cannot be read as text ({why}); refusing to report it clean \
+                     over content that was never examined",
+                    blob.path
+                )));
+            }
+        }
     }
 
     if findings.is_empty() {
@@ -258,12 +330,9 @@ pub(crate) fn in_files(request: &Request<'_>) -> Result<Option<Refusal>> {
     }))
 }
 
-fn scan(text: &str, path: &str, allowances: &[Allowance]) -> Vec<String> {
-    let characters: Vec<char> = text.chars().collect();
-    let mut findings = Vec::new();
-    let mut line = 1usize;
-    let mut column = 1usize;
-    let granted: BTreeSet<char> = allowances
+/// The codepoints admitted at one path.
+fn granted_at(path: &str, allowances: &[Allowance]) -> BTreeSet<char> {
+    allowances
         .iter()
         .filter(|allowance| {
             allowance
@@ -272,7 +341,49 @@ fn scan(text: &str, path: &str, allowances: &[Allowance]) -> Vec<String> {
                 .is_none_or(|glob| glob.is_match(path))
         })
         .map(|allowance| allowance.codepoint)
-        .collect();
+        .collect()
+}
+
+/// The path itself, judged as the committed text it is.
+///
+/// Stricter than the content rule by exactly two characters, and they are the
+/// two the content rule exempts: a tab and a newline are legal INSIDE a file
+/// and are never legitimate in a path. Everything else this guard refuses is
+/// refused here for the same reasons, under the same `allow` list -- a
+/// codepoint admitted under a glob is admitted in the names that glob matches.
+fn scan_name(path: &str, allowances: &[Allowance]) -> Vec<String> {
+    let characters: Vec<char> = path.chars().collect();
+    let granted = granted_at(path, allowances);
+    let mut findings = Vec::new();
+    for (index, &character) in characters.iter().enumerate() {
+        if granted.contains(&character) {
+            continue;
+        }
+        let base = index
+            .checked_sub(1)
+            .and_then(|previous| characters.get(previous).copied());
+        let next = characters.get(index + 1).copied();
+        let offending = character == '\t' || character == '\n' || refused(character, base, next);
+        if !offending {
+            continue;
+        }
+        findings.push(format!(
+            "{path}:1:{}: U+{:04X} {} in the FILE NAME",
+            index + 1,
+            character as u32,
+            unicode_names2::name(character)
+                .map_or_else(|| String::from("UNKNOWN"), |name| name.to_string()),
+        ));
+    }
+    findings
+}
+
+fn scan(text: &str, path: &str, allowances: &[Allowance]) -> Vec<String> {
+    let characters: Vec<char> = text.chars().collect();
+    let mut findings = Vec::new();
+    let mut line = 1usize;
+    let mut column = 1usize;
+    let granted: BTreeSet<char> = granted_at(path, allowances);
 
     for (index, &character) in characters.iter().enumerate() {
         if character == '\n' {
@@ -369,5 +480,65 @@ mod tests {
     fn a_malformed_allowance_is_refused_with_its_own_message() {
         assert!(parse_allowance("00A0").is_err());
         assert!(parse_allowance("U+ZZZZ").is_err());
+    }
+
+    #[test]
+    fn a_filename_is_committed_text_too() {
+        // The half that did not survive the port. A zero-width space in a path
+        // is read by reviewers, importers and build rules, and nothing here
+        // looked at a path at all -- so the one place a reader cannot see the
+        // character was the one place the guard did not check.
+        let found = scan_name("docs/re\u{200B}adme.md", &[]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("U+200B"), "{found:?}");
+        assert!(found[0].contains("FILE NAME"), "{found:?}");
+        assert!(scan_name("docs/readme.md", &[]).is_empty());
+    }
+
+    #[test]
+    fn a_tab_is_legal_in_a_file_and_never_in_a_path() {
+        // The two characters the content rule exempts, which is why the path
+        // cannot simply be handed to `scan`.
+        assert!(findings("a\tb\n").is_empty());
+        assert_eq!(scan_name("a\tb", &[]).len(), 1);
+        assert_eq!(scan_name("a\nb", &[]).len(), 1);
+    }
+
+    #[test]
+    fn an_allowance_scoped_to_a_path_reaches_that_paths_name() {
+        let allowances = vec![parse_allowance("U+00A0:docs/**").unwrap()];
+        assert!(scan_name("docs/a\u{00A0}b.md", &allowances).is_empty());
+        assert_eq!(scan_name("src/a\u{00A0}b.rs", &allowances).len(), 1);
+    }
+
+    #[test]
+    fn a_blob_that_is_not_text_is_told_apart_from_one_that_is_binary() {
+        // The direction that matters: an undecodable blob used to be skipped in
+        // silence, so a file nobody read was counted as a file with nothing in
+        // it. Binary is the one honest skip -- there are no lines in it for a
+        // codepoint to hide in.
+        assert!(matches!(decode_for_scan(b"plain\n"), Decoded::Text(_)));
+        assert!(matches!(
+            decode_for_scan(&[0x89, b'P', b'N', b'G', 0x00, 0x1A]),
+            Decoded::Binary
+        ));
+        assert!(matches!(
+            decode_for_scan(b"caf\xe9 latin1\n"),
+            Decoded::Unreadable(_)
+        ));
+    }
+
+    #[test]
+    fn a_utf16_file_is_read_rather_than_dismissed_as_binary() {
+        // It is full of NUL bytes, so the binary test alone takes an ordinary
+        // text file out of the scan while looking exactly like a skipped image.
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in "a\u{200B}b".encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        let Decoded::Text(text) = decode_for_scan(&bytes) else {
+            unreachable!("a UTF-16 file with a byte-order mark is text");
+        };
+        assert_eq!(scan(&text, "a.txt", &[]).len(), 1);
     }
 }

@@ -189,15 +189,41 @@ fn a_body_file_is_read_and_a_skip_flag_is_not() {
 }
 
 #[test]
-fn a_body_typed_into_an_editor_is_said_to_be_unchecked_rather_than_passed() {
-    // What gets typed there has not been written yet, so there is nothing to
-    // hand a checker. A shim that says nothing here reports a pass over text it
-    // never saw.
+fn a_body_composed_in_an_editor_makes_the_editor_the_checkpoint() {
+    // This case used to be the one thing a shim admitted it could not see: no
+    // body in argv, no `--web`, and a command about to open an editor, so there
+    // was nothing to hand a checker and the shim said so and execed. Saying so
+    // leaves the text unchecked and tells somebody who did nothing wrong to do
+    // it differently, so the shim now installs itself in the command's own
+    // editor variable and reads the file back when the editor closes.
+    //
+    // The assertion is on what is HANDED to the command, because that is what
+    // decides whether the checkpoint exists: the stub prints its environment,
+    // and the shim's declared `editor_env` has to be pointing at this binary by
+    // the time the command runs. `tests/shim_handoff_cli.rs` drives the whole
+    // round trip with a real editor; this holds the near end of it.
     let root = workspace(POLICY);
+    let stub = root.join("bin/faux");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\necho \"faux ran: $*\"\necho \"editor: $FAUX_EDITOR\"\n",
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&stub).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&stub, permissions).unwrap();
+
     let output = shim(&root, &["faux", "pr", "create"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("composed in an editor"),
+        stdout(&output).contains("editor: ") && stdout(&output).contains("shim 'faux'"),
+        "the command was handed no checkpoint to open: {}",
+        stdout(&output)
+    );
+    // And it says which checkpoint it is, rather than reporting a pass over
+    // text nothing has read yet.
+    assert!(
+        stderr(&output).contains("the editor is the checkpoint"),
         "{}",
         stderr(&output)
     );
@@ -296,5 +322,66 @@ fn the_binary_run_under_a_commands_name_is_that_commands_shim() {
         stderr(&output).contains("Nothing was published"),
         "{}",
         stderr(&output)
+    );
+}
+
+/// argv is bytes, and a shim that stands in front of `git` will be handed some.
+///
+/// `std::env::args()` PANICS on an argument that is not UTF-8 -- exit 101, out
+/// of a binary whose whole promise is three exit codes and transparency. A file
+/// named in latin-1 is an ordinary argument to `git add`, and this binary is
+/// installed exactly where such a name gets typed. So the bytes go through
+/// untouched where there is nothing to check, and where there IS something to
+/// check the shim says it could not read them rather than checking a lossy copy.
+#[test]
+fn an_argument_that_is_not_text_reaches_the_command_it_was_typed_for() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = workspace(POLICY);
+    let path = format!(
+        "{}:{}",
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    // `caf\xe9`, which is a perfectly good file name and is not UTF-8.
+    let latin1 = std::ffi::OsString::from_vec(b"caf\xe9.txt".to_vec());
+
+    // `repo clone` is not in this shim's `match` list, so there is nothing to
+    // check and nothing to stop: the command must run.
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["shim", "faux", "repo", "clone"])
+        .arg(&latin1)
+        .current_dir(&root)
+        .env("PATH", &path)
+        .env_remove("UPHOLD_ALLOW")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("faux ran: repo clone"),
+        "{}",
+        stdout(&output)
+    );
+
+    // `pr create` is, so the same bytes are now part of an invocation whose text
+    // is checked. Exit 2: nothing was found and nothing was cleared.
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["shim", "faux", "pr", "create", "-t"])
+        .arg(&latin1)
+        .current_dir(&root)
+        .env("PATH", &path)
+        .env_remove("UPHOLD_ALLOW")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("is not UTF-8 text"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
     );
 }

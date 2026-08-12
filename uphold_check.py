@@ -98,15 +98,40 @@ TIERS = ("uphold", "cmd-shims", "local")
 # rather than as an absent hook.
 REPO_LINE = re.compile(r"^\s*-\s*repo:\s*(\S+)")
 HOOK_ID_LINE = re.compile(r"^\s*-\s*id:\s*(\S+)")
-LEFTHOOK_COMMAND = re.compile(r"^\s{4}([A-Za-z0-9._-]+):\s*$")
+
+# A valueless mapping key: `commands:` itself, a command name under it, or the
+# `configs:` key a lefthook consumer writes under `remotes:`. WHICH of those it
+# is cannot be read off the line, so the scan below tracks the key that encloses
+# it instead of matching on indentation. Matching on indentation alone is what
+# made `configs` a command name -- README.md tells every lefthook consumer to
+# write that key verbatim at exactly the indent a command name sits at, so a
+# claim on a rule called `configs` reconciled green in every repository that
+# followed the documentation.
+LEFTHOOK_KEY = re.compile(r"^(\s*)([A-Za-z0-9._-]+):\s*(?:#.*)?$")
 
 # The ids THIS repository publishes, read from the manifest that publishes them.
 #
 # Written out here as a literal it would be an enumeration describing a constant
-# in another file -- the exact shape of the bug `_rule_ids` was rewritten to
+# in another file -- the exact shape of the bug `_rule_stages` was rewritten to
 # delete, where a hardcoded list of six table names sat opposite an engine that
 # had seven and silently under-reported. The manifest is the list; this reads it.
 PUBLISHED_HOOKS = Path(".pre-commit-hooks.yaml")
+
+# What an id RUNS, which is the part of the manifest that says whether pinning
+# it is evidence of anything. `entry:` is the command the runner executes, so
+# `uphold scan` is the file scan, `uphold guard --stage <hook>` is the guard at
+# exactly one git stage, and `uphold_check.py` is this script -- the reconciler
+# itself, which runs no rule and enforces nothing.
+#
+# Reading the stage out of the entry rather than writing the five pairs down
+# here is the same decision as reading the ids: the mapping pre-commit ->
+# uphold-guard, commit-msg -> uphold-guard-commit-msg, pre-merge-commit ->
+# uphold-guard-merge, pre-push -> uphold-guard-push and manual ->
+# uphold-guard-manual is a fact the manifest already states, and a copy of it
+# here is the copy that goes stale when a sixth stage is published.
+ENTRY_LINE = re.compile(r"^\s+entry:\s*(.+?)\s*$")
+ENTRY_GUARD = re.compile(r"(?:\buphold\b|--)\s+guard\b.*?--stage\s+([A-Za-z0-9-]+)")
+ENTRY_SCAN = re.compile(r"(?:\buphold\b|--)\s+scan\b")
 
 # A lefthook consumer pins nothing by id. It names this repository under
 # `remotes:` and lefthook merges the commands in, so the consumer's own file
@@ -119,6 +144,12 @@ PUBLISHED_HOOKS = Path(".pre-commit-hooks.yaml")
 # all three are the same seam, and a pattern anchored on the program name would
 # have recognised only the middle one.
 LEFTHOOK_RUN = re.compile(r"^\s*run:\s*.*(?:\buphold|--)\s+(?:scan|guard)\b")
+# Which seam that hand-wired command line is, asked of the same line. A config
+# that runs the guards and never runs the scan installs no file rules, and one
+# that names `--stage pre-commit` says nothing about pre-push -- the same
+# distinction the published ids make, arriving as an argument instead of an id.
+LEFTHOOK_RUN_SCAN = re.compile(r"^\s*run:\s*.*(?:\buphold|--)\s+scan\b")
+LEFTHOOK_RUN_STAGE = re.compile(r"--stage\s+([A-Za-z0-9-]+)")
 # Either the repository name or the config path it publishes. The path is the
 # more reliable of the two: `git_url` may be a mirror, an SSH form, or a local
 # clone, and none of those has to contain the repository's name -- but a remote
@@ -170,13 +201,112 @@ def upstream_slug() -> str:
     return "/".join(parts[-2:])
 
 
-@functools.cache
-def lefthook_remote() -> re.Pattern[str]:
-    return re.compile(rf"{re.escape(upstream_slug())}\b|hooks/lefthook\.yml")
+def includes_our_lefthook_remote(text: str) -> bool:
+    """Does one `remotes:` entry name THIS repository and take its config?
+
+    Both halves, in the SAME entry. This was one regex alternating between the
+    two, so either alone was enough: a remote whose url merely contained the
+    slug, or a remote pulling a file that happens to be called
+    `hooks/lefthook.yml` out of somebody else's repository. Either match granted
+    every stage this manifest publishes, because the branch it feeds assumes the
+    remote IS this repository's config -- so a fork, a mirror, or an unrelated
+    project following the same conventional filename was credited with running
+    every guard here.
+
+    Read by indentation rather than by pattern, because a `remotes:` item spells
+    its url and its config on separate lines, and the question is which lines
+    belong to the same item.
+    """
+    slug = upstream_slug()
+    entries: list[list[str]] = []
+    current: list[str] | None = None
+    marker = -1
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        stripped = line.lstrip()
+        if stripped.startswith("- "):
+            # A less-indented item ends the one before it and is not part of it.
+            if current is not None and indent <= marker:
+                entries.append(current)
+                current = None
+            if current is None:
+                current, marker = [], indent
+        elif current is not None and indent <= marker:
+            entries.append(current)
+            current = None
+        if current is not None:
+            current.append(stripped)
+    if current is not None:
+        entries.append(current)
+    # The test is not "does this url name us". It is "does this url name someone
+    # ELSE", because most git urls cannot answer the first question at all.
+    #
+    # lefthook takes any git url. A consumer may clone this repository from a
+    # filesystem path, from a mirror, or from a bare directory whose name says
+    # nothing -- `scripts/consumer_check.sh` does exactly that, cloning to a
+    # neutral `$WORK/hooks` on purpose, so the url the consumer writes carries
+    # neither the owner nor the repository name. Demanding the slug there is
+    # demanding evidence the format does not carry, and answering "no seam here
+    # supplies it" is answering exit 1 -- the claim is false -- about a
+    # repository whose only fault is cloning from a path.
+    #
+    # So a remote is rejected only when it is identifiably somebody else's: it
+    # spells a forge `owner/name` and that pair is not ours. Anything without a
+    # host is a path, and a path is unidentifiable rather than foreign.
+    #
+    # The load-bearing half of the previous fix is untouched: both the remote and
+    # `hooks/lefthook.yml` must appear in the SAME entry, so a fork pinning its
+    # own config, or an unrelated project pulling a file that happens to share
+    # the conventional name, is still not credited with running every guard here.
+    forge_url = re.compile(
+        r"(?:https?://|ssh://|git://|[\w.-]+@)[\w.-]+[/:](?P<slug>[\w.\-/]+)"
+    )
+
+    def could_be_this_repository(line: str) -> bool:
+        _, _, value = line.partition(":")
+        for word in value.split():
+            found = forge_url.search(word)
+            if not found:
+                # No host, so no owner to disagree with: a path or a bare name.
+                continue
+            spelled = found.group("slug").rstrip("/").removesuffix(".git")
+            if "/" in spelled and not spelled.endswith(slug):
+                return False
+        return True
+
+    return any(
+        any(could_be_this_repository(line) for line in entry if "git_url" in line)
+        and any("hooks/lefthook.yml" in line for line in entry)
+        for entry in entries
+    )
 
 
 class CouldNotLook(Exception):
     """Raised where the tool cannot inspect what it claims to check (exit 2)."""
+
+
+def _string_list(value: object, field: str) -> list[str]:
+    """Every entry, or a refusal naming the one that is not a string.
+
+    The alternative -- keeping the strings and dropping the rest -- answers a
+    question nobody asked, because the engine reading the same file will not
+    silently agree. Whatever this list is short by is a rule the engine runs and
+    this reconcile has never heard of.
+    """
+    if not isinstance(value, list):
+        raise CouldNotLook(
+            f"{CONTENT_POLICY}: {field} must be a list, not {type(value).__name__}"
+        )
+    for index, entry in enumerate(value):
+        if not isinstance(entry, str):
+            raise CouldNotLook(
+                f"{CONTENT_POLICY}: {field}[{index}] is {type(entry).__name__}, not a string. "
+                f"Which rules it would have inherited cannot be resolved, so what this "
+                f"repository runs is unknown"
+            )
+    return list(value)
 
 
 def discover_root() -> Path:
@@ -196,17 +326,35 @@ def load_records() -> dict[str, dict]:
 
 
 def read_toml(path: Path) -> dict:
+    """Parse a TOML file, or say that it could not be parsed.
+
+    `UnicodeDecodeError` for the same reason `read_text` catches it, and it
+    reaches here by a route that is easy to miss: `tomllib.load` takes a binary
+    handle and decodes the bytes itself, so a declaration or a policy file with
+    one byte that is not UTF-8 raises out of the decode rather than out of the
+    parse, and `TOMLDecodeError` never sees it.
+    """
     try:
         with path.open("rb") as handle:
             return tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError) as error:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         raise CouldNotLook(f"{path}: {error}") from error
 
 
 def read_text(path: Path) -> str:
+    """Read a configuration file, or say that it could not be read.
+
+    `UnicodeDecodeError` is caught beside `OSError` because it is the same
+    answer arriving by a different route, and it does NOT derive from it: it
+    derives from `ValueError`, so a config carrying one stray 0xff byte escaped
+    this handler entirely and left the process on a traceback and exit 1. Every
+    caller here is a could-not-look path, and the contract reads exit 1 as "a
+    claim is false" -- so an unreadable byte was reported as a repository whose
+    declaration lies. See the `explicit-unknown` record.
+    """
     try:
         return path.read_text(encoding="utf-8")
-    except OSError as error:
+    except (OSError, UnicodeDecodeError) as error:
         raise CouldNotLook(f"{path}: {error}") from error
 
 
@@ -250,23 +398,66 @@ def installed_hooks(root: Path) -> dict[str, list[str]]:
     return hooks
 
 
-def published_hook_ids() -> set[str]:
-    """Every hook id this repository publishes, from the manifest publishing them."""
+def published_seams() -> tuple[set[str], dict[str, str]]:
+    """(the ids that run `uphold scan`, stage -> the id that runs the guard there).
+
+    Read from the manifest's `entry:` lines rather than from its `- id:` lines,
+    because an id is not evidence that anything runs. `uphold-check` is this
+    very script: a repository that pins it and nothing else runs the reconcile
+    and no rule at all, and while every published id counted as evidence that
+    pin was accepted as proof that every scan rule and every guard fires here --
+    the reconciler certifying itself, and printing "reconciled N enforcement
+    claims" over a repository enforcing nothing.
+
+    The stage is read for the same reason it is asked for: a guard id installs
+    exactly one git stage, so `uphold-guard-push` says nothing about what fires
+    at commit-msg.
+    """
     path = HERE / PUBLISHED_HOOKS
     if not path.is_file():
         raise CouldNotLook(
             f"{PUBLISHED_HOOKS} not found beside this script; "
             f"cannot tell which hook ids run `uphold`"
         )
-    return {
-        match.group(1)
-        for line in read_text(path).splitlines()
-        if (match := HOOK_ID_LINE.match(line))
-    }
+
+    scans: set[str] = set()
+    guards: dict[str, str] = {}
+    current = ""
+    for line in read_text(path).splitlines():
+        hook = HOOK_ID_LINE.match(line)
+        if hook:
+            current = hook.group(1)
+            continue
+        entry = ENTRY_LINE.match(line)
+        if not entry or not current:
+            continue
+        command = entry.group(1)
+        guard = ENTRY_GUARD.search(command)
+        if guard:
+            guards.setdefault(guard.group(1), current)
+        elif ENTRY_SCAN.search(command):
+            scans.add(current)
+        current = ""
+
+    if not scans or not guards:
+        raise CouldNotLook(
+            f"{PUBLISHED_HOOKS} publishes no id whose `entry:` runs `uphold scan` "
+            f"or `uphold guard --stage`; cannot tell what pinning an id would run"
+        )
+    return scans, guards
 
 
-def runs_principles(root: Path) -> tuple[bool, str]:
-    """Does this repository actually run `uphold`, and how did we tell?
+def published_hook_ids() -> set[str]:
+    """The published ids that run a seam -- the evidence set, not the id list.
+
+    Deliberately NOT every id in the manifest: see `published_seams`.
+    """
+    scans, guards = published_seams()
+    return scans | set(guards.values())
+
+
+def runs_principles(root: Path) -> tuple[bool, set[str], str]:
+    """Which seams of `uphold` run here -- the file scan, and which git stages.
 
     The question used to be asked as "is there a hook called `content-policy`",
     which is the name of a command in THIS repository's own lefthook.yml. No
@@ -279,39 +470,94 @@ def runs_principles(root: Path) -> tuple[bool, str]:
     Three ways in, one per runner, and the answer says which was taken -- a
     reconcile that passes for a reason the reader cannot see is one they cannot
     check.
+
+    Two answers rather than one, and that is the second half of the same fix. A
+    single repository-wide yes/no said "uphold runs here" and let every rule in
+    the policy file resolve against it, so a repository that pinned `uphold-scan`
+    and no guard id at all reconciled a claim on a `pre-push` guard: the stage
+    that guard fires at is installed by `uphold-guard-push`, which nothing here
+    pinned, and the rule ran nowhere. What is returned is what was installed --
+    the file scan, and the set of git stages some pinned id actually runs.
+
+    Both runners are read and the answers unioned rather than the first one
+    winning: a repository may install pre-commit for the fast stages and drive
+    the slow ones from lefthook, and either file alone understates it.
     """
-    published = published_hook_ids()
-    pinned = sorted(published & set(installed_hooks(root)))
+    scans, guards = published_seams()
+    installed = set(installed_hooks(root))
+
+    scan = bool(scans & installed)
+    stages = {stage for stage, hook in guards.items() if hook in installed}
+    how: list[str] = []
+    pinned = sorted((scans | set(guards.values())) & installed)
     if pinned:
-        return True, f"{PRE_COMMIT_CONFIG} pins {', '.join(pinned)}"
+        how.append(f"{PRE_COMMIT_CONFIG} pins {', '.join(pinned)}")
 
     path = root / LEFTHOOK_CONFIG
     if path.is_file():
         text = read_text(path)
-        if any(LEFTHOOK_RUN.match(line) for line in text.splitlines()):
-            return True, f"{LEFTHOOK_CONFIG} runs the binary directly"
-        if lefthook_remote().search(text):
-            return True, f"{LEFTHOOK_CONFIG} includes this repository as a remote"
+        direct = [line for line in text.splitlines() if LEFTHOOK_RUN.match(line)]
+        if direct:
+            scan = scan or any(LEFTHOOK_RUN_SCAN.match(line) for line in direct)
+            ran = {
+                match.group(1)
+                for line in direct
+                if (match := LEFTHOOK_RUN_STAGE.search(line))
+            }
+            stages |= ran
+            how.append(f"{LEFTHOOK_CONFIG} runs the binary directly")
+        if includes_our_lefthook_remote(text):
+            # The remote config is this repository's `hooks/lefthook.yml`, which
+            # wires every stage the manifest publishes. A consumer that includes
+            # it has them all, which is why including it is the one form that
+            # needs no per-stage reading.
+            scan = True
+            stages |= set(guards)
+            how.append(f"{LEFTHOOK_CONFIG} includes this repository as a remote")
 
-    return (
-        False,
-        "no runner configuration here runs `uphold scan` or `uphold guard`",
-    )
+    if not scan and not stages:
+        return (
+            False,
+            set(),
+            "no runner configuration here runs `uphold scan` or `uphold guard`",
+        )
+    return scan, stages, "; ".join(how)
 
 
 def lefthook_commands(root: Path) -> set[str]:
+    """The command names a lefthook config defines, and nothing else.
+
+    A command name is a valueless mapping key nested under `commands:`, and the
+    nesting is the whole of what distinguishes it. Matching indentation alone
+    accepted `configs:` -- the key under `remotes:` that README.md tells every
+    lefthook consumer to write verbatim -- as a rule named `configs`, so a claim
+    naming that rule reconciled green against a file that defines no such thing.
+
+    The enclosing key is tracked with a stack of the valueless keys seen so far,
+    popped back to the current indent. A key that carries a value cannot enclose
+    anything, so it never joins the stack.
+    """
     path = root / LEFTHOOK_CONFIG
     if not path.is_file():
         return set()
-    return {
-        match.group(1)
-        for line in read_text(path).splitlines()
-        if (match := LEFTHOOK_COMMAND.match(line))
-    }
+
+    names: set[str] = set()
+    enclosing: list[tuple[int, str]] = []
+    for line in read_text(path).splitlines():
+        match = LEFTHOOK_KEY.match(line)
+        if not match:
+            continue
+        indent, key = len(match.group(1)), match.group(2)
+        while enclosing and enclosing[-1][0] >= indent:
+            enclosing.pop()
+        if enclosing and enclosing[-1][1] == "commands":
+            names.add(key)
+        enclosing.append((indent, key))
+    return names
 
 
-def _rule_ids(policy: dict) -> set[str]:
-    """Every rule id in one policy document.
+def _rule_stages(policy: dict) -> dict[str, set[str]]:
+    """Every rule id in one policy document, mapped to the git stages it fires at.
 
     ONE table name, which is the whole point. This function used to walk a
     hardcoded list of six array-of-tables names against an engine that had
@@ -322,28 +568,71 @@ def _rule_ids(policy: dict) -> set[str]:
 
     The id is the section header -- `[rule.<id>]` -- so the ids are the keys of
     one table, and a duplicate cannot even parse.
+
+    `git.hooks` is carried out rather than discarded because it is the field
+    that says WHERE a rule runs, and a caller that has only the ids cannot tell
+    a file rule from a pre-push guard. An empty set means no git hook runs it,
+    which is the file scan's rule and not a rule that runs nowhere.
     """
     rules = policy.get("rule", {})
     if not isinstance(rules, dict):
         raise CouldNotLook("policy: [rule] must be a table of [rule.<id>] sections")
-    return set(rules)
+
+    stages: dict[str, set[str]] = {}
+    for rule_id, body in rules.items():
+        git = body.get("git", {}) if isinstance(body, dict) else {}
+        hooks = git.get("hooks", []) if isinstance(git, dict) else []
+        if not isinstance(hooks, list):
+            raise CouldNotLook(
+                f"policy: [rule.{rule_id}] git.hooks must be an array of git hook names"
+            )
+        stages[rule_id] = {value for value in hooks if isinstance(value, str)}
+    return stages
 
 
-def content_policy_rules(root: Path) -> tuple[set[str], set[str], list[str]]:
-    """Return (declared rule ids, disabled rule ids, inherited base sets).
+def content_policy_rules(
+    root: Path,
+) -> tuple[dict[str, set[str]], set[str], list[str], list[str]]:
+    """Return (rule id -> git stages, disabled ids, inherited sets, inherited paths).
 
-    Declared INCLUDES the inherited base sets, because they ship in this
-    repository now. While the base set lived in another repository at a pinned
-    rev its rules ran here and could not be enumerated from here, so the count
-    was reported as locally declared rules plus a note naming the hole.
+    Declared INCLUDES what `[inherit]` pulls in, because those rules run here.
+    While the base set lived in another repository at a pinned rev its rules ran
+    here and could not be enumerated from here, so the count was reported as
+    locally declared rules plus a note naming the hole.
 
-    "Right there" means beside THIS SCRIPT, not beside the consumer's policy
+    A bundled set resolves beside THIS SCRIPT, not beside the consumer's policy
     file. The engine embeds the bundled sets with `include_str!`, so
     `sets = ["process-residue"]` in a consuming repository resolves to a file
     that repository does not have and never will -- and resolving it against
     their tree made every consumer that inherits a base set exit 2 on a
     declaration that was in fact fine. `HERE` is the clone a runner made of
     this repository, which is where the sets the engine compiled in are.
+
+    `inherit.paths` resolves the other way, against the tree under check, which
+    is where `config::load` resolves it: those are the consumer's own extra
+    policy files. Reading only `inherit.sets` made every rule arriving that way
+    invisible, so a claim on one was refused as supplied by nothing while the
+    engine was running it -- a false negative in the direction that costs the
+    most, because the answer a person acts on is "delete the claim".
+
+    It is still a SECOND, partial reader of what `config::load` already
+    resolves, and every field the two disagree about is a rule reported to run
+    where it does not or the other way round. The one loader can now be asked
+    directly -- `uphold rules --effective --json` prints the resolved rule ids
+    with their `git.hooks` -- and that is what this function should eventually
+    read instead of the policy file.
+
+    It does not read it yet, and the reason is where this script runs. It is the
+    hook OTHER repositories install, and two of the three runners build the
+    binary inside their own environment directory rather than putting it on
+    PATH; a consumer whose `uphold` is not reachable would go from a reconcile
+    that works to exit 2 on every commit. Shelling out with a fallback to this
+    reader would keep both readers AND add a third behaviour, so until the
+    binary's location is something this script can rely on, there is one reader
+    here and a test -- `Reconciliation.test_the_two_readers_of_the_policy_agree`
+    -- that fails when it drifts from the engine on this repository's own
+    policy. That test is the thing that makes the duplication survivable, and
+    deleting it is what would make it dangerous.
     """
     bundled = HERE / CONTENT_POLICY_BASE
     path = root / CONTENT_POLICY
@@ -356,9 +645,20 @@ def content_policy_rules(root: Path) -> tuple[set[str], set[str], list[str]]:
     if not isinstance(inherit, dict):
         raise CouldNotLook(f"{CONTENT_POLICY}: 'inherit' must be a table")
 
-    names = [value for value in inherit.get("sets", []) if isinstance(value, str)]
+    # Refused, not filtered. These two comprehensions dropped a non-string entry
+    # in silence, which turns a malformed declaration into a SHORTER list of
+    # inherited rules than the engine resolves -- and a claim on one of the rules
+    # that went missing then fails as "no seam here supplies it", exit 1, which
+    # in this tool means the claim is false. It is not false; nobody looked. The
+    # honest answer is exit 2, the same one a missing inherited file gets a few
+    # lines below.
+    names = _string_list(inherit.get("sets", []), "inherit.sets")
+    relatives = _string_list(inherit.get("paths", []), "inherit.paths")
 
-    declared = _rule_ids(policy)
+    # Merged in the order the engine merges them -- bundled sets, then the
+    # named paths, then the repository's own rules -- so a rule the repository
+    # redefines is read with the stages the repository gave it.
+    declared: dict[str, set[str]] = {}
     for name in names:
         base_path = bundled / f"{name}.toml"
         if not base_path.is_file():
@@ -366,12 +666,26 @@ def content_policy_rules(root: Path) -> tuple[set[str], set[str], list[str]]:
                 f"{CONTENT_POLICY}: inherit.sets names {name!r}, "
                 f"which is not a bundled base set ({base_path} does not exist)"
             )
-        declared |= _rule_ids(read_toml(base_path))
+        declared |= _rule_stages(read_toml(base_path))
+    for relative in relatives:
+        extra = root / relative
+        if not extra.is_file():
+            raise CouldNotLook(
+                f"{CONTENT_POLICY}: inherit.paths names {relative!r}, "
+                f"which this repository does not have ({extra} does not exist)"
+            )
+        declared |= _rule_stages(read_toml(extra))
+    declared |= _rule_stages(policy)
 
-    disabled = {
-        value for value in inherit.get("disabled_rules", []) if isinstance(value, str)
-    }
-    return declared, disabled, names
+    # The third list in the same table, and it was left filtering in silence when
+    # the other two stopped. It is the one where dropping an entry is worst: the
+    # engine refuses a `disabled_rules` id that names nothing inherited, so a
+    # malformed entry that vanishes here is a load failure over there -- this
+    # tool reporting on a policy the binary will not even accept.
+    disabled = set(
+        _string_list(inherit.get("disabled_rules", []), "inherit.disabled_rules")
+    )
+    return declared, disabled, names, relatives
 
 
 def cmd_shims_checks(root: Path) -> set[str]:
@@ -510,26 +824,61 @@ class Inventory:
 def inventory_principles(root: Path) -> Inventory:
     notes: list[str] = []
     try:
-        in_use, how = runs_principles(root)
+        scan, stages, how = runs_principles(root)
     except CouldNotLook as error:
         return Inventory(notes=[str(error)], unreadable=True)
-    if not in_use:
+    if not scan and not stages:
         return Inventory(notes=[how])
     notes.append(how)
 
     try:
-        declared, disabled, inherited = content_policy_rules(root)
+        declared, disabled, sets, paths = content_policy_rules(root)
     except CouldNotLook as error:
         return Inventory(notes=[str(error)], unreadable=True)
-    if inherited:
+    if sets:
         # This tier used to be the one hole in the coverage report: the base set
         # lived in another repository at a pinned rev, its rules ran here, and
         # they could not be enumerated from here. They ship in this repository
         # now, so the count is whole and says which sets it counted.
-        notes.append(f"includes the bundled base set(s): {', '.join(inherited)}")
+        notes.append(f"includes the bundled base set(s): {', '.join(sets)}")
+    if paths:
+        notes.append(
+            f"includes the policy file(s) inherit.paths names: {', '.join(paths)}"
+        )
     if disabled:
         notes.append(f"extend.disabled_rules turns off {', '.join(sorted(disabled))}")
-    return Inventory(rules=declared - disabled, notes=notes)
+
+    # A rule is supplied where the seam that runs it is installed, which is a
+    # question per rule and not per repository. A rule with no `git.hooks` is
+    # the file scan's; a rule with them fires at those git stages and nowhere
+    # else, so a policy declaring a pre-push guard in a repository that pinned
+    # only `uphold-scan` declares a rule that runs nowhere -- and reporting it
+    # as supplied is how a claim on it reconciled green.
+    #
+    # ANY of a rule's stages is enough. `no-stale-hook-pins` fires at pre-push
+    # and manual and the manual stage is reached by a scheduled run rather than
+    # by a pinned id, so requiring every stage would refuse a rule that is
+    # demonstrably running.
+    rules: set[str] = set()
+    uninstalled: list[str] = []
+    for rule_id, hooks in sorted(declared.items()):
+        if rule_id in disabled:
+            continue
+        if hooks:
+            if hooks & stages:
+                rules.add(rule_id)
+            else:
+                uninstalled.append(f"{rule_id} ({', '.join(sorted(hooks))})")
+        elif scan:
+            rules.add(rule_id)
+        else:
+            uninstalled.append(f"{rule_id} (file scan)")
+    if uninstalled:
+        notes.append(
+            "declared, but no runner configuration here installs the seam it "
+            f"fires at: {', '.join(uninstalled)}"
+        )
+    return Inventory(rules=rules, notes=notes)
 
 
 def inventory_cmd_shims(root: Path) -> Inventory:
@@ -668,7 +1017,14 @@ def format_coverage(
         if record.get("status") != "deprecated"
         and record.get("enforcement", {}).get("automatable") != "no"
     }
-    enforced = {principle for principle, _ in claims} & set(claimable)
+    # Intersected with what is SUPPLIED, not merely with what was claimed. The
+    # orphans printed immediately above are claims naming a rule no seam here
+    # runs, and counting them here put them back into the numerator of the one
+    # number a reader takes away -- a record counted as claimed by a rule that
+    # this very report has just said does not exist.
+    enforced = {principle for principle, rule in claims if rule in supplied} & set(
+        claimable
+    )
     unclaimable = len(records) - len(claimable)
     lines.append("")
     lines.append(
@@ -893,6 +1249,15 @@ STARTER = """\
 
 
 def review_settings(declaration: dict) -> dict:
+    """Read `[review]`, refusing a field whose type the rest of the mode assumes.
+
+    All four fields are checked, because the two that were not were read by
+    coercion: `int(settings.get("max_lines"))` and `list(...)` turn a wrong type
+    into a ValueError or a TypeError, which leaves the process on a traceback
+    and exit 1 -- and exit 1 in this tool means a claim is false. A declaration
+    saying `max_lines = "nine hundred"` is one this tool could not read, which
+    is exit 2 and a message naming the field. See the `explicit-unknown` record.
+    """
     settings = declaration.get("review", {})
     if not isinstance(settings, dict):
         raise CouldNotLook("`review` must be a table")
@@ -907,12 +1272,62 @@ def review_settings(declaration: dict) -> dict:
             "`review.no_subject_here` maps a record id to the reason this "
             "repository has no subject for it"
         )
+
+    # `isinstance(True, int)` is True in Python, and `max_lines = true` is a
+    # ceiling of 1 rather than a configuration error, so bool is excluded by
+    # hand.
+    max_lines = settings.get("max_lines", review_mod.DEFAULT_MAX_LINES)
+    if isinstance(max_lines, bool) or not isinstance(max_lines, int) or max_lines < 1:
+        raise CouldNotLook(
+            f"`review.max_lines` must be a positive integer, not {max_lines!r}"
+        )
+
+    domains = settings.get("include_domains", [])
+    if not isinstance(domains, list) or not all(
+        isinstance(value, str) for value in domains
+    ):
+        raise CouldNotLook("`review.include_domains` must be an array of domain names")
+
+    emit = settings.get("emit", ["REVIEW.md"])
+    if not isinstance(emit, list) or not all(
+        isinstance(value, str) and value.strip() for value in emit
+    ):
+        raise CouldNotLook(
+            "`review.emit` must be an array of file names to write the compiled "
+            "review document to"
+        )
+
     return {
-        "max_lines": int(settings.get("max_lines", review_mod.DEFAULT_MAX_LINES)),
-        "include_domains": list(settings.get("include_domains", [])),
-        "emit": list(settings.get("emit", ["REVIEW.md"])),
+        "max_lines": max_lines,
+        "include_domains": domains,
+        "emit": emit,
         "exempt": exempt,
     }
+
+
+def emit_target(root: Path, name: str) -> Path:
+    """Where one `review.emit` name writes to, refusing anything outside the repo.
+
+    The name is taken from the declaration and handed to `write_text`, so
+    `emit = ["../ESCAPED.md"]` created a file one level ABOVE the repository and
+    reported "wrote ../ESCAPED.md" as though it had done what was asked. A
+    declaration is configuration a reviewer skims and a hook runs unattended;
+    the one place it may write is the repository it describes.
+    """
+    candidate = Path(name)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise CouldNotLook(
+            f"`review.emit` names {name!r}, which is outside this repository; "
+            f"the compiled document is written into the repository it describes"
+        )
+    target = (root / candidate).resolve()
+    if not target.is_relative_to(root.resolve()):
+        # A symlinked parent directory reaches outside the tree without a `..`
+        # anywhere in the written name.
+        raise CouldNotLook(
+            f"`review.emit` names {name!r}, which resolves to {target}, outside {root}"
+        )
+    return target
 
 
 def run_review(argv: list[str]) -> int:
@@ -926,6 +1341,10 @@ def run_review(argv: list[str]) -> int:
     try:
         declaration = read_toml(root / DECLARATION_RELPATH)
         settings = review_settings(declaration)
+        # Resolved before anything is rendered, so a name this mode may not
+        # write to is refused as unreadable configuration rather than after a
+        # document exists to write.
+        targets = [(name, emit_target(root, name)) for name in settings["emit"]]
         claims = declared_claims(declaration)
         suppliers, _ = rule_suppliers(root)
     except CouldNotLook as error:
@@ -949,15 +1368,25 @@ def run_review(argv: list[str]) -> int:
         return 1
 
     if emit:
-        for name in settings["emit"]:
-            (root / name).write_text(document, encoding="utf-8")
+        for name, path in targets:
+            try:
+                path.write_text(document, encoding="utf-8")
+            except OSError as error:
+                # A missing parent directory, a read-only tree, a name that is
+                # already a directory. None of those is a false claim, so none
+                # of them is exit 1.
+                print(f"uphold review could not write {name}: {error}", file=sys.stderr)
+                return 2
             print(f"wrote {name} ({len(document.splitlines())} lines)")
         return 0
 
     if check:
-        for name in settings["emit"]:
-            path = root / name
-            current = path.read_text(encoding="utf-8") if path.is_file() else ""
+        for name, path in targets:
+            try:
+                current = read_text(path) if path.is_file() else ""
+            except CouldNotLook as error:
+                print(f"uphold review could not look: {error}", file=sys.stderr)
+                return 2
             if current != document:
                 print(
                     f"{name} is not what the catalog compiles to; run --review --emit",

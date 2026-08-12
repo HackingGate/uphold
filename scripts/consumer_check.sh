@@ -11,7 +11,7 @@
 # that read git's stdin under a runner that does not forward it. Each of those
 # passed every test here and failed on first contact with a consumer.
 #
-# Each runner is asked the same four questions, because "supports lefthook" has
+# Each runner is asked the same eight questions, because "supports lefthook" has
 # to mean the same thing as "supports pre-commit" or it is a listing rather than
 # a claim:
 #
@@ -23,6 +23,11 @@
 #      delivers by a different channel
 #   5. a rule that names `[rule.files]` and no `[rule.git]` is NOT run by a git
 #      hook, because an absent table is a place the rule does not run
+#   6. a false enforcement claim is refused when the declaration changes, and
+#      the corrected one is accepted
+#   7. an ordinary merge commit is made and passes, and a merge that would bring
+#      in a zero-width space is refused
+#   8. the manual-stage entry point runs and passes
 #
 # Question 4 is the one that matters for the runners. A guard that cannot see
 # the push does not fail loudly by default; it falls back to some other tree and
@@ -31,6 +36,15 @@
 # Question 5 is the one that matters for the schema, and it is the only one here
 # that fails by a check running where nobody asked for it rather than by one
 # failing to run.
+#
+# Questions 6 to 8 exist because the consumer config below pins every published
+# id, and pinning an id is not running it. Three of those ids fired nowhere:
+# `uphold-check` is registered against a list of PATHS and no question edited
+# one of them, `uphold-guard-merge` needs a merge commit and no question made
+# one, and `uphold-guard-manual` sits at a stage reached only by an explicit
+# invocation that nothing here made. A pinned id that never runs is this
+# script's own failure mode, one level up -- it passes here, in a config that
+# looks complete, and does nothing in the consumer that copies it.
 
 set -euo pipefail
 
@@ -205,6 +219,14 @@ grep -q "prevent-unusual-unicode-in-files" "$WORK/push.log" ||
 if grep -q "no ref line reached this guard" "$WORK/push.log"; then
     fail "$RUNNER did not deliver the pushed range to the guard"
 fi
+# The plant has answered its question and it is still in the tree. Every
+# question after this one expects a tree that PASSES -- the merge guard reads
+# the merged index and the manual guard reads the whole tree, and both would
+# refuse for a reason this script planted rather than for the reason being
+# asked about. Removed with hooks off, because a deletion is not what is under
+# test either.
+rm -f "$CONSUMER/sneaky.txt"
+raw_commit "Remove the planted file"
 
 say "5. a rule that names [rule.files] and no [rule.git] is not run by a hook"
 # The marker is refused -- by the SCAN, which is the place the rule named. The
@@ -225,4 +247,111 @@ fi
 git -C "$CONSUMER" rm -q --cached marker.txt
 rm -f "$CONSUMER/marker.txt"
 
-say "$RUNNER: all five passed"
+say "6. a change to the declaration is reconciled, and a false claim is refused"
+# The only check here that fires on a PATH rather than on every commit: it runs
+# when the declaration changes, or when a file a claim is reconciled against
+# changes, and stays silent otherwise. Which means every question above ran with
+# it switched off, and a consumer who pinned it would have learned nothing about
+# whether it works -- the same shape of hole as an id nothing publishes.
+#
+# Asked in the refusing direction first. A check that fires and cannot say no is
+# indistinguishable, from the outside, from a check that never fired.
+cat > "$CONSUMER/policy/upheld.toml" <<'DECLARATION'
+[[enforce]]
+principle = "complete-mediation"
+rule = "prevent-ai-author"
+
+# No rule in policy/principles.toml supplies this one, so the claim is false --
+# which is a different answer from "could not look", and the exit code says so.
+[[enforce]]
+principle = "least-privilege"
+rule = "prevent-public-push"
+DECLARATION
+git -C "$CONSUMER" add -A
+if git -C "$CONSUMER" -c user.email=demo@example.test -c user.name=Demo \
+    commit -q -m "Claim a rule this repository does not run" >"$WORK/claim.log" 2>&1; then
+    fail "a false enforcement claim was accepted"
+fi
+grep -q "prevent-public-push" "$WORK/claim.log" ||
+    fail "refused, but not by the declaration check: $(cat "$WORK/claim.log")"
+# A declaration that could not be READ exits 2 and prints this instead, which
+# would satisfy the grep above for the wrong reason: the seams a claim is
+# resolved against live in the consumer's own config, and a runner that hands
+# the checker the wrong working directory reads none of them.
+if grep -q "could not look" "$WORK/claim.log"; then
+    fail "the declaration check could not read this consumer: $(cat "$WORK/claim.log")"
+fi
+
+# And the accepting direction, which is the half a consumer lives in. The false
+# claim is replaced by a true one rather than simply deleted: reverting the file
+# to what it already held stages nothing, git refuses an empty commit, and the
+# question would have passed on a commit that never happened.
+cat > "$CONSUMER/policy/upheld.toml" <<'DECLARATION'
+[[enforce]]
+principle = "complete-mediation"
+rule = "prevent-ai-author"
+
+[[enforce]]
+principle = "least-astonishment"
+rule = "prevent-unusual-unicode"
+DECLARATION
+commit "Declare what enforces what" || fail "a true enforcement claim was refused"
+
+say "7. a merge is guarded"
+# git runs `pre-merge-commit` for a merge and `pre-commit` for a commit. They
+# are different hook types, installed by different lines, and nothing above
+# makes a merge at all -- so the stage every consumer pins was the stage nothing
+# here ever entered. A branch carrying a zero-width space merging into the trunk
+# with no file guard consulted is the failure this stage exists to prevent, and
+# it is invisible until a merge happens.
+git -C "$CONSUMER" checkout -q -b side
+printf 'a side line\n' > "$CONSUMER/side.txt"
+commit "Add a side note"
+git -C "$CONSUMER" checkout -q main
+git -C "$CONSUMER" -c user.email=demo@example.test -c user.name=Demo \
+    merge -q --no-ff -m "Merge the side branch" side >"$WORK/merge.log" 2>&1 ||
+    fail "an ordinary merge was refused: $(cat "$WORK/merge.log")"
+
+# The same merge with something to find. Planted with hooks off so that what
+# refuses it is the merge guard reading the merged index, not the commit guard
+# that would have caught it on the branch.
+git -C "$CONSUMER" checkout -q -b side-hidden
+printf 'hidden\xe2\x80\x8b again\n' > "$CONSUMER/side-hidden.txt"
+raw_commit "Add a side file"
+git -C "$CONSUMER" checkout -q main
+if git -C "$CONSUMER" -c user.email=demo@example.test -c user.name=Demo \
+    merge -q --no-ff -m "Merge the hidden branch" side-hidden >"$WORK/merge-hidden.log" 2>&1; then
+    fail "a merge carrying U+200B was accepted"
+fi
+grep -q "prevent-unusual-unicode-in-files" "$WORK/merge-hidden.log" ||
+    fail "the merge was refused, but not by the file guard: $(cat "$WORK/merge-hidden.log")"
+# A refused merge leaves the merged index in place for the author to fix. This
+# is not that author, and the question after this one reads the tree.
+git -C "$CONSUMER" merge --abort 2>/dev/null || true
+git -C "$CONSUMER" reset -q --hard HEAD
+git -C "$CONSUMER" branch -D side-hidden >/dev/null
+
+say "8. the manual-stage entry point runs and passes"
+# Where the slow guards live: the tree-wide name scans and the pin check each
+# ask the forge over the network, so they are registered at a stage no commit
+# and no push reaches. CI and a schedule are the only things that ever run them,
+# and each runner spells that invocation differently -- which is exactly where
+# "supported" decays into "listed", because an id pinned at a stage the runner
+# has no way to reach is an id that runs nowhere and reports nothing.
+case "$RUNNER" in
+pre-commit | prek)
+    (cd "$CONSUMER" && "$RUNNER" run --all-files --hook-stage manual) \
+        >"$WORK/manual.log" 2>&1 ||
+        fail "the manual stage failed: $(cat "$WORK/manual.log")"
+    ;;
+lefthook)
+    # lefthook has no manual stage; `uphold-manual` is the named group that
+    # stands in for one, and a consumer merging this repository's remote config
+    # gets it under that name.
+    (cd "$CONSUMER" && lefthook run uphold-manual) \
+        >"$WORK/manual.log" 2>&1 ||
+        fail "the manual group failed: $(cat "$WORK/manual.log")"
+    ;;
+esac
+
+say "$RUNNER: all eight passed"

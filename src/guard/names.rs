@@ -11,11 +11,24 @@
 //!
 //! Three modes, because git is not the only way a private name reaches a public
 //! place and it is not the way it usually does. `in_message` judges a commit
-//! message. `in_staged` judges the lines a commit ADDS, which is the right unit
-//! at commit time and blind by construction to a line already there.
-//! `in_tracked` closes that half: a name that arrived under `--no-verify`,
-//! through a merge, or in a checkout where no hook was installed is never looked
-//! at again otherwise.
+//! message. `in_staged` judges what a commit ADDS, which is the right unit at
+//! commit time and blind by construction to a line already there. `in_tracked`
+//! closes that half: a name that arrived under `--no-verify`, through a merge,
+//! or in a checkout where no hook was installed is never looked at again
+//! otherwise.
+//!
+//! What a name is written INTO is not only file content, and each of these
+//! reads every carrier it can reach:
+//!
+//! * the bytes of a blob, and a symlink's blob IS its target path;
+//! * the PATH itself, for every kind of entry -- `docs/why-acme-secret-broke.md`
+//!   discloses a repository in every listing and every search of the history
+//!   without one line of its content saying anything at all, and a gitlink has
+//!   nothing else to disclose;
+//! * the messages a push publishes, because `commit-msg` fires only when
+//!   `git commit` writes one. `git commit-tree`, a rebase, a cherry-pick,
+//!   `git am`, `--no-verify` and a fast import each record a message no hook
+//!   has read, and everything else at pre-push reads the tree.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -535,18 +548,212 @@ pub(crate) fn in_message(request: &Request<'_>) -> Result<Option<Refusal>> {
     decide(request, &[(String::from("commit message"), text)])
 }
 
-/// The lines this commit ADDS.
-pub(crate) fn in_staged(request: &Request<'_>) -> Result<Option<Refusal>> {
-    let diff = git::run(request.root, &["diff", "--cached", "--unified=0"])?;
-    let added: String = diff
+/// Git's own answer to "was this path diffed as text", per `--numstat`.
+///
+/// `-` for both counts is git saying it did not, and it is the only signal
+/// there is: it means the binary heuristic and the `diff` ATTRIBUTE alike,
+/// which is exactly why the blob has to be consulted next.
+struct Staged {
+    path: String,
+    added: bool,
+    as_text: bool,
+}
+
+/// Every path the index changes, with git's verdict on each.
+///
+/// `--numstat -z` rather than the headers of the diff itself, because `-z`
+/// prints a path verbatim -- no quoting, no escaping -- and a path read out of
+/// a `+++ b/...` header is a path this reader would have to unquote correctly
+/// to attribute a finding to the right file.
+fn staged_paths(root: &Path) -> Result<Vec<Staged>> {
+    let records = git::run_z(
+        root,
+        &[
+            "-c",
+            "core.quotepath=false",
+            "diff",
+            "--cached",
+            "--numstat",
+            "-z",
+        ],
+    )?;
+    let mut staged = Vec::new();
+    let mut records = records.into_iter();
+    while let Some(record) = records.next() {
+        let mut fields = record.split('\t');
+        let added = fields.next().unwrap_or_default().to_owned();
+        let deleted = fields.next().unwrap_or_default().to_owned();
+        let path = fields.next().unwrap_or_default().to_owned();
+        // A rename or a copy: `-z` spells it as this record with an empty path
+        // and then the source and the destination, each its own record.
+        let path = if path.is_empty() {
+            let Some(_source) = records.next() else { break };
+            let Some(destination) = records.next() else {
+                break;
+            };
+            destination
+        } else {
+            path
+        };
+        let as_text = added != "-" || deleted != "-";
+        staged.push(Staged {
+            path,
+            added: added != "0",
+            as_text,
+        });
+    }
+    Ok(staged)
+}
+
+/// The lines one staged path ADDS.
+///
+/// Every flag here closes a way this diff was reported as empty over a file
+/// that was not:
+///
+/// * `--no-ext-diff` and `--no-textconv`, because `git diff` honours
+///   `diff.external` and a per-path `textconv` from the repository's config AND
+///   from the global and system files. A difftastic or delta setup -- somebody
+///   else's, on their own machine, made for reading diffs and not for this --
+///   emits `EXTERNAL a.txt ...` and not one `+` line, and the guard reported a
+///   pass over a diff it never saw.
+/// * `--no-color`, one step down from the same class: `color.diff = always` in
+///   a personal config wraps every line in escape sequences, and `+` stops
+///   being the first byte of an added line.
+/// * `core.quotepath=false`, so a non-ASCII path is spelled here the way every
+///   other listing in this file spells it.
+/// * `--text` on the second pass, which is what makes a `diff` attribute stop
+///   deciding whether the bytes get read.
+fn added_lines(root: &Path, path: &str, force_text: bool) -> Result<String> {
+    let mut argv: Vec<&str> = vec![
+        "-c",
+        "core.quotepath=false",
+        "diff",
+        "--cached",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "-U0",
+    ];
+    if force_text {
+        argv.push("--text");
+    }
+    let spec = format!(":(literal){path}");
+    argv.push("--");
+    argv.push(&spec);
+    let diff = git::run(root, &argv)?;
+    Ok(diff
         .lines()
         .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
         .collect::<Vec<&str>>()
-        .join("\n");
-    decide(request, &[(String::from("staged changes"), added)])
+        .join("\n"))
 }
 
-/// Every blob the operation is introducing.
+/// The paths this commit INTRODUCES, whatever is inside them.
+///
+/// A path is committed text: `docs/why-acme-secret-broke.md` names a private
+/// repository in every listing, every diff and every search of the history,
+/// and no line of its content has to say anything at all. Added and renamed
+/// only -- a path that was already there is the tree-wide guard's business,
+/// and reporting it at every commit that touches the file would be a wall
+/// somebody bypasses by reflex rather than a finding they act on.
+fn introduced_paths(root: &Path) -> Result<Vec<String>> {
+    git::run_z(
+        root,
+        &[
+            "-c",
+            "core.quotepath=false",
+            "diff",
+            "--cached",
+            "--name-only",
+            "--diff-filter=ACR",
+            "-z",
+        ],
+    )
+}
+
+/// The lines this commit ADDS, and the paths it introduces.
+///
+/// One source per path rather than one blob for the whole commit: the rule's
+/// `[rule.files]` scope is a question about a PATH, so a single blob labelled
+/// "staged changes" could not be scoped at all -- and the finding it produced
+/// named neither the file it came from nor anything a reader could open.
+pub(crate) fn in_staged(request: &Request<'_>) -> Result<Option<Refusal>> {
+    let mut sources: Vec<(String, String)> = Vec::new();
+
+    for path in introduced_paths(request.root)? {
+        if !scope::in_file_scope(request.rule, &path)? {
+            continue;
+        }
+        sources.push((format!("{path} (the path itself)"), path));
+    }
+
+    for staged in staged_paths(request.root)? {
+        if !scope::in_file_scope(request.rule, &staged.path)? {
+            continue;
+        }
+        if staged.as_text {
+            if staged.added {
+                sources.push((
+                    staged.path.clone(),
+                    added_lines(request.root, &staged.path, false)?,
+                ));
+            }
+            continue;
+        }
+
+        // The second pass, for the paths git would not diff as text.
+        //
+        // `git diff` consults the `diff` ATTRIBUTE before it looks at a single
+        // byte. A committed `*.log -diff`, `* -diff` or `*.csv binary` -- two
+        // lines, in this very commit if you like -- reduces a plain-ASCII file
+        // to "Binary files a/x and b/x differ", so not one of its added lines
+        // reached the first pass and this guard exited 0 with nothing printed.
+        // The attribute is a claim about how to RENDER a change; whether there
+        // is readable text in there is a question about the blob, and this asks
+        // it of the blob.
+        let Some(oid) = git::try_run(
+            request.root,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!(":{}", staged.path),
+            ],
+        )?
+        else {
+            // Not in the index at all: the change is a deletion, and a deletion
+            // adds no line to any commit.
+            continue;
+        };
+        let oid = oid.trim();
+        if oid.is_empty() {
+            continue;
+        }
+        // Not a skip. git named this path as changed and then would not show
+        // it, so failing to read the object is could-not-look -- the one thing
+        // this guard must never report as a clean commit.
+        let bytes = scope::read_object(request.root, oid, &staged.path)?;
+        // git's own binary test, asked of the content this time: a NUL in the
+        // first 8000 bytes. A file that really is binary holds no repository
+        // name a reader could act on.
+        if bytes.iter().take(8000).any(|byte| *byte == 0) {
+            continue;
+        }
+        sources.push((
+            staged.path.clone(),
+            added_lines(request.root, &staged.path, true)?,
+        ));
+    }
+
+    decide(request, &sources)
+}
+
+/// Every blob the operation is introducing, every path it arrives under, and --
+/// at a push -- every commit message it publishes.
+///
+/// Four of the five things the upstream scanned; the fifth is the symlink
+/// target, which arrives here already, because a symlink's blob IS its target
+/// path and `scope` hands that blob over like any other.
 pub(crate) fn in_tracked(request: &Request<'_>) -> Result<Option<Refusal>> {
     let blobs = scope::blobs(
         request.root,
@@ -555,9 +762,21 @@ pub(crate) fn in_tracked(request: &Request<'_>) -> Result<Option<Refusal>> {
         request.push_source,
         request.remote_name,
     )?;
-    let mut sources = Vec::with_capacity(blobs.len());
+    let mut sources = Vec::with_capacity(blobs.len() * 2);
     for blob in &blobs {
         if !scope::in_file_scope(request.rule, &blob.path)? {
+            continue;
+        }
+        // THE PATH ITSELF, for every kind of entry, because it is the one thing
+        // every entry has. A gitlink has no blob in this repository at all and
+        // its path is the whole of what it publishes -- and a path the pushed
+        // range introduced and the tip no longer holds published that name just
+        // as permanently as one that survived.
+        sources.push((
+            format!("{} (the path itself)", blob.path),
+            blob.path.clone(),
+        ));
+        if !blob.has_content() {
             continue;
         }
         let bytes = scope::read(request.root, blob)?;
@@ -566,6 +785,23 @@ pub(crate) fn in_tracked(request: &Request<'_>) -> Result<Option<Refusal>> {
             String::from_utf8_lossy(&bytes).into_owned(),
         ));
     }
+
+    // The messages of the commits this push publishes. `commit-msg` fires only
+    // when `git commit` writes a message -- not for `git commit-tree`, a
+    // rebase, a cherry-pick, `git am`, `--no-verify` or a fast import -- and
+    // everything else at pre-push reads the TREE, so a subject line naming a
+    // private repository reached a remote with every hook green. It costs no
+    // network beyond the name lookups this guard already makes.
+    for (sha, body) in scope::pushed_messages(
+        request.root,
+        request.stage,
+        request.push_refs,
+        request.push_source,
+    )? {
+        let short: String = sha.chars().take(12).collect();
+        sources.push((format!("commit {short} (its MESSAGE)"), body));
+    }
+
     decide(request, &sources)
 }
 

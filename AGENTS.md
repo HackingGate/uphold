@@ -11,7 +11,6 @@ opinion nobody asked for. The rules already active here are:
 - `catalog-reference-current`
 - `catalog-tests`
 - `catalog-validate`
-- `hook-pins-resolve`
 - `no-stale-hook-pins`
 - `prevent-ai-author`
 - `prevent-public-push`

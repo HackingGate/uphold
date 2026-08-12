@@ -94,6 +94,7 @@ not look — see [`explicit-unknown`](principles/explicit-unknown.toml).
 ```sh
 uphold scan                     # content rules over the tree
 uphold scan --text -            # a commit message, release note, PR body
+uphold rules --effective        # every rule inheritance resolved to, and where each runs
 uphold guard --stage pre-push   # the guards for that git hook
 uphold shim gh pr create ...    # stand in front of a command, then exec
 uphold audit --for-publication  # before flipping private -> public
@@ -115,19 +116,27 @@ tables — an absent table is a place the rule does not run. Full field referenc
 
 **`uphold scan`** evaluates content rules over the repository's own files,
 using ripgrep's search libraries, so a pattern written against `rg` keeps
-meaning what it meant. `--text -` runs it over prose that never becomes a file.
+meaning what it meant. "Its own files" is **what git tracks**, not a directory
+walk: a tracked file some ignore pattern also matches is still pushed and still
+cloned, and walking the tree hid exactly those from every rule. A selected file
+that cannot be read is **not** reported clean — it is named, with its reason, and
+the run exits `2`. `--text -` runs it over prose that never becomes a file. `uphold rules --effective` prints what
+inheritance actually resolved to, so nothing has to re-derive it.
 
 **`uphold guard --stage STAGE`** reads an *act* rather than a tree: the
 message about to be recorded, the identity about to be stamped, the range about
-to be pushed. Eleven built-in guards, registered by `git.hooks`.
-`UPHOLD_ALLOW=<id>` overrides one invocation.
+to be pushed. Eleven built-in guards, registered by `git.hooks`. A file's
+**name** is committed text too, and at a push the guards also read the commit
+**messages** the push publishes. `UPHOLD_ALLOW=<id>` overrides one invocation.
 
 **`uphold shim`** stands in front of a command, checks what the invocation
 is about to publish, and execs through. A pull-request body reaches a public API
 without passing a single hook; so does a branch name, an issue title, and a
 commit written under `--no-verify`. Put a link named for the command on PATH
 ahead of the real one — that is what a multicall binary is for, and why there is
-no installer.
+no installer. Where the body is composed in an **editor**, the shim makes itself
+the editor and checks what the editor leaves in the file when it closes — so
+there is no invocation whose published text goes unread.
 
 ## The catalog
 
@@ -188,7 +197,7 @@ python3 scripts/validate.py           # schema and relationship validation
 python3 scripts/build_reference.py    # rebuild the generated files after edits
 python3 -m unittest discover -s tests
 ./uphold_check.py                 # this repo's own declaration
-python3 scripts/check_hook_pins.py    # every rev: names a ref that exists
+cargo run --quiet -- guard --stage manual   # every pin still names a ref
 ```
 
 ```text

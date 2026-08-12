@@ -38,7 +38,7 @@
 //!   and removed in the next is in the remote's history permanently, is in no
 //!   tip tree, and was read by nothing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use globset::Glob;
@@ -121,11 +121,43 @@ pub(crate) fn in_file_scope(rule: &Rule, path: &str) -> Result<bool> {
     Ok(true)
 }
 
-/// One blob the operation is introducing, and the path it arrived under.
+/// One entry the operation is introducing: the path it arrived under, the
+/// object sitting at it, and the MODE git recorded beside the two.
+///
+/// The mode is carried rather than inferred, because inferring it means finding
+/// out by trying to read. A gitlink -- mode 160000, one line per submodule in
+/// every index in this workspace -- names ANOTHER repository's commit, and
+/// `git cat-file blob <commit-oid>` fails on it. `read` reported that failure
+/// the way it reports any other, so a tree with a submodule in it aborted both
+/// tree-wide guards with exit 2 and neither of them ever finished a scan here.
+///
+/// The entry is still enumerated, and deliberately: its PATH is this
+/// repository's own committed text whatever the object at it turns out to be.
+/// What the mode decides is whether there are BYTES here to read, which is what
+/// `has_content` answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Blob {
     pub path: String,
     pub sha: String,
+    /// git's six-digit mode, or empty for an object `rev-list` named -- that
+    /// listing gives an object and a path it once appeared at, and no mode.
+    pub mode: String,
+}
+
+/// A submodule: another repository's commit, recorded at a path in this one.
+const GITLINK: &str = "160000";
+
+impl Blob {
+    /// Whether this repository holds bytes at this entry.
+    ///
+    /// False for exactly one thing, and it is not a judgement about the file:
+    /// a submodule's commit belongs to a repository with its own object
+    /// database and its own hooks. There is nothing here to read, and nothing
+    /// hidden by not reading it -- the path above is this repository's and is
+    /// scanned by the callers either way.
+    pub(crate) fn has_content(&self) -> bool {
+        self.mode != GITLINK
+    }
 }
 
 const ZERO: &str = "0000000000000000000000000000000000000000";
@@ -211,14 +243,18 @@ fn index_blobs(root: &Path) -> Result<Vec<Blob>> {
             continue;
         };
         let fields: Vec<&str> = meta.split_whitespace().collect();
-        let [_, sha, _, ..] = fields.as_slice() else {
+        let [mode, sha, _, ..] = fields.as_slice() else {
             continue;
         };
         // Mode 120000 is a symlink, and its blob is the TARGET PATH. Kept, for
         // the reason in the module docstring: that path is committed bytes.
+        // Mode 160000 is a gitlink, whose object is not in this repository at
+        // all -- kept too, for its path, and marked by the mode so that nobody
+        // downstream asks git for bytes that are somebody else's.
         blobs.push(Blob {
             path: path.to_owned(),
             sha: (*sha).to_owned(),
+            mode: (*mode).to_owned(),
         });
     }
     Ok(blobs)
@@ -232,15 +268,62 @@ fn tree_blobs(root: &Path, rev: &str) -> Result<Vec<Blob>> {
             continue;
         };
         let fields: Vec<&str> = meta.split_whitespace().collect();
-        let [_, "blob", sha, ..] = fields.as_slice() else {
+        // `blob` and `commit` alike. A commit here is a gitlink, and it is kept
+        // for the same reason the index keeps one: the path it sits at is this
+        // repository's committed text even though the object is not this
+        // repository's to read. `-r` lists nothing else, and a kind this reader
+        // does not know is dropped rather than guessed at.
+        let [mode, "blob" | "commit", sha, ..] = fields.as_slice() else {
             continue;
         };
         blobs.push(Blob {
             path: path.to_owned(),
             sha: (*sha).to_owned(),
+            mode: (*mode).to_owned(),
         });
     }
     Ok(blobs)
+}
+
+/// WHICH commits one pushed ref publishes, as arguments for `rev-list` and for
+/// `log`.
+///
+/// One answer, because two readers working the range out separately are two
+/// ranges that agree until they do not -- and the two readers here are the
+/// blobs the push introduces and the MESSAGES it publishes, which have to be
+/// the same push or the report is about two different acts.
+///
+/// A remote sha this clone does not have is NOT an empty range, and it used to
+/// become one: `^<sha>` fails on an unknown object, and the failure was read as
+/// "this push introduces nothing", so the whole range half of the scope
+/// disappeared without a word. It is not a rare state -- anyone else pushing
+/// since the last fetch produces it, as do a rewritten upstream ref and a
+/// shallow clone. So the sha is RESOLVED first, and a range that cannot be
+/// anchored falls back to subtracting what is already known to be on a remote.
+/// Over-subtracting is the safe direction: those commits are reachable from a
+/// ref that was itself pushed under a hook.
+fn range_of(root: &Path, local_sha: &str, remote_sha: &str) -> Result<Vec<String>> {
+    let new_branch = remote_sha.chars().all(|character| character == '0') || remote_sha == ZERO;
+    let anchored = !new_branch
+        && git::try_run(
+            root,
+            &[
+                "rev-parse",
+                "-q",
+                "--verify",
+                &format!("{remote_sha}^{{commit}}"),
+            ],
+        )?
+        .is_some();
+    Ok(if anchored {
+        vec![local_sha.to_owned(), format!("^{remote_sha}")]
+    } else {
+        vec![
+            local_sha.to_owned(),
+            String::from("--not"),
+            String::from("--remotes"),
+        ]
+    })
 }
 
 /// Every blob the pushed range introduces, including ones later deleted.
@@ -250,48 +333,16 @@ fn range_blobs(
     remote_sha: &str,
     remote: Option<&str>,
 ) -> Result<Vec<Blob>> {
-    let new_branch = remote_sha.chars().all(|character| character == '0') || remote_sha == ZERO;
-    let listed = if new_branch {
-        // Nothing on the remote to subtract, so subtract everything already
-        // known to be there. `--not --all` over-subtracts if the branch shares
-        // commits with another local branch, which is the safe direction: those
-        // commits are reachable from a ref that was itself pushed under a hook.
-        git::try_run(
-            root,
-            &["rev-list", "--objects", local_sha, "--not", "--remotes"],
-        )?
-        .or(git::try_run(root, &["rev-list", "--objects", local_sha])?)
-    } else {
-        // A remote sha this clone does not have is NOT an empty range, and it
-        // used to become one: `^<sha>` fails on an unknown object, and the
-        // failure was read as "this push introduces nothing", so the whole
-        // range half of the scope disappeared without a word. It is not a rare
-        // state -- anyone else pushing since the last fetch produces it, as do
-        // a rewritten upstream ref and a shallow clone -- and the half it drops
-        // is the one that catches a blob added in one pushed commit and removed
-        // in the next, which is on the remote permanently and in no tip tree.
-        //
-        // So fall back the way the new-branch arm does: subtract what is known
-        // to be on a remote already. Over-subtracting is the safe direction for
-        // the same stated reason -- those commits are reachable from a ref that
-        // was itself pushed under a hook.
-        match git::try_run(
-            root,
-            &[
-                "rev-list",
-                "--objects",
-                local_sha,
-                &format!("^{remote_sha}"),
-            ],
-        )? {
-            Some(listed) => Some(listed),
-            None => git::try_run(
-                root,
-                &["rev-list", "--objects", local_sha, "--not", "--remotes"],
-            )?,
-        }
+    let range = range_of(root, local_sha, remote_sha)?;
+    let mut argv: Vec<&str> = vec!["rev-list", "--objects"];
+    argv.extend(range.iter().map(String::as_str));
+    let listed = match git::try_run(root, &argv)? {
+        Some(listed) => Some(listed),
+        // The whole history reachable from the tip, which is what is left when
+        // nothing can be subtracted from it. Reading too much is the safe
+        // direction; reading nothing is the one this guard exists to refuse.
+        None => git::try_run(root, &["rev-list", "--objects", local_sha])?,
     };
-    let _ = remote;
     // Neither the range nor the fallback could be listed. Returning no blobs
     // here reports a push nobody read as a push with nothing in it.
     let Some(listed) = listed else {
@@ -318,9 +369,81 @@ fn range_blobs(
         candidates.push(Blob {
             path: path.to_owned(),
             sha: sha.to_owned(),
+            // No mode: this listing names an object and a path it appeared at,
+            // and `keep_blobs` below settles the only question the mode would
+            // have answered here -- whether there are bytes to read.
+            mode: String::new(),
         });
     }
     keep_blobs(root, candidates)
+}
+
+/// The messages of the commits this push publishes.
+///
+/// Empty at every other stage, and that is the answer rather than a shrug: an
+/// index is a commit that does not exist yet, and its message is what the
+/// commit-msg guards read at the moment it is written.
+///
+/// This half exists because `commit-msg` only fires when `git commit` writes a
+/// message. `git commit-tree`, a rebase, a cherry-pick, `git am`, `--no-verify`
+/// and a fast-forward carrying somebody else's commit in from a hookless clone
+/// all record a message that no hook ever read -- and until this, everything at
+/// pre-push read the TREE. A subject line naming a private repository reached a
+/// remote with every hook green and no override of any kind.
+pub(crate) fn pushed_messages(
+    root: &Path,
+    stage: Stage,
+    push_refs: &str,
+    push_source: crate::runner::Source,
+) -> Result<Vec<(String, String)>> {
+    if stage != Stage::PrePush {
+        return Ok(Vec::new());
+    }
+    if push_source == crate::runner::Source::Absent {
+        // The same refusal `blobs` makes, and for the same reason: without a
+        // ref line there is no range, and a range nobody named is not an empty
+        // one. `blobs` says it at length; a caller reaches this only by asking
+        // for the messages without asking for the blobs.
+        return Err(Fatal::new(
+            "pre-push: no ref line reached this guard, so which commits are being \
+             published is unknown -- refusing to report their messages as read",
+        ));
+    }
+
+    let mut messages: Vec<(String, String)> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for line in push_refs.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [_, local_sha, _, remote_sha, ..] = fields.as_slice() else {
+            continue;
+        };
+        // A deletion publishes no commit and so no message.
+        if local_sha.chars().all(|character| character == '0') {
+            continue;
+        }
+        let range = range_of(root, local_sha, remote_sha)?;
+        // `%B` is the raw body -- subject and body exactly as stored, with
+        // nothing stripped, because git has already stripped the `#` comment
+        // lines by the time a message is in a commit. The sha travels with it
+        // so a finding can name the commit rather than only quote the text, and
+        // `-z` separates the records because a message holds newlines and blank
+        // lines by construction.
+        let mut argv: Vec<&str> = vec!["log", "-z", "--format=%H%x09%B"];
+        argv.extend(range.iter().map(String::as_str));
+        // Not `try_run`: a range that cannot be read is a set of messages
+        // nobody looked at, and an empty list of them would read as a push that
+        // published nothing to say.
+        let listed = git::run(root, &argv)?;
+        for record in listed.split('\0').filter(|field| !field.is_empty()) {
+            let Some((sha, body)) = record.split_once('\t') else {
+                continue;
+            };
+            if seen.insert(sha.to_owned()) {
+                messages.push((sha.to_owned(), body.to_owned()));
+            }
+        }
+    }
+    Ok(messages)
 }
 
 fn keep_blobs(root: &Path, candidates: Vec<Blob>) -> Result<Vec<Blob>> {
@@ -386,15 +509,34 @@ fn keep_blobs(root: &Path, candidates: Vec<Blob>) -> Result<Vec<Blob>> {
 /// The bytes of one blob. Read through git rather than off disk, because the
 /// blob is the artifact and the file beside it may differ or not exist.
 pub(crate) fn read(root: &Path, blob: &Blob) -> Result<Vec<u8>> {
+    if !blob.has_content() {
+        // A caller that got here skipped `has_content`, and the object is
+        // another repository's commit. Said as a refusal rather than as a git
+        // failure, because the two mean different things: this one is a bug in
+        // the caller, and the git failure it used to produce was read as "this
+        // tree cannot be scanned" and ended the run at exit 2.
+        return Err(Fatal::new(format!(
+            "{}: a gitlink has no blob in this repository -- its content belongs to \
+             the submodule, which carries its own guards",
+            blob.path
+        )));
+    }
+    read_object(root, &blob.sha, &blob.path)
+}
+
+/// The bytes of one object, named by oid rather than by an enumerated entry.
+///
+/// The staged-blob reader needs this: what it holds is a path and the oid the
+/// INDEX has at it, which is not one of the entries any scope enumerated.
+pub(crate) fn read_object(root: &Path, sha: &str, path: &str) -> Result<Vec<u8>> {
     let output = std::process::Command::new("git")
-        .args(["cat-file", "blob", &blob.sha])
+        .args(["cat-file", "blob", sha])
         .current_dir(root)
         .output()
-        .map_err(|error| Fatal::new(format!("git cat-file blob {}: {error}", blob.sha)))?;
+        .map_err(|error| Fatal::new(format!("git cat-file blob {sha}: {error}")))?;
     if !output.status.success() {
         return Err(Fatal::new(format!(
-            "git cat-file blob {} ({}) failed",
-            blob.sha, blob.path
+            "git cat-file blob {sha} ({path}) failed"
         )));
     }
     Ok(output.stdout)
@@ -452,6 +594,32 @@ mod tests {
     fn the_repository_root_bounds_nothing() {
         let rule = rule_with_files("[files]\ninclude = [\".\"]\n");
         assert!(in_file_scope(&rule, "anywhere/at/all.rs").unwrap());
+    }
+
+    fn entry(path: &str, mode: &str) -> Blob {
+        Blob {
+            path: path.to_owned(),
+            sha: String::from("0123456789abcdef0123456789abcdef01234567"),
+            mode: mode.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_gitlink_is_enumerated_and_never_read() {
+        // The live one: this workspace tracks submodules, and every tree-wide
+        // guard exited 2 over the first of them because a gitlink was handed
+        // downstream as a blob and `git cat-file blob <commit-oid>` fails.
+        // Enumerated all the same -- the PATH is this repository's committed
+        // text whatever the object at it belongs to.
+        assert!(!entry("sub", "160000").has_content());
+        assert!(entry("src/main.rs", "100644").has_content());
+        assert!(entry("run.sh", "100755").has_content());
+        // A symlink's blob IS its target path, which is committed text and is
+        // read like any other blob.
+        assert!(entry("link", "120000").has_content());
+        // An object `rev-list` named carries no mode, and `keep_blobs` has
+        // already settled that it is a blob.
+        assert!(entry("gone.txt", "").has_content());
     }
 
     #[test]

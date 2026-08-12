@@ -147,6 +147,134 @@ class Composition(unittest.TestCase):
         self.assertNotIn("the rationale", document)
 
 
+class Settings(unittest.TestCase):
+    """`[review]` is configuration, so a field of the wrong type is exit 2.
+
+    Two of the four fields were read by coercion -- `int(...)` and `list(...)`
+    -- which turns a wrong type into a traceback and exit 1, and exit 1 in this
+    tool means a claim is false. A declaration this tool could not read is
+    could-not-look; see the `explicit-unknown` record.
+    """
+
+    def review(self, body: str, *args: str) -> subprocess.CompletedProcess:
+        policy = Path(self.tmp) / "policy"
+        policy.mkdir(exist_ok=True)
+        (policy / "upheld.toml").write_text(textwrap.dedent(body), encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--review", *args],
+            cwd=self.tmp,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.tmp = self._directory.name
+        self.addCleanup(self._directory.cleanup)
+
+    def test_a_max_lines_that_is_not_a_number_is_two_not_a_traceback(self):
+        result = self.review(
+            """
+            [review]
+            max_lines = "nine hundred"
+            """
+        )
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("review.max_lines", result.stderr)
+
+    def test_a_max_lines_of_zero_is_refused_rather_than_silently_impossible(self):
+        result = self.review(
+            """
+            [review]
+            max_lines = 0
+            """
+        )
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("review.max_lines", result.stderr)
+
+    def test_include_domains_that_is_not_a_list_of_names_is_two(self):
+        result = self.review(
+            """
+            [review]
+            include_domains = "security"
+            """
+        )
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("review.include_domains", result.stderr)
+
+    def test_an_emit_entry_that_is_not_a_file_name_is_two(self):
+        result = self.review(
+            """
+            [review]
+            emit = [7]
+            """
+        )
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("review.emit", result.stderr)
+
+    def test_an_emit_name_that_escapes_the_repository_writes_nothing(self):
+        """`emit` is a name from the declaration handed straight to write_text.
+
+        `emit = ["../ESCAPED.md"]` created a file one level ABOVE the repository
+        and reported "wrote ../ESCAPED.md" as though that were what was asked
+        for. A hook runs this unattended; the one place it may write is the
+        repository it describes.
+        """
+        # `include_domains` names a domain no record carries, so nothing routes
+        # and nothing is refused before the write is reached.
+        result = self.review(
+            """
+            [review]
+            include_domains = ["no-such-domain"]
+            emit = ["../ESCAPED.md"]
+            """,
+            "--emit",
+        )
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertFalse((Path(self.tmp).parent / "ESCAPED.md").exists())
+        self.assertNotIn("wrote", result.stdout)
+
+    def test_an_absolute_emit_name_writes_nothing(self):
+        target = Path(self.tmp) / "outside.md"
+        result = self.review(
+            f"""
+            [review]
+            include_domains = ["no-such-domain"]
+            emit = ["{target}"]
+            """,
+            "--emit",
+        )
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertFalse(target.exists())
+
+    def test_an_emit_name_under_a_directory_that_is_not_there_is_two_not_one(self):
+        """A missing parent is could-not-do-it, not a false claim."""
+        result = self.review(
+            """
+            [review]
+            include_domains = ["no-such-domain"]
+            emit = ["generated/REVIEW.md"]
+            """,
+            "--emit",
+        )
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("could not write", result.stderr)
+
+    def test_an_emit_name_inside_the_repository_is_written(self):
+        """The refusals above are a narrower door, not a closed one."""
+        result = self.review(
+            """
+            [review]
+            include_domains = ["no-such-domain"]
+            emit = ["REVIEW.md"]
+            """,
+            "--emit",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((Path(self.tmp) / "REVIEW.md").is_file())
+
+
 class SelfApplication(unittest.TestCase):
     def test_this_repository_routes_cleanly(self):
         result = subprocess.run(

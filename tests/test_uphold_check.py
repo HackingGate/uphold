@@ -29,12 +29,18 @@ import uphold_check  # noqa: E402
 # `content-policy`, which is a command in this repository's own lefthook.yml and
 # in no consumer's config anywhere, so it asserted a shape only this repository
 # had.
+#
+# One id per stage, and the fixture pins the stages the policy fixtures below
+# declare. A guard id installs exactly ONE git stage, so pinning `uphold-scan`
+# and `uphold-guard-push` is evidence about the file scan and about pre-push and
+# about nothing else.
 PRE_COMMIT_WITH_PRINCIPLES = """\
 repos:
   - repo: https://github.com/HackingGate/uphold
     rev: v2.0.0
     hooks:
       - id: uphold-scan
+      - id: uphold-guard-commit-msg
       - id: uphold-guard-push
   - repo: local
     hooks:
@@ -44,12 +50,24 @@ repos:
 
 # The same repository, run by lefthook instead: no ids, no pins, just this
 # repository named as a remote. The seam has to be visible from here too.
+#
+# The `configs:` key is the shape README.md tells every lefthook consumer to
+# write, and it is a valueless mapping key at exactly the indent a command name
+# sits at -- so a scan keyed on indentation read it as a command called
+# `configs`, and a claim naming that rule reconciled green against a file that
+# defines no such thing. The real command below is what a command name looks
+# like, and the two have to be told apart from here.
 LEFTHOOK_WITH_PRINCIPLES = """\
 remotes:
   - git_url: https://github.com/HackingGate/uphold
     ref: v2.0.0
     configs:
       - hooks/lefthook.yml
+
+pre-commit:
+  commands:
+    my-own-check:
+      run: ./check.sh
 """
 
 # One guard, declared the way a repository declares one.
@@ -155,6 +173,43 @@ class ExitCodeContract(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("could not look", result.stderr)
 
+    def test_a_declaration_that_is_not_utf8_is_two_not_a_traceback(self):
+        """One byte that is not UTF-8 is a file this tool could not read.
+
+        `UnicodeDecodeError` derives from `ValueError` and not from `OSError`,
+        so it escaped the handler that catches an unreadable file and left the
+        process on a traceback and exit 1 -- and exit 1 in this tool means a
+        claim is false. A repository whose declaration is mis-encoded was
+        reported as a repository that lies about what it enforces.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            build(Path(tmp), "# placeholder\n")
+            (Path(tmp) / "policy" / "upheld.toml").write_bytes(
+                b'[[enforce]]\nprinciple = "\xff"\n'
+            )
+            result = run(Path(tmp))
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("could not look", result.stderr)
+
+    def test_a_policy_file_that_is_not_utf8_is_two_not_a_traceback(self):
+        """The same byte in the file the claim is reconciled against."""
+        with tempfile.TemporaryDirectory() as tmp:
+            build(
+                Path(tmp),
+                """
+                [[enforce]]
+                principle = "fail-safe-defaults"
+                rule = "prevent-public-push"
+                """,
+                **{".pre-commit-config.yaml": PRE_COMMIT_WITH_PRINCIPLES},
+            )
+            (Path(tmp) / "policy" / "principles.toml").write_bytes(
+                b'[rule.prevent-public-push]\nmessage = "\xff"\n'
+            )
+            result = run(Path(tmp))
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("could not look", result.stderr)
+
     def test_empty_declaration_is_zero(self):
         with tempfile.TemporaryDirectory() as tmp:
             build(Path(tmp), "# nothing enforced yet\n")
@@ -207,20 +262,23 @@ class Reconciliation(unittest.TestCase):
         self.assertIn("enforced by uphold", result.stdout)
 
     def test_the_seam_is_found_by_a_published_id_not_by_one_repositorys_name(self):
-        """Every published hook id has to make the seam visible.
+        """Every published guard id has to make its own stage visible.
 
         The predicate was a single literal hook name that only this repository
         used, so a consumer pinning the ids this repository publishes was told
         the seam supplying every guard was absent. The manifest is the list of
-        ids now, so a new id cannot be added there and forgotten here.
+        ids now, so a new id cannot be added there and forgotten here -- and the
+        stage is read from the same manifest, so the pair
+        `pre-push -> uphold-guard-push` cannot drift either.
         """
-        published = uphold_check.published_hook_ids()
-        self.assertIn("uphold-scan", published)
-        self.assertTrue(
-            {"uphold-guard", "uphold-guard-push"} <= published,
-            f"guard ids are not published: {sorted(published)}",
+        scans, guards = uphold_check.published_seams()
+        self.assertIn("uphold-scan", scans)
+        self.assertEqual(
+            guards.get("pre-push"),
+            "uphold-guard-push",
+            f"the published guard ids are {guards}",
         )
-        for hook_id in sorted(published):
+        for stage, hook_id in sorted(guards.items()):
             with tempfile.TemporaryDirectory() as tmp:
                 build(
                     Path(tmp),
@@ -237,12 +295,220 @@ class Reconciliation(unittest.TestCase):
                             "    hooks:\n"
                             f"      - id: {hook_id}\n"
                         ),
-                        "policy__principles.toml": GUARD_POLICY,
+                        "policy__principles.toml": (
+                            "[rule.prevent-public-push]\n"
+                            'builtin = "prevent-public-push"\n'
+                            f'git.hooks = ["{stage}"]\n'
+                        ),
                     },
                 )
                 result = run(Path(tmp))
             self.assertEqual(result.returncode, 0, f"{hook_id}: {result.stderr}")
             self.assertIn("enforced by uphold", result.stdout, hook_id)
+
+    def test_the_reconciler_s_own_id_is_not_evidence_that_a_rule_runs(self):
+        """`uphold-check` runs this script, which enforces nothing.
+
+        While every id in the manifest counted as evidence, a repository that
+        pinned the reconciler and nothing else was accepted as proof that every
+        content rule and every guard fires here -- the reconciler certifying
+        itself, and printing "reconciled 1 enforcement claims" over a repository
+        running no rule at all.
+        """
+        self.assertNotIn("uphold-check", uphold_check.published_hook_ids())
+        with tempfile.TemporaryDirectory() as tmp:
+            build(
+                Path(tmp),
+                """
+                [[enforce]]
+                principle = "fail-safe-defaults"
+                rule = "prevent-public-push"
+                """,
+                **{
+                    ".pre-commit-config.yaml": (
+                        "repos:\n"
+                        "  - repo: https://github.com/HackingGate/uphold\n"
+                        "    rev: v2.0.0\n"
+                        "    hooks:\n"
+                        "      - id: uphold-check\n"
+                    ),
+                    "policy__principles.toml": GUARD_POLICY,
+                },
+            )
+            result = run(Path(tmp))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("no seam here supplies", result.stderr)
+
+    def test_a_guard_claim_fails_when_the_stage_it_fires_at_is_not_installed(self):
+        """A guard id installs one stage, and `uphold-scan` installs none.
+
+        The seam was one repository-wide yes/no, so a repository that pinned
+        `uphold-scan` -- the file scan, which runs no guard -- reconciled a
+        claim on a rule declaring `git.hooks = ["pre-push"]`. The rule ran
+        nowhere: what installs it is `uphold-guard-push`, which nothing here
+        pinned.
+        """
+        for hooks, expected in (("uphold-scan", 1), ("uphold-guard-push", 0)):
+            with tempfile.TemporaryDirectory() as tmp:
+                build(
+                    Path(tmp),
+                    """
+                    [[enforce]]
+                    principle = "fail-safe-defaults"
+                    rule = "prevent-public-push"
+                    """,
+                    **{
+                        ".pre-commit-config.yaml": (
+                            "repos:\n"
+                            "  - repo: https://github.com/HackingGate/uphold\n"
+                            "    rev: v2.0.0\n"
+                            "    hooks:\n"
+                            f"      - id: {hooks}\n"
+                        ),
+                        "policy__principles.toml": GUARD_POLICY,
+                    },
+                )
+                result = run(Path(tmp))
+            self.assertEqual(result.returncode, expected, f"{hooks}: {result.stderr}")
+
+    def test_a_rule_inherited_through_inherit_paths_is_supplied(self):
+        """`[inherit]` has three fields and the reader used to see one.
+
+        `inherit.paths` names the repository's own extra policy files, which
+        `config::load` merges exactly as it merges the bundled sets. Reading
+        only `inherit.sets` made every rule arriving that way invisible, so a
+        claim on one was refused as supplied by nothing while the engine was
+        running it -- and the action a person takes on that answer is to delete
+        a claim that was true.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            build(
+                Path(tmp),
+                """
+                [[enforce]]
+                principle = "single-authoritative-source"
+                rule = "no-merge-conflict-markers"
+                """,
+                **{
+                    ".pre-commit-config.yaml": LOCAL_CONTENT_POLICY,
+                    "policy__extra.toml": HYGIENE_BASE,
+                    "policy__principles.toml": (
+                        '[inherit]\npaths = ["policy/extra.toml"]\n'
+                    ),
+                },
+            )
+            result = run(Path(tmp))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("enforced by uphold", result.stdout)
+
+    def test_the_two_readers_of_the_policy_agree(self):
+        """This script and the engine must resolve the same rules.
+
+        `content_policy_rules` re-implements part of `config::load`: the bundled
+        sets, `inherit.paths`, `inherit.disabled_rules`, and a repository's own
+        rule shadowing an inherited id. The engine can now be asked directly --
+        `uphold rules --effective --json` -- and the reason this script does not
+        simply call it is written on that function: it is the hook other
+        repositories install, and two of the three runners keep the binary
+        inside their own environment directory rather than on PATH.
+
+        So the duplication stays, and this is what keeps it honest. Every field
+        the two readers disagree about is a rule reported to run where it does
+        not, or the other way round, and the answer a person acts on is to
+        delete a claim that was true. Asked of THIS repository's policy, which
+        is the one tree that exercises inheritance, disabling and shadowing at
+        once.
+
+        Skipped where the binary has not been built, because a test that needs
+        a `cargo build` to be meaningful must not report a red suite to somebody
+        who has not run one.
+        """
+        binary = ROOT / "target" / "debug" / "uphold"
+        if not binary.is_file():
+            self.skipTest(f"{binary} is not built; `cargo build` first")
+        answered = subprocess.run(
+            [str(binary), "rules", "--effective", "--json"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(answered.returncode, 0, answered.stderr)
+        engine = {
+            entry["id"]: set(entry["git_hooks"])
+            for entry in json.loads(answered.stdout)
+        }
+        declared, disabled, _sets, _paths = uphold_check.content_policy_rules(ROOT)
+        here = {
+            rule: stages for rule, stages in declared.items() if rule not in disabled
+        }
+        self.assertEqual(here, engine)
+
+    def test_inherit_paths_naming_a_file_that_is_not_there_is_two_not_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build(
+                Path(tmp),
+                """
+                [[enforce]]
+                principle = "single-authoritative-source"
+                rule = "no-merge-conflict-markers"
+                """,
+                **{
+                    ".pre-commit-config.yaml": LOCAL_CONTENT_POLICY,
+                    "policy__principles.toml": (
+                        '[inherit]\npaths = ["policy/gone.toml"]\n'
+                    ),
+                },
+            )
+            result = run(Path(tmp))
+            coverage = run(Path(tmp), "--coverage")
+        # A policy file the engine merges and this reader cannot open is a seam
+        # that could not be read, which is exit 2 at both ends -- and the
+        # coverage report is where the file that could not be opened is named.
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("could not look", result.stderr)
+        self.assertEqual(coverage.returncode, 2, coverage.stdout)
+        self.assertIn("inherit.paths", coverage.stdout)
+
+    def test_a_lefthook_key_that_is_not_a_command_is_not_a_rule(self):
+        """`configs:` under `remotes:` is not a rule called `configs`.
+
+        README.md tells every lefthook consumer to write that key, at exactly
+        the indent a command name sits at, so a scan keyed on indentation
+        accepted a claim on it -- a green reconcile over a rule that exists
+        nowhere. What makes a command name a command name is `commands:` above
+        it, which is what the scan reads now.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            build(
+                Path(tmp),
+                """
+                [[enforce]]
+                principle = "fail-safe-defaults"
+                rule = "configs"
+                """,
+                **{
+                    "lefthook.yml": LEFTHOOK_WITH_PRINCIPLES,
+                    "policy__principles.toml": GUARD_POLICY,
+                },
+            )
+            refused = run(Path(tmp))
+
+            build(
+                Path(tmp),
+                """
+                [[enforce]]
+                principle = "fail-safe-defaults"
+                rule = "my-own-check"
+                """,
+            )
+            command = run(Path(tmp))
+        self.assertEqual(refused.returncode, 1, refused.stdout)
+        self.assertIn("no seam here supplies", refused.stderr)
+        # The command in the same file, which is a rule, still resolves -- the
+        # fix is a narrower scan and not a disabled one.
+        self.assertEqual(command.returncode, 0, command.stderr)
+        self.assertIn("enforced by local", command.stdout)
 
     def test_a_consumer_inheriting_a_bundled_base_set_can_be_read(self):
         """`inherit.sets` names a set that ships HERE, not in the consumer.
@@ -566,12 +832,16 @@ class Coverage(unittest.TestCase):
         rule = "prevent-public-push"
         """
 
+    # Both guard stages the policy below declares are pinned, because a rule
+    # whose stage nothing installs is a rule that runs nowhere and does not
+    # belong in this denominator.
     PRE_COMMIT = """\
 repos:
   - repo: https://github.com/HackingGate/uphold
     rev: v2.0.0
     hooks:
       - id: uphold-scan
+      - id: uphold-guard
       - id: uphold-guard-push
   - repo: local
     hooks:
@@ -657,6 +927,35 @@ git.hooks = ["pre-commit"]
             "claimed but supplied by nothing here: no-such-hook", result.stdout
         )
 
+    def test_an_orphan_claim_is_not_counted_in_the_number_it_was_reported_under(self):
+        """The numerator counted the orphans the same report had just named.
+
+        `records: N of M claimable records are claimed by a rule here` is the
+        one number a reader takes away, and it was computed from the claims
+        rather than from what any seam supplies -- so a declaration whose only
+        claim names a rule nothing runs reported one record as claimed by a rule
+        here, two lines under the line saying that rule is supplied by nothing.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            build(
+                Path(tmp),
+                """
+                [[enforce]]
+                principle = "fail-safe-defaults"
+                rule = "no-such-hook"
+                """,
+                **{
+                    ".pre-commit-config.yaml": self.PRE_COMMIT,
+                    "policy__principles.toml": "",
+                },
+            )
+            result = run(Path(tmp), "--coverage")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "claimed but supplied by nothing here: no-such-hook", result.stdout
+        )
+        self.assertIn("records: 0 of ", result.stdout)
+
     def test_it_counts_records_against_what_can_be_claimed(self):
         result = run(ROOT, "--coverage")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -729,9 +1028,94 @@ class UpstreamIdentity(unittest.TestCase):
 
         self.assertEqual(uphold_check.upstream_url(), url)
         self.assertEqual(uphold_check.upstream_slug(), "/".join(url.split("/")[-2:]))
-        self.assertRegex(
-            uphold_check.lefthook_remote().pattern,
-            rf"^{uphold_check.upstream_slug()}\\b\|",
+        # Asserted through the reader rather than against its pattern: the
+        # pattern is gone, and what the drift would break is the recognition.
+        slug = uphold_check.upstream_slug()
+        self.assertTrue(
+            uphold_check.includes_our_lefthook_remote(
+                f"remotes:\n"
+                f"  - git_url: https://github.com/{slug}\n"
+                f"    ref: v1.0.0\n"
+                f"    configs:\n"
+                f"      - hooks/lefthook.yml\n"
+            )
+        )
+
+    def test_a_remote_naming_this_repository_without_an_owner_is_still_ours(
+        self,
+    ) -> None:
+        """lefthook takes any git url, and most of them carry no `owner/name`.
+
+        Requiring the slug rejected a clone by filesystem path, which is exactly
+        what `scripts/consumer_check.sh` writes: the parity harness points the
+        consumer at the checkout under test. A consumer wired the way the
+        documentation describes was reported as running no seam at all, and the
+        one CI job that drives a real lefthook consumer refused a clean commit.
+        """
+        name = uphold_check.upstream_slug().rsplit("/", 1)[-1]
+        # Neutral placeholders, because this repository's own
+        # `no-running-os-identity-metadata` rule reads the running home path and
+        # searches the tracked files for it. A realistic workspace path written
+        # here passes on a developer's machine and refuses the scan on a CI
+        # runner, whose home directory it happens to name -- and a comment
+        # quoting that path to explain the trap falls into it exactly as the
+        # test data did. `scripts/consumer_check.sh` avoids the same edge by
+        # cloning to a neutral path, and says so.
+        for url in (
+            f"/srv/example/work/{name}",
+            f"git@github.com:HackingGate/{name}.git",
+            "/srv/example/neutral-clone-name",
+        ):
+            with self.subTest(url=url):
+                self.assertTrue(
+                    uphold_check.includes_our_lefthook_remote(
+                        f"remotes:\n"
+                        f"  - git_url: {url}\n"
+                        f"    ref: v1.0.0\n"
+                        f"    configs:\n"
+                        f"      - hooks/lefthook.yml\n"
+                    )
+                )
+
+    def test_a_remote_is_only_ours_when_one_entry_says_both(self) -> None:
+        """Neither half alone, because the branch it feeds grants every stage.
+
+        This read as an alternation, so a fork of this repository pinning its own
+        config, or an unrelated project whose config happens to carry the
+        conventional filename, was credited with running every guard published
+        here.
+        """
+        slug = uphold_check.upstream_slug()
+        ours_but_another_config = (
+            f"remotes:\n"
+            f"  - git_url: https://github.com/{slug}\n"
+            f"    configs:\n"
+            f"      - hooks/something-else.yml\n"
+        )
+        our_filename_from_elsewhere = (
+            "remotes:\n"
+            "  - git_url: https://github.com/someone/unrelated\n"
+            "    configs:\n"
+            "      - hooks/lefthook.yml\n"
+        )
+        split_across_two_entries = (
+            f"remotes:\n"
+            f"  - git_url: https://github.com/{slug}\n"
+            f"    configs:\n"
+            f"      - hooks/something-else.yml\n"
+            f"  - git_url: https://github.com/someone/unrelated\n"
+            f"    configs:\n"
+            f"      - hooks/lefthook.yml\n"
+        )
+
+        self.assertFalse(
+            uphold_check.includes_our_lefthook_remote(ours_but_another_config)
+        )
+        self.assertFalse(
+            uphold_check.includes_our_lefthook_remote(our_filename_from_elsewhere)
+        )
+        self.assertFalse(
+            uphold_check.includes_our_lefthook_remote(split_across_two_entries)
         )
 
     def test_the_python_manifest_names_the_same_repository(self) -> None:

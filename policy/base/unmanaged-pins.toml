@@ -54,6 +54,15 @@
 # into 36 of 39 consuming repositories, byte-identical in every one. Thirty-six
 # identical copies of a rule is not thirty-six decisions; it is one decision and
 # thirty-five transcriptions, and the transcriptions are where drift lives.
+#
+# The patterns here are wider than those copies, and wider is the only safe
+# direction to move them. A rule that grows can at worst find something a
+# consumer argues about; a rule that narrows finds less and says nothing about
+# it -- the gate goes green and stays green over the thing it stopped watching.
+# `tests/fixtures/promotion-corpus.json` holds a line for every alternative
+# those 36 copies carried and the test beside it fails if any of them stops
+# matching, so an edit here cannot quietly take coverage away from a repository
+# that deleted its local copy on the strength of this file.
 
 [rule.no-pinned-tool-install]
 message = """
@@ -64,8 +73,36 @@ open a pull request against it, so it goes stale silently.
 Install the floating version and let the toolchain resolve it, or move the pin
 into a manifest something reads (go.mod, pyproject.toml, package.json, a
 lockfile) where a bot can see it move.
+
+The same applies to a git tag given to an installer -- `cargo install --git URL
+--tag vX.Y.Z` -- and to the ref a hook manager pins a remote config at.
 """
-regexp = '(?i)(go install \S+@v?[0-9]+\.[0-9]|pip[x]? install [^\n]*==[0-9]|npm (i|install)( -g)? \S+@[0-9]+\.[0-9]|npx \S+@[0-9]+\.[0-9]|cargo install [^\n]*(--version[ =]|@)[0-9]|--with [A-Za-z0-9_.-]+==[0-9])'
+# TWO ALTERNATIVES THAT READ LIKE OUTLIERS AND ARE THE CENTRE OF THE RULE. Both
+# are shapes the install instructions of the repository shipping this rule hand
+# to a consumer, which is where a missing alternative is easiest to find and
+# hardest to argue with.
+#
+# `cargo install --git <url> --tag vX.Y.Z` is how a Rust binary with no
+# crates.io release is installed, and it is the purest case this rule has: the
+# version sits in an argument, no manifest holds it, and `--version` -- the
+# cargo spelling every other alternative here covers -- is precisely the one
+# that cannot be combined with `--git`. The single cargo install line with
+# nowhere else to put its pin is the one that needs naming here.
+#
+# `ref:` is the hook-manager half. A lefthook consumer pins a hooks repository
+# as `remotes: [{git_url: ..., ref: vX.Y.Z}]`, and that ref is the twin of the
+# `rev:` in a .pre-commit-config.yaml with the one difference that decides it:
+# dependabot has a `pre-commit` ecosystem and moves a `rev:`, and no ecosystem
+# moves a lefthook `ref:`. It is a pin, in a config, that nothing watches --
+# which is the definition this file opens with.
+#
+# The `ref:` alternative is deliberately not scoped to a `remotes:` block. A
+# regex over lines cannot see the block it is inside, and the alternatives that
+# would be caught by accident -- a `ref:` input to a checkout step, a ref given
+# to a container action -- are unwatched version pins of the same kind, judged
+# by the same argument. Anything genuinely outside it is what `files.exclude`
+# and `disabled_rules` are for.
+regexp = '''(?i)(go install \S+@v?[0-9]+\.[0-9]|pip[x]? install [^\n]*==[0-9]|npm (i|install)( -g)? \S+@[0-9]+\.[0-9]|npx \S+@[0-9]+\.[0-9]|cargo install [^\n]*(--version[ =]|--tag[ =]v?|@)[0-9]|--with [A-Za-z0-9_.-]+==[0-9]|^\s*ref:\s*["']?v?[0-9]+\.[0-9])'''
 files.include = ["."]
 files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "third_party/**", "vendor/**"]
 
