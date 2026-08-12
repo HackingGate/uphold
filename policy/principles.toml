@@ -213,13 +213,19 @@ A pull-request body reaches a public API without passing a single hook, which
 is the whole reason this seam exists.
 """
 exec = "uphold guard --text -"
-# `gh` and `glab` only, and this is what the scoping is for. The three
-# text-capable guards read prose somebody wrote -- an authorship trailer, an
-# unusual character, a private repository's name. A branch name on `git push`
-# carries none of those and a package directory on `npm publish` is not prose
-# at all, so before this field existed both were asked anyway, and every answer
-# was a pass over a subject the rule had nothing to say about.
-command.before = ["gh", "glab"]
+# Not `npm publish`: a package directory is not prose, and asking a guard that
+# reads prose about one produces a pass over a subject it has nothing to say
+# about. `git push` is here, and leaving it out was wrong. The three
+# text-capable guards read an authorship trailer, an unusual character and a
+# private organisation's name -- and a branch name is the second-likeliest place
+# in this workspace for the third of those to land, after a commit message.
+# `fix/acme-outage` goes onto a public forge in the ref list, in the pull
+# request it suggests and in every notification, and pre-push is handed the refs
+# but the guards that read them judge the DESTINATION and never the name. The
+# other two guards passing over a branch name is not a wasted answer; it is the
+# check, and `git push origin main:refs/heads/PrivateOrg-probe` walked straight
+# through this seam while the field said otherwise.
+command.before = ["gh", "glab", "git push"]
 
 # ---------------------------------------------------------------------------
 # Shims -- what a command is about to publish.
