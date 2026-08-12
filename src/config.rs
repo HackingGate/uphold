@@ -1084,7 +1084,32 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     for relative in &inherit.paths {
         let path = root.join(relative);
         let extended = read_to_string(&path)?;
-        inherited.extend(parse(&path, &extended)?.rules.into_values());
+        let parsed = parse(&path, &extended)?;
+        // Refused rather than merged, and refused rather than ignored. Only
+        // `.rules` is merged below, so an inherited `[[shim]]` used to vanish --
+        // and vanish in the worst possible way, because the `exec` rule that
+        // came with it survived, and `validate_shims` then reported that rule's
+        // `command.before` as naming a shim nobody declared. The author would be
+        // told to declare the shim they had in fact declared. Merging is the
+        // other available answer and it is not obviously right: a shim is the
+        // thing that stands in front of a command, and inheriting one silently
+        // puts a program in front of `git` on the strength of a path in an
+        // `[inherit]` line. Until that is a decision somebody makes on purpose,
+        // say so here.
+        if !parsed.shims.is_empty() {
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "{} declares {} `[[shim]]` table(s), and an inherited file's shims are \
+                     not adopted. A shim stands in front of a real command, which is not \
+                     something to acquire by inheriting a path. Move the `[[shim]]` into \
+                     this file",
+                    path.display(),
+                    parsed.shims.len()
+                ),
+            ));
+        }
+        inherited.extend(parsed.rules.into_values());
     }
 
     let own_ids: Vec<&str> = file.rules.keys().map(String::as_str).collect();
@@ -1214,6 +1239,31 @@ fn validate_shims(policy_path: &Path, rules: &[Rule], shims: &[crate::shim::Shim
     // much of the subcommand path as the rule wanted to scope itself to, which
     // is not the shim's business -- `[[shim]] command = "gh"` stands in front
     // of `gh pr create` and of every other `gh`.
+    // A blank entry is refused before the set is built. `["   "]` parses, and
+    // `split_whitespace().next()` answers `None` for it, so it used to drop out
+    // here and take its rule's whole reason for existing with it: the rule stays
+    // an `exec` check, stands in front of nothing, and reports clean forever.
+    // `CommandWhere::matches` can never match it either, so there is no reading
+    // of a blank entry that does anything.
+    for rule in rules.iter().filter(|rule| rule.is(Check::Exec)) {
+        let Some(where_) = rule.command.as_ref() else {
+            continue;
+        };
+        for line in &where_.before {
+            if line.split_whitespace().next().is_none() {
+                return Err(Fatal::at(
+                    policy_path,
+                    format!(
+                        "`command.before` on {:?} has an entry with no command in it. An \
+                         empty entry names nothing, so it stands in front of nothing, and \
+                         the rule reads as one that passes",
+                        rule.id
+                    ),
+                ));
+            }
+        }
+    }
+
     let checked: BTreeSet<&str> = rules
         .iter()
         .filter(|rule| rule.is(Check::Exec))
@@ -1614,6 +1664,72 @@ mod tests {
         let text = error.to_string();
         assert!(text.contains("glab"), "{text}");
         assert!(text.contains("no `[[shim]]` declares"), "{text}");
+    }
+
+    /// A `before` entry with no command in it stands in front of nothing.
+    ///
+    /// `["   "]` parses, and the set of checked commands is built from
+    /// `split_whitespace().next()`, which answers `None` for it -- so the entry
+    /// used to fall out of the check entirely and take the rule's whole reason
+    /// for existing with it. The rule stays an `exec` check, is consulted by no
+    /// shim, and reports clean for good.
+    #[test]
+    fn a_before_entry_naming_no_command_is_refused() {
+        let error = policy_from(
+            r#"
+            [rule.body]
+            message = "no"
+            exec = "checker"
+
+            [rule.body.command]
+            before = ["   "]
+            "#,
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("no command in it"), "{text}");
+        assert!(text.contains("body"), "{text}");
+    }
+
+    /// An inherited `[[shim]]` is refused rather than dropped on the floor.
+    ///
+    /// Only `.rules` is merged, so the shim vanished and the `exec` rule that
+    /// arrived with it did not -- and `validate_shims` then told the author that
+    /// their `command.before` named a shim nobody declared, which they had in
+    /// fact declared, in the file they were pointing at.
+    #[test]
+    fn a_shim_in_an_inherited_file_is_refused_rather_than_ignored() {
+        let dir = std::env::temp_dir().join(format!(
+            "uphold-config-inherited-shim-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("shared.toml"),
+            r#"
+            [[shim]]
+            command = "gh"
+            match = ["pr:create"]
+            text_flags = ["-b"]
+            scope = "always"
+            "#,
+        )
+        .unwrap();
+        let path = dir.join("rg-policy.toml");
+        std::fs::write(
+            &path,
+            r#"
+            [inherit]
+            paths = ["shared.toml"]
+            "#,
+        )
+        .unwrap();
+
+        let error = load(&dir, &path).unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("`[[shim]]`"), "{text}");
+        assert!(text.contains("not adopted"), "{text}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The verified bug: two parameters that look enforced, read by nothing.
