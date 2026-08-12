@@ -55,7 +55,17 @@ does not run.**
 Both halves are checked at load. A rule naming two checks is refused, because
 one of them would be read by nothing while looking enforced. A rule naming no
 place is refused, because it runs nowhere and that reads exactly like a rule
-that passes.
+that passes. `command.before` is refused on a check no shim can consult — the
+shim consults `exec` checkers and the built-ins that can judge arbitrary text
+(`prevent-ai-author`, `prevent-unusual-unicode`, `no-private-repo-names`), and
+anything else reads an index, an identity or a push range and has nothing to say
+about a pull-request body.
+
+A text-capable built-in with `command.before` and no `git.hooks` is a deliberate
+shape, not an omission. `no-private-repo-names` reads the commit message at
+every git hook, and a repository whose own prose cites its issues would have
+every one of those citations refused — so the seam it belongs at is the command
+that publishes text to a forge, and only that one.
 
 Exit codes: `0` clean, `1` violations, `2` the check could not be made.
 

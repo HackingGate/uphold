@@ -169,23 +169,39 @@ pub(crate) fn over_text(
 ) -> Result<Vec<Refusal>> {
     let mut refusals = Vec::new();
     for rule in policy.of_check(Check::Builtin) {
-        let Some(builtin) = rule.builtin() else {
-            continue;
-        };
-        if !TEXT_GUARDS.contains(&builtin) || bypassed(&rule.id) {
-            continue;
-        }
-        let found = match builtin {
-            "prevent-ai-author" => message::ai_author_in(rule, label, text),
-            "prevent-unusual-unicode" => message::unusual_unicode_in(rule, label, text),
-            "no-private-repo-names" => names::in_text(root, rule, label, text)?,
-            _ => None,
-        };
-        if let Some(refusal) = found {
+        if let Some(refusal) = text_refusal(root, rule, label, text)? {
             refusals.push(refusal);
         }
     }
     Ok(refusals)
+}
+
+/// One text-capable guard's verdict over one piece of text.
+///
+/// `None` where the rule is not a text guard, or is bypassed, or found nothing
+/// -- three different reasons a caller does not have to tell apart, because a
+/// guard with nothing to say about a pull-request body is not a guard that
+/// passed it. Extracted so the shim seam consults exactly the same dispatch
+/// `uphold guard --text` does: a text guard that judged a commit message one
+/// way and a PR body another would be two rules under one id.
+pub(crate) fn text_refusal(
+    root: &Path,
+    rule: &Rule,
+    label: &str,
+    text: &str,
+) -> Result<Option<Refusal>> {
+    let Some(builtin) = rule.builtin() else {
+        return Ok(None);
+    };
+    if !TEXT_GUARDS.contains(&builtin) || bypassed(&rule.id) {
+        return Ok(None);
+    }
+    Ok(match builtin {
+        "prevent-ai-author" => message::ai_author_in(rule, label, text),
+        "prevent-unusual-unicode" => message::unusual_unicode_in(rule, label, text),
+        "no-private-repo-names" => names::in_text(root, rule, label, text)?,
+        _ => None,
+    })
 }
 
 /// Run one guard.

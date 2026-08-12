@@ -903,13 +903,33 @@ impl Rule {
         // it: "nothing says where it runs" is SATISFIED by the very field that
         // cannot be used, so the one check that exists to find a rule with no
         // place is the check this rule slips past.
-        if check != Check::Exec && self.command.is_some() {
+        // A text-capable built-in stands in front of a command too, and it is
+        // the ONLY seam some of them belong at: `no-private-repo-names` reads a
+        // commit message at every git hook, which refuses the issue citations a
+        // repository's own prose is full of, so a repository that wants it over
+        // a pull-request body and nowhere else has no other field to say it in.
+        // Three wrote `command.before` on the built-in independently while this
+        // refused all three.
+        let text_capable = self
+            .builtin()
+            .is_some_and(|builtin| crate::guard::TEXT_GUARDS.contains(&builtin));
+        if check != Check::Exec && !text_capable && self.command.is_some() {
+            let built_in_note = if check == Check::Builtin {
+                format!(
+                    "\nThe built-ins that can judge the text a command publishes are {}; \
+                     any other reads an index, an identity or a push range, and has nothing \
+                     to say about a pull-request body.",
+                    crate::guard::TEXT_GUARDS.join(", ")
+                )
+            } else {
+                String::new()
+            };
             return Err(Fatal::new(format!(
-                "rule {:?}: only an `exec` checker stands in front of a command, so \
-                 `command.before` on a `{check}` rule would be read by nothing and would \
-                 look like configuration that works.\n\
+                "rule {:?}: a `{check}` rule cannot stand in front of a command, so \
+                 `command.before` here would be read by nothing and would look like \
+                 configuration that works.\n\
                  A rule that searches the tree says so with `files.*`, and a built-in \
-                 that fires at a git hook says so with `git.hooks`.",
+                 that fires at a git hook says so with `git.hooks`.{built_in_note}",
                 self.id
             )));
         }
@@ -1299,9 +1319,18 @@ fn validate_shims(policy_path: &Path, rules: &[Rule], shims: &[crate::shim::Shim
         }
     }
 
+    // Both kinds count. An `exec` checker is a program this repository names; a
+    // text-capable built-in is one the binary carries, and `shim::run` consults
+    // both. Counting only the first refused a policy whose shim was checked --
+    // by a guard rather than by a script -- as a shim checked by nothing.
     let checked: BTreeSet<&str> = rules
         .iter()
-        .filter(|rule| rule.is(Check::Exec))
+        .filter(|rule| {
+            rule.is(Check::Exec)
+                || rule
+                    .builtin()
+                    .is_some_and(|builtin| crate::guard::TEXT_GUARDS.contains(&builtin))
+        })
         .filter_map(|rule| rule.command.as_ref())
         .flat_map(|where_| where_.before.iter())
         .filter_map(|line| line.split_whitespace().next())
@@ -1607,18 +1636,20 @@ mod tests {
     #[test]
     /// `command.before` on a check no shim can consult.
     ///
-    /// The third member of the same family, and the one that was missing.
-    /// `shim::run` filters its checkers to `exec` rules, so a built-in whose
+    /// The third member of the same family. `shim::run` consults `exec`
+    /// checkers and text-capable BUILT-INS, so a rule that is neither and whose
     /// only declared place is `command.before` is consulted by nothing and runs
     /// nowhere -- and the "nothing says where it runs" refusal is satisfied by
     /// the very field that cannot be used, so the check meant to catch a rule
     /// with no place is the one this rule walked past.
     fn a_command_place_the_check_cannot_use_is_refused() {
-        // The regexp case carries `files.*` too: it is a rule that really does
-        // run, by the scan, and the `command.before` beside it is the part that
-        // reaches nothing.
+        // A built-in that reads the index, an identity or a push range has
+        // nothing to say about the text a command publishes. The regexp case
+        // carries `files.*` too: it is a rule that really does run, by the scan,
+        // and the `command.before` beside it is the part that reaches nothing.
         for check in [
-            "builtin = \"prevent-ai-author\"",
+            "builtin = \"prevent-public-push\"",
+            "builtin = \"prevent-unusual-unicode-in-files\"",
             "message = \"no\"\nregexp = \"TODO\"\nfiles.include = [\".\"]",
         ] {
             let error = policy_from(&format!(
@@ -1629,6 +1660,38 @@ mod tests {
                 error.to_string().contains("read by nothing"),
                 "{check}: {error}"
             );
+        }
+    }
+
+    #[test]
+    /// A text-capable built-in may stand in front of a command.
+    ///
+    /// It is the only seam some of them belong at. `no-private-repo-names`
+    /// reads a commit message at every git hook, which refuses the issue
+    /// citations a repository's own prose is full of -- so a repository that
+    /// wants it over a pull-request body and nowhere else has no other field to
+    /// say it in. Three wrote `command.before` on the built-in independently
+    /// while the loader refused all three, on the true-but-unhelpful grounds
+    /// that a built-in is not an `exec`.
+    fn a_text_capable_builtin_may_stand_in_front_of_a_command() {
+        for builtin in crate::guard::TEXT_GUARDS {
+            let loaded = policy_from(&format!(
+                "[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\n\
+                 text_flags = [\"-b\"]\n\n\
+                 [rule.stands-in-front]\nbuiltin = \"{builtin}\"\n\n\
+                 [rule.stands-in-front.command]\nbefore = [\"gh\"]\n"
+            ));
+            assert!(loaded.is_ok(), "{builtin}: {:?}", loaded.err());
+            let policy = loaded.unwrap();
+            let rule = policy
+                .rules
+                .iter()
+                .find(|rule| rule.id == "stands-in-front");
+            assert!(
+                rule.is_some(),
+                "{builtin}: the rule did not survive the load"
+            );
+            assert_eq!(rule.unwrap().seams(), vec!["shim"], "{builtin}");
         }
     }
 

@@ -1117,9 +1117,19 @@ pub(crate) fn run(root: &Path, policy: &Policy, name: &str, argv: &[OsString]) -
     // also asked about a branch name on `git push` and a tarball on `npm
     // publish` -- because the only thing selecting it was `kind = "command"`,
     // which says nothing about which command.
+    // Two kinds stand in front of a command, and both are scoped by the same
+    // `command.before`. An `exec` checker is a program this repository names.
+    // A text-capable BUILT-IN is one the binary already carries -- and a
+    // repository that wanted `no-private-repo-names` over a pull-request body
+    // had no way to say so: the guard reads a commit message at every git hook,
+    // which refuses the issue citations a repository's own prose is full of, so
+    // the seam it belongs at is this one and only this one. Three repositories
+    // wrote `command.before` on the built-in independently and the loader
+    // refused all three, on the true-but-unhelpful grounds that a built-in is
+    // not an `exec`. The field means what they meant now.
     let checkers: Vec<&Rule> = policy
         .before_command(name, &words)
-        .filter(|rule| rule.is(Check::Exec))
+        .filter(|rule| rule.is(Check::Exec) || rule.is(Check::Builtin))
         .collect();
     let mut refusals: Vec<String> = Vec::new();
 
@@ -1150,6 +1160,17 @@ pub(crate) fn run(root: &Path, policy: &Policy, name: &str, argv: &[OsString]) -
                 }
                 for rule in &checkers {
                     if crate::guard::bypassed(&rule.id) {
+                        continue;
+                    }
+                    if rule.is(Check::Builtin) {
+                        // The same dispatch `uphold guard --text` runs, so a
+                        // guard cannot judge a commit message one way and a
+                        // pull-request body another under one id.
+                        if let Some(refusal) =
+                            crate::guard::text_refusal(root, rule, subject.kind, &subject.value)?
+                        {
+                            refusals.push(refusal.report);
+                        }
                         continue;
                     }
                     if let Some(refusal) = consult(root, rule, subject)? {
