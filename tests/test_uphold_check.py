@@ -22,6 +22,23 @@ sys.path.insert(0, str(ROOT))
 
 import uphold_check  # noqa: E402
 
+
+def needs_the_engine(test):
+    """Skip where neither a built binary nor cargo can answer.
+
+    The same reason `test_the_two_readers_of_the_policy_agree` gives: a test
+    that needs a `cargo build` to be meaningful must not report a red suite to
+    somebody who has not run one, and the catalog job runs on an image with no
+    Rust toolchain by design. What is skipped here is asserted in
+    tests/check_cli.rs, which runs where a toolchain exists.
+    """
+    try:
+        uphold_check.engine(ROOT, "--version")
+    except uphold_check.CouldNotLook as error:
+        return unittest.skip(str(error))(test)
+    return test
+
+
 # The guards are this repository's own rules now, so the seam that supplies one
 # is `uphold`, and what installs it is a PUBLISHED hook id -- what a
 # consumer actually writes. The fixture used to name a local hook called
@@ -117,6 +134,7 @@ def build(directory: Path, declaration: str, **files: str) -> None:
         path.write_text(body, encoding="utf-8")
 
 
+@needs_the_engine
 class NoProseInRuntime(unittest.TestCase):
     """`enforcement-needs-a-trigger`: the tool must not carry principle text."""
 
@@ -175,6 +193,7 @@ class NoProseInRuntime(unittest.TestCase):
         self.assertIn("Do not raise the ceiling", result.stderr)
 
 
+@needs_the_engine
 class OscalExport(unittest.TestCase):
     """The mapping crosses to OSCAL; the records deliberately do not."""
 

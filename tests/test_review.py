@@ -22,6 +22,26 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import review as review_mod  # noqa: E402
 
+sys.path.insert(0, str(ROOT))
+
+import uphold_check  # noqa: E402
+
+
+def needs_the_engine(test):
+    """Skip where neither a built binary nor cargo can answer.
+
+    The same reason `test_the_two_readers_of_the_policy_agree` gives: a test
+    that needs a `cargo build` to be meaningful must not report a red suite to
+    somebody who has not run one, and the catalog job runs on an image with no
+    Rust toolchain by design. What is skipped here is asserted in
+    tests/check_cli.rs, which runs where a toolchain exists.
+    """
+    try:
+        uphold_check.engine(ROOT, "--version")
+    except uphold_check.CouldNotLook as error:
+        return unittest.skip(str(error))(test)
+    return test
+
 
 def record(record_id: str, automatable: str, **extra: object) -> dict:
     base = {
@@ -147,6 +167,7 @@ class Composition(unittest.TestCase):
         self.assertNotIn("the rationale", document)
 
 
+@needs_the_engine
 class ClaimsThatEnforceNothing(unittest.TestCase):
     """A claim naming a rule no seam supplies must not silence the review.
 
@@ -211,6 +232,7 @@ class ClaimsThatEnforceNothing(unittest.TestCase):
         self.assertIn("no rule here claims it", result.stderr)
 
 
+@needs_the_engine
 class Settings(unittest.TestCase):
     """`[review]` is configuration, so a field of the wrong type is exit 2.
 
@@ -347,6 +369,7 @@ class Settings(unittest.TestCase):
         self.assertTrue((Path(self.tmp) / "REVIEW.md").is_file())
 
 
+@needs_the_engine
 class SelfApplication(unittest.TestCase):
     def test_this_repository_routes_cleanly(self):
         result = subprocess.run(

@@ -226,8 +226,8 @@ repos:
       # `enforcement-needs-a-trigger` record refuses.
       - id: uphold-check-here
         name: this repo's own enforcement claims
-        entry: ./uphold_check.py
+        entry: cargo run --quiet -- check
         language: system
         pass_filenames: false
         stages: [pre-commit, manual]
-        files: '^(policy/upheld\.toml|policy/principles\.toml|\.pre-commit-config\.yaml|lefthook\.yml|\.cmd-shims/checks\.enabled)$'
+        files: '^(policy/upheld\.toml|policy/principles\.toml|\.pre-commit-config\.yaml|lefthook\.yml)$'

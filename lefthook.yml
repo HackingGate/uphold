@@ -17,7 +17,7 @@ pre-commit:
     catalog-tests:
       run: python3 -m unittest discover -s tests
     uphold-check:
-      run: python3 uphold_check.py
+      run: cargo run --quiet -- check
     content-policy:
       run: cargo run --quiet -- scan
     guards:
