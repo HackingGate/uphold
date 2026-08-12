@@ -447,62 +447,22 @@ pub(crate) fn pushed_messages(
 }
 
 fn keep_blobs(root: &Path, candidates: Vec<Blob>) -> Result<Vec<Blob>> {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-
     if candidates.is_empty() {
         return Ok(candidates);
     }
-
-    let mut child = Command::new("git")
-        .args(["cat-file", "--batch-check=%(objectname) %(objecttype)"])
-        .current_dir(root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| Fatal::new(format!("git cat-file: {error}")))?;
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| Fatal::new("git cat-file: no stdin"))?;
-        for candidate in &candidates {
-            writeln!(stdin, "{}", candidate.sha)
-                .map_err(|error| Fatal::new(format!("git cat-file: {error}")))?;
-        }
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| Fatal::new(format!("git cat-file: {error}")))?;
-    // The status was never read here, and the failure was silent in the worst
-    // direction: no stdout means no known kinds, and the filter below then drops
-    // EVERY candidate and returns an empty list -- a push whose blobs could not
-    // be identified, reported as a push with no blobs in it. `read` a few lines
-    // down has always checked this; only this function did not.
-    //
-    // A missing object is not this case. `--batch-check` writes "<sha> missing"
-    // and still exits 0, so a non-zero status means git itself could not run.
-    if !output.status.success() {
-        return Err(Fatal::new(format!(
-            "git cat-file --batch-check exited {}: cannot tell which of {} object(s) \
-             are blobs, and reporting none of them would read as a clean push",
-            output.status.code().unwrap_or(-1),
-            candidates.len()
-        )));
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-
-    let mut kinds: BTreeMap<&str, &str> = BTreeMap::new();
-    for line in text.lines() {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if let [name, kind, ..] = fields.as_slice() {
-            kinds.insert(name, kind);
-        }
-    }
+    // The pumping, the closed stdin and the exit-status refusal all live in
+    // `git::blob_shas`. They used to live here too, in a version that wrote the
+    // whole list before reading a byte back -- which is the pipe deadlock the
+    // shared one exists to make unrepeatable, and which hung this guard on any
+    // pushed range past roughly fifteen hundred objects.
+    let shas: Vec<String> = candidates
+        .iter()
+        .map(|candidate| candidate.sha.clone())
+        .collect();
+    let blobs = git::blob_shas(root, &shas)?;
     Ok(candidates
         .into_iter()
-        .filter(|candidate| kinds.get(candidate.sha.as_str()) == Some(&"blob"))
+        .filter(|candidate| blobs.contains(&candidate.sha))
         .collect())
 }
 
