@@ -255,6 +255,12 @@ fn the_bypass_names_the_checker_it_switched_off() {
     assert!(stdout(&output).contains("faux ran:"));
 }
 
+/// Asked BY NAME for a shim this repository does not have, and told so.
+///
+/// The other half of this pair lets the same reading through, and the two are
+/// not in tension: what differs is what was asked. `uphold shim unknown ...` is
+/// a question typed with an answer in mind, and nothing is standing in front of
+/// anything, so the caller hears it rather than watching a typo run.
 #[test]
 fn a_command_no_shim_declares_is_refused_rather_than_silently_passed_through() {
     let root = workspace(POLICY);
@@ -263,6 +269,100 @@ fn a_command_no_shim_declares_is_refused_rather_than_silently_passed_through() {
     assert!(
         stderr(&output).contains("no shim declares"),
         "{}",
+        stderr(&output)
+    );
+}
+
+/// A link is on PATH for the whole machine; a `[[shim]]` is a line in one
+/// repository's policy.
+///
+/// So the undeclared case is the ordinary one, not the exception: every
+/// directory outside a participating repository reaches it, and so does every
+/// participating repository that declares a shim for some OTHER command. While
+/// that answer was an error, installing the link as the documentation describes
+/// made the command exit 2 nearly everywhere it was typed -- and what gets
+/// installed after that is nothing, which loses the seam in the repositories
+/// that did declare it.
+#[test]
+fn a_command_this_policy_does_not_declare_still_runs_when_the_link_is_the_command() {
+    let root = workspace(POLICY);
+    // The real command, behind a link named for it. Two directories, because one
+    // cannot hold two files of the same name -- and the link has to come first.
+    std::fs::create_dir_all(root.join("front")).unwrap();
+    let stub = root.join("bin/undeclared");
+    std::fs::write(&stub, "#!/bin/sh\necho \"undeclared ran: $*\"\n").unwrap();
+    let mut permissions = std::fs::metadata(&stub).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&stub, permissions).unwrap();
+    let link = root.join("front/undeclared");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_uphold"), &link).unwrap();
+
+    let path = format!(
+        "{}:{}:{}",
+        root.join("front").display(),
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new(&link)
+        .args(["publish", "--now"])
+        .current_dir(&root)
+        .env("PATH", path)
+        .env_remove("UPHOLD_ALLOW")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("undeclared ran: publish --now"),
+        "{}{}",
+        stdout(&output),
+        stderr(&output)
+    );
+}
+
+/// No policy where the command was typed is not a repository refusing; it is a
+/// directory that declares nothing.
+///
+/// `/tmp`, somebody else's checkout, a shell that never enters a participating
+/// repository -- a machine-wide link meets these far more often than it meets a
+/// declaration. Refusing here protects nothing and breaks the command
+/// everywhere.
+#[test]
+fn a_directory_with_no_policy_at_all_does_not_break_the_command() {
+    let root = workspace(POLICY);
+    // Outside `root`, deliberately: a subdirectory of it would find the policy
+    // by walking up, which is the case this test is not about.
+    let elsewhere = std::env::temp_dir().join(format!(
+        "uphold-shim-no-policy-{}-{}",
+        std::process::id(),
+        root.file_name().unwrap().to_string_lossy()
+    ));
+    let _ = std::fs::remove_dir_all(&elsewhere);
+    std::fs::create_dir_all(&elsewhere).unwrap();
+
+    // Named for the stub, so PATH resolution finds the link first and the real
+    // command second, exactly as an install puts them.
+    std::fs::create_dir_all(root.join("front")).unwrap();
+    let front = root.join("front/faux");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_uphold"), &front).unwrap();
+
+    let path = format!(
+        "{}:{}:{}",
+        root.join("front").display(),
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new(&front)
+        .args(["pr", "create", "-t", "anything"])
+        .current_dir(&elsewhere)
+        .env("PATH", path)
+        .env_remove("UPHOLD_ALLOW")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("faux ran:"),
+        "{}{}",
+        stdout(&output),
         stderr(&output)
     );
 }

@@ -168,6 +168,17 @@ fn history(root: &Path) -> Result<Vec<Surface>> {
 /// untouched and a clone does not carry them by default -- so an audit that
 /// only read local refs would report clean over exactly the surface that
 /// survives the fix.
+///
+/// Pruned, for the reason `refresh_origin` states about branches and this half
+/// did not honour: `refs/audit/pull/*` is a local destination that nothing else
+/// writes and nothing else deletes, so a ref left by an earlier run outlives the
+/// pull request it named -- and outlives the remote it came from, if `origin`
+/// was ever repointed. Every commit under it was then read as one this forge
+/// serves and reported as `would be republished`, which is the "cries wolf about
+/// the unpublishable" failure named a few lines up: findings whose only fix is
+/// to delete something the reader would discover was never published there.
+/// `--prune` with an explicit refspec prunes that refspec's destination, so a
+/// stale ref goes on the next run rather than being audited forever.
 fn retained_pull_refs(root: &Path) -> Result<(Vec<Surface>, Vec<String>)> {
     let mut surfaces = Vec::new();
     let mut unreadable = Vec::new();
@@ -175,6 +186,7 @@ fn retained_pull_refs(root: &Path) -> Result<(Vec<Surface>, Vec<String>)> {
         .args([
             "fetch",
             "-q",
+            "--prune",
             "origin",
             "+refs/pull/*/head:refs/audit/pull/*",
         ])

@@ -241,3 +241,62 @@ hooks = ["pre-commit"]
         "a literal owner outside the first variant was never objected to:\n{report}"
     );
 }
+
+/// A `refs/audit/pull/*` ref the forge no longer serves is not audited.
+///
+/// That destination is written by this subcommand and by nothing else, so a ref
+/// left by an earlier run stays until something prunes it -- including after
+/// `origin` is repointed at a different repository, which is when every ref
+/// under it names a pull request the current forge never had. Read unpruned,
+/// those commits are reported as `would be republished`, and the reader's only
+/// fix is to delete something that was never published where the report says it
+/// was. It is the same defect the branch half was fixed for, on the ref set that
+/// half does not cover.
+#[test]
+fn a_pull_ref_the_forge_no_longer_serves_is_not_audited() {
+    let root = repository();
+    // A real remote, because the fetch is what prunes: with no origin at all the
+    // subcommand reports the surface unreadable and never walks a ref.
+    let origin =
+        std::env::temp_dir().join(format!("uphold-publication-origin-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&origin);
+    git(&root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
+    git(
+        &root,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+
+    std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    git(&root, &["push", "-q", "origin", "main"]);
+
+    // A commit the remote does not have, parked under the audit's own
+    // destination the way a previous run against another forge would leave it.
+    std::fs::write(root.join("STALE.md"), "PrivateOrg\n").unwrap();
+    git(&root, &["add", "-A"]);
+    git(
+        &root,
+        &[
+            "commit",
+            "-qm",
+            "a pull request on some other forge",
+            "--no-verify",
+        ],
+    );
+    let stale = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let stale = String::from_utf8_lossy(&stale.stdout).trim().to_owned();
+    git(&root, &["update-ref", "refs/audit/pull/9", &stale]);
+    git(&root, &["reset", "-q", "--hard", "HEAD~1"]);
+
+    let output = audit(&root);
+    let report = text(&output);
+    assert!(
+        !report.contains("STALE.md") && !report.contains("some other forge"),
+        "a pruned pull ref was still read as a surface this forge serves:\n{report}"
+    );
+}

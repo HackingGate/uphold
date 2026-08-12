@@ -478,6 +478,16 @@ exists precisely to skip `commit-msg`.
 about to publish, and **execs through**. Put a link named for the command on
 PATH ahead of the real one and `argv[0]` does the rest.
 
+That link is on PATH for the whole machine, while a `[[shim]]` is a line in one
+repository's policy — so **where nothing declares the command, the command
+simply runs**: no policy in this directory, or a policy that declares a shim for
+some other command. Neither is a could-not-look, so neither is exit `2`; the
+policy was read and it said this command is not one it stands in front of. A
+policy that exists and cannot be *read* still exits `2`, because the
+declaration that could not be read might have been the one. Asked for by name —
+`uphold shim faux …` — an undeclared command is still an error, since nothing is
+standing in front of anything and the caller asked.
+
 ```toml
 [[shim]]
 command = "gh"

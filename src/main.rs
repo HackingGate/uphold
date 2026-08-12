@@ -201,7 +201,7 @@ fn run() -> Result<Exit> {
         .file_name()
         .filter(|name| !name.is_empty() && name.to_str() != Some("uphold"))
     {
-        return shim_command(text_of(name)?, &arguments);
+        return shim_command(text_of(name)?, &arguments, shim::Invoked::AsTheCommand);
     }
 
     let Some((first, rest)) = arguments.split_first() else {
@@ -250,7 +250,7 @@ fn run() -> Result<Exit> {
             let (name, shimmed) = rest
                 .split_first()
                 .ok_or_else(|| Fatal::new(format!("shim needs a command\n\n{USAGE}")))?;
-            shim_command(text_of(name)?, shimmed)
+            shim_command(text_of(name)?, shimmed, shim::Invoked::ByName)
         }
         other => Err(Fatal::new(format!(
             "unknown subcommand {other:?}\n\n{USAGE}"
@@ -626,9 +626,27 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
     Ok(Exit::Clean)
 }
 
-fn shim_command(name: &str, argv: &[OsString]) -> Result<Exit> {
+fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result<Exit> {
     let working = std::env::current_dir()?;
-    let (root, policy_path) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
+    // No policy where the command was typed means no repository here declares
+    // anything to stand in front of it. Run as the command, that is the command
+    // running: the link is on PATH for the whole machine -- `/tmp`, somebody
+    // else's checkout, a shell that never enters a participating repository --
+    // and refusing there protects nothing, breaks `git` everywhere, and gets
+    // the link removed, which is how the seam is lost in the repositories that
+    // DID declare it. Asked for by name, it is still an error, because the
+    // caller asked this repository for a shim it does not have.
+    //
+    // A policy that exists and cannot be read is a different answer and still
+    // fatal both ways: `config::load` below says so, because a declaration that
+    // could not be read might have been the one standing in front of this
+    // command.
+    let Some((root, policy_path)) = discover(&working) else {
+        return match invoked {
+            shim::Invoked::AsTheCommand => shim::exec_through(name, argv),
+            shim::Invoked::ByName => Err(no_policy_here(&working)),
+        };
+    };
     let policy = config::load(&root, &policy_path)?;
     // The shimmed command's arguments stay bytes all the way to the exec. On
     // Unix an argument is an arbitrary byte string -- `git add` on a file named
@@ -638,7 +656,7 @@ fn shim_command(name: &str, argv: &[OsString]) -> Result<Exit> {
     // command that runs is the command that was typed. Where the shim has
     // something to CHECK, it refuses the untranslatable argument itself, in the
     // words of what it could not read.
-    shim::run(&root, &policy, name, argv)
+    shim::run(&root, &policy, name, argv, invoked)
 }
 
 fn main() {
