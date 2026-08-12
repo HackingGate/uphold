@@ -240,9 +240,19 @@ fn overrides_for(root: &Path, rule: &Rule, not_text: &[String]) -> Result<Overri
     // carried the same ordering and the same comment, found by a test that
     // reported a file as skipped and searched it anyway. Everything below
     // this line is unconditional, which is why it goes here and not above.
+    // Escaped, because these are PATHS and not patterns. The globs above are
+    // author-written and their metacharacters are meant; these come back from
+    // `git check-attr` and are literal names, so a tracked file called
+    // `page[1].html` or `data{1,2}.bin` was read as a character class or an
+    // alternation. Each way it went wrong is worse than the last: the class did
+    // not match its own name, so a file declared not-text was searched AND
+    // listed as skipped in the same report; the alternation matched two files
+    // nobody declared, removing them from every rule silently; and an unclosed
+    // class was a parse error that took the whole run to exit 2.
     for path in not_text {
+        let literal = globset::escape(path);
         builder
-            .add(&format!("!{path}"))
+            .add(&format!("!{literal}"))
             .map_err(|error| Fatal::new(format!("not-text path {path:?}: {error}")))?;
     }
     // The object store is not repository content. It holds every version of
@@ -661,6 +671,67 @@ mod tests {
             notes.iter().any(|note| note.contains("locked")),
             "the subtree nobody could enter went unnamed: {notes:?}"
         );
+    }
+
+    #[test]
+    fn a_not_text_path_holding_glob_metacharacters_excludes_only_itself() {
+        // These paths come back from `git check-attr` and are literal NAMES,
+        // but they were handed to the glob builder as patterns. Three ways it
+        // went wrong, all in this one fixture's shape:
+        //
+        //   `data{1,2}.bin` read as an alternation, so `data1.bin` and
+        //   `data2.bin` -- neither declared not-text -- were removed from every
+        //   content rule and named in no report.
+        //
+        //   `page[1].html` read as a character class, which does not match its
+        //   own literal name, so the file DECLARED not-text was searched while
+        //   the same run listed it as skipped.
+        //
+        //   `capture[1.bin` is an unclosed class, a parse error that took the
+        //   whole run to exit 2 with no rule having reported anything.
+        let root = repository("not-text-metacharacters");
+        write(&root, "data{1,2}.bin", "declared\n");
+        write(&root, "data1.bin", "not declared\n");
+        write(&root, "data2.bin", "not declared\n");
+        write(&root, "plain.txt", "not declared\n");
+        git(&root, &["add", "-f", "-A", "."]);
+
+        let declared = vec!["data{1,2}.bin".to_owned()];
+        let files = Selection::build(&root, &rule(Files::default()), &declared)
+            .unwrap()
+            .files();
+
+        assert!(
+            !files.iter().any(|path| path == "data{1,2}.bin"),
+            "the declared path was searched anyway: {files:?}"
+        );
+        for undeclared in ["data1.bin", "data2.bin", "plain.txt"] {
+            assert!(
+                files.iter().any(|path| path == undeclared),
+                "{undeclared} was excluded by a path nobody declared: {files:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_not_text_path_with_an_unclosed_class_is_not_a_parse_error() {
+        // Exit 2 for the whole repository, because one tracked file had a `[`
+        // in its name.
+        let root = repository("not-text-unclosed");
+        write(&root, "capture[1.bin", "declared\n");
+        write(&root, "plain.txt", "not declared\n");
+        git(&root, &["add", "-f", "-A", "."]);
+
+        let declared = vec!["capture[1.bin".to_owned()];
+        let files = Selection::build(&root, &rule(Files::default()), &declared)
+            .expect("an unclosed class in a FILENAME is not a malformed glob")
+            .files();
+
+        assert!(
+            !files.iter().any(|path| path == "capture[1.bin"),
+            "{files:?}"
+        );
+        assert!(files.iter().any(|path| path == "plain.txt"), "{files:?}");
     }
 
     #[test]

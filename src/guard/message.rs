@@ -53,6 +53,37 @@ fn message_text(request: &Request<'_>) -> Result<(PathBuf, String)> {
     Ok((path, String::from_utf8_lossy(&bytes).into_owned()))
 }
 
+/// Every message this run is actually about, labelled.
+///
+/// At `pre-push` that is the messages of the commits being published, and NOT
+/// `.git/COMMIT_EDITMSG`. Reading the fallback there is the same mistake the
+/// paragraph above `message_text` describes, arriving by the other door: the
+/// file exists, it holds whatever the last `git commit` wrote, and it is clean
+/// -- so a push carrying a marker in a commit made by `git commit-tree`, a
+/// rebase, a cherry-pick, `git am`, `--no-verify`, or a fast-forward out of a
+/// hookless clone was reported as one guard passed, exit 0.
+///
+/// `no-private-repo-names` already reads the pushed range for exactly this
+/// reason; these two guards were the ones left asking the wrong file.
+fn message_subjects(request: &Request<'_>) -> Result<Vec<(String, String)>> {
+    if request.stage == super::Stage::PrePush {
+        return Ok(super::scope::pushed_messages(
+            request.root,
+            request.stage,
+            request.push_refs,
+            request.push_source,
+        )?
+        .into_iter()
+        .map(|(sha, body)| {
+            let short: String = sha.chars().take(12).collect();
+            (format!("commit {short} (its MESSAGE)"), body)
+        })
+        .collect());
+    }
+    let (path, text) = message_text(request)?;
+    Ok(vec![(path.display().to_string(), text)])
+}
+
 /// The judgment, over text that may never have been a file.
 pub(crate) fn ai_author_in(rule: &crate::config::Rule, label: &str, text: &str) -> Option<Refusal> {
     let mut found: Vec<&str> = Vec::new();
@@ -129,12 +160,12 @@ fn unusual_findings(label: &str, text: &str) -> Vec<String> {
 }
 
 pub(crate) fn prevent_ai_author(request: &Request<'_>) -> Result<Option<Refusal>> {
-    let (path, text) = message_text(request)?;
-    Ok(ai_author_in(
-        request.rule,
-        &path.display().to_string(),
-        &text,
-    ))
+    for (label, text) in message_subjects(request)? {
+        if let Some(refusal) = ai_author_in(request.rule, &label, &text) {
+            return Ok(Some(refusal));
+        }
+    }
+    Ok(None)
 }
 
 /// Characters refused in a commit message.
@@ -163,10 +194,10 @@ fn message_character_is_ordinary(character: char) -> bool {
 }
 
 pub(crate) fn prevent_unusual_unicode(request: &Request<'_>) -> Result<Option<Refusal>> {
-    let (path, text) = message_text(request)?;
-    Ok(unusual_unicode_in(
-        request.rule,
-        &path.display().to_string(),
-        &text,
-    ))
+    for (label, text) in message_subjects(request)? {
+        if let Some(refusal) = unusual_unicode_in(request.rule, &label, &text) {
+            return Ok(Some(refusal));
+        }
+    }
+    Ok(None)
 }

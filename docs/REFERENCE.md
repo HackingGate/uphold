@@ -350,9 +350,9 @@ stamped on it, the range about to be pushed.
 
 | guard | refuses |
 |---|---|
-| `prevent-ai-author` | a commit message carrying AI-authorship markers |
+| `prevent-ai-author` | AI-authorship markers in the message being written — and at a push, in **every commit message the push publishes** |
 | `prevent-author-mismatch` | an identity that is not your global one |
-| `prevent-unusual-unicode` | unusual characters in a commit message |
+| `prevent-unusual-unicode` | unusual characters in the same set of messages |
 | `prevent-unusual-unicode-in-files` | characters that draw nothing, in committed content **and in the paths that carry it** |
 | `no-private-repo-names` | a private repository named in a public one's message |
 | `no-private-repo-names-staged` | the same, in the lines a commit adds |

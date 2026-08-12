@@ -110,13 +110,27 @@ impl<'a> Scan<'a> {
                     }
                     failures.extend(match rule.builtin().unwrap_or_default() {
                         "links-resolve" => self.link_failures(rule)?,
-                        // Every other built-in reads something that is not the
-                        // tree. Silently passing over it here would report a
-                        // check that did not happen as one that did.
+                        // A guard built-in's `[rule.files]` is not read by
+                        // nothing: `guard::scope::in_file_scope` reads it, to
+                        // scope the guard to part of the tree. So the question
+                        // is which seam owns the rule, and `git.hooks` answers
+                        // it -- a rule that names a hook runs there, and this
+                        // scan is not its seam to fail from.
+                        //
+                        // Aborting here regardless is what made scoping a guard
+                        // -- the supported way to narrow one -- kill content
+                        // scanning for the WHOLE repository at exit 2, with a
+                        // diagnosis that was not true of the rule it named.
+                        _ if !rule.hooks().is_empty() => continue,
+                        // With no hook either, nothing runs it and the keys
+                        // really are read by nothing. Silently passing over
+                        // that would report a check that did not happen as one
+                        // that did.
                         other => {
                             return Err(Fatal::new(format!(
-                                "rule {:?}: built-in {other:?} does not read files, so \
-                                 its `files.*` keys would be read by nothing",
+                                "rule {:?}: built-in {other:?} does not read files and names \
+                                 no `git.hooks`, so nothing runs it and its `files.*` keys \
+                                 would be read by nothing",
                                 rule.id
                             )))
                         }

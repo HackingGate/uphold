@@ -42,9 +42,8 @@
 //! still carries the caveat in its body.
 
 use std::collections::BTreeSet;
-use std::io::{Read as _, Write as _};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use crate::config::{Check, Policy, Rule};
 use crate::error::{Exit, Fatal, Result};
@@ -394,83 +393,11 @@ fn forge_conversations(root: &Path) -> (Vec<Surface>, Vec<String>) {
 }
 
 /// Which of these objects git says are blobs, asked once rather than once each.
+///
+/// `git::blob_shas` holds the pumping and the exit-status refusal, because the
+/// pre-push guard asks the identical question and had the version that hangs.
 fn blob_shas(root: &Path, shas: &[String]) -> Result<BTreeSet<String>> {
-    let mut blobs = BTreeSet::new();
-    if shas.is_empty() {
-        return Ok(blobs);
-    }
-    let mut child = Command::new("git")
-        .args(["cat-file", "--batch-check=%(objectname) %(objecttype)"])
-        .current_dir(root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| Fatal::new(format!("git cat-file: {error}")))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| Fatal::new("git cat-file: no stdin"))?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| Fatal::new("git cat-file: no stdout"))?;
-    // Both pipes move at once, for the reason `selection::not_text_paths` gives
-    // at greater length: `--batch-check` answers each object as it reads it, at
-    // roughly fifty bytes an answer, so it fills its stdout pipe -- 64 KiB on
-    // Linux -- somewhere near the thirteen-hundredth object and stops reading
-    // stdin. A parent that writes the whole list first is then blocked on a full
-    // stdin pipe while the child is blocked on a stdout pipe nobody is draining.
-    // Every repository this audit is meant for is far past that count, so
-    // writing first is not a rare hang, it is the ordinary case.
-    let mut answered: Vec<u8> = Vec::new();
-    let written = std::thread::scope(|scope| {
-        let writer = scope.spawn(move || {
-            for sha in shas {
-                writeln!(stdin, "{sha}")?;
-            }
-            // Dropped here, and closing stdin is what tells `--batch-check` the
-            // list is finished. Without it the child waits for more input that
-            // is never coming and the read below never sees end of file.
-            drop(stdin);
-            Ok::<(), std::io::Error>(())
-        });
-        let drained = stdout.read_to_end(&mut answered);
-        // The writer's own error outranks the drain's: a child that died early
-        // shows up here as a broken pipe, and the drain merely stops.
-        writer.join().map_or_else(
-            |_| {
-                Err(std::io::Error::other(
-                    "git cat-file: writer thread panicked",
-                ))
-            },
-            |result| result.and_then(|()| drained.map(|_| ())),
-        )
-    });
-    written.map_err(|error| Fatal::new(format!("git cat-file: {error}")))?;
-    let status = child
-        .wait()
-        .map_err(|error| Fatal::new(format!("git cat-file: {error}")))?;
-    // Reported rather than swallowed, for the reason `keep_blobs` in
-    // `guard::scope` gives: no stdout means no known kinds, the filter below
-    // then keeps nothing, and a repository whose objects could not be identified
-    // would be audited as a repository with nothing in it.
-    if !status.success() {
-        return Err(Fatal::new(format!(
-            "git cat-file --batch-check exited {}: cannot tell which of {} reachable \
-             object(s) are blobs, and reading none of them would report as a clean tree",
-            status.code().unwrap_or(-1),
-            shas.len()
-        )));
-    }
-    let text = String::from_utf8_lossy(&answered);
-    for line in text.lines() {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if let [name, "blob", ..] = fields.as_slice() {
-            blobs.insert((*name).to_owned());
-        }
-    }
-    Ok(blobs)
+    crate::git::blob_shas(root, shas)
 }
 
 /// Every blob a flip would serve, not every path HEAD still names.

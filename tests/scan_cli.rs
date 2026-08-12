@@ -1165,3 +1165,79 @@ fn the_effective_rules_are_what_inheritance_resolved_to() {
         "{text}"
     );
 }
+
+// --- a guard's own file scope is not the scan's to fail on -----------------
+
+#[test]
+fn a_scoped_guard_does_not_abort_the_content_scan() {
+    // `[rule.files]` on a guard built-in is the supported way to narrow one:
+    // `guard::scope::in_file_scope` reads it. The scan aborted on it anyway,
+    // exit 2 for the WHOLE repository, with a diagnosis -- "would be read by
+    // nothing" -- that was not true of the rule it named. Scoping one guard
+    // switched off every content rule in the policy.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TODO'
+
+        [rule.no-todo.files]
+        exclude = ["policy/**"]
+
+        [rule.prevent-unusual-unicode-in-files]
+        builtin = "prevent-unusual-unicode-in-files"
+
+        [rule.prevent-unusual-unicode-in-files.files]
+        include = ["src"]
+
+        [rule.prevent-unusual-unicode-in-files.git]
+        hooks = ["pre-commit"]
+"#,
+    );
+    write(&root, "src/a.txt", "fine\nTODO: later\n");
+
+    let output = scan(&root);
+    assert_eq!(
+        code(&output),
+        1,
+        "the scan should report the pattern rule, not abort: {}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("src/a.txt:2:TODO: later"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_guard_built_in_that_no_hook_runs_is_still_refused() {
+    // The other side of the same question. With `files.*` and no `git.hooks`,
+    // nothing runs the rule at either seam, so the keys really are read by
+    // nothing -- and passing over it would report a check that did not happen
+    // as one that did.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.prevent-unusual-unicode-in-files]
+        builtin = "prevent-unusual-unicode-in-files"
+
+        [rule.prevent-unusual-unicode-in-files.files]
+        include = ["src"]
+"#,
+    );
+    write(&root, "src/a.txt", "fine\n");
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("prevent-unusual-unicode-in-files"),
+        "{}",
+        stderr(&output)
+    );
+}
