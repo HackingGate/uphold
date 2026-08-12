@@ -435,7 +435,9 @@ class Reconciliation(unittest.TestCase):
         )
         self.assertEqual(answered.returncode, 0, answered.stderr)
         engine = {
-            entry["id"]: set(entry["git_hooks"])
+            entry["id"]: uphold_check.Where(
+                hooks=set(entry["git_hooks"]), seams=set(entry["seams"])
+            )
             for entry in json.loads(answered.stdout)
         }
         declared, disabled, _sets, _paths = uphold_check.content_policy_rules(ROOT)
@@ -443,6 +445,70 @@ class Reconciliation(unittest.TestCase):
             rule: stages for rule, stages in declared.items() if rule not in disabled
         }
         self.assertEqual(here, engine)
+
+    def test_a_rule_that_only_stands_in_front_of_a_command_is_not_the_scans(self):
+        """The seam `git.hooks` cannot name, and the reason it is compared.
+
+        A rule whose only declared place is `command.before` fires when the shim
+        is on PATH ahead of the real command. It has no hooks and reads no
+        files, and while this reader knew only about hooks, an empty hook list
+        meant "the file scan's" -- so the rule was credited to `uphold scan` and
+        a claim on it reconciled green in a repository where the scan never
+        touches it. This repository has two such rules of its own.
+
+        Asserted here rather than left to the agreement test above, because that
+        test compares the two readers and would stay green if BOTH were wrong in
+        the same direction, which is what they were.
+        """
+        declared, _disabled, _sets, _paths = uphold_check.content_policy_rules(ROOT)
+        for rule_id in ("no-published-host-identity", "no-published-markers"):
+            where = declared[rule_id]
+            self.assertEqual(where.seams, {"shim"}, rule_id)
+            self.assertEqual(where.hooks, set(), rule_id)
+
+    def test_a_claim_on_a_shim_only_rule_is_refused_and_not_credited_to_the_scan(self):
+        """The reconcile end of the same bug.
+
+        The repository pins `uphold-scan` and nothing else, and its policy holds
+        one rule whose only declared place is `command.before`. Nothing here
+        establishes that the shim is on PATH in front of `gh`, so the claim is
+        not supplied -- but while an empty hook list meant "the file scan's",
+        the pinned `uphold-scan` was read as supplying it and the claim
+        reconciled green, exit 0, over a rule the scan never touches.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            build(
+                Path(tmp),
+                """
+                [[enforce]]
+                principle = "complete-mediation"
+                rule = "no-published-markers"
+                """,
+                **{
+                    ".pre-commit-config.yaml": LOCAL_CONTENT_POLICY,
+                    # The `[[shim]]` is not decoration: the engine refuses a
+                    # `command.before` naming a command no shim declares, so a
+                    # fixture without one is a policy that would never load.
+                    "policy__principles.toml": (
+                        "[[shim]]\n"
+                        'command = "gh"\n'
+                        'match = ["pr:create"]\n'
+                        'text_flags = ["-b", "--body"]\n'
+                        "\n"
+                        "[rule.no-published-markers]\n"
+                        'message = "do not publish that"\n'
+                        'exec = "uphold guard --text -"\n'
+                        'command.before = ["gh"]\n'
+                    ),
+                },
+            )
+            result = run(Path(tmp))
+            coverage = run(Path(tmp), "--coverage")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no-published-markers", result.stderr)
+        # And the coverage report says which seam went unestablished, rather
+        # than listing the rule as one the scan runs.
+        self.assertIn("stands in front of a command", coverage.stdout)
 
     def test_inherit_paths_naming_a_file_that_is_not_there_is_two_not_one(self):
         with tempfile.TemporaryDirectory() as tmp:

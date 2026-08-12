@@ -137,11 +137,18 @@ uphold rules --effective          # every resolved rule, and where it fires
 uphold rules --effective --json   # the same, for a program
 ```
 
-The JSON is one array of `{"id": ..., "git_hooks": [...]}`, in the order the
-engine resolved them. It exists so that nothing has to re-implement the loader
-to find out what runs — a second reader of these fields is a reader free to
-disagree with the engine, and it will disagree exactly where somebody used a
-field it does not know about.
+The JSON is one array of `{"id": ..., "git_hooks": [...], "seams": [...]}`, in
+the order the engine resolved them. It exists so that nothing has to
+re-implement the loader to find out what runs — a second reader of these fields
+is a reader free to disagree with the engine, and it will disagree exactly where
+somebody used a field it does not know about.
+
+`seams` is `scan`, `guard`, `shim`, or more than one, and it is the half
+`git_hooks` cannot express. An empty hook list is true of a content rule and of
+a checker standing in front of a command alike, so a reader with only the hooks
+has to guess between two unrelated places — and the reconciler guessed `scan`,
+which credited a shim-only rule to a seam that never touches it. An empty
+`seams` means nothing runs the rule at all, which the loader refuses.
 
 The two requests this shape exists to make writable:
 

@@ -556,8 +556,37 @@ def lefthook_commands(root: Path) -> set[str]:
     return names
 
 
-def _rule_stages(policy: dict) -> dict[str, set[str]]:
-    """Every rule id in one policy document, mapped to the git stages it fires at.
+class Where:
+    """The seams one rule runs at, and the git hooks if `guard` is one of them.
+
+    Two fields rather than one, because `git.hooks` alone cannot answer the
+    question. An empty hook list was read as "the file scan's rule", and that is
+    true of a content rule and false of a checker standing in front of `gh` --
+    which is how a claim on a rule whose only place is `command.before` was
+    credited to `uphold scan` and reconciled green in a repository where the
+    scan never touches it.
+
+    `seams` holds the same three names the engine prints in
+    `uphold rules --effective --json`, and the drift test compares them.
+    """
+
+    __slots__ = ("hooks", "seams")
+
+    def __init__(self, hooks: set[str], seams: set[str]) -> None:
+        self.hooks = hooks
+        self.seams = seams
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Where):
+            return NotImplemented
+        return self.hooks == other.hooks and self.seams == other.seams
+
+    def __repr__(self) -> str:
+        return f"Where(hooks={sorted(self.hooks)}, seams={sorted(self.seams)})"
+
+
+def _rule_stages(policy: dict) -> dict[str, Where]:
+    """Every rule id in one policy document, mapped to where it runs.
 
     ONE table name, which is the whole point. This function used to walk a
     hardcoded list of six array-of-tables names against an engine that had
@@ -569,24 +598,40 @@ def _rule_stages(policy: dict) -> dict[str, set[str]]:
     The id is the section header -- `[rule.<id>]` -- so the ids are the keys of
     one table, and a duplicate cannot even parse.
 
-    `git.hooks` is carried out rather than discarded because it is the field
-    that says WHERE a rule runs, and a caller that has only the ids cannot tell
-    a file rule from a pre-push guard. An empty set means no git hook runs it,
-    which is the file scan's rule and not a rule that runs nowhere.
+    The seam is carried out beside the hooks, and it is the field that was
+    missing. `git.hooks` says which git stages a guard fires at; it says nothing
+    about a rule that fires at none, and there are two unrelated kinds of those.
+    `files.*` is the scan's, `command.before` is the shim's, and reading the
+    second as the first is the whole of the bug this record exists to close.
     """
     rules = policy.get("rule", {})
     if not isinstance(rules, dict):
         raise CouldNotLook("policy: [rule] must be a table of [rule.<id>] sections")
 
-    stages: dict[str, set[str]] = {}
+    stages: dict[str, Where] = {}
     for rule_id, body in rules.items():
-        git = body.get("git", {}) if isinstance(body, dict) else {}
-        hooks = git.get("hooks", []) if isinstance(git, dict) else []
+        body = body if isinstance(body, dict) else {}
+        git = body.get("git", {}) if isinstance(body.get("git"), dict) else {}
+        hooks = git.get("hooks", [])
         if not isinstance(hooks, list):
             raise CouldNotLook(
                 f"policy: [rule.{rule_id}] git.hooks must be an array of git hook names"
             )
-        stages[rule_id] = {value for value in hooks if isinstance(value, str)}
+        hooks = {value for value in hooks if isinstance(value, str)}
+
+        seams: set[str] = set()
+        # The engine's own filter, in `Rule::seams`: a built-in reaches the scan
+        # only when it reads files and fires at no hook; every other rule that
+        # declares `files.*` is the scan's.
+        if isinstance(body.get("files"), dict) and not (
+            isinstance(body.get("builtin"), str) and hooks
+        ):
+            seams.add("scan")
+        if hooks:
+            seams.add("guard")
+        if isinstance(body.get("command"), dict):
+            seams.add("shim")
+        stages[rule_id] = Where(hooks=hooks, seams=seams)
     return stages
 
 
@@ -861,18 +906,32 @@ def inventory_principles(root: Path) -> Inventory:
     # demonstrably running.
     rules: set[str] = set()
     uninstalled: list[str] = []
-    for rule_id, hooks in sorted(declared.items()):
+    for rule_id, where in sorted(declared.items()):
         if rule_id in disabled:
             continue
-        if hooks:
-            if hooks & stages:
+        if "guard" in where.seams:
+            if where.hooks & stages:
                 rules.add(rule_id)
             else:
-                uninstalled.append(f"{rule_id} ({', '.join(sorted(hooks))})")
-        elif scan:
-            rules.add(rule_id)
+                uninstalled.append(f"{rule_id} ({', '.join(sorted(where.hooks))})")
+        elif "scan" in where.seams:
+            if scan:
+                rules.add(rule_id)
+            else:
+                uninstalled.append(f"{rule_id} (file scan)")
+        elif "shim" in where.seams:
+            # The shim seam, which this branch used to fall through to `scan`.
+            # A checker standing in front of `gh` runs when the shim is on PATH
+            # ahead of the real command, and no runner configuration in this
+            # repository says whether it is -- so the honest answer is that it
+            # was not established here, not that the file scan supplies it.
+            # `inventory_local` is where a repository asserts a seam this script
+            # cannot observe.
+            uninstalled.append(f"{rule_id} (stands in front of a command)")
         else:
-            uninstalled.append(f"{rule_id} (file scan)")
+            # `validate` refuses a rule with no declared place, so reaching this
+            # means the policy said something the engine would not have loaded.
+            uninstalled.append(f"{rule_id} (nothing declares where it runs)")
     if uninstalled:
         notes.append(
             "declared, but no runner configuration here installs the seam it "

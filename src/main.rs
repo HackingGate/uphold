@@ -545,7 +545,13 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
         for rule in &policy.rules {
             let hooks = rule.hooks();
             let at = if hooks.is_empty() {
-                String::from("no git hook")
+                // Which seam, where there is no hook to name. "no git hook" was
+                // true of a content rule and of a checker standing in front of
+                // `gh` alike, and those are not the same place.
+                match rule.seams().as_slice() {
+                    [] => String::from("nothing runs it"),
+                    seams => seams.join(", "),
+                }
             } else {
                 hooks.join(", ")
             };
@@ -567,6 +573,17 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
                 document.push_str(", ");
             }
             json_string(hook, &mut document);
+        }
+        // `git_hooks` alone cannot answer where a hookless rule runs, and a
+        // caller that has to guess guesses the scan -- which is how a claim on
+        // a rule whose only place is `command.before` reconciled green in a
+        // repository where nothing runs it. The loader knows; it says so here.
+        document.push_str("], \"seams\": [");
+        for (position, seam) in rule.seams().iter().enumerate() {
+            if position > 0 {
+                document.push_str(", ");
+            }
+            json_string(seam, &mut document);
         }
         document.push_str("]}");
     }

@@ -648,6 +648,41 @@ impl Rule {
         self.hooks().iter().any(|name| name == hook)
     }
 
+    /// Which seams run this rule: `scan`, `guard`, `shim`, in that order.
+    ///
+    /// The question `git.hooks` alone cannot answer. A rule with no hooks is
+    /// either a content rule the scan owns or a checker standing in front of a
+    /// command, and the two are not the same place -- but an empty hook list
+    /// looked identical for both, so every reader downstream had to guess, and
+    /// the reconciler guessed `scan`. A claim on a shim-only rule then
+    /// reconciled green in a repository where the scan never touches it.
+    ///
+    /// Answered here rather than derived by a caller, for the reason
+    /// `effective_rules_command` gives: every second reader of these fields is
+    /// a reader free to disagree with the engine about which rules run.
+    ///
+    /// Empty is a real answer and not a gap: it means nothing runs the rule.
+    /// `validate` refuses that at load, so it should not be reachable -- and it
+    /// is spelled out rather than folded into one of the three, because a rule
+    /// nobody runs must not read as a rule the scan runs.
+    pub(crate) fn seams(&self) -> Vec<&'static str> {
+        let mut seams = Vec::new();
+        // The scan's own filter, in `scan::Scan::run`: a built-in is the scan's
+        // only when it reads files, and every other check that reads files is.
+        if self.reads_files() && (self.check() != Some(Check::Builtin) || self.hooks().is_empty()) {
+            seams.push("scan");
+        }
+        if !self.hooks().is_empty() {
+            seams.push("guard");
+        }
+        // `shim::run` consults `Check::Exec` rules only, and `validate` refuses
+        // `command.before` on anything else.
+        if self.command.is_some() {
+            seams.push("shim");
+        }
+        seams
+    }
+
     /// Whether this rule stands in front of `command` invoked as `argv`.
     pub(crate) fn stands_before(&self, command: &str, argv: &[String]) -> bool {
         self.command
