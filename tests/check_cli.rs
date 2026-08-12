@@ -710,3 +710,62 @@ fn the_output_carries_no_record_prose() {
         );
     }
 }
+
+#[test]
+fn a_remote_cloned_to_a_neutral_path_is_not_somebody_elses() {
+    // The question is "is this identifiably somebody else's", not "does this
+    // name us", because most git urls cannot answer the second.
+    // `scripts/consumer_check.sh` clones to a neutral `$WORK/hooks` on purpose,
+    // so the url a lefthook consumer writes carries neither the owner nor the
+    // repository name. Demanding the slug there demanded evidence the format
+    // does not carry, and answered exit 1 -- the claim is FALSE -- about a
+    // repository whose only fault was cloning from a path.
+    for url in [
+        "/tmp/tmp.Lwu7lqsxpk/hooks",
+        "/srv/example/some-checkout",
+        "../a-sibling-clone",
+    ] {
+        let root = workspace();
+        write(&root, "policy/principles.toml", GUARD_POLICY);
+        write(
+            &root,
+            "lefthook.yml",
+            &format!(
+                "remotes:\n  - git_url: {url}\n    ref: v1.0.0\n    configs:\n      - hooks/lefthook.yml\n"
+            ),
+        );
+        write(
+            &root,
+            "policy/upheld.toml",
+            "[[enforce]]\nprinciple = \"fail-safe-defaults\"\nrule = \"prevent-public-push\"\n",
+        );
+        let output = check(&root, &[]);
+        assert_eq!(code(&output), 0, "{url}: {}", stderr(&output));
+    }
+}
+
+#[test]
+fn a_forge_url_under_another_owner_is_somebody_elses() {
+    // The one case a url CAN answer: it spells `owner/name` and the pair is not
+    // ours, in either spelling git accepts.
+    for url in [
+        "https://github.com/somebody-else/uphold",
+        "git@github.com:somebody-else/uphold.git",
+    ] {
+        let root = workspace();
+        write(&root, "policy/principles.toml", GUARD_POLICY);
+        write(
+            &root,
+            "lefthook.yml",
+            &format!(
+                "remotes:\n  - git_url: {url}\n    ref: v1.0.0\n    configs:\n      - hooks/lefthook.yml\n"
+            ),
+        );
+        write(
+            &root,
+            "policy/upheld.toml",
+            "[[enforce]]\nprinciple = \"fail-safe-defaults\"\nrule = \"prevent-public-push\"\n",
+        );
+        assert_eq!(code(&check(&root, &[])), 1, "{url}");
+    }
+}

@@ -51,40 +51,48 @@ fn upstream_slug() -> Option<(&'static str, &'static str)> {
     (!owner.is_empty() && !name.is_empty()).then_some((owner, name))
 }
 
-/// Does this url name THIS repository?
+/// Is this url NOT identifiably somebody else's?
 ///
-/// `owner/name`, or the bare `name`. lefthook takes any git url and most carry
-/// no owner: `scripts/consumer_check.sh` points its consumer at a clone by
-/// FILESYSTEM PATH, and requiring the slug reported that consumer as running no
-/// seam at all -- so the one CI job that drives a real lefthook consumer refused
-/// a clean commit.
+/// The question is deliberately that way round. lefthook takes any git url, and
+/// most cannot answer "does this name us" at all: a consumer may clone from a
+/// filesystem path, a mirror, or a bare directory whose name says nothing.
+/// `scripts/consumer_check.sh` clones to a neutral `$WORK/hooks` on purpose, so
+/// the url it writes carries neither the owner nor the repository name.
+/// Demanding the slug there demands evidence the format does not carry, and
+/// answering "no seam here supplies it" is answering exit 1 -- the claim is
+/// FALSE -- about a repository whose only fault is cloning from a path.
 ///
-/// The last path segment has to match exactly. A url ending `my-uphold-fork` is
-/// not this repository, and a substring test said it was.
+/// So a remote is rejected only when it spells a forge `owner/name` and that
+/// pair is not ours. Anything without a host is a path, and a path is
+/// unidentifiable rather than foreign.
+///
+/// The load-bearing half is elsewhere and untouched: the remote and
+/// `hooks/lefthook.yml` must appear in the SAME entry, so a fork pinning its own
+/// config, or an unrelated project pulling a file that happens to share the
+/// conventional name, is still not credited with running every guard here.
 fn names_this_repository(url: &str) -> bool {
     let trimmed = url.trim().trim_end_matches('/').trim_end_matches(".git");
     let Some((owner, name)) = upstream_slug() else {
         return false;
     };
-    let Some((before, last)) = trimmed.rsplit_once('/') else {
-        // A bare name and nothing else.
-        return trimmed == name;
-    };
-    // Exactly the last segment, never a substring: a url ending
-    // `my-uphold-fork` is not this repository, and a `contains` said it was.
-    if last != name {
-        return false;
-    }
-    // A url that names a HOST names an owner too, and a fork under another
-    // owner publishes the same name while being a different repository. A
-    // filesystem path names no owner at all, which is what
-    // `scripts/consumer_check.sh` writes -- so the segment before the name is
-    // asked to match only where there is a host for it to belong to.
-    let remote = trimmed.contains("://") || trimmed.contains('@');
-    if !remote {
+    // A host, in either spelling git accepts: `scheme://host/owner/name` and
+    // `user@host:owner/name`. Without one there is no owner to compare.
+    let after_host = if let Some((_, rest)) = trimmed.split_once("://") {
+        rest.split_once('/').map(|(_, path)| path)
+    } else if let Some((_, rest)) = trimmed.split_once('@') {
+        rest.split_once(':').map(|(_, path)| path)
+    } else {
         return true;
-    }
-    before.rsplit('/').next() == Some(owner)
+    };
+    let Some(path) = after_host else {
+        return true;
+    };
+    let mut segments = path.rsplit('/');
+    let (Some(last), Some(before)) = (segments.next(), segments.next()) else {
+        // A host and one segment names no owner, so it identifies nobody.
+        return true;
+    };
+    before == owner && last == name
 }
 
 /// One `[[enforce]]` entry, as written.
