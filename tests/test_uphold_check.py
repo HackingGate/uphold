@@ -1053,10 +1053,17 @@ class UpstreamIdentity(unittest.TestCase):
         one CI job that drives a real lefthook consumer refused a clean commit.
         """
         name = uphold_check.upstream_slug().rsplit("/", 1)[-1]
+        # Neutral placeholders, because this repository's own
+        # `no-running-os-identity-metadata` rule reads the running home path and
+        # searches the tracked files for it -- and on a CI runner the home path
+        # is `/home/runner`, so writing a realistic workspace path here refused
+        # the scan on every runner while passing on every developer's machine.
+        # `scripts/consumer_check.sh` avoids the same trap by cloning to a
+        # neutral path, and says so.
         for url in (
-            f"/home/runner/work/{name}/{name}",
+            f"/srv/example/work/{name}",
             f"git@github.com:HackingGate/{name}.git",
-            f"/tmp/mirror/{name}.git",
+            "/srv/example/neutral-clone-name",
         ):
             with self.subTest(url=url):
                 self.assertTrue(

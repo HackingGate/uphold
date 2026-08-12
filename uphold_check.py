@@ -240,32 +240,44 @@ def includes_our_lefthook_remote(text: str) -> bool:
             current.append(stripped)
     if current is not None:
         entries.append(current)
-    # `owner/name` where the url spells one, and the bare repository name where
-    # it cannot. A remote is not always a forge url: lefthook takes any git url,
-    # so a clone by filesystem path, by ssh, or by any mirror is still a remote
-    # naming THIS repository, and it carries no owner to check. Requiring the
-    # slug rejected exactly that -- the parity harness clones the hooks
-    # repository by path, and a consumer wired the documented way was reported
-    # as running no seam at all.
+    # The test is not "does this url name us". It is "does this url name someone
+    # ELSE", because most git urls cannot answer the first question at all.
     #
-    # The name alone is weaker than the slug and it is not the load-bearing half.
-    # What CodeRabbit's finding was about, and what still holds, is that the two
-    # halves must appear in the SAME entry: a repository that is ours and a
-    # config that is ours, together, rather than either one on its own.
-    name = slug.rsplit("/", 1)[-1]
+    # lefthook takes any git url. A consumer may clone this repository from a
+    # filesystem path, from a mirror, or from a bare directory whose name says
+    # nothing -- `scripts/consumer_check.sh` does exactly that, cloning to a
+    # neutral `$WORK/hooks` on purpose, so the url the consumer writes carries
+    # neither the owner nor the repository name. Demanding the slug there is
+    # demanding evidence the format does not carry, and answering "no seam here
+    # supplies it" is answering exit 1 -- the claim is false -- about a
+    # repository whose only fault is cloning from a path.
+    #
+    # So a remote is rejected only when it is identifiably somebody else's: it
+    # spells a forge `owner/name` and that pair is not ours. Anything without a
+    # host is a path, and a path is unidentifiable rather than foreign.
+    #
+    # The load-bearing half of the previous fix is untouched: both the remote and
+    # `hooks/lefthook.yml` must appear in the SAME entry, so a fork pinning its
+    # own config, or an unrelated project pulling a file that happens to share
+    # the conventional name, is still not credited with running every guard here.
+    forge_url = re.compile(
+        r"(?:https?://|ssh://|git://|[\w.-]+@)[\w.-]+[/:](?P<slug>[\w.\-/]+)"
+    )
 
-    def names_this_repository(line: str) -> bool:
-        if re.search(rf"{re.escape(slug)}\b", line):
-            return True
+    def could_be_this_repository(line: str) -> bool:
         _, _, value = line.partition(":")
         for word in value.split():
-            tail = word.rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
-            if tail == name:
-                return True
-        return False
+            found = forge_url.search(word)
+            if not found:
+                # No host, so no owner to disagree with: a path or a bare name.
+                continue
+            spelled = found.group("slug").rstrip("/").removesuffix(".git")
+            if "/" in spelled and not spelled.endswith(slug):
+                return False
+        return True
 
     return any(
-        any(names_this_repository(line) for line in entry)
+        any(could_be_this_repository(line) for line in entry if "git_url" in line)
         and any("hooks/lefthook.yml" in line for line in entry)
         for entry in entries
     )
