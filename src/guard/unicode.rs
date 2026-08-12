@@ -35,6 +35,7 @@ use globset::{Glob, GlobMatcher};
 use super::scope;
 use super::{Refusal, Request};
 use crate::error::{Fatal, Result};
+use crate::selection::{normalize_rel, not_text_paths};
 
 /// A codepoint admitted, optionally only under one path glob.
 struct Allowance {
@@ -273,6 +274,24 @@ pub(crate) fn in_files(request: &Request<'_>) -> Result<Option<Refusal>> {
         request.push_source,
         request.remote_name,
     )?;
+    // The same declaration `uphold scan` reads, from the same place, because a
+    // file the repository declares is not text is one file with one answer and
+    // not two. It said so at the tree seam and refused at this one: a captured
+    // page kept byte-for-byte in the encoding its venue served -- the use
+    // `not_text_paths` names -- was skipped by the scan and made every commit
+    // touching it exit 2 here, and `.gitattributes` is one of the three cures
+    // the reference names for exactly that.
+    //
+    // The NUL test below keeps its job, which is a different one: it is the
+    // guess about bytes NOBODY declared. A declaration is not a guess, and
+    // where there is one it answers first. A `.gitattributes` that could not be
+    // read leaves the list empty and the reason set, and then the refusal
+    // stands with that reason attached -- an unanswered question is not a
+    // declaration that a file is fine to skip.
+    let (not_text, unmeasured) = not_text_paths(request.root);
+    let declared_not_text: BTreeSet<&str> =
+        not_text.iter().map(|path| normalize_rel(path)).collect();
+    let mut skipped: Vec<&str> = Vec::new();
     let mut findings: Vec<String> = Vec::new();
     let mut looked = 0usize;
 
@@ -294,6 +313,12 @@ pub(crate) fn in_files(request: &Request<'_>) -> Result<Option<Refusal>> {
         if !blob.has_content() {
             continue;
         }
+        // After the name and before the bytes. The name is committed text
+        // whatever the content is declared to be.
+        if let Some(path) = declared_not_text.get(normalize_rel(&blob.path)) {
+            skipped.push(path);
+            continue;
+        }
         let bytes = scope::read(request.root, blob)?;
         match decode_for_scan(&bytes) {
             Decoded::Text(text) => {
@@ -307,15 +332,30 @@ pub(crate) fn in_files(request: &Request<'_>) -> Result<Option<Refusal>> {
             // reported as a file with nothing in it -- `explicit-unknown` by
             // name, in the guard that reports it about everyone else.
             Decoded::Unreadable(why) => {
+                let unknown = unmeasured.as_deref().unwrap_or(
+                    "Declare it not text in .gitattributes, declare its charset with an \
+                     `encoding` rule, or exclude it from this rule.",
+                );
                 return Err(Fatal::new(format!(
                     "{}: cannot be read as text ({why}); refusing to report it clean \
-                     over content that was never examined",
+                     over content that was never examined. {unknown}",
                     blob.path
                 )));
             }
         }
     }
 
+    // Said on the way past, refusal or not, for the reason `not_text_paths`
+    // gives about its own two answers: "we did not check these" and "these were
+    // clean" must never look the same on the way out.
+    if !skipped.is_empty() {
+        eprintln!(
+            "{}: {} path(s) skipped, declared not text in .gitattributes:\n{}",
+            request.rule.id,
+            skipped.len(),
+            skipped.join("\n")
+        );
+    }
     if findings.is_empty() {
         return Ok(None);
     }
