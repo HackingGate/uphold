@@ -129,20 +129,28 @@ git.hooks = ["pre-push"]
 [rule.no-private-repo-names]
 builtin = "no-private-repo-names"
 # `visibility` is declared rather than looked up, and it is a settled fact
-# rather than a placeholder: publication was considered and declined, so this
-# repository stays private and the guard stays out of scope.
+# rather than a placeholder: this repository was published, so the guard is in
+# scope on every commit written here.
+#
+# It said `private` for a day after the flip, and that is how the one finding
+# below was written. The declaration is the whole scope test -- a rule that
+# believes its repository is private refuses nothing, silently, and reports a
+# clean tree while doing it -- so a declaration left behind by a visibility
+# change is not a stale comment, it is the guard switched off. Flipping a
+# repository means editing this line in the same change.
 #
 # Declared rather than looked up because a lookup makes every commit wait on a
-# forge, and because the answer is a decision rather than a reading. The line to
-# change if that decision is revisited is this one -- and the check to run
-# before changing it is `uphold audit --for-publication`, which asks what a
-# flip would republish under the visibility it is flipping TO. Every guard here
-# asks "is the target public NOW", so nothing else re-examines a name that was
-# correctly allowed at write time.
+# forge, and because the answer is a decision rather than a reading. The check
+# to run before changing it is `uphold audit --for-publication`, which asks what
+# a flip would republish under the visibility it is flipping TO. Every guard
+# here asks "is the target public NOW", so nothing else re-examines a name that
+# was correctly allowed at write time.
 #
-# It has an answer today, and it is not clean: two retained pull-request head
-# refs carry a private organisation's name, and no history rewrite reaches them.
-visibility = "private"
+# What the flip published, and what no rewrite reaches: commit 188970b2, on the
+# retained head ref of the pull request that merged it, names a private
+# organisation in its message. The squashed commit on the default branch does
+# not. The remaining copy is the forge's to remove, not a rewrite's.
+visibility = "public"
 # Declared, not looked up. A forge lookup answers for `owner/repo`; these are
 # organisations, and the form that got past a hand audit of this repository was
 # an organisation named on its own, in a sentence about what it carries. A
@@ -160,12 +168,15 @@ git.hooks = ["commit-msg"]
 
 [rule.no-private-repo-names-staged]
 builtin = "no-private-repo-names-staged"
-visibility = "private"
+# The same settled fact as the variant above, and it has to be written again
+# here: each variant carries its own scope, so one left at `private` is one seam
+# standing down while its siblings refuse.
+visibility = "public"
 git.hooks = ["pre-commit"]
 
 [rule.no-private-repo-names-in-files]
 builtin = "no-private-repo-names-in-files"
-visibility = "private"
+visibility = "public"
 # Not pre-commit: this asks the forge about every distinct name anywhere in the
 # tree, not the few a commit touches, and a check that adds twenty seconds to
 # every commit is one somebody deletes. That trade-off is a line in this file
