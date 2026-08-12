@@ -147,6 +147,70 @@ class Composition(unittest.TestCase):
         self.assertNotIn("the rationale", document)
 
 
+class ClaimsThatEnforceNothing(unittest.TestCase):
+    """A claim naming a rule no seam supplies must not silence the review.
+
+    `route` drops an `automatable = "yes"` record from the document when a rule
+    claims it -- "a rule enforces it; a reviewer repeating it is noise". A claim
+    whose rule nothing here supplies enforces nothing, so it is not that case,
+    and passing it in unfiltered removed the record from the human tier while
+    the same document's "already active here" list -- which IS filtered by
+    suppliers -- left the rule out. Enforced by nothing and reviewed by nobody,
+    with the page showing no trace of either.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._directory.name)
+        self.addCleanup(self._directory.cleanup)
+        (self.tmp / "policy").mkdir()
+
+    def review(self, declaration: str, policy: str) -> subprocess.CompletedProcess:
+        (self.tmp / "policy" / "upheld.toml").write_text(
+            textwrap.dedent(declaration), encoding="utf-8"
+        )
+        (self.tmp / "policy" / "principles.toml").write_text(
+            textwrap.dedent(policy), encoding="utf-8"
+        )
+        (self.tmp / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/HackingGate/uphold\n"
+            "    rev: v2.0.0\n"
+            "    hooks:\n"
+            "      - id: uphold-scan\n",
+            encoding="utf-8",
+        )
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--review"],
+            cwd=self.tmp,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_a_claim_no_seam_supplies_does_not_remove_its_principle_from_review(self):
+        # `fail-safe-defaults` is `automatable = "yes"` in the shipped
+        # catalog, and the policy here supplies no rule by the claimed name at
+        # all -- so the claim enforces nothing and the record still needs an
+        # answer from somebody.
+        result = self.review(
+            """
+            [[enforce]]
+            principle = "fail-safe-defaults"
+            rule = "a-rule-that-does-not-exist"
+            """,
+            """
+            [rule.no-todo]
+            message = "no TODO"
+            regexp = 'TODO'
+            files.include = ["."]
+            """,
+        )
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("fail-safe-defaults", result.stderr)
+        self.assertIn("no rule here claims it", result.stderr)
+
+
 class Settings(unittest.TestCase):
     """`[review]` is configuration, so a field of the wrong type is exit 2.
 

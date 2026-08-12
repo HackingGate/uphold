@@ -1411,7 +1411,18 @@ def run_review(argv: list[str]) -> int:
         return 2
 
     records = load_records()
-    claimed = {principle for principle, _ in claims}
+    # Filtered by `suppliers`, exactly as `active` is on the line below. A
+    # principle leaves the review document because a rule enforces it -- that is
+    # the `continue` in `review.route`, "a rule enforces it; a reviewer
+    # repeating it is noise" -- and a claim naming a rule no seam here supplies
+    # enforces nothing. Unfiltered, such a claim removed the principle from the
+    # document AND was absent from the "already active here" list the same
+    # document prints, so an `automatable = "yes"` record could be enforced by
+    # nothing and reviewed by nobody, with the page showing no trace of either.
+    #
+    # The reconcile refuses that claim outright; this mode has to survive it,
+    # because `--review` runs over a declaration a person is still writing.
+    claimed = {principle for principle, rule in claims if rule in suppliers}
     for_review, errors, stale = review_mod.route(
         records, claimed, settings["exempt"], settings["include_domains"]
     )
