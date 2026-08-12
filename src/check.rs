@@ -192,8 +192,10 @@ struct PreCommitConfig {
 
 #[derive(Debug, Deserialize)]
 struct PreCommitRepo {
-    #[serde(default)]
-    repo: String,
+    // No `repo:` field. Which repository an id came from is deliberately not
+    // consulted -- see `pinned_ids`. `repo: local` entries are read the same
+    // way as any other, because a local hook is a rule that fires here and a
+    // claim may name it.
     #[serde(default)]
     hooks: Vec<PinnedHook>,
 }
@@ -204,15 +206,22 @@ struct PinnedHook {
     id: String,
 }
 
-/// Hook ids from a pre-commit config: `(this repository's, every one).`
+/// Every hook id a pre-commit config installs, from any repository.
 ///
-/// Two sets, because they answer two questions. Which of THIS binary's seams
-/// are installed is evidence only an id of this binary's can give -- a consumer
-/// pinning some other repository's `uphold-scan` establishes nothing here. But
-/// a claim may also name a rule that is not this binary's at all: a local hook,
-/// or a formatter from a third-party repository, is a rule that fires here and
-/// can be claimed as one. That is the `local` tier, and it is every id.
-fn pinned_ids(root: &Path) -> Result<Option<(BTreeSet<String>, BTreeSet<String>)>> {
+/// By ID and not by repository url, which is the whole of what
+/// `published_seams` is for. The predicate this replaced was a repository name,
+/// and a consumer does not necessarily write one a matcher would recognise:
+/// `scripts/consumer_check.sh` clones this repository to a temporary directory
+/// and pins it by PATH, so the last segment of its `repo:` is `hooks`. Scoping
+/// on the url told that consumer the seam supplying every guard was absent.
+///
+/// An id is specific enough on its own. `uphold-guard-push` is this binary's
+/// name for this binary's stage, and the manifest is where the list comes from
+/// so a new id cannot be published there and forgotten here.
+///
+/// The same set answers the `local` tier: a claim may name a formatter, a
+/// linter, or a hook this repository wrote, and those are rules that fire here.
+fn pinned_ids(root: &Path) -> Result<Option<BTreeSet<String>>> {
     let path = root.join(".pre-commit-config.yaml");
     if !path.is_file() {
         return Ok(None);
@@ -228,18 +237,13 @@ fn pinned_ids(root: &Path) -> Result<Option<(BTreeSet<String>, BTreeSet<String>)
              could-not-look",
         ));
     };
-    let mut ours = BTreeSet::new();
     let mut every = BTreeSet::new();
     for entry in repos {
-        let mine = names_this_repository(&entry.repo);
         for hook in entry.hooks {
-            if mine {
-                ours.insert(hook.id.clone());
-            }
             every.insert(hook.id);
         }
     }
-    Ok(Some((ours, every)))
+    Ok(Some(every))
 }
 
 #[derive(Debug, Deserialize)]
@@ -406,20 +410,20 @@ pub(crate) fn installed(root: &Path) -> Result<Installed> {
     let mut found = Installed::default();
 
     match pinned_ids(root) {
-        Ok(Some((ours, every))) => {
-            found.scan = ours.iter().any(|id| scans.contains(id));
+        Ok(Some(ids)) => {
+            found.scan = ids.iter().any(|id| scans.contains(id));
             for (stage, hook) in &guards {
-                if ours.contains(hook) {
+                if ids.contains(hook) {
                     found.stages.insert(stage.clone());
                 }
             }
-            found.local.extend(every);
-            let mut named: Vec<&str> = ours
+            let mut named: Vec<String> = ids
                 .iter()
                 .filter(|id| scans.contains(*id) || guards.values().any(|hook| hook == *id))
-                .map(String::as_str)
+                .cloned()
                 .collect();
             named.sort_unstable();
+            found.local.extend(ids);
             if !named.is_empty() {
                 found
                     .how

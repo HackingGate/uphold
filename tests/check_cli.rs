@@ -370,21 +370,44 @@ fn a_claim_on_a_shim_only_rule_is_refused_and_not_credited_to_the_scan() {
 
 #[test]
 fn the_seam_is_found_by_a_published_id_not_by_one_repositorys_name() {
-    // A consumer pinning some OTHER repository's `uphold-scan` establishes
-    // nothing about this binary's seams.
-    let root = workspace();
-    write(&root, "policy/principles.toml", GUARD_POLICY);
-    write(
-        &root,
-        ".pre-commit-config.yaml",
-        "repos:\n  - repo: https://github.com/somebody-else/uphold\n    rev: v1.0.0\n    hooks:\n      - id: uphold-guard-push\n",
-    );
-    write(
-        &root,
-        "policy/upheld.toml",
-        "[[enforce]]\nprinciple = \"fail-safe-defaults\"\nrule = \"prevent-public-push\"\n",
-    );
-    assert_eq!(code(&check(&root, &[])), 1);
+    // Every published guard id has to make its own stage visible, and the id is
+    // the whole of what is matched. The predicate this replaced was a
+    // repository NAME, and a consumer does not necessarily write one a matcher
+    // would recognise: `scripts/consumer_check.sh` clones this repository to a
+    // temporary directory and pins it by path, so the last segment of its
+    // `repo:` is `hooks`. Scoping on the url told that consumer the seam
+    // supplying every guard was absent.
+    for (stage, id) in [
+        ("pre-commit", "uphold-guard"),
+        ("commit-msg", "uphold-guard-commit-msg"),
+        ("pre-merge-commit", "uphold-guard-merge"),
+        ("pre-push", "uphold-guard-push"),
+    ] {
+        let root = workspace();
+        write(
+            &root,
+            "policy/principles.toml",
+            &format!(
+                "[rule.prevent-unusual-unicode-in-files]\n\
+                 builtin = \"prevent-unusual-unicode-in-files\"\n\
+                 git.hooks = [\"{stage}\"]\n"
+            ),
+        );
+        write(
+            &root,
+            ".pre-commit-config.yaml",
+            &format!(
+                "repos:\n  - repo: /tmp/some-checkout/hooks\n    rev: v1.0.0\n    hooks:\n      - id: {id}\n"
+            ),
+        );
+        write(
+            &root,
+            "policy/upheld.toml",
+            "[[enforce]]\nprinciple = \"complete-mediation\"\nrule = \"prevent-unusual-unicode-in-files\"\n",
+        );
+        let output = check(&root, &[]);
+        assert_eq!(code(&output), 0, "{stage}/{id}: {}", stderr(&output));
+    }
 }
 
 #[test]
