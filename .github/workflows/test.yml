@@ -310,6 +310,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The reconcile is the binary's now, so this job needs one. It builds
+      # rather than pinning a release because what is under test is this
+      # commit's reconcile against this commit's manifest.
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+
       # A hook is only proven by the path a consumer takes: a repository that
       # is not this one, declaring a profile, running the released entry point.
       - name: A consuming repository's declaration
@@ -317,7 +323,8 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/consumer/policy
           ./uphold_check.py --init > /tmp/consumer/policy/upheld.toml
-          cd /tmp/consumer && "$GITHUB_WORKSPACE/uphold_check.py"
+          cp -r policy/principles.toml /tmp/consumer/policy/principles.toml
+          cd /tmp/consumer && "$GITHUB_WORKSPACE/target/release/uphold" check
 
       - name: A declaration that cannot be read is not a pass
         run: |
@@ -325,7 +332,7 @@ jobs:
           mkdir -p /tmp/unreadable
           cd /tmp/unreadable
           set +e
-          "$GITHUB_WORKSPACE/uphold_check.py"
+          "$GITHUB_WORKSPACE/target/release/uphold" check
           status=$?
           set -e
           test "$status" -eq 2 || { echo "expected exit 2, got $status"; exit 1; }
