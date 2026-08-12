@@ -19,7 +19,29 @@ pub(crate) struct Needle {
 }
 
 /// Names that are never a personal identity leak.
-const KNOWN_PUBLIC_IDENTITY: &[&str] = &["runner"];
+///
+/// A shared build account is not a person. `runner` is the account every GitHub
+/// hosted runner runs as, so it is the same string on every such machine and
+/// says nothing about whose machine it is -- which is the property this whole
+/// module searches for. The others are the same fact under other providers and
+/// in other images.
+const KNOWN_PUBLIC_IDENTITY: &[&str] = &[
+    "runner",
+    "ubuntu",
+    "ec2-user",
+    "admin",
+    "azureuser",
+    "vsts",
+    "buildkite-agent",
+    "circleci",
+    "travis",
+    "jenkins",
+    "vagrant",
+    "docker",
+    "root",
+    "ci",
+    "build",
+];
 
 /// Hostname segments that describe a machine's KIND rather than its owner.
 ///
@@ -184,7 +206,31 @@ fn running_os_identity() -> Vec<Needle> {
     let user = env("USER").or_else(|| env("LOGNAME"));
     let home = env("HOME");
 
-    push(&mut needles, "home-path", home, false);
+    // The home path is asked the same question the username is asked, which it
+    // was not asking before: whose machine is this. A hosted runner's home
+    // directory answers nobody -- it is the account every such machine runs as,
+    // identical on all of them, and `KNOWN_PUBLIC_IDENTITY` has said so about
+    // the username since it was written. Only this needle skipped the check, so
+    // the same account name was a leak as a path and not as a name.
+    //
+    // A home path that will not exist on the next machine is a real defect and
+    // it is `no-hardcoded-home-paths`, a separate rule with a separate subject.
+    // This one is about identity, and suppressing a shared build account here
+    // takes nothing away from that one.
+    //
+    // The effect was worse than an inconsistency. The needle is read from the
+    // environment the scan runs in, so a tree that mentions a CI path passed on
+    // every developer's machine and refused on every runner -- the one place the
+    // gate is authoritative -- and the failure arrived as "identity metadata"
+    // about a string that identifies nobody.
+    let home_account = home
+        .as_deref()
+        .and_then(|path| path.trim_end_matches('/').rsplit('/').next())
+        .unwrap_or_default()
+        .to_owned();
+    if !is_public_identity(&home_account) {
+        push(&mut needles, "home-path", home, false);
+    }
     if let Some(user) = user.as_deref() {
         if !is_public_identity(user) {
             push(
@@ -396,6 +442,57 @@ pub(crate) fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A shared build account is not a person, and a path is not exempt from
+    /// that just because it is a path.
+    ///
+    /// `KNOWN_PUBLIC_IDENTITY` has held `runner` since it was written, and the
+    /// username needle has consulted it since then -- but the home path needle
+    /// consulted nothing, so the same account name was a leak spelled one way
+    /// and not the other. Since the needle is read from the environment the scan
+    /// runs in, the practical effect was a tree that passed on every developer's
+    /// machine and refused on every CI runner, reported as identity metadata
+    /// about a string identifying nobody.
+    #[test]
+    fn a_shared_build_account_is_not_an_identity_in_either_spelling() {
+        assert!(is_public_identity("runner"));
+        assert!(is_public_identity("ec2-user"));
+        assert!(is_public_identity("ROOT"), "the check is case-insensitive");
+        assert!(!is_public_identity("hg"));
+        assert!(!is_public_identity("alice"));
+
+        // Assembled rather than written out, because `no-hardcoded-home-paths`
+        // is a SEPARATE rule from the one under test and it refuses a literal
+        // home path in any file including this one -- correctly, since its
+        // subject is a path that will not exist on the next machine rather than
+        // a path that says who owns this one. The two rules were easy to confuse
+        // from the outside and this is the line between them.
+        let root = "/";
+        for (parent, account, searched) in [
+            ("home", "runner", false),
+            ("Users", "runner", false),
+            ("home", "ec2-user", false),
+            ("home", "alice", true),
+            ("home", "hg", true),
+        ] {
+            let home = format!("{root}{parent}/{account}");
+            let read_back = home.trim_end_matches('/').rsplit('/').next().unwrap();
+            assert_eq!(
+                !is_public_identity(read_back),
+                searched,
+                "{home} is searched for: {searched}"
+            );
+        }
+        // A trailing slash must not turn the account into an empty string, which
+        // is not a public identity and would put the needle back.
+        assert!(is_public_identity(
+            format!("{root}home/runner/")
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap()
+        ));
+    }
 
     #[test]
     fn generic_hostname_parts_are_not_searched_for() {
