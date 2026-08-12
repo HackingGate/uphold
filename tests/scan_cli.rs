@@ -981,3 +981,178 @@ fn the_promoted_sets_refuse_what_they_were_promoted_for() {
     // fired on everything would also satisfy.
     assert!(!text.contains("docs/setup.md -> "), "{text}");
 }
+
+/// A repository, because the two cases below are about git's index and a
+/// directory without one takes the walk instead.
+fn repository(root: &Path) {
+    for arguments in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.name", "Test"][..],
+        &["config", "user.email", "test@example.test"][..],
+    ] {
+        let status = Command::new("git")
+            .args(arguments)
+            .current_dir(root)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {arguments:?} failed");
+    }
+}
+
+fn add(root: &Path) {
+    let status = Command::new("git")
+        .args(["add", "-A", "."])
+        .current_dir(root)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// A path git tracks and the working tree cannot produce is exit 2, named.
+///
+/// It used to be dropped from the selection without a word, so every rule
+/// searched what was left, found nothing there, and the run printed `policy
+/// checks passed` at exit 0 over a tree it had not finished reading. The four
+/// ways in are an unstaged deletion, a sparse checkout, a directory this
+/// process may not enter, and a filesystem that lost the file; the report has
+/// to name the path in all of them, because that is the only part the reader
+/// can act on.
+#[test]
+fn a_tracked_path_the_tree_cannot_produce_is_named_and_is_not_a_pass() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TODO'
+
+        [rule.no-todo.files]
+        exclude = ["policy/**"]
+"#,
+    );
+    write(&root, "kept.txt", "fine\n");
+    write(&root, "gone.txt", "fine\n");
+    repository(&root);
+    add(&root);
+    std::fs::remove_file(root.join("gone.txt")).unwrap();
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("gone.txt"), "{text}");
+    assert!(text.contains("could not be read"), "{text}");
+    // Not a pass, and it must not read like one either.
+    assert!(!stdout(&output).contains("policy checks passed"), "{text}");
+}
+
+/// The other half: the unreadable path does not swallow the findings.
+///
+/// This is why the list rides out beside the files instead of ending the run at
+/// the first rule that hits it. A tree with one missing path still has an
+/// answer for every other rule, and a reader who only ever sees "restore this
+/// file" never learns there was a violation waiting behind it.
+#[test]
+fn an_unreadable_path_is_reported_beside_the_findings_and_not_instead_of_them() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TODO'
+
+        [rule.no-todo.files]
+        exclude = ["policy/**"]
+"#,
+    );
+    write(&root, "offender.txt", "TODO: later\n");
+    write(&root, "gone.txt", "fine\n");
+    repository(&root);
+    add(&root);
+    std::fs::remove_file(root.join("gone.txt")).unwrap();
+
+    let output = scan(&root);
+    let text = stderr(&output);
+    // Exit 1: something was found, and that is the answer the reader acts on
+    // first. The unreadable path is still named.
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("offender.txt:1:TODO: later"), "{text}");
+    assert!(text.contains("gone.txt"), "{text}");
+}
+
+/// The one loader, asked rather than re-implemented.
+///
+/// Which rules a repository runs is five interacting fields -- the bundled sets
+/// it inherits, the extra policy files `inherit.paths` merges, the ids
+/// `inherit.disabled_rules` drops, and its own rules shadowing an inherited id
+/// -- and every second reader of them is a reader free to disagree with the
+/// engine about what runs. `uphold_check.py` was that second reader. This is
+/// the answer it can ask for instead, so the assertions here are exactly the
+/// interactions a re-implementation gets wrong.
+#[test]
+fn the_effective_rules_are_what_inheritance_resolved_to() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/extra.toml",
+        r#"
+        [rule.from-a-path]
+        message = "inherited through inherit.paths"
+        regexp = 'nothing-matches-this'
+        files.include = ["."]
+"#,
+    );
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [inherit]
+        sets = ["process-residue"]
+        paths = ["policy/extra.toml"]
+        disabled_rules = ["no-task-tracker-references"]
+
+        [rule.of-its-own]
+        message = "declared here"
+        regexp = 'nothing-matches-this-either'
+        files.include = ["."]
+
+        [rule.no-local-merge]
+        builtin = "no-local-merge"
+        git.hooks = ["pre-merge-commit", "manual"]
+"#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["rules", "--effective", "--json"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let text = stdout(&output);
+
+    // Inherited from a bundled set, merged from a path, and declared here.
+    assert!(text.contains("\"no-merge-conflict-markers\""), "{text}");
+    assert!(text.contains("\"from-a-path\""), "{text}");
+    assert!(text.contains("\"of-its-own\""), "{text}");
+    // Dropped by name, which is the field a reader of `[rule.*]` tables alone
+    // never sees.
+    assert!(!text.contains("no-task-tracker-references"), "{text}");
+    // And the hooks travel with the rule, because "which rules run" cannot be
+    // answered without saying WHEN -- a claim on a guard is supplied only where
+    // the seam it fires at is installed.
+    assert!(
+        text.contains(
+            "{\"id\": \"no-local-merge\", \"git_hooks\": [\"pre-merge-commit\", \"manual\"]}"
+        ),
+        "{text}"
+    );
+    // A content rule fires at no git hook, and says so rather than being
+    // reported under whichever stage happened to be installed.
+    assert!(
+        text.contains("{\"id\": \"of-its-own\", \"git_hooks\": []}"),
+        "{text}"
+    );
+}

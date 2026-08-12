@@ -36,6 +36,7 @@ mod shim;
 mod sources;
 mod text;
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use crate::error::{Exit, Fatal, Result};
@@ -48,6 +49,8 @@ usage:
   uphold guard --text [FILE|-]       run the text-capable guards over text
   uphold audit --for-publication     what a private->public flip would republish
   uphold rules --set NAME            what a bundled rule set refuses, rule by rule
+  uphold rules --effective [--json]  every rule this repository resolves to, and
+                                     the git hooks each one fires at
   uphold shim <command> [args...]     check what a command would publish, then run it
 
 Invoked under a command's own name -- a link called `gh` on PATH ahead of the
@@ -78,7 +81,29 @@ UPHOLD_ALLOW=<id>,<id> bypasses named guards for one invocation.
 /// binary shipped rather than on the day they chose.
 const POLICY_NAMES: [&str; 2] = ["principles.toml", "rg-policy.toml"];
 
-/// Walk up from the working directory until a policy file appears.
+/// Whether this directory is where a repository begins.
+///
+/// `.git` is a directory in an ordinary clone and a FILE in a linked worktree
+/// and in a submodule, so the question is whether the name is there at all and
+/// never what kind of thing it is. `symlink_metadata` rather than
+/// `Path::exists` because a `.git` that cannot be followed is still a boundary:
+/// reading it as absent would resume the climb into the enclosing superproject,
+/// which is the one thing the boundary exists to stop.
+fn is_repository_root(directory: &Path) -> bool {
+    directory.join(".git").symlink_metadata().is_ok()
+}
+
+/// Walk up from the working directory until a policy file appears, stopping at
+/// the repository boundary.
+///
+/// The stop is the whole of the difference between a policy and somebody else's
+/// policy. Without it, a repository with no policy of its own kept climbing,
+/// loaded the enclosing superproject's, and adopted the SUPERPROJECT'S
+/// directory as root -- so the run scanned another tree and the report named
+/// files that are not in the repository the command was run in, under this
+/// repository's name. Nine repositories in the workspace this was found in have
+/// no policy and sit inside superprojects that do, so every one of them was
+/// being reported on by proxy.
 fn discover(start: &Path) -> Option<(PathBuf, PathBuf)> {
     let mut candidate = start.to_path_buf();
     loop {
@@ -88,10 +113,76 @@ fn discover(start: &Path) -> Option<(PathBuf, PathBuf)> {
                 return Some((candidate.clone(), policy));
             }
         }
-        if !candidate.pop() {
+        // Asked AFTER the lookup: a repository root carrying its own policy is
+        // the ordinary case, and it has to be found rather than stopped at.
+        if is_repository_root(&candidate) || !candidate.pop() {
             return None;
         }
     }
+}
+
+/// The refusal every entry point shares when no policy is within reach.
+///
+/// It says "in this repository" because that is now the whole of what was
+/// looked at. The alternative is not a pass and never was: a repository with no
+/// policy has nothing to check against, and borrowing a parent's was a report
+/// about a different tree.
+fn no_policy_here(working: &Path) -> Fatal {
+    Fatal::new(format!(
+        "no policy in this repository (looked for policy/{} from {} up to the \
+         repository root). A repository's policy is its own -- an enclosing \
+         superproject's is not borrowed, because a report naming files outside \
+         this repository is a report about something else",
+        POLICY_NAMES.join(" or policy/"),
+        working.display()
+    ))
+}
+
+/// The root that an explicitly named policy file is the policy for.
+///
+/// `--policy PATH` used to take the file's grandparent and check nothing, which
+/// is the root only when the file really is at `<root>/policy/<name>.toml`:
+/// `uphold scan --policy principles.toml` made the root the repository's
+/// PARENT, and a policy one directory below `/` made it `/`. The default
+/// include of `["."]` then walks whatever that came out as. So the layout
+/// `discover` looks for is asserted here rather than assumed, and a root that
+/// cannot be established is exit 2 -- scanning the wrong tree and reporting on
+/// it is worse than saying the layout was not understood.
+fn root_of(policy: &Path) -> Result<PathBuf> {
+    let directory = policy.parent();
+    let inside_policy_directory = directory
+        .and_then(Path::file_name)
+        .is_some_and(|name| name == "policy");
+    match directory.and_then(Path::parent) {
+        Some(root) if inside_policy_directory => Ok(root.to_path_buf()),
+        _ => Err(Fatal::at(
+            policy,
+            "a policy file says which tree it is about by where it sits, and this one \
+             is not at <root>/policy/<name>.toml, so there is no root to scan. Move it \
+             under a `policy` directory, or drop --policy and let `uphold scan` find \
+             the one belonging to the repository you are standing in",
+        )),
+    }
+}
+
+/// The text of an argument that has to be text to mean anything.
+///
+/// argv on Unix is arbitrary bytes: a file named in latin-1 is a perfectly good
+/// argument, and `std::env::args()` PANICS on one -- exit 101, which is not one
+/// of the three codes this tool promises, out of a binary designed to stand in
+/// front of `git`, `gh` and `npm` and be handed exactly such paths. So argv is
+/// read as `OsString` and only the names that are compared against literals
+/// here -- an option, a subcommand, a rule-set name, the command a shim stands
+/// in front of -- are converted, each with this. A name that is not UTF-8 names
+/// nothing this binary has, and saying so is exit 2.
+fn text_of(argument: &OsStr) -> Result<&str> {
+    argument.to_str().ok_or_else(|| {
+        Fatal::new(format!(
+            "the argument {:?} is not valid UTF-8, and an option name, a subcommand \
+             name and a command name are all read as text",
+            argument.to_string_lossy()
+        ))
+    })
 }
 
 fn run() -> Result<Exit> {
@@ -99,78 +190,79 @@ fn run() -> Result<Exit> {
     // binary IS that shim -- which is what ends `install.sh` and the
     // sibling-checkout coupling: there is nothing to install but a link, and
     // nothing to find but this binary.
-    let invoked_as = std::env::args()
-        .next()
-        .map(PathBuf::from)
-        .and_then(|path| {
-            path.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
-        .unwrap_or_default();
-    if !invoked_as.is_empty() && invoked_as != "uphold" {
-        let argv: Vec<String> = std::env::args().skip(1).collect();
-        return shim_command(&invoked_as, &argv);
+    let mut argv = std::env::args_os();
+    let program = argv.next().unwrap_or_default();
+    let arguments: Vec<OsString> = argv.collect();
+    if let Some(name) = Path::new(&program)
+        .file_name()
+        .filter(|name| !name.is_empty() && name.to_str() != Some("uphold"))
+    {
+        return shim_command(text_of(name)?, &arguments);
     }
 
-    let argv: Vec<String> = std::env::args().skip(1).collect();
-    let mut arguments = argv.iter().map(String::as_str);
+    let Some((first, rest)) = arguments.split_first() else {
+        print!("{USAGE}");
+        return Ok(Exit::Clean);
+    };
 
-    match arguments.next() {
-        Some("--version" | "-V") => {
+    match text_of(first)? {
+        "--version" | "-V" => {
             println!("uphold {}", env!("CARGO_PKG_VERSION"));
             Ok(Exit::Clean)
         }
-        Some("--help" | "-h") | None => {
+        "--help" | "-h" => {
             print!("{USAGE}");
             Ok(Exit::Clean)
         }
-        Some("scan") => scan_command(&arguments.collect::<Vec<_>>()),
-        Some("guard") => guard_command(&arguments.collect::<Vec<_>>()),
-        Some("audit") => audit_command(&arguments.collect::<Vec<_>>()),
-        Some("rules") => {
-            let rest: Vec<&str> = arguments.collect();
-            match rest.as_slice() {
-                ["--set", name] => rules_command(name),
-                _ => Err(Fatal::new(format!(
-                    "usage: uphold rules --set NAME\n\n{USAGE}"
-                ))),
+        "scan" => scan_command(rest),
+        "guard" => guard_command(rest),
+        "audit" => audit_command(rest),
+        "rules" => match rest {
+            [flag, name] if flag == "--set" => rules_command(text_of(name)?),
+            [flag] if flag == "--effective" => effective_rules_command(false),
+            [flag, format] if flag == "--effective" && format == "--json" => {
+                effective_rules_command(true)
             }
-        }
-        Some("shim") => {
-            let rest: Vec<&str> = arguments.collect();
+            _ => Err(Fatal::new(format!(
+                "usage: uphold rules --set NAME | uphold rules --effective [--json]\n\n{USAGE}"
+            ))),
+        },
+        "shim" => {
             let (name, shimmed) = rest
                 .split_first()
                 .ok_or_else(|| Fatal::new(format!("shim needs a command\n\n{USAGE}")))?;
-            shim_command(
-                name,
-                &shimmed
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<String>>(),
-            )
+            shim_command(text_of(name)?, shimmed)
         }
-        Some(other) => Err(Fatal::new(format!(
+        other => Err(Fatal::new(format!(
             "unknown subcommand {other:?}\n\n{USAGE}"
         ))),
     }
 }
 
-fn scan_command(arguments: &[&str]) -> Result<Exit> {
+fn scan_command(arguments: &[OsString]) -> Result<Exit> {
     let mut explicit_policy: Option<PathBuf> = None;
     let mut text_source: Option<String> = None;
     let mut index = 0;
-    while let Some(argument) = arguments.get(index).copied() {
-        match argument {
+    while let Some(argument) = arguments.get(index) {
+        match text_of(argument)? {
             "--policy" => {
                 index += 1;
                 let value = arguments
                     .get(index)
                     .ok_or_else(|| Fatal::new("--policy needs a path"))?;
+                // A path keeps its bytes. Only the flag NAME above had to be
+                // text, and a policy file whose name is not UTF-8 opens exactly
+                // as well as one whose name is.
                 explicit_policy = Some(PathBuf::from(value));
             }
             "--text" => {
                 index += 1;
-                text_source = Some(arguments.get(index).copied().unwrap_or("-").to_owned());
+                // This one is a path or `-`, and what reads it takes text, so
+                // it converts here -- as a sentence and exit 2, never a panic.
+                text_source = Some(match arguments.get(index) {
+                    Some(value) => text_of(value)?.to_owned(),
+                    None => String::from("-"),
+                });
             }
             other => return Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}"))),
         }
@@ -183,10 +275,7 @@ fn scan_command(arguments: &[&str]) -> Result<Exit> {
             let policy = path
                 .canonicalize()
                 .map_err(|error| Fatal::at(path, error))?;
-            let root = policy
-                .parent()
-                .and_then(Path::parent)
-                .map_or_else(|| working.clone(), Path::to_path_buf);
+            let root = root_of(&policy)?;
             Some((root, policy))
         }
         None => discover(&working),
@@ -197,11 +286,7 @@ fn scan_command(arguments: &[&str]) -> Result<Exit> {
     }
 
     let Some((root, policy_path)) = found else {
-        return Err(Fatal::new(format!(
-            "no policy file found (looked for policy/{} walking up from {})",
-            POLICY_NAMES.join(" or policy/"),
-            working.display()
-        )));
+        return Err(no_policy_here(&working));
     };
 
     let policy = config::load(&root, &policy_path)?;
@@ -226,35 +311,68 @@ fn scan_command(arguments: &[&str]) -> Result<Exit> {
         }
     }
 
-    if failures.is_empty() {
-        println!("policy checks passed");
-        return Ok(Exit::Clean);
+    // The other half of that distinction, and the one nobody declared. A path
+    // a rule selected and could not open was dropped from the list on the way
+    // in, so the rule searched what was left, found nothing there, and the run
+    // said `policy checks passed` over a tree it had not finished reading.
+    // Named here, one line each, and exit 2 -- the same shape `audit
+    // --for-publication` uses for a forge surface it could not list.
+    let unreadable = scanner.unreadable();
+    if !unreadable.is_empty() {
+        eprintln!(
+            "{} path(s) could not be read, so this run searched part of the tree and not the \
+             rest -- which is not the same as finding nothing:",
+            unreadable.len()
+        );
+        for note in &unreadable {
+            eprintln!("  {note}");
+        }
     }
-    Ok(Exit::Violations)
+
+    if !failures.is_empty() {
+        // A violation outranks an unreadable path, the way it does in `audit`
+        // and in the pin guard: something was found, and exit 1 is the answer
+        // to "is this tree publishable" that the reader has to act on first.
+        // The unreadable list is printed either way, so nothing is hidden by
+        // the ranking -- only the exit code is decided by it.
+        return Ok(Exit::Violations);
+    }
+    if !unreadable.is_empty() {
+        return Ok(Exit::Broken);
+    }
+    println!("policy checks passed");
+    Ok(Exit::Clean)
 }
 
-fn guard_command(arguments: &[&str]) -> Result<Exit> {
+fn guard_command(arguments: &[OsString]) -> Result<Exit> {
     let mut stage: Option<guard::Stage> = None;
     let mut message: Option<PathBuf> = None;
     let mut remote_name: Option<String> = None;
     let mut remote_url: Option<String> = None;
     let mut text_source: Option<String> = None;
     let mut index = 0;
-    while let Some(argument) = arguments.get(index).copied() {
+    while let Some(argument) = arguments.get(index) {
+        // A stage name, a remote name, a remote URL and a text source are all
+        // read as text by what they are handed to, so those values convert
+        // here. `--message` does not: it is a path, and a path does not have to
+        // be text to be opened.
         let value = |at: usize, flag: &str| -> Result<String> {
-            arguments
+            let given = arguments
                 .get(at)
-                .map(ToString::to_string)
-                .ok_or_else(|| Fatal::new(format!("{flag} needs a value")))
+                .ok_or_else(|| Fatal::new(format!("{flag} needs a value")))?;
+            Ok(text_of(given)?.to_owned())
         };
-        match argument {
+        match text_of(argument)? {
             "--stage" => {
                 index += 1;
                 stage = Some(guard::Stage::parse(&value(index, "--stage")?)?);
             }
             "--message" => {
                 index += 1;
-                message = Some(PathBuf::from(value(index, "--message")?));
+                let path = arguments
+                    .get(index)
+                    .ok_or_else(|| Fatal::new("--message needs a value"))?;
+                message = Some(PathBuf::from(path));
             }
             "--remote" => {
                 index += 1;
@@ -266,7 +384,10 @@ fn guard_command(arguments: &[&str]) -> Result<Exit> {
             }
             "--text" => {
                 index += 1;
-                text_source = Some(arguments.get(index).copied().unwrap_or("-").to_owned());
+                text_source = Some(match arguments.get(index) {
+                    Some(given) => text_of(given)?.to_owned(),
+                    None => String::from("-"),
+                });
             }
             other => return Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}"))),
         }
@@ -274,13 +395,7 @@ fn guard_command(arguments: &[&str]) -> Result<Exit> {
     }
 
     let working = std::env::current_dir()?;
-    let (root, policy_path) = discover(&working).ok_or_else(|| {
-        Fatal::new(format!(
-            "no policy file found (looked for policy/{} walking up from {})",
-            POLICY_NAMES.join(" or policy/"),
-            working.display()
-        ))
-    })?;
+    let (root, policy_path) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
     let policy = config::load(&root, &policy_path)?;
 
     if let Some(source) = text_source {
@@ -342,11 +457,11 @@ fn guard_command(arguments: &[&str]) -> Result<Exit> {
     )
 }
 
-fn audit_command(arguments: &[&str]) -> Result<Exit> {
+fn audit_command(arguments: &[OsString]) -> Result<Exit> {
     // No default mode. `audit` on its own would have to pick a question, and
     // the one it would pick is the one this tool exists because nothing asks.
-    match arguments.first().copied() {
-        Some("--for-publication") if arguments.len() == 1 => {}
+    match arguments {
+        [only] if only == "--for-publication" => {}
         _ => {
             return Err(Fatal::new(format!(
                 "audit needs --for-publication\n\n{USAGE}"
@@ -354,13 +469,7 @@ fn audit_command(arguments: &[&str]) -> Result<Exit> {
         }
     }
     let working = std::env::current_dir()?;
-    let (root, policy_path) = discover(&working).ok_or_else(|| {
-        Fatal::new(format!(
-            "no policy file found (looked for policy/{} walking up from {})",
-            POLICY_NAMES.join(" or policy/"),
-            working.display()
-        ))
-    })?;
+    let (root, policy_path) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
     let policy = config::load(&root, &policy_path)?;
     audit::for_publication(&root, &policy)
 }
@@ -383,16 +492,104 @@ fn rules_command(name: &str) -> Result<Exit> {
     Ok(Exit::Clean)
 }
 
-fn shim_command(name: &str, argv: &[String]) -> Result<Exit> {
+/// One JSON string, escaped.
+///
+/// Hand-written rather than pulled in with a serialization crate, because this
+/// is the only JSON this binary emits and a rule id is the only thing in it
+/// that is not a fixed literal. The escapes are the ones RFC 8259 requires: the
+/// two structural characters, and every control character below U+0020, which
+/// a `\u` escape covers whatever it is.
+fn json_string(value: &str, into: &mut String) {
+    into.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => into.push_str("\\\""),
+            '\\' => into.push_str("\\\\"),
+            '\n' => into.push_str("\\n"),
+            '\r' => into.push_str("\\r"),
+            '\t' => into.push_str("\\t"),
+            control if control < ' ' => {
+                // Two digits is the whole range: everything below U+0020 fits
+                // in a byte, and `from_digit` is total for a value under 16, so
+                // the fallback below is unreachable rather than a guess.
+                let code = u32::from(control);
+                into.push_str("\\u00");
+                into.push(char::from_digit(code >> 4, 16).unwrap_or('0'));
+                into.push(char::from_digit(code & 0xf, 16).unwrap_or('0'));
+            }
+            ordinary => into.push(ordinary),
+        }
+    }
+    into.push('"');
+}
+
+/// Every rule this repository actually resolves to, after inheritance.
+///
+/// It exists so that nothing else has to re-implement `config::load`. What a
+/// repository runs is the bundled sets it names, plus the extra policy files
+/// `inherit.paths` merges, minus `inherit.disabled_rules`, with its own rules
+/// shadowing an inherited id -- five interacting fields, and every second
+/// reader of them is a reader free to disagree with the engine about which
+/// rules run. The reconciler in `uphold_check.py` is that second reader today,
+/// and this is what ends it: one loader answers, and everything else asks.
+///
+/// `--json` because the caller is a program. The human form is the same answer
+/// for a person standing in a repository asking what it is holding itself to.
+fn effective_rules_command(as_json: bool) -> Result<Exit> {
     let working = std::env::current_dir()?;
-    let (root, policy_path) = discover(&working).ok_or_else(|| {
-        Fatal::new(format!(
-            "no policy file found (looked for policy/{} walking up from {})",
-            POLICY_NAMES.join(" or policy/"),
-            working.display()
-        ))
-    })?;
+    let (root, policy_path) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
     let policy = config::load(&root, &policy_path)?;
+
+    if !as_json {
+        println!("{} rule(s) in effect", policy.rules.len());
+        for rule in &policy.rules {
+            let hooks = rule.hooks();
+            let at = if hooks.is_empty() {
+                String::from("no git hook")
+            } else {
+                hooks.join(", ")
+            };
+            println!("  {}  ({at})", rule.id);
+        }
+        return Ok(Exit::Clean);
+    }
+
+    let mut document = String::from("[");
+    for (index, rule) in policy.rules.iter().enumerate() {
+        if index > 0 {
+            document.push(',');
+        }
+        document.push_str("\n  {\"id\": ");
+        json_string(&rule.id, &mut document);
+        document.push_str(", \"git_hooks\": [");
+        for (position, hook) in rule.hooks().iter().enumerate() {
+            if position > 0 {
+                document.push_str(", ");
+            }
+            json_string(hook, &mut document);
+        }
+        document.push_str("]}");
+    }
+    if !policy.rules.is_empty() {
+        document.push('\n');
+    }
+    document.push(']');
+    println!("{document}");
+    Ok(Exit::Clean)
+}
+
+fn shim_command(name: &str, argv: &[OsString]) -> Result<Exit> {
+    let working = std::env::current_dir()?;
+    let (root, policy_path) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
+    let policy = config::load(&root, &policy_path)?;
+    // The shimmed command's arguments stay bytes all the way to the exec. On
+    // Unix an argument is an arbitrary byte string -- `git add` on a file named
+    // in latin-1 is an ordinary thing to type, and this binary is installed in
+    // front of `git` exactly where that happens. `shim::run` reads a lossy copy
+    // to decide what the invocation is, and hands these to the exec, so the
+    // command that runs is the command that was typed. Where the shim has
+    // something to CHECK, it refuses the untranslatable argument itself, in the
+    // words of what it could not read.
     shim::run(&root, &policy, name, argv)
 }
 
@@ -405,4 +602,118 @@ fn main() {
         }
     };
     std::process::exit(exit.code());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{discover, root_of};
+    use std::path::{Path, PathBuf};
+
+    /// One directory per case. The suite runs in parallel threads of a single
+    /// process, so a path keyed on the process id alone is the SAME path for
+    /// every case, and one case reads the tree another just built.
+    fn workspace() -> PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "uphold-discover-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn write_policy(directory: &Path) -> PathBuf {
+        std::fs::create_dir_all(directory.join("policy")).unwrap();
+        let path = directory.join("policy/principles.toml");
+        std::fs::write(&path, "allowed_scripts = [\"Latin\"]\n").unwrap();
+        path
+    }
+
+    /// The live bug: nine repositories with no policy of their own, each inside
+    /// a superproject that has one.
+    ///
+    /// The old walk climbed past the inner repository's own root, loaded the
+    /// superproject's policy and adopted the SUPERPROJECT'S directory as root,
+    /// so the report named files outside the repository the command was run in.
+    #[test]
+    fn a_repository_with_no_policy_does_not_borrow_the_superprojects() {
+        let superproject = workspace();
+        write_policy(&superproject);
+        let inner = superproject.join("inner");
+        std::fs::create_dir_all(inner.join("src")).unwrap();
+        std::fs::create_dir_all(inner.join(".git")).unwrap();
+
+        assert!(discover(&inner).is_none(), "borrowed the superproject");
+        assert!(
+            discover(&inner.join("src")).is_none(),
+            "climbed out of the repository from a subdirectory"
+        );
+        // And the superproject itself still finds its own, from any depth: the
+        // stop is a boundary, not a ban on walking up.
+        assert_eq!(
+            discover(&superproject).map(|(root, _)| root),
+            Some(superproject.clone())
+        );
+    }
+
+    /// A `.git` FILE is the boundary too -- that is what a linked worktree and
+    /// a submodule have where a clone has a directory.
+    #[test]
+    fn a_git_file_stops_the_walk_the_way_a_git_directory_does() {
+        let superproject = workspace();
+        write_policy(&superproject);
+        let inner = superproject.join("submodule");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(inner.join(".git"), "gitdir: ../.git/modules/submodule\n").unwrap();
+
+        assert!(discover(&inner).is_none());
+    }
+
+    /// The boundary is where the walk STOPS, not where it refuses to look: a
+    /// repository root carrying its own policy is the ordinary case.
+    #[test]
+    fn a_repository_root_with_its_own_policy_is_still_found() {
+        let superproject = workspace();
+        write_policy(&superproject);
+        let inner = superproject.join("inner");
+        std::fs::create_dir_all(inner.join(".git")).unwrap();
+        let policy = write_policy(&inner);
+        std::fs::create_dir_all(inner.join("src")).unwrap();
+
+        assert_eq!(
+            discover(&inner.join("src")),
+            Some((inner.clone(), policy)),
+            "a repository's own policy is what it is checked against"
+        );
+    }
+
+    /// `--policy` derived the root by taking the file's grandparent and
+    /// checking nothing, so `--policy principles.toml` rooted the scan at the
+    /// repository's PARENT and a policy one directory below `/` rooted it at
+    /// `/`. The default include of `["."]` then walked that.
+    #[test]
+    fn an_explicit_policy_off_the_layout_has_no_root_to_scan() {
+        for off_layout in [
+            "principles.toml",
+            "/principles.toml",
+            "/srv/example/rules/principles.toml",
+        ] {
+            let error = root_of(Path::new(off_layout))
+                .expect_err("a root derived from a layout that is not there is the wrong tree");
+            assert!(
+                error.to_string().contains("<root>/policy/<name>.toml"),
+                "{off_layout}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_explicit_policy_in_the_layout_roots_at_the_repository() {
+        assert_eq!(
+            root_of(Path::new("/srv/example/policy/principles.toml")).unwrap(),
+            Path::new("/srv/example")
+        );
+    }
 }
