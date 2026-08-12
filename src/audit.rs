@@ -42,7 +42,7 @@
 //! still carries the caveat in its body.
 
 use std::collections::BTreeSet;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -106,14 +106,32 @@ fn git_lines(root: &Path, args: &[&str]) -> Result<String> {
 /// other. Reporting them produces findings whose only fix is to delete
 /// something the reader would then discover was never published -- and a report
 /// that cries wolf about the unpublishable is one nobody finishes reading.
-fn history(root: &Path) -> Result<Vec<Surface>> {
+/// Bring the remote-tracking refs up to date before anything reads them.
+///
+/// This lived inside `history`, which runs after `reachable_blobs`, so the
+/// object walk read a ref set that had not been fetched and had not been pruned:
+/// an object the forge holds but this clone had never seen was missed entirely,
+/// and a branch deleted upstream was still walked as something the forge serves.
+/// Both readings are about what publication exposes, so both need the same
+/// answer, which means the fetch belongs before either of them rather than
+/// inside whichever happens to run first.
+fn refresh_origin(root: &Path) {
     // Pruned, because a remote-tracking ref for a branch deleted upstream still
     // exists locally and would be read as something the forge still serves.
+    //
+    // A failure is deliberately not fatal here. Offline, the audit still has
+    // every ref this clone already holds, and refusing to run at all would make
+    // the pre-publication check unavailable exactly when a reviewer is most
+    // likely to reach for it. What must not happen is a silent success, and the
+    // caller reports the staleness instead.
     Command::new("git")
         .args(["fetch", "-q", "--prune", "origin"])
         .current_dir(root)
         .output()
         .ok();
+}
+
+fn history(root: &Path) -> Result<Vec<Surface>> {
     let listed = git_lines(root, &["log", "--remotes=origin", "--format=%H%x1f%B%x1e"])?;
     let mut surfaces = Vec::new();
     for record in listed.split('\u{1e}') {
@@ -376,32 +394,63 @@ fn blob_shas(root: &Path, shas: &[String]) -> Result<BTreeSet<String>> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| Fatal::new(format!("git cat-file: {error}")))?;
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| Fatal::new("git cat-file: no stdin"))?;
-        for sha in shas {
-            writeln!(stdin, "{sha}")
-                .map_err(|error| Fatal::new(format!("git cat-file: {error}")))?;
-        }
-    }
-    let output = child
-        .wait_with_output()
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| Fatal::new("git cat-file: no stdin"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| Fatal::new("git cat-file: no stdout"))?;
+    // Both pipes move at once, for the reason `selection::not_text_paths` gives
+    // at greater length: `--batch-check` answers each object as it reads it, at
+    // roughly fifty bytes an answer, so it fills its stdout pipe -- 64 KiB on
+    // Linux -- somewhere near the thirteen-hundredth object and stops reading
+    // stdin. A parent that writes the whole list first is then blocked on a full
+    // stdin pipe while the child is blocked on a stdout pipe nobody is draining.
+    // Every repository this audit is meant for is far past that count, so
+    // writing first is not a rare hang, it is the ordinary case.
+    let mut answered: Vec<u8> = Vec::new();
+    let written = std::thread::scope(|scope| {
+        let writer = scope.spawn(move || {
+            for sha in shas {
+                writeln!(stdin, "{sha}")?;
+            }
+            // Dropped here, and closing stdin is what tells `--batch-check` the
+            // list is finished. Without it the child waits for more input that
+            // is never coming and the read below never sees end of file.
+            drop(stdin);
+            Ok::<(), std::io::Error>(())
+        });
+        let drained = stdout.read_to_end(&mut answered);
+        // The writer's own error outranks the drain's: a child that died early
+        // shows up here as a broken pipe, and the drain merely stops.
+        writer.join().map_or_else(
+            |_| {
+                Err(std::io::Error::other(
+                    "git cat-file: writer thread panicked",
+                ))
+            },
+            |result| result.and_then(|()| drained.map(|_| ())),
+        )
+    });
+    written.map_err(|error| Fatal::new(format!("git cat-file: {error}")))?;
+    let status = child
+        .wait()
         .map_err(|error| Fatal::new(format!("git cat-file: {error}")))?;
     // Reported rather than swallowed, for the reason `keep_blobs` in
     // `guard::scope` gives: no stdout means no known kinds, the filter below
     // then keeps nothing, and a repository whose objects could not be identified
     // would be audited as a repository with nothing in it.
-    if !output.status.success() {
+    if !status.success() {
         return Err(Fatal::new(format!(
             "git cat-file --batch-check exited {}: cannot tell which of {} reachable \
              object(s) are blobs, and reading none of them would report as a clean tree",
-            output.status.code().unwrap_or(-1),
+            status.code().unwrap_or(-1),
             shas.len()
         )));
     }
-    let text = String::from_utf8_lossy(&output.stdout);
+    let text = String::from_utf8_lossy(&answered);
     for line in text.lines() {
         let fields: Vec<&str> = line.split_whitespace().collect();
         if let [name, "blob", ..] = fields.as_slice() {
@@ -553,6 +602,12 @@ pub(crate) fn for_publication(root: &Path, policy: &Policy) -> Result<Exit> {
         "Judged under the visibility this repository is ABOUT to have (public), not the one \
          it has."
     );
+
+    // Every read below is about what the forge will serve, so every read below
+    // wants the same ref set: fetched, and pruned of branches the forge no
+    // longer has. This ran inside `history`, three lines further down, which
+    // left `reachable_blobs` walking whatever the last fetch happened to leave.
+    refresh_origin(root);
 
     // The pull refs are fetched FIRST, because `reachable_blobs` walks them:
     // a blob that only ever existed on a pull-request head is served by the
