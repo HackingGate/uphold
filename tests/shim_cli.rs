@@ -542,6 +542,162 @@ fn a_clean_body_reaches_the_real_command_through_a_builtin_checker() {
     assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
 }
 
+/// A `git` shim as the shipped policy declares it, with git's own global
+/// grammar written nowhere in it.
+const GIT_POLICY: &str = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+exec = "uphold guard --text -"
+
+[rule.no-published-markers.command]
+before = ["git"]
+
+[rule.prevent-ai-author]
+builtin = "prevent-ai-author"
+
+[rule.prevent-ai-author.git]
+hooks = ["commit-msg"]
+
+[[shim]]
+command = "git"
+match = ["push:*"]
+text_flags = ["-m"]
+scope = "always"
+"#;
+
+/// A stub for a command the workspace does not install by default.
+fn stub(root: &Path, name: &str, script: &str) {
+    let path = root.join("bin").join(name);
+    std::fs::write(&path, script).unwrap();
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&path, permissions).unwrap();
+}
+
+#[test]
+fn a_git_global_option_before_the_subcommand_does_not_switch_the_shim_off() {
+    // A `[[shim]]` table names the flags whose values it publishes; nothing in
+    // one says what `git -c` does, and no repository should have to write git's
+    // grammar into its policy to be guarded. Skipping only the table's flags,
+    // `git -c user.name=x push ...` reads `user.name=x` as the verb -- no
+    // `match` entry contains that, so a push to a public forge exec'd
+    // unexamined, silently and with an exit code of 0.
+    let root = workspace(GIT_POLICY);
+    stub(&root, "git", "#!/bin/sh\necho \"git ran: $*\"\n");
+    for form in [
+        vec![
+            "git",
+            "-c",
+            "user.name=x",
+            "push",
+            "-m",
+            "Generated with Claude Code",
+        ],
+        vec![
+            "git",
+            "-C",
+            "/somewhere/else",
+            "push",
+            "-m",
+            "Generated with Claude Code",
+        ],
+        vec![
+            "git",
+            "--git-dir",
+            "/elsewhere/.git",
+            "push",
+            "-m",
+            "Generated with Claude Code",
+        ],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("git ran:"), "{form:?}");
+    }
+
+    // And the half a looser matcher would lose: `-c` takes the word after it,
+    // so `status` there is a value and not a subcommand this shim checks. Read
+    // as a decision rather than as an ambiguity -- knowing git's grammar is
+    // what keeps every `git -c ... status` on the machine quiet.
+    let output = shim(&root, &["git", "-c", "user.name=push", "status"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("git ran:"), "{}", stdout(&output));
+    assert!(
+        !stderr(&output).contains("This is not a pass."),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn an_option_nothing_can_classify_is_said_out_loud_rather_than_passed_in_silence() {
+    // Neither reading of `--fictional value` names an invocation this shim
+    // checks, so which subcommand this even is was never established. Running
+    // it anyway is deliberate -- the link is on PATH for the whole machine, and
+    // refusing every command that grows an option would make the guard the
+    // reason work stops -- but running it in silence is the shape of failure
+    // this tool refuses.
+    let root = workspace(POLICY);
+    let output = shim(&root, &["faux", "--fictional", "value", "repo", "clone"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran:"), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("This is not a pass."),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A shim that names this invocation, and a checker that names another one.
+///
+/// The load refuses a `[[shim]]` whose command no rule names at all. This is
+/// the same reading one invocation later: `faux pr create` is checked, and
+/// `faux issue create` -- which the same `match` list names -- is collected,
+/// consulted by nobody, and exec'd.
+const NARROWED_CHECKER: &str = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+exec = "uphold guard --text -"
+
+[rule.no-published-markers.command]
+before = ["faux pr create"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create", "issue:*"]
+text_flags = ["-t", "--title", "-b", "--body"]
+scope = "always"
+"#;
+
+#[test]
+fn an_invocation_no_checker_stands_in_front_of_is_not_a_pass() {
+    let root = workspace(NARROWED_CHECKER);
+
+    // The invocation a rule does name is checked, and runs.
+    let output = shim(&root, &["faux", "pr", "create", "-t", "An ordinary title"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran:"), "{}", stdout(&output));
+
+    // The one it does not is exit 2 and no command at all. A body collected and
+    // consulted by nobody exits 0 otherwise, which is indistinguishable from a
+    // body every checker approved.
+    let output = shim(
+        &root,
+        &["faux", "issue", "create", "-t", "An ordinary title"],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("nothing would have been checked"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn a_builtin_checker_satisfies_the_shim_that_would_otherwise_check_nothing() {
     // The load refuses a shim no checker names, because a command collected and

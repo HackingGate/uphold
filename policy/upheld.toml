@@ -41,14 +41,27 @@ rule = "catalog-tests"
 [[enforce]]
 principle = "explicit-unknown"
 rule = "no-stale-hook-pins"
-# A pin that could not be checked -- unreachable remote, unreadable config, a
-# bare sha with no ref to look up -- exits 2, which is not the 0 it would exit
-# if the pin resolved. The claim used to name `hook-pins-resolve`, a separate
-# script asking that half of the question while this guard asked the other and
-# counted a pin it could not reach as passed; one rule asks both now, so the
-# claim moves to the rule that carries it. src/pins.rs::stale returns the
-# "Could not look is not a pass" refusal, and tests/hook_pins_cli.rs asserts
-# that an unreachable remote is exit 2 rather than the exit 0 it used to be.
+# A pin that could not be checked -- a remote this run could not reach, a
+# directory it could not read, or a tree holding no hook configuration of either
+# manager at all -- exits 2, which is not the 0 it would exit if the pin
+# resolved. That third case is the could-not-look one step earlier than the
+# others: zero pins found is not zero pins to find, and a config renamed, moved
+# above the root, or added to .gitignore looks exactly like a repository that
+# never had one.
+#
+# A bare sha naming no tag is deliberately NOT one of them, and must not be
+# listed here as though it were: the sha arm of `src/pins.rs::stale` passes it,
+# on the ground that a sha is neither behind a tag nor missing. This claim
+# records that decision rather than papering over it -- what would make the
+# claim false is the guard exiting 0 over a pin it could not establish, not over
+# one it established by a different route.
+#
+# The claim used to name `hook-pins-resolve`, a separate script asking that half
+# of the question while this guard asked the other and counted a pin it could
+# not reach as passed; one rule asks both now, so the claim moves to the rule
+# that carries it. src/pins.rs::stale returns the "Could not look is not a pass"
+# refusal, and tests/hook_pins_cli.rs asserts that an unreachable remote is exit
+# 2 rather than the exit 0 it used to be.
 
 [[enforce]]
 principle = "single-authoritative-source"

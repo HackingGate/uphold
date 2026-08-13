@@ -156,11 +156,7 @@ fn foreign_forge_names(text: &str) -> BTreeSet<(String, String)> {
 /// A private repository on another forge is still reachable here: declare its
 /// owner in `private_owners`, which is matched in the bare form and needs no
 /// network.
-fn candidates(
-    text: &str,
-    private_owners: &[String],
-    own_owner: Option<&str>,
-) -> BTreeSet<(String, String)> {
+fn candidates(text: &str, owners: &OwnerMatchers) -> BTreeSet<(String, String)> {
     let mut found: BTreeSet<(String, String)> = BTreeSet::new();
     for capture in url_pattern().captures_iter(text) {
         if !is_github_host(&capture[1]) {
@@ -174,63 +170,91 @@ fn candidates(
         found.insert((owner, repo));
     }
 
-    // The repository's OWN owner, treated as though it had been declared.
-    //
-    // `acme/widget` written with no host is the spelling a README uses for a
-    // sibling -- "now maintained in acme/widget" -- and the URL forms above all
-    // miss it. It is not caught for owners in general because a bare
-    // `owner/repo` is indistinguishable from a relative path, and every path in
-    // every document would become a lookup. It is caught for THIS owner because
-    // a segment equal to the login that owns the repository, followed by a
-    // name, is a sibling reference and not a directory: nobody writes
-    // `acme/main.rs`.
-    //
-    // Found by trying to write the deprecation note that would close #29 and
-    // watching the guard pass it.
-    let mut owners: Vec<String> = private_owners.to_vec();
-    if let Some(own_owner) = own_owner {
-        if !owners
-            .iter()
-            .any(|owner| owner.eq_ignore_ascii_case(own_owner))
-        {
-            owners.push(own_owner.to_owned());
-        }
-    }
-
-    for owner in &owners {
-        // Anchored at the owner so a declared-private owner is found in the
-        // bare form too. Escaped, because an owner may legitimately contain a
-        // dot and an unescaped one would match any character.
-        let pattern = format!(
-            r"(?i)\b{}/([A-Za-z0-9][A-Za-z0-9._-]*)",
-            regex::escape(owner)
-        );
-        let Ok(matcher) = Regex::new(&pattern) else {
-            continue;
-        };
+    for (owner, matcher) in &owners.named {
         for capture in matcher.captures_iter(text) {
             found.insert((owner.clone(), clean_repo(&capture[1])));
         }
-
-        // The owner ON ITS OWN, with no repository after it. Every form above
-        // needs an `owner/repo`, and this is the one that got past a hand
-        // audit: a sentence naming a private organisation discloses that it
-        // exists and who owns it without ever naming one of its repositories.
-        // Only for a DECLARED owner -- a bare word is not otherwise a name, and
-        // treating any capitalised token as one would fire on ordinary prose.
-        // The repository's own owner is deliberately not in this half: its
-        // name is published by the repository existing.
-        if !private_owners.iter().any(|declared| declared == owner) {
-            continue;
-        }
-        let bare = format!(r"(?i)\b{}\b", regex::escape(owner));
-        if let Ok(bare_matcher) = Regex::new(&bare) {
-            if bare_matcher.is_match(text) {
-                found.insert((owner.clone(), String::new()));
-            }
+    }
+    for (owner, matcher) in &owners.bare {
+        if matcher.is_match(text) {
+            found.insert((owner.clone(), String::new()));
         }
     }
     found
+}
+
+/// The patterns that depend only on the OWNER, compiled once per judgement.
+///
+/// Built here rather than inside `candidates` because `candidates` is asked
+/// about one source at a time, and the staged scan now hands it one ADDED LINE
+/// at a time: a pattern built inside the search is rebuilt once per line per
+/// declared owner. The tree-wide scan was already rebuilding it twice per blob,
+/// which is thousands of compilations of a pattern that cannot vary with the
+/// text it is run against.
+struct OwnerMatchers {
+    /// `owner/repo`, anchored at each owner this rule looks for.
+    named: Vec<(String, Regex)>,
+    /// A DECLARED private owner written on its own, with no repository after it.
+    bare: Vec<(String, Regex)>,
+}
+
+impl OwnerMatchers {
+    fn new(private_owners: &[String], own_owner: Option<&str>) -> Self {
+        // The repository's OWN owner, treated as though it had been declared.
+        //
+        // `acme/widget` written with no host is the spelling a README uses for
+        // a sibling -- "now maintained in acme/widget" -- and the URL forms in
+        // `candidates` all miss it. It is not caught for owners in general
+        // because a bare `owner/repo` is indistinguishable from a relative
+        // path, and every path in every document would become a lookup. It is
+        // caught for THIS owner because a segment equal to the login that owns
+        // the repository, followed by a name, is a sibling reference and not a
+        // directory: nobody writes `acme/main.rs`.
+        //
+        // Found by trying to write the deprecation note that would close #29
+        // and watching the guard pass it.
+        let mut owners: Vec<String> = private_owners.to_vec();
+        if let Some(own_owner) = own_owner {
+            if !owners
+                .iter()
+                .any(|owner| owner.eq_ignore_ascii_case(own_owner))
+            {
+                owners.push(own_owner.to_owned());
+            }
+        }
+
+        let mut named: Vec<(String, Regex)> = Vec::new();
+        let mut bare: Vec<(String, Regex)> = Vec::new();
+        for owner in owners {
+            // Anchored at the owner so a declared-private owner is found in the
+            // bare form too. Escaped, because an owner may legitimately contain
+            // a dot and an unescaped one would match any character.
+            let pattern = format!(
+                r"(?i)\b{}/([A-Za-z0-9][A-Za-z0-9._-]*)",
+                regex::escape(&owner)
+            );
+            let Ok(matcher) = Regex::new(&pattern) else {
+                continue;
+            };
+
+            // The owner ON ITS OWN, with no repository after it. Every form
+            // above needs an `owner/repo`, and this is the one that got past a
+            // hand audit: a sentence naming a private organisation discloses
+            // that it exists and who owns it without ever naming one of its
+            // repositories. Only for a DECLARED owner -- a bare word is not
+            // otherwise a name, and treating any capitalised token as one would
+            // fire on ordinary prose. The repository's own owner is
+            // deliberately not in this half: its name is published by the
+            // repository existing.
+            if private_owners.contains(&owner) {
+                if let Ok(alone) = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(&owner))) {
+                    bare.push((owner.clone(), alone));
+                }
+            }
+            named.push((owner, matcher));
+        }
+        Self { named, bare }
+    }
 }
 
 /// Ask the forge, once per name per run.
@@ -412,9 +436,10 @@ fn judge(root: &Path, rule: &Rule, owners: &[String], sources: &[(String, String
     let mut refused = Vec::new();
     let mut unresolved = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
+    let matchers = OwnerMatchers::new(owners, our_owner.as_deref());
 
     for (where_found, text) in sources {
-        for (owner, repo) in candidates(text, owners, our_owner.as_deref()) {
+        for (owner, repo) in candidates(text, &matchers) {
             let bare_owner = repo.is_empty();
             let name = if bare_owner {
                 owner.clone()
@@ -565,6 +590,14 @@ struct Staged {
 /// prints a path verbatim -- no quoting, no escaping -- and a path read out of
 /// a `+++ b/...` header is a path this reader would have to unquote correctly
 /// to attribute a finding to the right file.
+///
+/// `--no-ext-diff` and `--no-textconv` for the reason `added_lines` sets out at
+/// length. git counts these itself and does not put them through a diff driver,
+/// so on the git in front of me the flags change nothing here -- they are
+/// written anyway so that the three `git diff` calls in this file cannot be
+/// read as three different decisions about whose config gets a say. The one
+/// that was missing them was blind, and it looked exactly like its twins until
+/// somebody put them side by side.
 fn staged_paths(root: &Path) -> Result<Vec<Staged>> {
     let records = git::run_z(
         root,
@@ -573,6 +606,8 @@ fn staged_paths(root: &Path) -> Result<Vec<Staged>> {
             "core.quotepath=false",
             "diff",
             "--cached",
+            "--no-ext-diff",
+            "--no-textconv",
             "--numstat",
             "-z",
         ],
@@ -605,7 +640,35 @@ fn staged_paths(root: &Path) -> Result<Vec<Staged>> {
     Ok(staged)
 }
 
-/// The lines one staged path ADDS.
+/// Which line of the NEW file a hunk opens at, from the `+c,d` half of its
+/// `@@ -a,b +c,d @@` header.
+///
+/// The count is optional and `-U0` is where that shows: a one-line hunk is
+/// spelled `@@ -7 +7 @@`, with no comma anywhere in it, so a reader that split
+/// on one found no number and every finding in the commit lost its line.
+fn hunk_start(header: &str) -> Option<usize> {
+    header
+        .split_once('+')?
+        .1
+        .split(|character: char| character == ',' || character.is_whitespace())
+        .next()
+        .filter(|number| !number.is_empty())
+        .and_then(|number| number.parse().ok())
+}
+
+/// The lines one staged path ADDS, each with the line it will be at.
+///
+/// Read hunk by hunk rather than by keeping every line that starts with `+` and
+/// excepting `+++`. That exception cannot tell a header from content: an added
+/// line whose own first two characters are `++` is spelled `+++...` in the diff
+/// exactly like the `+++ b/path` above it, so every such line was dropped from
+/// the scan -- `++ github.com/acme/secret` in a changelog was a name this guard
+/// never looked at. Inside a hunk a leading `+` is always the marker, and the
+/// file header cannot appear inside one.
+///
+/// It is also the only place the LINE NUMBER exists. A finding that names the
+/// file and not the line is one a reader has to go searching for, and the
+/// sibling guard over the same text has named both since it was written.
 ///
 /// Every flag here closes a way this diff was reported as empty over a file
 /// that was not:
@@ -623,7 +686,7 @@ fn staged_paths(root: &Path) -> Result<Vec<Staged>> {
 ///   other listing in this file spells it.
 /// * `--text` on the second pass, which is what makes a `diff` attribute stop
 ///   deciding whether the bytes get read.
-fn added_lines(root: &Path, path: &str, force_text: bool) -> Result<String> {
+fn added_lines(root: &Path, path: &str, force_text: bool) -> Result<Vec<(Option<usize>, String)>> {
     let mut argv: Vec<&str> = vec![
         "-c",
         "core.quotepath=false",
@@ -641,11 +704,58 @@ fn added_lines(root: &Path, path: &str, force_text: bool) -> Result<String> {
     argv.push("--");
     argv.push(&spec);
     let diff = git::run(root, &argv)?;
-    Ok(diff
-        .lines()
-        .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
-        .collect::<Vec<&str>>()
-        .join("\n"))
+
+    let mut added: Vec<(Option<usize>, String)> = Vec::new();
+    let mut in_hunk = false;
+    // `None` inside a hunk means a header this reader could not parse. The line
+    // is still SCANNED -- it is only reported without a number. A guard that
+    // dropped the line because it could not number it would be answering "where
+    // is it" by deciding there is nothing there.
+    let mut line: Option<usize> = None;
+    for record in diff.lines() {
+        if let Some(header) = record.strip_prefix("@@") {
+            in_hunk = true;
+            line = hunk_start(header);
+            continue;
+        }
+        // One path per call, so this is belt and braces -- but the counter has
+        // to be wrong before a finding can name the wrong line, and starting it
+        // over at each file is what makes that impossible.
+        if record.starts_with("diff --git ") {
+            in_hunk = false;
+            line = None;
+            continue;
+        }
+        if !in_hunk {
+            // The preamble: the mode and index lines, `--- /dev/null`,
+            // `+++ b/path`, and "Binary files a/x and b/x differ" -- which is
+            // the whole of the output for a path the first pass cannot read,
+            // and the reason there is a second one.
+            continue;
+        }
+        if let Some(text) = record.strip_prefix('+') {
+            added.push((line, text.to_owned()));
+            line = line.map(|number| number.saturating_add(1));
+        } else if record.starts_with(' ') {
+            // Context, which `-U0` does not ask for. Counted all the same,
+            // because what the numbers here mean must not depend on a
+            // `diff.context` in somebody's personal config being overridden.
+            line = line.map(|number| number.saturating_add(1));
+        }
+        // A `-` line is text the commit removes and does not carry, and
+        // `\ No newline at end of file` is a note about the line above it.
+        // Neither is a line of the new file, and neither moves the counter.
+    }
+    Ok(added)
+}
+
+/// Where a finding was found: the path, and the line when the diff said which.
+///
+/// Dropped rather than guessed at when a hunk header could not be read. A wrong
+/// line number sends a reader to the wrong place and is worse than none, and the
+/// line was scanned either way.
+fn located(path: &str, line: Option<usize>) -> String {
+    line.map_or_else(|| path.to_owned(), |number| format!("{path}:{number}"))
 }
 
 /// The paths this commit INTRODUCES, whatever is inside them.
@@ -656,6 +766,11 @@ fn added_lines(root: &Path, path: &str, force_text: bool) -> Result<String> {
 /// only -- a path that was already there is the tree-wide guard's business,
 /// and reporting it at every commit that touches the file would be a wall
 /// somebody bypasses by reflex rather than a finding they act on.
+///
+/// Spelled with the same flags as its two neighbours, for the reason
+/// `staged_paths` gives: whose config gets a say in what this guard can see is
+/// one decision, and three call sites that answer it three ways is the fork
+/// this tool exists to catch.
 fn introduced_paths(root: &Path) -> Result<Vec<String>> {
     git::run_z(
         root,
@@ -664,6 +779,8 @@ fn introduced_paths(root: &Path) -> Result<Vec<String>> {
             "core.quotepath=false",
             "diff",
             "--cached",
+            "--no-ext-diff",
+            "--no-textconv",
             "--name-only",
             "--diff-filter=ACR",
             "-z",
@@ -673,10 +790,11 @@ fn introduced_paths(root: &Path) -> Result<Vec<String>> {
 
 /// The lines this commit ADDS, and the paths it introduces.
 ///
-/// One source per path rather than one blob for the whole commit: the rule's
-/// `[rule.files]` scope is a question about a PATH, so a single blob labelled
-/// "staged changes" could not be scoped at all -- and the finding it produced
-/// named neither the file it came from nor anything a reader could open.
+/// One source per ADDED LINE rather than one blob for the whole commit: the
+/// rule's `[rule.files]` scope is a question about a PATH, so a single blob
+/// labelled "staged changes" could not be scoped at all -- and the finding it
+/// produced named neither the file it came from nor anything a reader could
+/// open. A path answers the scope; the line is what a reader opens.
 pub(crate) fn in_staged(request: &Request<'_>) -> Result<Option<Refusal>> {
     let mut sources: Vec<(String, String)> = Vec::new();
 
@@ -693,10 +811,9 @@ pub(crate) fn in_staged(request: &Request<'_>) -> Result<Option<Refusal>> {
         }
         if staged.as_text {
             if staged.added {
-                sources.push((
-                    staged.path.clone(),
-                    added_lines(request.root, &staged.path, false)?,
-                ));
+                for (line, text) in added_lines(request.root, &staged.path, false)? {
+                    sources.push((located(&staged.path, line), text));
+                }
             }
             continue;
         }
@@ -739,10 +856,9 @@ pub(crate) fn in_staged(request: &Request<'_>) -> Result<Option<Refusal>> {
         if bytes.iter().take(8000).any(|byte| *byte == 0) {
             continue;
         }
-        sources.push((
-            staged.path.clone(),
-            added_lines(request.root, &staged.path, true)?,
-        ));
+        for (line, text) in added_lines(request.root, &staged.path, true)? {
+            sources.push((located(&staged.path, line), text));
+        }
     }
 
     decide(request, &sources)
@@ -831,6 +947,16 @@ pub(crate) fn in_text(
 mod tests {
     use super::*;
 
+    /// The owner patterns are compiled once per judgement now, so a test that
+    /// asks what a text names builds them the way `judge` does.
+    fn named(
+        text: &str,
+        private_owners: &[String],
+        own_owner: Option<&str>,
+    ) -> BTreeSet<(String, String)> {
+        candidates(text, &OwnerMatchers::new(private_owners, own_owner))
+    }
+
     fn resolved(visibility: Visibility, canonical: Option<&str>) -> Resolved {
         Resolved {
             visibility,
@@ -881,7 +1007,7 @@ mod tests {
             "https://datatracker.ietf.org/rfc/rfc9110",
         ] {
             assert!(
-                candidates(citation, &[], None).is_empty(),
+                named(citation, &[], None).is_empty(),
                 "{citation} was read as a repository name"
             );
         }
@@ -892,7 +1018,7 @@ mod tests {
         // The dangerous direction: `github.acme.com/acme/widget` is a different
         // forge. Asking github.com about it answers about somebody else's
         // repository, and a public answer there passes a private one here.
-        assert!(candidates("https://github.acme.com/acme/widget", &[], None).is_empty());
+        assert!(named("https://github.acme.com/acme/widget", &[], None).is_empty());
     }
 
     #[test]
@@ -909,7 +1035,7 @@ mod tests {
 
     #[test]
     fn a_raw_content_url_is_still_a_github_name() {
-        let found = candidates(
+        let found = named(
             "https://raw.githubusercontent.com/acme/widget/main/README.md",
             &[],
             None,
@@ -919,13 +1045,13 @@ mod tests {
 
     #[test]
     fn a_forge_url_is_a_candidate() {
-        let found = candidates("see https://github.com/acme/widget for details", &[], None);
+        let found = named("see https://github.com/acme/widget for details", &[], None);
         assert!(found.contains(&("acme".to_owned(), "widget".to_owned())));
     }
 
     #[test]
     fn a_sentence_full_stop_is_not_part_of_the_name() {
-        let found = candidates("moved to acme/widget.", &[], Some("acme"));
+        let found = named("moved to acme/widget.", &[], Some("acme"));
         assert!(
             found.contains(&("acme".to_owned(), "widget".to_owned())),
             "{found:?}"
@@ -934,16 +1060,16 @@ mod tests {
 
     #[test]
     fn a_dot_git_suffix_is_not_part_of_the_name() {
-        let found = candidates("git@github.com:acme/widget.git", &[], None);
+        let found = named("git@github.com:acme/widget.git", &[], None);
         assert!(found.contains(&("acme".to_owned(), "widget".to_owned())));
     }
 
     #[test]
     fn a_bare_path_is_not_a_candidate_unless_its_owner_was_declared() {
         // Otherwise every relative path in every document is a lookup.
-        assert!(candidates("see src/main.rs", &[], None).is_empty());
+        assert!(named("see src/main.rs", &[], None).is_empty());
         let declared = vec!["src".to_owned()];
-        assert!(candidates("see src/main.rs", &declared, None)
+        assert!(named("see src/main.rs", &declared, None)
             .contains(&("src".to_owned(), "main.rs".to_owned())));
     }
 
@@ -952,7 +1078,7 @@ mod tests {
         // `acme/widget` with no host is what a README writes -- "now maintained
         // in acme/widget" -- and every URL form misses it. Found by trying to
         // write a deprecation note and watching the guard pass it.
-        let found = candidates("now maintained in acme/widget", &[], Some("acme"));
+        let found = named("now maintained in acme/widget", &[], Some("acme"));
         assert!(found.contains(&("acme".to_owned(), "widget".to_owned())));
     }
 
@@ -961,7 +1087,7 @@ mod tests {
         // A bare `owner/repo` is indistinguishable from a relative path, so
         // this stays off for owners in general: every path in every document
         // would otherwise become a forge lookup.
-        let found = candidates("see src/main.rs", &[], Some("acme"));
+        let found = named("see src/main.rs", &[], Some("acme"));
         assert!(found.is_empty(), "{found:?}");
     }
 
@@ -969,17 +1095,38 @@ mod tests {
     fn the_repositorys_own_owner_alone_is_not_a_finding() {
         // Its name is published by the repository existing. Only a DECLARED
         // private owner is caught on its own.
-        let found = candidates("maintained by acme", &[], Some("acme"));
+        let found = named("maintained by acme", &[], Some("acme"));
         assert!(found.is_empty(), "{found:?}");
     }
 
     #[test]
     fn a_declared_owner_with_a_dot_is_escaped_not_interpreted() {
         let declared = vec!["acme.corp".to_owned()];
-        let found = candidates("acme.corp/thing and acmeXcorp/other", &declared, None);
+        let found = named("acme.corp/thing and acmeXcorp/other", &declared, None);
         assert!(found.contains(&("acme.corp".to_owned(), "thing".to_owned())));
         assert!(!found
             .iter()
             .any(|(owner, _)| owner.eq_ignore_ascii_case("acmeXcorp")));
+    }
+
+    #[test]
+    fn a_hunk_with_no_count_still_says_which_line_it_opens_at() {
+        // `-U0` spells a one-line hunk without a comma anywhere in it, and it is
+        // the spelling the staged scan asks for -- so a reader that needed the
+        // comma numbered nothing this guard ever sees.
+        assert_eq!(hunk_start(" -7 +7 @@ fn f()"), Some(7));
+        assert_eq!(hunk_start(" -0,0 +1,3 @@"), Some(1));
+        assert_eq!(hunk_start(" -1 +0,0 @@"), Some(0));
+        // Nothing to read rather than a number invented from one: a wrong line
+        // sends a reader to the wrong place.
+        assert_eq!(hunk_start(" not a hunk header"), None);
+    }
+
+    #[test]
+    fn a_finding_with_no_line_still_names_the_file() {
+        // The line is dropped when a header could not be parsed, and the finding
+        // is not -- the line was scanned either way.
+        assert_eq!(located("docs/note.md", Some(12)), "docs/note.md:12");
+        assert_eq!(located("docs/note.md", None), "docs/note.md");
     }
 }

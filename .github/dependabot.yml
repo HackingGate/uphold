@@ -28,3 +28,21 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  # NO LEFTHOOK ENTRY, AND THAT IS AN EXCLUSION RATHER THAN AN OVERSIGHT.
+  #
+  # A lefthook consumer pins exactly one version -- the `ref:` under `remotes:`
+  # in their lefthook.yml, which README.md's install block tells them to write.
+  # Dependabot has no ecosystem that reads that file, so no updater will ever
+  # raise a pull request for it: the `pre-commit` entry above covers
+  # `.pre-commit-config.yaml` and nothing else. Adding a `github-actions` or
+  # `gomod` entry would not reach it either, and listing one here to look
+  # covered is the failure this repository exists to catch.
+  #
+  # What does watch it is `no-stale-hook-pins`, which reads lefthook `remotes:`
+  # entries as pins alongside pre-commit `repo:`/`rev:` pairs and refuses one
+  # that has fallen behind its upstream or names no `ref:` at all. So the pin is
+  # watched, by a guard rather than by an updater -- meaning a lefthook consumer
+  # is told their pin is stale and is never handed the bump. That difference is
+  # stated in README.md so a consumer reads it before they need it, and it is
+  # the reason to prefer a manager Dependabot can see where there is a choice.

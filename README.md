@@ -57,6 +57,43 @@ remotes:
 cargo install --git https://github.com/HackingGate/uphold --tag v1.1.1
 ```
 
+That `ref:` is the one version a lefthook consumer pins, and **Dependabot does
+not watch it**: there is no ecosystem that reads a lefthook config, so no
+updater will raise a pull request when a newer tag lands. What watches it is
+`no-stale-hook-pins`, which reads lefthook `remotes:` as pins alongside
+pre-commit `repo:`/`rev:` pairs and refuses one that has fallen behind its
+upstream or names no `ref:` at all — so the pin is watched by a guard rather
+than by an updater, and you are told it is stale rather than handed the bump. It
+reads `lefthook.yml`, `lefthook.yaml`, `.lefthook.yml` and `.lefthook.yaml` at
+any depth; it does not read `lefthook.toml`, `lefthook.json` or the `-local`
+overlay files, so a pin written in one of those is watched by nothing.
+
+**Go repositories** — four toolchain ids ship here too. They run no uphold code
+and need no uphold binary; pin them instead of transcribing them.
+
+```yaml
+      - id: uphold-gofmt            # a tree gofmt would reformat
+      - id: uphold-go-vet
+      - id: uphold-go-build
+      - id: uphold-go-test
+```
+
+`language: system`, so they use the `go` a Go repository already has on PATH and
+add no toolchain and no build, and a `files:` regex keeps all four silent in a
+repository with no Go in it. A lefthook consumer gets the same four ids from
+`hooks/lefthook.yml` with nothing extra to write. They are `pre-commit` only,
+and not `manual` as the uphold ids are: lefthook applies a job's `glob` to what
+a git hook is running over, and a named group has no such set, so a Go job
+reachable that way would fire in a repository with no Go in it.
+
+They exist because 24 sibling repositories declared these four by hand, and two
+of the `gofmt` copies could never fail — `gofmt -l` prints the files it would
+reformat and exits `0` regardless, so twenty-two enforced and two reported
+"Passed" over unformatted code until someone read all 24 side by side.
+`uphold-gofmt` tests the *emptiness* of that output, which is where the verdict
+actually is. A pinned id can drift in one dimension, the rev, and that dimension
+has a check; a copied `entry:` line can drift in every dimension and has none.
+
 ## Declare what enforces what
 
 ```toml

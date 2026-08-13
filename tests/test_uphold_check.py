@@ -7,6 +7,8 @@ not look. Asserting it in-process would test the function and not the tool.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import subprocess
 import sys
@@ -14,6 +16,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "uphold_check.py"
@@ -110,6 +113,20 @@ HYGIENE_BASE = """\
 message = "no conflict markers"
 regexp = '^<{7} '
 files.include = ["."]
+"""
+
+
+# A repository both readers can be asked about at once: one guard whose stage a
+# pinned id installs, and one content rule the pinned scan runs. Two seams, so an
+# export that lost either would still look plausible on its own.
+DIFFERENTIAL_DECLARATION = """
+[[enforce]]
+principle = "fail-safe-defaults"
+rule = "prevent-public-push"
+
+[[enforce]]
+principle = "explicit-unknown"
+rule = "no-merge-conflict-markers"
 """
 
 
@@ -267,4 +284,152 @@ class OscalExport(unittest.TestCase):
             )
             result = run(Path(tmp), "--oscal")
         self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.stdout.strip(), "")
+
+
+@needs_the_engine
+class TheTwoReadersOfOneReport(unittest.TestCase):
+    """The binary decides which rules run; the export must carry that answer whole.
+
+    Since the reconcile moved into the loader, this script no longer derives a
+    rule set of its own -- it PARSES the binary's report. That closes the old
+    disagreement and opens a quieter one: a parser that stops recognising the
+    report it reads produces an empty answer rather than an error, and an empty
+    answer here is a component definition with no components, published at exit
+    0 over a repository whose reconcile had just succeeded on every claim.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._directory.name)
+        self.addCleanup(self._directory.cleanup)
+        build(
+            self.tmp,
+            DIFFERENTIAL_DECLARATION,
+            **{
+                ".pre-commit-config.yaml": PRE_COMMIT_WITH_PRINCIPLES,
+                "policy__principles.toml": GUARD_POLICY + HYGIENE_BASE,
+            },
+        )
+
+    def test_the_binary_and_the_export_name_the_same_rules(self):
+        """The differential: one fixture, both readers, one rule set.
+
+        The binary's half is read from its own header count and not from the
+        evidence lines, so this does not check the parser against itself.
+        """
+        check = uphold_check.engine(self.tmp, "check")
+        self.assertEqual(check.returncode, 0, check.stderr)
+        self.assertIn("reconciled 2 enforcement claims:", check.stdout)
+
+        exported = run(self.tmp, "--oscal")
+        self.assertEqual(exported.returncode, 0, exported.stderr)
+        requirements = [
+            requirement
+            for component in json.loads(exported.stdout)["component-definition"][
+                "components"
+            ]
+            for implementation in component["control-implementations"]
+            for requirement in implementation["implemented-requirements"]
+        ]
+        self.assertEqual(len(requirements), 2, exported.stdout)
+        rules = {
+            prop["value"]
+            for requirement in requirements
+            for prop in requirement["props"]
+            if prop["name"] == "rule-id"
+        }
+        self.assertEqual(rules, {"prevent-public-push", "no-merge-conflict-markers"})
+
+    def test_a_report_this_reader_cannot_parse_is_could_not_look(self):
+        """One word of the report changes, and the reader recovers nothing.
+
+        Before the count check this returned `{}`, which is indistinguishable
+        from a repository where no claim is supplied by anything.
+        """
+        real = uphold_check.engine
+
+        def drifted(root, *args):
+            answered = real(root, *args)
+            if args[:1] == ("check",):
+                answered.stdout = answered.stdout.replace("enforced by", "supplied by")
+            return answered
+
+        with (
+            mock.patch.object(uphold_check, "engine", drifted),
+            self.assertRaises(uphold_check.CouldNotLook) as raised,
+        ):
+            uphold_check.engine_suppliers(self.tmp)
+        self.assertIn("2 reconciled claim(s)", str(raised.exception))
+        self.assertIn("0 evidence line(s)", str(raised.exception))
+
+    def test_a_drifted_report_publishes_no_component_definition(self):
+        """Could not look is exit 2 and no document, not exit 0 and an empty one."""
+        real = uphold_check.engine
+
+        def drifted(root, *args):
+            answered = real(root, *args)
+            if args[:1] == ("check",):
+                answered.stdout = answered.stdout.replace("enforced by", "supplied by")
+            return answered
+
+        stdout = io.StringIO()
+        with (
+            contextlib.chdir(self.tmp),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(io.StringIO()),
+            mock.patch.object(uphold_check, "engine", drifted),
+        ):
+            code = uphold_check.main(["--oscal"])
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout.getvalue().strip(), "")
+
+
+class AnUnreadableDeclaration(unittest.TestCase):
+    """`explicit-unknown`, claimed by `catalog-tests` in policy/upheld.toml.
+
+    The claim names this file for this assertion: a declaration this tool could
+    not read exits 2. Not 0, which would be a repository reported as complying
+    on a file nobody could open, and not 1 -- exit 1 in this tool means a claim
+    is FALSE, and one stray byte is not an untrue claim.
+
+    No engine is needed: the declaration is read before anything is asked of
+    the binary, which is the point. The catalog job runs on an image with no
+    Rust toolchain, and this assertion has to hold there too.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._directory.name)
+        self.addCleanup(self._directory.cleanup)
+        (self.tmp / "policy").mkdir()
+
+    def write_declaration(self, body: bytes) -> None:
+        (self.tmp / "policy" / "upheld.toml").write_bytes(body)
+
+    def test_a_declaration_that_is_not_utf_8_is_two_and_not_a_traceback(self):
+        # `tomllib.load` takes a binary handle and decodes the bytes itself, so
+        # a stray 0xff raises `UnicodeDecodeError` out of the DECODE and never
+        # reaches `TOMLDecodeError`. It derives from `ValueError` and not from
+        # `OSError`, which is how it escaped the handler entirely and left the
+        # process on a traceback and exit 1.
+        self.write_declaration(b'[[enforce]]\nprinciple = "\xff"\nrule = "x"\n')
+        result = run(self.tmp, "--oscal")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("could not look", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(result.stdout.strip(), "")
+
+    def test_the_review_mode_reads_the_same_declaration_the_same_way(self):
+        """`--review` reaches `read_toml` by its own route and owes the same answer."""
+        self.write_declaration(b"[review]\nmax_lines = 900  # \xff\n")
+        result = run(self.tmp, "--review")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("could not look", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_a_declaration_that_is_not_there_is_two(self):
+        """The other unreadable: nothing to read at all, from a directory with none."""
+        result = run(self.tmp, "--oscal")
+        self.assertEqual(result.returncode, 2, result.stdout)
         self.assertEqual(result.stdout.strip(), "")

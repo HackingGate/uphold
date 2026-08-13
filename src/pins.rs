@@ -23,6 +23,14 @@
 //! the alternative -- what this did -- is to print the pin to stderr and exit 0
 //! with the guard counted among the ones that passed.
 //!
+//! A tree holding NO hook configuration at all is that same state one step
+//! earlier: no pin was read, so no pin was established, and it exits 2 too. The
+//! two mistakes here are opposite and both were made -- opening
+//! `.pre-commit-config.yaml` unconditionally killed every lefthook consumer at
+//! every push, and the repair passed any tree where the file was simply not
+//! found, which is what a config that was renamed, moved above the root, or
+//! added to `.gitignore` also looks like from here.
+//!
 //! Both managers are read. pre-commit writes `repos:` with a `rev:`; lefthook
 //! writes `remotes:` with a `ref:`, and that entry is the single version a
 //! lefthook consumer pins. It was read by nothing here and there is no
@@ -97,13 +105,26 @@ pub(crate) struct Pin {
     pub source: String,
 }
 
-/// Every pin in the tree, and what could not be read while collecting them.
+/// One read of a tree: every pin in it, and how much of it was read at all.
+///
+/// Named for the act rather than for the pins, because the count below is a
+/// fact about the read and not about the pins: an empty `pins` means one thing
+/// after two configurations were opened and another after none were.
 #[derive(Debug)]
-pub(crate) struct Pins {
+pub(crate) struct Reading {
     pub pins: Vec<Pin>,
     /// Facts about coverage rather than about pins: which of the two hook
     /// managers this tree even uses. Said aloud, never counted as a pass.
     pub notes: Vec<String>,
+    /// How many hook configurations this walk actually opened.
+    ///
+    /// Zero pins and no file to read a pin out of are different answers, and
+    /// only the first of them is a measurement. Without this count they were
+    /// the same empty `pins` vector, so a tree whose configuration had been
+    /// renamed, moved out from under the root, or added to `.gitignore` -- the
+    /// walk skips ignored files -- reported the same clean answer as a tree
+    /// with a current pin in it.
+    pub configs: usize,
 }
 
 const PRE_COMMIT_CONFIG: &str = ".pre-commit-config.yaml";
@@ -279,25 +300,30 @@ fn lefthook_pins(path: &Path, source: &str, text: &str) -> Result<Vec<Pin>> {
     Ok(pins)
 }
 
-pub(crate) fn read_pins(root: &Path) -> Result<Pins> {
+pub(crate) fn read_pins(root: &Path) -> Result<Reading> {
     let mut pins = Vec::new();
     let mut notes = Vec::new();
     let mut saw_pre_commit = false;
-    for path in hook_configs(root)? {
+    let mut saw_lefthook = false;
+    let mut sources: Vec<String> = Vec::new();
+    let configs = hook_configs(root)?;
+    for path in &configs {
         let source = path
             .strip_prefix(root)
-            .unwrap_or(&path)
+            .unwrap_or(path)
             .display()
             .to_string();
-        let text = read_to_string(&path)?;
+        sources.push(source.clone());
+        let text = read_to_string(path)?;
         if path
             .file_name()
             .is_some_and(|name| name == PRE_COMMIT_CONFIG)
         {
             saw_pre_commit = true;
-            pins.extend(pre_commit_pins(&path, &source, &text)?);
+            pins.extend(pre_commit_pins(path, &source, &text)?);
         } else {
-            pins.extend(lefthook_pins(&path, &source, &text)?);
+            saw_lefthook = true;
+            pins.extend(lefthook_pins(path, &source, &text)?);
         }
     }
     // An absent file, reported as a fact rather than as an io error. This
@@ -306,14 +332,45 @@ pub(crate) fn read_pins(root: &Path) -> Result<Pins> {
     // on every consumer who followed the documented lefthook-only install path.
     // They have no pre-commit config because they were told not to make one, and
     // that is an answer, not a failure to obtain one.
-    if !saw_pre_commit {
+    //
+    // Conditional on a lefthook config having been READ, because the sentence
+    // ends by promising that a lefthook config's `remotes:` were. Said over a
+    // tree holding neither manager's file, that promise names a file that does
+    // not exist -- and it was the whole justification for the pass the caller
+    // then reported. That case is the caller's to refuse; this one is a
+    // coverage fact beside a real answer.
+    if saw_lefthook && !saw_pre_commit {
         notes.push(format!(
             "no `{PRE_COMMIT_CONFIG}` anywhere in this tree, so there are no pre-commit pins \
              to check. That is the documented lefthook-only install path, not a hole in the \
              answer; any `remotes:` a lefthook config pins were read."
         ));
     }
-    Ok(Pins { pins, notes })
+    // A configuration that pins nothing is not a configuration whose pins are
+    // current, and this said nothing at all about the difference. The reader
+    // this module replaced counted `local` and `meta` entries on exactly that
+    // ground -- they pin nothing, so a config made only of them has verified no
+    // version -- and a lefthook config with no `remotes:` is the same state in
+    // the other manager. Silence here is the silence a fully-current tree
+    // prints, which leaves the two indistinguishable at the one moment the
+    // distinction matters.
+    //
+    // A note and not a refusal: these files were read, and what they say is
+    // that this repository pins nothing remote. That is an answer.
+    if pins.is_empty() && !sources.is_empty() {
+        notes.push(format!(
+            "read {} hook configuration(s) -- {} -- and none of them names a remote pin. \
+             `repo: local`, `repo: meta` and a lefthook config with no `remotes:` pin \
+             nothing by design, so no version was verified here.",
+            sources.len(),
+            sources.join(", ")
+        ));
+    }
+    Ok(Reading {
+        pins,
+        notes,
+        configs: configs.len(),
+    })
 }
 
 /// Compare two tags the way a person reads them.
@@ -406,11 +463,59 @@ fn remote_refs(repo: &str) -> Result<Option<Refs>> {
     }))
 }
 
+/// What was not established, in the one wording both exits owe a reader.
+///
+/// Both callers below say this: the one that found a violation as well, and the
+/// one that found nothing else at all. Written out twice they drifted -- the
+/// violation arm said it on stderr in its own words while the other said it in
+/// the refusal -- and the arm that mattered more to a reader was the terser one.
+fn unestablished(unchecked: &[String]) -> String {
+    format!(
+        "{} pin(s) could not be checked, so this guard established nothing about them:\n{}",
+        unchecked.len(),
+        unchecked.join("\n")
+    )
+}
+
 /// Both questions, over every pin.
 pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
-    let Pins { pins, notes } = read_pins(request.root)?;
+    let Reading {
+        pins,
+        notes,
+        configs,
+    } = read_pins(request.root)?;
     for note in &notes {
         println!("{}: {note}", request.rule.id);
+    }
+    // NO FILE TO READ IS THE COULD-NOT-LOOK ONE STEP EARLIER THAN AN
+    // UNREACHABLE REMOTE, and it exited 0.
+    //
+    // Making an absent `.pre-commit-config.yaml` a fact rather than an io error
+    // fixed a guard that killed every lefthook consumer at every push. Left
+    // there, it swapped one defect for its opposite: a tree holding NEITHER
+    // manager's configuration produced zero pins, a note explaining that the
+    // lefthook-only path is documented, and a pass -- with the note citing a
+    // lefthook config that was not there either.
+    //
+    // Zero pins found is not zero pins to find. The walk skips gitignored
+    // files, so a `.pre-commit-config.yaml` someone added to `.gitignore`
+    // arrives here as an empty tree; so does one renamed, moved above the root,
+    // or lost in a merge. Each of those is a repository whose hooks still run
+    // pinned code that nothing is watching, and each of them read as clean.
+    if configs == 0 {
+        return Err(Fatal::new(format!(
+            "{}: no `{PRE_COMMIT_CONFIG}` and no lefthook configuration ({}) anywhere under \
+             {}, so this guard read no pins and established nothing about the versions this \
+             repository's hooks run. Zero pins found and no file to find one in are different \
+             answers, and a config that was renamed, moved above this root, or added to \
+             `.gitignore` -- ignored files are not walked -- looks exactly like this one.\n\n\
+             Could not look is not a pass. Point this run at the tree that holds the hook \
+             configuration, or bypass it deliberately with UPHOLD_ALLOW={}.",
+            request.rule.id,
+            LEFTHOOK_CONFIGS.join(", "),
+            request.root.display(),
+            request.rule.id
+        )));
     }
     let mut behind: Vec<String> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
@@ -484,15 +589,25 @@ pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
         report.push_str("\n\nThe upstream tag owns the version; a `rev:` here is a copy of it.");
     }
     if !report.is_empty() {
-        // Said aloud beside the violation. The refusal below exits 1 on what was
-        // checked, and a reader has to know that number was measured over fewer
-        // pins than the file holds.
+        // IN the refusal, not on a stream beside it. `Refusal` says it carries
+        // the whole report because a guard that says only "refused" sends the
+        // reader looking; this caveat was the one part that did not travel with
+        // it. It went to stderr from here, before `guard::run` printed the
+        // finding it qualifies, so the two arrived out of order and only for a
+        // caller watching that stream -- and the exit code is 1, which reads as
+        // "checked, and here is what is wrong" over a set of pins smaller than
+        // the tree holds.
+        //
+        // Exit 1 and not 2, deliberately, on the rule `audit::verdict` states:
+        // a violation outranks an unread surface, because something WAS found
+        // and the reader has a fix to make either way. What they must not have
+        // to guess is that the finding was measured over fewer pins.
         if !unchecked.is_empty() {
-            eprintln!(
-                "{}: {} pin(s) could not be checked, on top of the finding(s) below:\n{}",
-                request.rule.id,
-                unchecked.len(),
-                unchecked.join("\n")
+            report.push_str("\n\n");
+            report.push_str(&unestablished(&unchecked));
+            report.push_str(
+                "\n\nThose are on top of the finding(s) above, and the finding(s) above were \
+                 measured over the pins that remain.",
             );
         }
         return Ok(Some(Refusal {
@@ -516,12 +631,10 @@ pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
     // `Exit::Broken` over a surface it could not read.
     if !unchecked.is_empty() {
         return Err(Fatal::new(format!(
-            "{}: {} pin(s) could not be checked, so this guard established nothing about \
-             them:\n{}\n\nCould not look is not a pass. Restore the remote's reachability, \
+            "{}: {}\n\nCould not look is not a pass. Restore the remote's reachability, \
              or bypass this run deliberately with UPHOLD_ALLOW={}.",
             request.rule.id,
-            unchecked.len(),
-            unchecked.join("\n"),
+            unestablished(&unchecked),
             request.rule.id
         )));
     }
@@ -642,6 +755,12 @@ mod tests {
         assert!(error.to_string().contains("could not be read"), "{error}");
     }
 
+    /// And a config that is nothing but local hooks says so.
+    ///
+    /// The pin reader this module replaced counted `local` and `meta` entries
+    /// because a config made only of them has verified no version at all, and
+    /// this printed the same nothing a tree of current pins prints -- so the
+    /// two states were indistinguishable to the reader of the output.
     #[test]
     fn a_local_repo_has_no_pin_to_check() {
         let dir = tree("local");
@@ -650,7 +769,16 @@ mod tests {
             ".pre-commit-config.yaml",
             "repos:\n  - repo: local\n    hooks:\n      - id: x\n",
         );
-        assert!(read_pins(&dir).unwrap().pins.is_empty());
+        let read = read_pins(&dir).unwrap();
+        assert!(read.pins.is_empty());
+        assert_eq!(read.configs, 1);
+        assert!(
+            read.notes
+                .iter()
+                .any(|note| note.contains("no version was verified here")),
+            "{:?}",
+            read.notes
+        );
     }
 
     /// The documented lefthook-only install path is not a broken repository.
@@ -658,11 +786,22 @@ mod tests {
     /// `read_pins` opened `root/.pre-commit-config.yaml` unconditionally and
     /// `read_to_string` turns ENOENT into a `Fatal`, so this guard exited 2 for
     /// every consumer who installed the way the documentation tells them to.
+    ///
+    /// Over a tree that HOLDS a lefthook config, which is what that install
+    /// path leaves behind and what the note this asserts on promises was read.
+    /// Asserted over an empty directory, this test passed while describing a
+    /// consumer it was not standing in for.
     #[test]
     fn an_absent_pre_commit_config_is_an_answer_and_not_an_error() {
         let dir = tree("absent");
+        write(
+            &dir,
+            "lefthook.yml",
+            "remotes:\n  - git_url: https://example.test/hooks\n    ref: v1.2.3\n",
+        );
         let read = read_pins(&dir).unwrap();
-        assert!(read.pins.is_empty());
+        assert_eq!(read.pins.len(), 1, "{:?}", read.pins);
+        assert_eq!(read.configs, 1);
         assert_eq!(read.notes.len(), 1, "{:?}", read.notes);
         assert!(
             read.notes
@@ -671,6 +810,25 @@ mod tests {
             "{:?}",
             read.notes
         );
+    }
+
+    /// No file to read a pin out of is not zero pins.
+    ///
+    /// The repair above stopped an absent `.pre-commit-config.yaml` being an
+    /// error and went one step too far: a tree with neither manager's config in
+    /// it produced an empty pin list, the lefthook note -- naming a file that
+    /// was not there either -- and a pass. `configs` is what tells the caller
+    /// apart from a tree that was actually read, and the caller refuses on it.
+    #[test]
+    fn no_hook_configuration_at_all_is_not_a_measurement() {
+        let dir = tree("nothing");
+        let read = read_pins(&dir).unwrap();
+        assert_eq!(read.configs, 0);
+        assert!(read.pins.is_empty(), "{:?}", read.pins);
+        // No note either: the one sentence available here ends by promising a
+        // lefthook config's `remotes:` were read, and there was no lefthook
+        // config. It is the caller's refusal that says what happened.
+        assert!(read.notes.is_empty(), "{:?}", read.notes);
     }
 
     /// A pin in `sub/` is a pin a run touches.

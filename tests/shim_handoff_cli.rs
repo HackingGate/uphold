@@ -452,6 +452,103 @@ fn an_editor_that_writes_something_ordinary_is_left_alone() {
     );
 }
 
+/// A checker that is a BUILT-IN rather than a program this repository names.
+const BUILTIN_RULE: &str = r#"
+[rule.no-private-repo-names]
+builtin = "no-private-repo-names"
+visibility = "public"
+private_owners = ["acme-private"]
+
+[rule.no-private-repo-names.command]
+before = ["faux"]
+"#;
+
+#[test]
+fn a_builtin_checker_stands_at_the_editor_checkpoint_as_well() {
+    // The editor round trip consulted `exec` rules and nothing else, so a
+    // repository whose checker for this command is a built-in got a checkpoint
+    // with nobody standing at it: the shim installed itself as the editor, ran
+    // it, read the file back, consulted zero rules and exited 0. That is the
+    // same guard judging a body one way through `--body` and another through the
+    // editor, under one id.
+    let root = workspace(
+        &format!("{BUILTIN_RULE}{EDITOR_POLICY}"),
+        &[
+            ("faux", EDITING_COMMAND),
+            (
+                "private-editor",
+                "#!/bin/sh\nprintf 'this fixes acme-private/thing\\n' > \"$1\"\n",
+            ),
+        ],
+    );
+    let editor = root.join("bin/private-editor");
+    let output = Run {
+        args: &["faux", "pr", "create"],
+        envs: &[("EDITOR", &editor.to_string_lossy())],
+        ..Run::default()
+    }
+    .go(&root);
+
+    assert_ne!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux published:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("acme-private"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A checker that names one command line, standing in front of a shim that
+/// names more than one.
+const NARROWED_RULE: &str = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+exec = "uphold guard --text -"
+
+[rule.no-published-markers.command]
+before = ["faux pr create"]
+"#;
+
+#[test]
+fn an_editor_checkpoint_with_nothing_to_consult_is_not_a_pass() {
+    // Re-entered as the editor for a command line no rule stands in front of --
+    // here because the argv the editor was opened for did not survive into this
+    // process, which is how the checkers that ran on the way in are chosen. The
+    // body exists by now and nobody is left to read it, so exit 2: the command
+    // abandons what it was doing on any non-zero, and a body read by nothing
+    // must not leave here looking like a body that passed.
+    let root = workspace(
+        &format!("{NARROWED_RULE}{EDITOR_POLICY}"),
+        &[
+            ("faux", EDITING_COMMAND),
+            (
+                "clean-editor",
+                "#!/bin/sh\nprintf 'An ordinary body\\n' > \"$1\"\n",
+            ),
+        ],
+    );
+    let editor = root.join("bin/clean-editor");
+    let output = Run {
+        args: &["faux", "body.md"],
+        envs: &[
+            ("UPHOLD_SHIM_EDITOR", "faux"),
+            ("UPHOLD_SHIM_EDITOR_REAL", &editor.to_string_lossy()),
+        ],
+        ..Run::default()
+    }
+    .go(&root);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("nothing would have been checked"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn a_body_given_on_the_command_line_does_not_open_an_editor_at_all() {
     // The editor is installed for the one case that needs it. A body already in

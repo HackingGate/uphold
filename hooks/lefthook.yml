@@ -54,6 +54,56 @@ pre-commit:
       run: uphold check
       glob: "{policy/upheld.toml,policy/principles.toml,.pre-commit-config.yaml,lefthook.yml}"
 
+    # ── the Go toolchain ─────────────────────────────────────────────
+    #
+    # Four jobs that run no uphold code and need no uphold binary. They are
+    # published because a fleet audit read 24 sibling repositories side by side
+    # and found these four hand-copied as local declarations -- and found that
+    # two of the 24 gofmt copies could never exit nonzero, because `gofmt -l`
+    # prints the files it would reformat and exits 0 either way. The reasoning
+    # is in .pre-commit-hooks.yaml, which publishes the same four ids under the
+    # same names; this file is the lefthook half of that one list.
+    #
+    # `glob:` is what makes them fire in no repository without Go in it, and it
+    # is the same list .pre-commit-hooks.yaml spells as a `files:` regex:
+    #
+    #   glob: "{*.go,*go.mod,*go.sum}"   <->   files: '(\.go|go\.mod|go\.sum)$'
+    #
+    # The two select the same paths. lefthook's `*` crosses a path separator, so
+    # `*.go` reaches `internal/x/y.go` and `*go.mod` reaches a nested module's
+    # `go.mod`; the regex is anchored only at the end, so it reaches both as
+    # well -- and both spellings over-select a file named `cargo.mod`, in the
+    # same way. Two triggers that disagreed would be the forked copy this
+    # section exists to end, one level up.
+    #
+    # Jobs rather than commands for the reason uphold-check is one: `glob` is a
+    # job key, and a Go hook with no condition on it is the full test suite in
+    # front of every commit in the repository, Go or not.
+    - name: uphold-gofmt
+      # `gofmt -l` is a REPORT and not a gate, so the EMPTINESS of its output is
+      # the verdict and emptiness is what is tested here. The list is printed
+      # before the refusal, because a gate that fails without naming what failed
+      # is the next one somebody deletes.
+      run: unformatted="$(gofmt -l .)"; [ -z "$unformatted" ] || { echo "gofmt would reformat these files; run gofmt -w ."; echo "$unformatted"; exit 1; }
+      glob: "{*.go,*go.mod,*go.sum}"
+    - name: uphold-go-vet
+      run: go vet ./...
+      glob: "{*.go,*go.mod,*go.sum}"
+    - name: uphold-go-build
+      # `-o` into a throwaway directory rather than a bare `go build ./...`, and
+      # it is not tidiness. Where `./...` resolves to several packages go
+      # discards what it built; where it resolves to a SINGLE main package go
+      # writes the executable into the working directory -- so the job that
+      # checks the tree compiles leaves an untracked binary in the tree it just
+      # checked, in exactly the repositories small enough to have one package.
+      # The status is carried across the cleanup because `rm` succeeding must
+      # not become the answer.
+      run: out="$(mktemp -d)"; go build -o "$out" ./...; status=$?; rm -rf "$out"; exit $status
+      glob: "{*.go,*go.mod,*go.sum}"
+    - name: uphold-go-test
+      run: go test ./...
+      glob: "{*.go,*go.mod,*go.sum}"
+
 commit-msg:
   commands:
     uphold-scan-text:
@@ -89,3 +139,14 @@ uphold-manual:
       run: uphold scan
     uphold-guard:
       run: uphold guard --stage manual
+
+# The four Go jobs are NOT repeated here, and .pre-commit-hooks.yaml declares
+# them `stages: [pre-commit]` for the same reason rather than the
+# `[pre-commit, manual]` every other id there carries. Measured against lefthook
+# v2.1.9: `glob` is applied to the files a GIT HOOK is running over, and a named
+# group like this one has no such set -- every job in it runs, glob or no glob.
+# So a Go job here fires in a repository with no Go in it and fails for want of
+# a module, which is the one thing these four are published not to do. Making
+# the two files disagree about which stages the ids reach, to keep a manual
+# sweep this runner cannot condition, would be the forked declaration the ids
+# exist to end.

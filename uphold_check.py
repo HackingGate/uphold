@@ -237,6 +237,25 @@ def declared_claims(declaration: dict) -> list[tuple[str, str]]:
     return claims
 
 
+# The report `uphold check` prints, as the two fragments this reader keys on.
+# Written down here rather than inline because the count check below is the only
+# thing that notices when the binary's format and this reader drift apart, and a
+# reader that has to be read alongside the format it parses should say what it
+# expects in one place.
+RECONCILED_PREFIX = "reconciled "
+RECONCILED_SUFFIX = " enforcement claims:"
+ENFORCED_BY = "  enforced by "
+
+
+def reconciled_count(line: str) -> int | None:
+    """The N of `reconciled N enforcement claims:`, or None for any other line."""
+    line = line.strip()
+    if not (line.startswith(RECONCILED_PREFIX) and line.endswith(RECONCILED_SUFFIX)):
+        return None
+    count = line[len(RECONCILED_PREFIX) : -len(RECONCILED_SUFFIX)]
+    return int(count) if count.isdigit() else None
+
+
 def engine_suppliers(root: Path, *, strict: bool = True) -> dict[str, list[str]]:
     """Which seams supply each rule, as the reconcile in the binary sees it.
 
@@ -247,6 +266,15 @@ def engine_suppliers(root: Path, *, strict: bool = True) -> dict[str, list[str]]
     supplies is exactly the state it exists to help with, and refusing there
     would take the review document away at the moment it is most wanted. The
     evidence lines for the claims that DID hold are on stdout either way.
+
+    The evidence lines are counted against the binary's own header, because this
+    is a PARSER of another program's report and a parser that stops recognising
+    it fails silently: every line skipped by the `continue` below, an empty
+    mapping returned, and `--oscal` publishing a component definition with no
+    components at all -- exit 0, to an outside reader, over a repository whose
+    reconcile had just succeeded on every claim. Nothing in the pipeline could
+    tell that apart from a repository that enforces nothing. A report this
+    reader could not read is could-not-look; see the `explicit-unknown` record.
     """
     answered = engine(root, "check")
     if answered.returncode == 2:
@@ -257,11 +285,16 @@ def engine_suppliers(root: Path, *, strict: bool = True) -> dict[str, list[str]]
             f"honest to export:\n{answered.stderr.strip()}"
         )
     suppliers: dict[str, list[str]] = {}
+    reconciled: int | None = None
+    read = 0
     for line in answered.stdout.splitlines():
-        if " <- " not in line or "enforced by" not in line:
+        if reconciled is None:
+            reconciled = reconciled_count(line)
+        if " <- " not in line or ENFORCED_BY not in line:
             continue
+        read += 1
         _, rest = line.split(" <- ", 1)
-        rule, by = rest.split("  enforced by ", 1)
+        rule, by = rest.split(ENFORCED_BY, 1)
         # Folded back to the SEAM, because an OSCAL component is a thing that
         # implements a control and the seam is that thing. `uphold check` names
         # the evidence -- which stage, which scan -- and a component per stage
@@ -275,6 +308,19 @@ def engine_suppliers(root: Path, *, strict: bool = True) -> dict[str, list[str]]
         for seam in seams:
             if seam not in suppliers.setdefault(rule.strip(), []):
                 suppliers[rule.strip()].append(seam)
+
+    # Only where the binary said the reconcile HELD. A refused one prints its
+    # failures on stderr and nothing on stdout, and `--review` is meant to keep
+    # going over exactly that; there is no count there to check against, and
+    # requiring one would turn the state this mode exists for into exit 2.
+    if answered.returncode == 0 and read != reconciled:
+        raise CouldNotLook(
+            f"`uphold check` reported {reconciled if reconciled is not None else 'no'} "
+            f"reconciled claim(s) and this reader recovered {read} evidence line(s) "
+            "from the same report, so which seam supplies which rule is unknown. "
+            "The binary's report and this reader have drifted apart; the binary "
+            "is the authority, so fix the reader."
+        )
     return suppliers
 
 

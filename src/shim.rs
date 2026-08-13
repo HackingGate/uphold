@@ -152,6 +152,123 @@ fn in_list(list: &[String], needle: &str) -> bool {
     list.iter().any(|item| item == needle)
 }
 
+/// Global options that take the word AFTER them, per command.
+///
+/// Grammar rather than policy, which is why it lives here and not in a
+/// `[[shim]]` table: a table names the flags whose values this shim publishes,
+/// and nothing in one says what `git -c` does. Skipping only the table's own
+/// flags left `git -c user.name=x push origin topic` reading `user.name=x` as
+/// the verb and `push` as the noun -- a pair no `match` list contains, so the
+/// shim decided a push to a public forge was none of its business and exec'd it
+/// unexamined, printing nothing and exiting 0.
+///
+/// `--git-dir`, `--work-tree`, `--namespace` and `--config-env` are documented
+/// with an `=` and accepted both ways by `git.c`, so both spellings are here:
+/// the `=` form is split off before this table is consulted.
+const VALUE_OPTIONS: &[(&str, &[&str])] = &[
+    (
+        "git",
+        &[
+            "-c",
+            "-C",
+            "--git-dir",
+            "--work-tree",
+            "--namespace",
+            "--config-env",
+            "--super-prefix",
+        ],
+    ),
+    ("gh", &["-R", "--repo"]),
+    ("glab", &["-R", "--repo"]),
+];
+
+/// Global options that take nothing, per command.
+///
+/// Listed for the sake of the ones that are NOT listed. An option neither table
+/// knows leaves the word after it ambiguous, and an ambiguity is reported out
+/// loud -- so `git --no-pager status` would warn about a line with no
+/// subcommand this shim wants, every time it is typed, if the harmless half of
+/// git's grammar were left out.
+///
+/// `--exec-path` with no `=` prints a path and exits rather than taking a
+/// value, which is why it is on this side.
+const BARE_OPTIONS: &[(&str, &[&str])] = &[
+    (
+        "git",
+        &[
+            "-v",
+            "--version",
+            "-h",
+            "--help",
+            "-p",
+            "--paginate",
+            "-P",
+            "--no-pager",
+            "--bare",
+            "--exec-path",
+            "--html-path",
+            "--man-path",
+            "--info-path",
+            "--no-replace-objects",
+            "--no-lazy-fetch",
+            "--no-optional-locks",
+            "--no-advice",
+            "--literal-pathspecs",
+            "--no-literal-pathspecs",
+            "--glob-pathspecs",
+            "--noglob-pathspecs",
+            "--icase-pathspecs",
+            "--no-icase-pathspecs",
+        ],
+    ),
+    ("gh", &["--help", "--version"]),
+    ("glab", &["--help", "--version"]),
+];
+
+fn listed(table: &[(&str, &[&str])], command: &str, flag: &str) -> bool {
+    table
+        .iter()
+        .any(|(name, flags)| *name == command && flags.contains(&flag))
+}
+
+/// Whether an option before the subcommand takes the word after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Arity {
+    /// It takes none, so the next word is the next word.
+    Bare,
+    /// It takes the word after it, which is therefore not a subcommand.
+    Value,
+    /// Nothing here can say, so both readings are possible and the shim has to
+    /// answer for both.
+    Unknown,
+}
+
+/// One reading of argv: the first two words that are neither an option nor an
+/// option's value, and the first option that could have been read either way.
+#[derive(Debug)]
+struct Words {
+    verb: String,
+    noun: String,
+    unclear: Option<String>,
+}
+
+/// What a shim can say about an invocation from argv alone.
+#[derive(Debug)]
+enum Reading {
+    /// A `match` entry names it, under a reading of the options this shim can
+    /// defend.
+    Named,
+    /// No entry names it, and every word before the subcommand was accounted
+    /// for.
+    Absent,
+    /// The subcommand could not be located. This option sits before it, nothing
+    /// here says whether the word after it is its value, and the two readings
+    /// disagree about which word the subcommand even is -- neither of them
+    /// matching. Not the same answer as `Absent`, and folding it into one is
+    /// how a guard reports a pass over an invocation it never identified.
+    Unclear(String),
+}
+
 impl Shim {
     /// Whether a flag this table names takes the word after it as its value.
     fn takes_value(&self, flag: &str) -> bool {
@@ -161,8 +278,22 @@ impl Shim {
             || in_list(&self.path_flags, flag)
     }
 
-    /// The verb and the noun of an invocation: the first two words that are
-    /// neither an option nor an option's value.
+    /// What this option does to the word after it.
+    fn arity(&self, flag: &str) -> Arity {
+        if self.takes_value(flag) || listed(VALUE_OPTIONS, &self.command, flag) {
+            Arity::Value
+        } else if in_list(&self.skip_flags, flag)
+            || in_list(&self.web_flags, flag)
+            || listed(BARE_OPTIONS, &self.command, flag)
+        {
+            Arity::Bare
+        } else {
+            Arity::Unknown
+        }
+    }
+
+    /// The verb and the noun of an invocation, under one reading of the options
+    /// nothing here can classify.
     ///
     /// Reading `argv[0]` and `argv[1]` is not the same question. Every one of
     /// these CLIs takes options before the subcommand, and `gh --repo
@@ -171,15 +302,23 @@ impl Shim {
     /// decides the invocation is none of its business and execs a publishing
     /// command unexamined. Nothing is printed and the exit code is 0, which is
     /// the shape of failure this tool exists to refuse.
-    fn verb_noun(&self, argv: &[String]) -> (String, String) {
-        let mut words: Vec<&str> = Vec::new();
+    ///
+    /// `unknown_takes_value` is the reading applied to an option neither this
+    /// table nor the grammar above names, and it is a parameter because neither
+    /// answer is safe alone: assume it takes nothing and `git -c user.name=x
+    /// push` loses `push`; assume it takes the next word and `gh --draft pr
+    /// create` loses `pr`. Both readings are tried, and where they disagree the
+    /// caller hears that rather than a verdict.
+    fn words(&self, argv: &[String], unknown_takes_value: bool) -> Words {
+        let mut found: Vec<&str> = Vec::new();
+        let mut unclear: Option<String> = None;
         let mut index = 0;
         while let Some(argument) = argv.get(index) {
             index += 1;
             // `--` ends the options. Everything after it is positional however
             // it is spelt.
             if argument == "--" {
-                words.extend(
+                found.extend(
                     argv.get(index..)
                         .unwrap_or_default()
                         .iter()
@@ -189,11 +328,7 @@ impl Shim {
             }
             if argument.starts_with('-') && argument != "-" {
                 // `--flag=value` carries its value in the same word; `--flag
-                // value` takes the next one, and only this table knows which
-                // flags do. A flag it does not name is assumed to take none,
-                // which is the safe way to be wrong: the worst case is reading
-                // a value as a subcommand and checking an invocation that
-                // needed no checking.
+                // value` takes the next one.
                 let inline = argument.starts_with("--") && argument.contains('=');
                 let flag = if inline {
                     argument
@@ -202,29 +337,80 @@ impl Shim {
                 } else {
                     argument.as_str()
                 };
-                if !inline && self.takes_value(flag) {
-                    index += 1;
+                if !inline {
+                    match self.arity(flag) {
+                        Arity::Value => index += 1,
+                        Arity::Bare => {}
+                        Arity::Unknown => {
+                            // Only where there IS a word after it. An option at
+                            // the end of argv took nothing whatever its grammar
+                            // says, and `gh --version` is not an invocation
+                            // whose subcommand went missing.
+                            if argv.get(index).is_some() {
+                                if unclear.is_none() {
+                                    unclear = Some(flag.to_owned());
+                                }
+                                if unknown_takes_value {
+                                    index += 1;
+                                }
+                            }
+                        }
+                    }
                 }
                 continue;
             }
-            words.push(argument);
-            if words.len() == 2 {
+            found.push(argument);
+            if found.len() == 2 {
                 break;
             }
         }
-        let mut words = words.into_iter();
-        (
-            words.next().unwrap_or_default().to_owned(),
-            words.next().unwrap_or_default().to_owned(),
-        )
+        let mut found = found.into_iter();
+        Words {
+            verb: found.next().unwrap_or_default().to_owned(),
+            noun: found.next().unwrap_or_default().to_owned(),
+            unclear,
+        }
     }
 
-    /// Whether this invocation is one the shim has anything to say about.
-    pub(crate) fn matches(&self, argv: &[String]) -> bool {
-        let (verb, noun) = self.verb_noun(argv);
-        in_list(&self.match_, "*")
-            || in_list(&self.match_, &format!("{verb}:{noun}"))
-            || in_list(&self.match_, &format!("{verb}:*"))
+    /// Whether a `match` entry names the pair one reading found.
+    fn names(&self, words: &Words) -> bool {
+        in_list(&self.match_, &format!("{}:{}", words.verb, words.noun))
+            || in_list(&self.match_, &format!("{}:*", words.verb))
+    }
+
+    /// Whether this invocation is one the shim has anything to say about, and
+    /// where it cannot tell, that it cannot tell.
+    fn reading(&self, argv: &[String]) -> Reading {
+        if in_list(&self.match_, "*") {
+            return Reading::Named;
+        }
+        let bare = self.words(argv, false);
+        if self.names(&bare) {
+            return Reading::Named;
+        }
+        // One reading found nothing; the other is what an option that DOES take
+        // a value would have left, and a `match` hit under it is a hit. Matching
+        // under either reading errs towards checking, which is the direction
+        // this whole seam exists to err in.
+        let valued = self.words(argv, true);
+        if self.names(&valued) {
+            return Reading::Named;
+        }
+        // Nothing was read either way, so the answer is the answer.
+        let Some(flag) = bare.unclear else {
+            return Reading::Absent;
+        };
+        // An option neither reading can classify leaves the SUBCOMMAND in doubt
+        // only where the two readings disagree about which word it is. `git log
+        // -1 --oneline` is `log` whether `-1` swallows the word after it or not,
+        // and `-1` sits after the subcommand besides. Reporting that as a
+        // could-not-look prints the refusal line over every ordinary command
+        // this shim exists to stay out of the way of -- which trains the reader
+        // to ignore the one invocation where the doubt is real.
+        if bare.verb == valued.verb && bare.noun == valued.noun {
+            return Reading::Absent;
+        }
+        Reading::Unclear(flag)
     }
 
     /// Walk argv once, reading the flags this table names.
@@ -1025,12 +1211,40 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
         kind: "text",
         value: text,
     };
-    let mut refusals: Vec<String> = Vec::new();
-    for rule in policy
+    // The same two kinds `run` consults, and for the reason the dispatch there
+    // gives: a guard cannot judge a body typed into an editor one way and the
+    // same body given with `--body` another under one id. Reading only `exec`
+    // here meant a policy whose checker for this command is a BUILT-IN had a
+    // checkpoint that opened an editor, read the file back, consulted nobody and
+    // exited 0.
+    let checkers: Vec<&Rule> = policy
         .before_command(name, &opened_for)
-        .filter(|rule| rule.is(Check::Exec))
-    {
+        .filter(|rule| rule.is(Check::Exec) || rule.is(Check::Builtin))
+        .collect();
+    if checkers.is_empty() {
+        // Nothing to consult, and the text exists now: this is a checkpoint
+        // with nobody standing at it. Exit 2 rather than 0, because the command
+        // abandons what it was doing on any non-zero -- and a body that reached
+        // an editor installed by this shim and was then read by nothing must not
+        // leave here looking like a body that passed.
+        return Err(Fatal::new(format!(
+            "{name}: the editor closed on a body to publish, and no rule stands in front of \
+             `{}` -- no `command.before` names it. Nothing was published, because nothing \
+             would have been checked",
+            opened_for.join(" ")
+        )));
+    }
+    let mut refusals: Vec<String> = Vec::new();
+    for rule in checkers {
         if crate::guard::bypassed(&rule.id) {
+            continue;
+        }
+        if rule.is(Check::Builtin) {
+            if let Some(refusal) =
+                crate::guard::text_refusal(root, rule, subject.kind, &subject.value)?
+            {
+                refusals.push(refusal.report);
+            }
             continue;
         }
         if let Some(refusal) = consult(root, rule, &subject)? {
@@ -1200,7 +1414,22 @@ pub(crate) fn run(
 
     let mut collected = Collected::default();
     let mut in_scope = false;
-    if shim.matches(&words) {
+    let reading = shim.reading(&words);
+    if let Reading::Unclear(flag) = &reading {
+        // Said out loud, and for the same reason the unresolvable-target arm in
+        // `in_scope` says its piece: the decision to run the command anyway is
+        // deliberate, and making it in silence is not available. Refusing here
+        // would stop every invocation carrying an option a release added to a
+        // command this shim stands in front of machine-wide; running one whose
+        // subcommand was never identified without a word about it is the shape
+        // of failure this tool refuses.
+        eprintln!(
+            "uphold shim: {name}: {flag} sits before the subcommand and nothing here says \
+             whether it takes the word after it, so which subcommand this is could not be \
+             established and no checker ran. This is not a pass."
+        );
+    }
+    if matches!(reading, Reading::Named) {
         // The one place the bytes have to be text. This invocation is one the
         // shim reads values out of, and a value that is not UTF-8 cannot be
         // read as text -- checking the lossy copy would report a pass over
@@ -1218,6 +1447,27 @@ pub(crate) fn run(
         }
         collected = shim.collect(root, &words)?;
         in_scope = shim.in_scope(root, &collected, &words)?;
+        // A `[[shim]]` that named this invocation and a policy with no rule
+        // standing in front of it: the shim collects the body, consults nobody,
+        // execs the command and exits 0 -- which is indistinguishable from a
+        // body every checker approved, and is the one outcome this tool exists
+        // to make impossible. `[[shim]]` says which command lines are checked
+        // before they are published; `command.before` says who checks them, and
+        // neither implies the other. The load refuses a `[[shim]]` whose command
+        // no rule names at all; this is the same reading one invocation later,
+        // where the rules that name the command do not name THIS command line.
+        //
+        // Out of scope is not this case: there the policy answered, and the
+        // answer was that these checks do not apply to this destination.
+        if in_scope && checkers.is_empty() {
+            return Err(Fatal::new(format!(
+                "{name}: `{}` is an invocation this repository's `[[shim]]` says is checked \
+                 before it is published, and no rule stands in front of it -- no \
+                 `command.before` names it. Nothing was published, because nothing would have \
+                 been checked",
+                words.join(" ")
+            )));
+        }
         if in_scope {
             for subject in &collected.subjects {
                 if subject.value.trim().is_empty() {
@@ -1299,8 +1549,32 @@ mod tests {
         }
     }
 
+    /// A `git` shim as the shipped policy declares it: positional text, and
+    /// none of git's global grammar written into the table.
+    fn git_push() -> Shim {
+        Shim {
+            command: String::from("git"),
+            match_: vec!["push:*".into()],
+            text_flags: Vec::new(),
+            file_flags: Vec::new(),
+            path_flags: Vec::new(),
+            target_flags: Vec::new(),
+            skip_flags: Vec::new(),
+            web_flags: Vec::new(),
+            argv_subject: false,
+            editor_env: None,
+            target: Target::GitRemote,
+            scope: Scope::PublicTarget,
+            collect: Collect::GitRefs,
+        }
+    }
+
     fn argv(line: &str) -> Vec<String> {
         line.split_whitespace().map(str::to_owned).collect()
+    }
+
+    fn named(shim: &Shim, line: &str) -> bool {
+        matches!(shim.reading(&argv(line)), Reading::Named)
     }
 
     #[test]
@@ -1308,10 +1582,86 @@ mod tests {
         // Named rather than pattern-matched: a shim that guesses which
         // subcommands carry text is one release away from missing a new one in
         // silence.
-        assert!(gh().matches(&argv("pr create")));
-        assert!(gh().matches(&argv("issue comment")));
-        assert!(!gh().matches(&argv("pr checkout")));
-        assert!(!gh().matches(&argv("repo clone")));
+        assert!(named(&gh(), "pr create"));
+        assert!(named(&gh(), "issue comment"));
+        assert!(!named(&gh(), "pr checkout"));
+        assert!(!named(&gh(), "repo clone"));
+    }
+
+    #[test]
+    fn a_git_global_option_does_not_switch_the_push_shim_off() {
+        // The grammar a `[[shim]]` table does not carry and should not have to.
+        // Skipping only the flags the table names, `git -c user.name=x push
+        // origin topic` reads `user.name=x` as the verb -- no `match` entry
+        // contains that, so a push to a public forge exec'd unexamined, silently
+        // and with an exit code of 0.
+        for line in [
+            "-c user.name=x push origin topic",
+            "-C /somewhere/else push origin topic",
+            "--git-dir /elsewhere/.git push",
+            "--git-dir=/elsewhere/.git push",
+            "--no-pager push origin topic",
+            "-c a=b -C /elsewhere --no-pager push",
+        ] {
+            assert!(named(&git_push(), line), "{line}");
+        }
+        // And the half a looser matcher would lose. `Absent` rather than merely
+        // unnamed: knowing git's grammar is what makes this a decision instead
+        // of an ambiguity, so `-c` swallowing a value spelled like a subcommand
+        // is answered rather than warned about.
+        for line in ["-c user.name=push status", "-C /elsewhere log"] {
+            assert!(
+                matches!(git_push().reading(&argv(line)), Reading::Absent),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_option_nothing_can_classify_is_unclear_rather_than_absent() {
+        // A guard that could not tell which subcommand it was looking at has
+        // not established that this is none of its business. Both readings are
+        // tried first -- one of them matching IS an answer -- and only a line
+        // no reading names lands here.
+        assert!(matches!(
+            git_push().reading(&argv("--fictional-option value status")),
+            Reading::Unclear(flag) if flag == "--fictional-option"
+        ));
+        // A word that follows nothing took nothing, whatever its grammar says:
+        // `gh --version` is not an invocation whose subcommand went missing.
+        assert!(matches!(
+            gh().reading(&argv("--fictional-option")),
+            Reading::Absent
+        ));
+        // And an option a reading DOES resolve into a match is a match, not an
+        // ambiguity: erring towards checking is the direction this seam exists
+        // to err in.
+        assert!(named(
+            &git_push(),
+            "--fictional-option value push origin topic"
+        ));
+    }
+
+    #[test]
+    fn an_option_after_the_subcommand_does_not_make_the_subcommand_unclear() {
+        // The doubt an unclassifiable option raises is doubt about WHICH WORD
+        // the subcommand is. An option that cannot move it -- because the
+        // subcommand was already read, or because swallowing the next word
+        // leaves the same pair -- raises none, and saying otherwise puts a
+        // could-not-look line on the terminal for `git log -1 --oneline`. A
+        // refusal a reader sees on every ordinary command is a refusal they
+        // stop reading, which costs the one invocation where it was true.
+        for line in [
+            "log -1 --oneline",
+            "status --short --branch",
+            "diff --stat --cached",
+            "log --format=%H -5",
+        ] {
+            assert!(
+                matches!(git_push().reading(&argv(line)), Reading::Absent),
+                "{line}"
+            );
+        }
     }
 
     #[test]
@@ -1452,7 +1802,7 @@ mod tests {
             "-w issue comment",
             "-- pr create",
         ] {
-            assert!(gh().matches(&argv(line)), "{line}");
+            assert!(named(&gh(), line), "{line}");
         }
         // And it still says no to what it has nothing to say about, which is
         // the half a looser matcher would lose.
@@ -1460,7 +1810,7 @@ mod tests {
             "--repo acme/widget pr checkout",
             "-R acme/widget repo clone",
         ] {
-            assert!(!gh().matches(&argv(line)), "{line}");
+            assert!(!named(&gh(), line), "{line}");
         }
     }
 
@@ -1469,8 +1819,11 @@ mod tests {
         // `--title pr` puts the word `pr` in argv without the invocation being
         // about a pull request, and only this table knows that `--title` took
         // it.
-        let (verb, noun) = gh().verb_noun(&argv("--title pr create issue"));
-        assert_eq!((verb.as_str(), noun.as_str()), ("create", "issue"));
+        let words = gh().words(&argv("--title pr create issue"), false);
+        assert_eq!(
+            (words.verb.as_str(), words.noun.as_str()),
+            ("create", "issue")
+        );
     }
 
     #[test]

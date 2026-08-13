@@ -11,7 +11,7 @@
 # that read git's stdin under a runner that does not forward it. Each of those
 # passed every test here and failed on first contact with a consumer.
 #
-# Each runner is asked the same eight questions, because "supports lefthook" has
+# Each runner is asked the same nine questions, because "supports lefthook" has
 # to mean the same thing as "supports pre-commit" or it is a listing rather than
 # a claim:
 #
@@ -28,6 +28,7 @@
 #   7. an ordinary merge commit is made and passes, and a merge that would bring
 #      in a zero-width space is refused
 #   8. the manual-stage entry point runs and passes
+#   9. each of the four published Go ids runs, and each one can refuse
 #
 # Question 4 is the one that matters for the runners. A guard that cannot see
 # the push does not fail loudly by default; it falls back to some other tree and
@@ -45,6 +46,13 @@
 # invocation that nothing here made. A pinned id that never runs is this
 # script's own failure mode, one level up -- it passes here, in a config that
 # looks complete, and does nothing in the consumer that copies it.
+#
+# Question 9 is the same lesson applied before it can be learned twice. The four
+# Go ids are published for repositories with Go in them and are triggered by a
+# `files:`/`glob:` on Go paths, so in a consumer like this one -- which has none
+# until question 9 makes some -- all four skip, silently and correctly, through
+# every question above. Four more ids pinned and never driven is exactly the
+# hole questions 6 to 8 were added to close.
 
 set -euo pipefail
 
@@ -73,6 +81,23 @@ commit() {
     git -C "$CONSUMER" add -A
     git -C "$CONSUMER" -c user.email=demo@example.test -c user.name=Demo \
         commit -q -m "$1"
+}
+
+# Stage what is in the tree, commit it, and require that ONE named id refused
+# and that the refusal carries the tool's own words. Used by question 9, where a
+# passing commit would be no evidence at all: a hook that never fired and a hook
+# that fired and found nothing look identical from out here, and the two runners
+# spell their progress output differently enough that grepping for a hook's name
+# would be a third thing to keep in step.
+refuses() {
+    local id=$1 needle=$2 subject=$3
+    git -C "$CONSUMER" add -A
+    if git -C "$CONSUMER" -c user.email=demo@example.test -c user.name=Demo \
+        commit -q -m "$subject" >"$WORK/$id.log" 2>&1; then
+        fail "$id did not refuse: \"$subject\" was accepted"
+    fi
+    grep -q "$needle" "$WORK/$id.log" ||
+        fail "refused, but not by $id: $(cat "$WORK/$id.log")"
 }
 
 say "consumer: $CONSUMER  runner: $RUNNER  hooks: $HOOKS_REPO@$HOOKS_REF"
@@ -156,6 +181,10 @@ repos:
       - id: uphold-guard-merge
       - id: uphold-guard-push
       - id: uphold-guard-manual
+      - id: uphold-gofmt
+      - id: uphold-go-vet
+      - id: uphold-go-build
+      - id: uphold-go-test
 CONFIG
     raw_commit "seed"
     (cd "$CONSUMER" && "$RUNNER" install --install-hooks >/dev/null)
@@ -354,4 +383,79 @@ lefthook)
     ;;
 esac
 
-say "$RUNNER: all eight passed"
+say "9. each of the four published Go ids runs, and each one can refuse"
+# Every question above ran in a consumer with no Go in it, which is where these
+# four are supposed to be silent -- and silence is also what a broken id sounds
+# like. So Go arrives here, and each id is then driven by a fault that ONLY it
+# can see: a build that does not compile fails all four at once and would prove
+# nothing about which of them ran.
+cat > "$CONSUMER/go.mod" <<'GOMOD'
+module example.test/consumerapp
+
+go 1.22
+GOMOD
+cat > "$CONSUMER/main.go" <<'GO'
+package main
+
+func main() {}
+GO
+commit "Add a Go module" || fail "a clean Go tree was refused"
+
+# `go build ./...` writes an executable into the working directory when `./...`
+# resolves to a single main package -- which is the shape a small consumer has,
+# and the shape of this fixture. The published id builds into a throwaway
+# directory for exactly that reason; if it ever stops, the binary lands here,
+# untracked, in the tree the hook had just finished pronouncing clean.
+if [ -e "$CONSUMER/consumerapp" ]; then
+    fail "uphold-go-build left an executable behind in the consumer's tree"
+fi
+
+# gofmt, which is why these four ids exist at all. `gofmt -l` PRINTS the files
+# it would reformat and exits 0 whatever it printed, so a hand-copied entry
+# running it bare reports a pass over unformatted code for as long as it lives
+# -- two of the 24 copies audited did precisely that. The published id tests the
+# EMPTINESS of that output, and this refusal is the whole of the difference.
+printf 'package main\n\nfunc  main( ){}\n' > "$CONSUMER/main.go"
+refuses uphold-gofmt "gofmt would reformat" "Unformatted Go"
+printf 'package main\n\nfunc main() {}\n' > "$CONSUMER/main.go"
+
+# go vet, on a finding the other three accept: an unused `fmt.Sprintf` result
+# compiles, and `unusedresult` is outside the vet subset `go test` runs itself.
+printf 'package main\n\nimport "fmt"\n\nfunc main() { fmt.Sprintf("nothing reads this") }\n' \
+    > "$CONSUMER/main.go"
+refuses uphold-go-vet "result of fmt.Sprintf call not used" "Go that only vet objects to"
+printf 'package main\n\nfunc main() {}\n' > "$CONSUMER/main.go"
+
+# go test, on a test that builds and vets clean, so nothing else can be what
+# refused it.
+cat > "$CONSUMER/main_test.go" <<'GO'
+package main
+
+import "testing"
+
+func TestConsumer(t *testing.T) { t.Fatal("this test fails on purpose") }
+GO
+refuses uphold-go-test "this test fails on purpose" "A failing Go test"
+rm -f "$CONSUMER/main_test.go"
+
+# go build last, because a tree that does not compile refuses under all four and
+# can only be attributed once the other three have already answered.
+printf 'package main\n\nfunc main() { nope() }\n' > "$CONSUMER/main.go"
+refuses uphold-go-build "undefined: nope" "Go that does not compile"
+printf 'package main\n\nfunc main() {}\n' > "$CONSUMER/main.go"
+
+# And the accepting direction, which is the half a consumer lives in: four ids
+# that only ever refuse would pass this question by never letting anything
+# through. It carries a NEW file rather than only the restored one, for the
+# reason question 6 replaces a claim instead of deleting it -- main.go is back
+# to bytes already committed and main_test.go was never committed at all, so
+# there would be nothing staged, git would refuse the empty commit, and the
+# question would have passed on a commit that never happened.
+cat > "$CONSUMER/greet.go" <<'GO'
+package main
+
+func greet() string { return "hello" }
+GO
+commit "Restore the Go module" || fail "a clean Go tree was refused after the faults"
+
+say "$RUNNER: all nine passed"
