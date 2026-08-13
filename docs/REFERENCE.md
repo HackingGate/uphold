@@ -33,6 +33,8 @@ anything else (`[rule."my rule"]`).
 | field | fails when |
 |---|---|
 | `regexp` | the regex matches anywhere in the selected files |
+| `comment_regexp` | the regex matches a **comment** in a selected Rust or Python file |
+| `trivial_comments` | a comment contributes no word the code beneath it already names |
 | `path_regexp` | a tracked path matches the regex |
 | `require_regexp` | a selected file does **not** contain the regex |
 | `max_lines` | a selected file is longer than that, or grew past its baseline |
@@ -212,6 +214,53 @@ rules of its own does not switch the built-in host-identity rule off — the
 built-in is added unless one of the declared rules is itself
 `forbidden_literals = "running-os-identity"`. Declaring a rule about something
 else is not a decision to stop checking this.
+
+### `comment_regexp` and `trivial_comments` — the comment, not the line
+
+Both parse the file rather than searching it, in Rust and Python. That is the
+whole reason they are separate checks: `regexp` reads bytes, so
+`let marker = "// TODO";` is a hit for a rule about `// TODO` and there is no
+way to write the difference down. These read comment nodes, so a marker inside a
+string literal is a string literal.
+
+```toml
+[rule.no-before-after-narrative-in-source]
+message = "State what holds, not what it replaced."
+comment_regexp = '(?i)\bused to be\b'
+files.include = ["src"]
+files.glob = ["*.rs", "*.py"]
+
+[rule.no-trivial-comment]
+message = "This comment says only what the code beneath it already says."
+trivial_comments = true
+files.include = ["src"]
+files.glob = ["*.rs", "*.py"]
+```
+
+**Documentation comments are excluded from both.** `///` and `//!` are published
+output, not remarks to the next reader, and a check that cannot tell them apart
+from `//` is one whose findings, acted on, delete a public item's documentation.
+The grammar marks them; nothing here matches on the prefix, which is what a
+prefix test gets wrong by construction — `///` starts with `//`.
+
+`trivial_comments` is a subset test and carries no list of boring verbs: a
+comment fails when every word it contributes is a word the statements beneath it
+already name, counting their string literals. `// Stop and disable dnsmasq` over
+`systemd::stop("dnsmasq")` and `systemd::disable("dnsmasq")` fails; the same
+comment with a reason attached does not, and no list had to be edited for that to
+be true. The code it is judged against runs from the comment to the next blank
+line or the next comment — where a reader stops attributing it.
+
+Five shapes are left alone, each because its words restate the code by design
+while the comment is doing something else: a trailing comment on the same line as
+code, one line of a multi-line comment run, a separator (`---`, `===`, box
+drawing), a worked example (containing `=` or `→`), and a parenthesised aside.
+A tree that wants its separators gone writes a `comment_regexp` saying so; this
+check does not reach that verdict on its own.
+
+There is no fixer, and that is a decision rather than a gap. A comment worth
+deleting is usually worth replacing with the reason the code is that way, and
+that is not an edit a checker can make.
 
 ### `forbidden_literals` — what must appear nowhere
 

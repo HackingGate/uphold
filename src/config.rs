@@ -78,6 +78,15 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
 pub(crate) enum Check {
     /// `regexp`: a regex over file contents that must find zero hits.
     Regexp,
+    /// `comment_regexp`: the same regex, over the COMMENTS of a parsed file
+    /// rather than over its bytes. A separate check and not a `files.*` knob,
+    /// because it answers a different question about a different subject: a
+    /// pattern that must not appear anywhere is not the pattern that must not
+    /// appear in prose a reader is asked to trust.
+    CommentRegexp,
+    /// `trivial_comments`: a comment that says only what the code under it
+    /// already says.
+    TrivialComments,
     /// `forbidden_literals` / `forbidden_literals_from`: literals produced at
     /// runtime -- a machine's own identity, or a command's output -- each of
     /// which must appear nowhere in the selected files.
@@ -101,8 +110,10 @@ pub(crate) enum Check {
 
 impl Check {
     /// Evaluation order, and the only enumeration of the checks anywhere.
-    pub(crate) const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 11] = [
         Self::Regexp,
+        Self::CommentRegexp,
+        Self::TrivialComments,
         Self::ForbiddenLiterals,
         Self::MaxLines,
         Self::PathRegexp,
@@ -118,6 +129,8 @@ impl Check {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Regexp => "regexp",
+            Self::CommentRegexp => "comment_regexp",
+            Self::TrivialComments => "trivial_comments",
             Self::ForbiddenLiterals => "forbidden_literals",
             Self::MaxLines => "max_lines",
             Self::PathRegexp => "path_regexp",
@@ -139,6 +152,8 @@ impl Check {
         matches!(
             self,
             Self::Regexp
+                | Self::CommentRegexp
+                | Self::TrivialComments
                 | Self::ForbiddenLiterals
                 | Self::MaxLines
                 | Self::PathRegexp
@@ -310,6 +325,21 @@ pub(crate) struct Rule {
     /// A regex over file contents that must find zero hits.
     #[serde(default)]
     pub regexp: Option<String>,
+    /// A regex over the COMMENTS of a parsed file. Same dialect as `regexp` and
+    /// a different subject: the text is the comment with its markers stripped,
+    /// so a pattern never has to know whether the language spells one `//` or
+    /// `#`, and `let marker = "// TODO";` is not a comment however it reads.
+    ///
+    /// Documentation comments are excluded. `///` is an artefact rustdoc
+    /// publishes, not a remark about the code, and a rule that cannot tell the
+    /// two apart is one whose fix deletes a public item's documentation.
+    #[serde(default)]
+    pub comment_regexp: Option<String>,
+    /// A comment that contributes no word the code beneath it does not already
+    /// name. There is no pattern to write: the check compares the comment
+    /// against the identifiers and literals of the statement it introduces.
+    #[serde(default)]
+    pub trivial_comments: Option<bool>,
     /// A regex matched against tracked file PATHS rather than their contents.
     #[serde(default)]
     pub path_regexp: Option<String>,
@@ -471,6 +501,8 @@ impl Rule {
             id: id.to_owned(),
             message: None,
             regexp: None,
+            comment_regexp: None,
+            trivial_comments: None,
             path_regexp: None,
             require_regexp: None,
             max_lines: None,
@@ -504,6 +536,8 @@ impl Rule {
         // would instead of quietly becoming a different check.
         match check {
             Check::Regexp => rule.regexp = Some(String::new()),
+            Check::CommentRegexp => rule.comment_regexp = Some(String::new()),
+            Check::TrivialComments => rule.trivial_comments = Some(true),
             Check::PathRegexp => rule.path_regexp = Some(String::new()),
             Check::RequireRegexp => rule.require_regexp = Some(String::new()),
             Check::MaxLines => rule.max_lines = Some(0),
@@ -523,6 +557,12 @@ impl Rule {
     pub(crate) const fn check(&self) -> Option<Check> {
         if self.regexp.is_some() {
             return Some(Check::Regexp);
+        }
+        if self.comment_regexp.is_some() {
+            return Some(Check::CommentRegexp);
+        }
+        if self.trivial_comments.is_some() {
+            return Some(Check::TrivialComments);
         }
         if self.path_regexp.is_some() {
             return Some(Check::PathRegexp);
@@ -707,6 +747,7 @@ impl Rule {
     pub(crate) fn expression(&self) -> Option<&str> {
         self.regexp
             .as_deref()
+            .or(self.comment_regexp.as_deref())
             .or(self.path_regexp.as_deref())
             .or(self.require_regexp.as_deref())
     }
@@ -730,6 +771,10 @@ impl Rule {
     fn validate(&self) -> Result<()> {
         let set: Vec<&str> = [
             self.regexp.is_some().then_some("regexp"),
+            self.comment_regexp.is_some().then_some("comment_regexp"),
+            self.trivial_comments
+                .is_some()
+                .then_some("trivial_comments"),
             self.path_regexp.is_some().then_some("path_regexp"),
             self.require_regexp.is_some().then_some("require_regexp"),
             self.max_lines.is_some().then_some("max_lines"),
@@ -751,8 +796,9 @@ impl Rule {
         let Some(check) = self.check() else {
             return Err(Fatal::new(format!(
                 "rule {:?}: nothing says what it checks. Set one of: regexp, \
-                 path_regexp, require_regexp, max_lines, encoding, allowed_scripts, \
-                 forbidden_literals, forbidden_literals_from, builtin, exec",
+                 comment_regexp, trivial_comments, path_regexp, require_regexp, \
+                 max_lines, encoding, allowed_scripts, forbidden_literals, \
+                 forbidden_literals_from, builtin, exec",
                 self.id
             )));
         };
@@ -779,6 +825,15 @@ impl Rule {
             self.forbidden_literals.is_some() && self.forbidden_literals_from.is_some(),
             "`forbidden_literals` names a built-in source and `forbidden_literals_from` \
              names a command; one rule cannot have both",
+        )?;
+        // Writing the field is what declares the check, so `false` is a rule
+        // that names a check and switches it off -- which reads as enforcement
+        // in `upheld.toml` and enforces nothing. Deleting the rule is the way to
+        // not run it.
+        self.refuse(
+            self.trivial_comments == Some(false),
+            "`trivial_comments = false` declares the check and then runs nothing. \
+             Delete the rule instead, so no claim can name it",
         )?;
 
         if check.requires_files() && self.files.is_none() {

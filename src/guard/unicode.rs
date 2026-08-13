@@ -553,8 +553,8 @@ mod tests {
 
     #[test]
     fn a_blob_that_is_not_text_is_told_apart_from_one_that_is_binary() {
-        // The direction that matters: an undecodable blob used to be skipped in
-        // silence, so a file nobody read was counted as a file with nothing in
+        // The direction that matters: an undecodable blob is `Unreadable` and
+        // not a skip, because a file nobody read is not a file with nothing in
         // it. Binary is the one honest skip -- there are no lines in it for a
         // codepoint to hide in.
         assert!(matches!(decode_for_scan(b"plain\n"), Decoded::Text(_)));

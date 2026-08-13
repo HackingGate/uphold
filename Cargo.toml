@@ -48,6 +48,15 @@ unicode_names2 = "3.1"
 # `parameterize-do-not-enumerate` names.
 encoding_rs = "0.8"
 serde_yaml_ng = "0.10.0"
+# A parser, for the one question a regex over file contents cannot answer:
+# whether the text it matched is a comment. `grep-regex` reads bytes, so
+# `let s = "// TODO";` is a hit and a rule about comments is a rule about
+# anything that spells one. These give the comment its own node kind -- and
+# `///` a different kind from `//`, which is the distinction a line-prefix test
+# gets wrong by construction: `///` starts with `//`.
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-python = "0.25"
 
 [profile.release]
 strip = true
