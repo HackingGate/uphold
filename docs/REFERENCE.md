@@ -496,14 +496,27 @@ that will not decode is a surface this run did not examine, and saying so is
 the whole contract. A submodule is enumerated by path and never read as a blob:
 its content is another repository's.
 
-`no-stale-hook-pins` reaches every `.pre-commit-config.yaml` and every
-`lefthook.yml` in the tree, not just the ones at the root, and reads lefthook
-`remotes:` entries as pins alongside pre-commit `repo:`/`rev:` pairs. A tree
-with no pin file at all is a pass that says why — the lefthook-only install path
-is documented and pins nothing. A pin whose remote could not be reached is exit
-`2`: a runner with no network fails this guard where it used to pass it, and
-`UPHOLD_ALLOW=no-stale-hook-pins` is the deliberate bypass, named in the
-refusal.
+`no-stale-hook-pins` reaches every `.pre-commit-config.yaml` and every lefthook
+config in the tree — `lefthook.yml`, `lefthook.yaml`, `.lefthook.yml`,
+`.lefthook.yaml`, at any depth, gitignored files and submodules excluded — and
+reads lefthook `remotes:` entries as pins alongside pre-commit `repo:`/`rev:`
+pairs. A `remotes:` entry with no `ref:` is refused as unpinned, because it
+follows the upstream's default branch. `lefthook.toml`, `lefthook.json` and the
+`-local` overlay files are **not** read, so a pin written in one of those is
+watched by nothing here.
+
+Three trees that look alike from the outside and are three different answers:
+
+| the tree | the answer |
+|---|---|
+| a lefthook config and no `.pre-commit-config.yaml` | `0` with a note. That is the documented lefthook-only install path, and any `remotes:` the lefthook config pins *were* read |
+| a hook config naming no remote pin — every entry `repo: local` or `repo: meta`, or a lefthook config with no `remotes:` | `0` with a note. These files were read, and what they say is that this repository pins nothing remote |
+| no hook configuration of **either** manager, anywhere under the root | `2`. Zero pins found is not zero pins to find: a config renamed, moved above this root, or added to `.gitignore` — ignored files are not walked — arrives here as an empty tree, and used to read as clean |
+
+A pin whose remote could not be reached is exit `2` for the same reason: a
+runner with no network fails this guard where it used to pass it.
+`UPHOLD_ALLOW=no-stale-hook-pins` is the deliberate bypass in each of those
+cases, and every refusal names it.
 
 ### Overriding one
 

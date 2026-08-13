@@ -283,8 +283,17 @@ jobs:
       - if: matrix.tool == 'pre-commit' || matrix.tool == 'prek'
         run: pipx install "${{ matrix.tool }}"
 
-      - if: matrix.tool == 'lefthook'
-        uses: actions/setup-go@v7
+      # Go on every leg, and it is not the lefthook binary's toolchain -- that
+      # is the step below. The consumer harness's ninth question drives the four
+      # published Go ids, which are `language: system` and use whatever `go` the
+      # consumer has, so all three runners need one to drive them with.
+      #
+      # This does not weaken the gate above. What that gate protects is the "no
+      # Rust toolchain needed" claim, and Rust is still absent from the two legs
+      # whose runners are supposed to bootstrap it themselves. A Go toolchain
+      # proves nothing about a Rust bootstrap in either direction, and the four
+      # ids it is here for run no uphold code at all.
+      - uses: actions/setup-go@v7
         with:
           go-version: '>=1.26'
 

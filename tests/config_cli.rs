@@ -110,22 +110,6 @@ text_flags = ["-t", "--title"]
 scope = "always"
 "#;
 
-/// The rule under both cases below: a built-in that reads a push range, whose
-/// only declared place is one no shim consults.
-const PUSH_GUARD_IN_FRONT_OF_A_COMMAND: &str = r#"
-[rule.push]
-builtin = "prevent-public-push"
-
-[rule.push.command]
-before = ["faux"]
-
-[[shim]]
-command = "faux"
-match = ["pr:create"]
-text_flags = ["-t"]
-scope = "always"
-"#;
-
 /// `command.before` on a check no shim consults, refused by the real binary.
 ///
 /// `shim::run` filters the rules it consults to `exec` checkers and
@@ -136,7 +120,21 @@ scope = "always"
 /// is the one this rule walks past.
 #[test]
 fn a_command_place_no_seam_reads_stops_the_binary() {
-    let root = workspace(PUSH_GUARD_IN_FRONT_OF_A_COMMAND);
+    let root = workspace(
+        r#"
+        [rule.push]
+        builtin = "prevent-public-push"
+
+        [rule.push.command]
+        before = ["faux"]
+
+        [[shim]]
+        command = "faux"
+        match = ["pr:create"]
+        text_flags = ["-t"]
+        scope = "always"
+        "#,
+    );
     // Asked of an entry point that only loads and prints, so what fails is the
     // load and not a check downstream of it.
     let output = uphold(&root, &["rules", "--effective"]);
@@ -159,7 +157,21 @@ fn a_command_place_no_seam_reads_stops_the_binary() {
 /// running the command.
 #[test]
 fn the_shim_refuses_rather_than_running_a_command_that_rule_could_not_guard() {
-    let root = workspace(PUSH_GUARD_IN_FRONT_OF_A_COMMAND);
+    let root = workspace(
+        r#"
+        [rule.push]
+        builtin = "prevent-public-push"
+
+        [rule.push.command]
+        before = ["faux"]
+
+        [[shim]]
+        command = "faux"
+        match = ["pr:create"]
+        text_flags = ["-t"]
+        scope = "always"
+        "#,
+    );
     let output = uphold(&root, &["shim", "faux", "pr", "create", "-t", "A title"]);
     assert_eq!(code(&output), 2, "{}", stderr(&output));
     assert!(

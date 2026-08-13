@@ -258,7 +258,16 @@ exec = "uphold scan --text -"
 # place through a pull-request body, through a branch name in a push, and
 # through a package's metadata, and none of those is more forgiving than the
 # others.
-command.before = ["gh", "glab", "git push", "npm publish"]
+#
+# `npm` bare, not `npm publish`: the `[[shim]]` below matches `pack:*` as well,
+# because the tarball's metadata is built by `pack` and merely uploaded by
+# `publish` -- the same subject, one step earlier. A checker named for `publish`
+# alone stands in front of only half of what the shim says it checks, and the
+# shim now refuses an invocation it matches with no checker in front of it
+# rather than passing it in silence, so `npm pack` was exit 2. Widening the
+# checker keeps both subcommands checked; narrowing the shim would have bought
+# the same green by looking at less.
+command.before = ["gh", "glab", "git push", "npm"]
 
 [rule.no-published-markers]
 message = """

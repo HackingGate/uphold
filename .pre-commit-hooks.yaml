@@ -7,12 +7,20 @@
 # the claim true. lefthook has no equivalent format; it consumes `lefthook.yml`
 # from a remote repository instead, which is what `hooks/lefthook.yml` is for.
 #
-# `language: rust` throughout, and it is not a toolchain requirement being
-# pushed onto the consumer: both runners bootstrap Rust themselves when it is
-# absent. All of these hooks build ONE environment, because pre-commit and prek
-# key an environment on (repo, language, version) rather than on the hook, so
-# the compile is paid once for the whole file however many ids a repository
-# pins.
+# `language: rust` for every id that runs the binary, and it is not a toolchain
+# requirement being pushed onto the consumer: both runners bootstrap Rust
+# themselves when it is absent. Those hooks build ONE environment between them,
+# because pre-commit and prek key an environment on (repo, language, version)
+# rather than on the hook, so the compile is paid once for the whole file
+# however many ids a repository pins.
+#
+# The four Go ids at the bottom are the exception, and they are `language:
+# system`. They run a consumer's own toolchain over a consumer's own module, so
+# there is no uphold code in them and nothing here for a runner to build:
+# `language: golang` would have pre-commit install a Go package out of THIS
+# repository, which contains none. A repository with Go in it has `go` on PATH
+# by definition, and one that does not is told so by the command rather than by
+# a build of the wrong thing.
 
 # The declaration check. This fires when the declaration changes or when any
 # configuration it reads changes -- the files that can turn a true enforcement
@@ -163,3 +171,98 @@
   stages: [manual]
   pass_filenames: false
   always_run: true
+
+# ── the Go toolchain ─────────────────────────────────────────────────
+#
+# Four ids that run no uphold code at all, published here for one reason: a
+# fleet audit read 24 sibling repositories side by side and found these four
+# declared as `repo: local` entries and hand-copied -- go-test in 24, go-vet in
+# 24, gofmt in 24, go-build in 22. Byte-identical apart from one variant, and
+# the variant is the whole argument: two of the gofmt copies could never exit
+# nonzero, because `gofmt -l` PRINTS the files it would reformat and exits 0
+# either way. Twenty-two enforced; two reported "Passed" over unformatted code
+# for as long as they existed, and nothing compared a copy against its siblings.
+#
+# A pinned id can drift in exactly one dimension, the rev, and
+# `no-stale-hook-pins` already watches that one. A copied `entry:` line can
+# drift in every dimension and nothing watches any of them.
+#
+# The ids carry the `uphold-` prefix every id in this file carries, even though
+# they name no uphold command. hooks/lefthook.yml publishes the same four, and a
+# lefthook remote config is MERGED into the consumer's own: two commands sharing
+# a name under one hook is one command silently replacing the other, and `gofmt`
+# is a name a Go repository has very likely used already. The two files have to
+# publish one id list, so the prefix is on both.
+#
+# `files:` rather than `always_run:`, and that is the whole of "fires in no
+# repository without Go in it". The same list is spelled as a `glob:` in
+# hooks/lefthook.yml, and the two are meant to be read side by side:
+#
+#   files: '(\.go|go\.mod|go\.sum)$'   <->   glob: "{*.go,*go.mod,*go.sum}"
+#
+# They select the same paths, nested ones included, because lefthook's `*`
+# crosses a path separator -- and they OVER-select the same way, since a file
+# named `cargo.mod` satisfies both. Identical over-selection is the property
+# worth having here: two triggers that disagree are the forked copy this whole
+# section exists to end, one level up.
+#
+# `pass_filenames: false` on all four, because not one of these commands takes a
+# file list. `./...` is a package pattern and `gofmt -l .` is a walk; handing
+# either the staged subset would ask a narrower question than the id names.
+#
+# `stages: [pre-commit]` and not the `[pre-commit, manual]` every other id here
+# carries, which is the one place these four are deliberately narrower than they
+# look. Measured against lefthook v2.1.9: `glob` is applied to the files a GIT
+# HOOK is running over, and `lefthook run <group>` -- the only manual stage that
+# runner has -- has no such set, so every job in the group runs whatever its
+# glob says. A Go job reachable that way fires in a repository with no Go in it
+# and fails for want of a module. Declaring `manual` here anyway would buy a
+# sweep on two runners out of three and make the two published id lists disagree
+# about what a pinned id does, which is the failure these ids exist to end.
+
+# The broken copy, written once. `gofmt -l` is a REPORT and not a gate, so the
+# EMPTINESS of its output is the verdict and emptiness is what is tested. The
+# list is printed before the refusal, because a gate that fails without naming
+# what failed is the next one somebody deletes.
+- id: uphold-gofmt
+  name: gofmt
+  description: refuse a tree gofmt would reformat -- the check `gofmt -l` alone cannot make
+  entry: sh -c 'unformatted="$(gofmt -l .)"; [ -z "$unformatted" ] || { echo "gofmt would reformat these files; run gofmt -w ."; echo "$unformatted"; exit 1; }'
+  language: system
+  stages: [pre-commit]
+  pass_filenames: false
+  files: '(\.go|go\.mod|go\.sum)$'
+
+- id: uphold-go-vet
+  name: go vet
+  description: run go vet over every package in the module
+  entry: go vet ./...
+  language: system
+  stages: [pre-commit]
+  pass_filenames: false
+  files: '(\.go|go\.mod|go\.sum)$'
+
+# `-o` into a throwaway directory rather than a bare `go build ./...`, and it is
+# not tidiness. Where `./...` resolves to several packages go discards what it
+# built, but where it resolves to a SINGLE main package go writes the executable
+# into the working directory -- so the hook that checks the tree compiles leaves
+# an untracked binary in the tree it just checked, named after the module, in
+# exactly the repositories small enough to have one package. The status is
+# carried across the cleanup because `rm` succeeding must not become the answer.
+- id: uphold-go-build
+  name: go build
+  description: refuse a module that does not compile, without leaving a binary behind
+  entry: sh -c 'out="$(mktemp -d)"; go build -o "$out" ./...; status=$?; rm -rf "$out"; exit $status'
+  language: system
+  stages: [pre-commit]
+  pass_filenames: false
+  files: '(\.go|go\.mod|go\.sum)$'
+
+- id: uphold-go-test
+  name: go test
+  description: run the module's tests
+  entry: go test ./...
+  language: system
+  stages: [pre-commit]
+  pass_filenames: false
+  files: '(\.go|go\.mod|go\.sum)$'

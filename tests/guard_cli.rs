@@ -868,3 +868,144 @@ fn no_global_identity_at_all_says_the_guard_did_not_run() {
         stderr(&output)
     );
 }
+
+// ── the staged name scan: where a finding says it is ─────────────────
+
+/// A declared private owner needs no network and cannot be contradicted by one,
+/// which is what lets these judge a real refusal without asking a forge.
+const STAGED_NAMES: &str = r#"
+[rule.no-private-repo-names-staged]
+builtin = "no-private-repo-names-staged"
+visibility = "public"
+private_owners = ["acme-private"]
+
+[rule.no-private-repo-names-staged.git]
+hooks = ["pre-commit"]
+"#;
+
+#[test]
+fn a_staged_finding_names_the_line_the_name_arrived_on() {
+    // The file alone leaves a reader searching a file they did not write for a
+    // name they have not seen -- and the sibling guard over the same text has
+    // named `path:line:column` since it was written.
+    let root = repository(STAGED_NAMES);
+    write(
+        &root,
+        "docs/note.md",
+        "one\ntwo\nwe hit this in acme-private/secret\nfour\n",
+    );
+    git(&root, &["add", "docs/note.md"]);
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("docs/note.md:3"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn an_added_line_that_looks_like_a_diff_header_is_still_read() {
+    // Every added line is spelled with ONE leading `+`, so a line whose own
+    // first two characters are `++` reaches the reader as `+++...` -- exactly
+    // like the `+++ b/path` header. The reader excepted `+++` to skip that
+    // header and skipped the content with it, so a name written after `++` in a
+    // changelog or a diff quoted in a document was never looked at, and the
+    // guard exited 0 over it.
+    let root = repository(STAGED_NAMES);
+    write(
+        &root,
+        "CHANGELOG.md",
+        "notes\n++ ported from acme-private/secret\n",
+    );
+    git(&root, &["add", "CHANGELOG.md"]);
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("CHANGELOG.md:2"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_one_line_hunk_in_a_file_that_was_already_there_is_numbered() {
+    // `-U0` spells a one-line change `@@ -7 +7 @@`, with no count and no comma
+    // anywhere in it, and every hunk this guard reads is asked for that way. The
+    // number also has to come from the hunk rather than from counting the diff:
+    // the name below is on line 7 of the file and on the sixth line of the diff.
+    let root = repository(STAGED_NAMES);
+    write(&root, "notes.md", "a\nb\nc\nd\ne\nf\ng\nh\n");
+    git(&root, &["add", "notes.md"]);
+    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+
+    write(
+        &root,
+        "notes.md",
+        "a\nb\nc\nd\ne\nf\nsee acme-private/secret\nh\n",
+    );
+    git(&root, &["add", "notes.md"]);
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("notes.md:7"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_diff_attribute_does_not_take_the_line_number_away() {
+    // The second pass, which forces `--text` over a `diff` attribute, reads its
+    // hunks through the same reader as the first. It used to hand back one blob
+    // per file, so the half of the scan that exists FOR a suppressed diff was
+    // also the half whose findings said least about where they were.
+    let root = repository(STAGED_NAMES);
+    write(&root, ".gitattributes", "* -diff\n");
+    git(&root, &["add", ".gitattributes"]);
+    git(&root, &["commit", "-qm", "attributes", "--no-verify"]);
+
+    write(
+        &root,
+        "docs/note.md",
+        "one\ntwo\nwe hit this in acme-private/secret\n",
+    );
+    git(&root, &["add", "docs/note.md"]);
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("docs/note.md:3"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_personal_textconv_cannot_blind_the_listing_the_scan_starts_from() {
+    // The twin of the external-diff case, one call earlier: the path listing and
+    // the numstat verdict decide WHICH files the reader is ever pointed at, so a
+    // diff driver that reached them would take a file out of the scan before the
+    // flags on the patch call could matter.
+    let root = repository(STAGED_NAMES);
+    git(&root, &["config", "diff.external", "true"]);
+    git(&root, &["config", "diff.render.textconv", "true"]);
+    write(&root, ".gitattributes", "* diff=render\n");
+    write(
+        &root,
+        "docs/note.md",
+        "one\nwe hit this in acme-private/secret\n",
+    );
+    git(&root, &["add", "-A"]);
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("docs/note.md:2"),
+        "{}",
+        stderr(&output)
+    );
+}
