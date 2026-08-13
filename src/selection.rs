@@ -447,11 +447,11 @@ fn by_walking(root: &Path, roots: &[PathBuf], overrides: &Override) -> (Vec<Stri
             match entry {
                 // A subtree nobody searched: a directory the process cannot
                 // read, a symlink loop, an ignore file that would not parse.
-                // Every one of these used to be dropped on the floor, which
-                // left a tree half of it could not enter looking exactly like a
-                // small repository -- and the rules over it said `policy checks
-                // passed` at exit 0. Collected here and reported by the caller,
-                // which is exit 2: the run could not look.
+                // Collected here and reported by the caller, which is exit 2 --
+                // the run could not look. Dropping any one of them on the floor
+                // leaves a tree half of it could not enter looking exactly like
+                // a small repository, and the rules over it saying `policy
+                // checks passed` at exit 0.
                 Err(error) => unreadable.push(error.to_string()),
                 Ok(entry) => {
                     if !entry.file_type().is_some_and(|kind| kind.is_file()) {

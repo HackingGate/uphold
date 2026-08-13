@@ -155,6 +155,8 @@ impl<'a> Scan<'a> {
                 }
                 failures.extend(match check {
                     Check::Regexp => self.pattern_failures(rule)?,
+                    Check::CommentRegexp => self.comment_pattern_failures(rule)?,
+                    Check::TrivialComments => self.trivial_comment_failures(rule)?,
                     Check::ForbiddenLiterals => self.literal_failures(rule)?,
                     Check::MaxLines => self.size_failures(rule)?,
                     Check::PathRegexp => self.path_failures(rule)?,
@@ -224,6 +226,97 @@ impl<'a> Scan<'a> {
             ));
         }
         Ok(failures)
+    }
+
+    // -- comments -----------------------------------------------------------
+
+    /// Every comment in the files a rule selects, with the ones the language
+    /// cannot be read for left out.
+    ///
+    /// A selected file in a language no grammar here knows is skipped and not
+    /// reported: `files.include = ["src"]` on a mixed tree is a normal thing to
+    /// write, and a Markdown file under it is not an unreadable one. What IS
+    /// reported is a rule that selects nothing parseable at all, because that is
+    /// a rule whose author believes it runs.
+    fn comments_of(&self, rule: &Rule) -> Result<Vec<(String, crate::comments::Comment)>> {
+        let files = self.select(rule)?;
+        let mut parsed = 0_usize;
+        let mut found = Vec::new();
+        for file in &files {
+            let Some(language) = crate::comments::Language::for_path(file) else {
+                continue;
+            };
+            let path = self.root.join(file);
+            let Ok(source) = std::fs::read_to_string(&path) else {
+                // Consistent with every other check here: a file that could not
+                // be read is recorded and the scan carries on, because a checker
+                // that skips what it could not open is claiming a tree it never
+                // examined.
+                self.unreadable
+                    .borrow_mut()
+                    .insert(format!("{}: could not be read as text", path.display()));
+                continue;
+            };
+            parsed += 1;
+            for comment in crate::comments::collect(&source, language) {
+                found.push((file.clone(), comment));
+            }
+        }
+        if parsed == 0 && !files.is_empty() {
+            return Err(Fatal::new(format!(
+                "rule {:?}: selects {} file(s) and none of them is Rust or Python, so the \
+                 check reads no comments at all. Narrow `files.glob` to the languages it \
+                 is meant for",
+                rule.id,
+                files.len()
+            )));
+        }
+        Ok(found)
+    }
+
+    fn comment_pattern_failures(&self, rule: &Rule) -> Result<Vec<Failure>> {
+        let pattern = rule.expression().unwrap_or_default();
+        let matcher = Regex::new(pattern)
+            .map_err(|error| Fatal::new(format!("rule {:?}: {error}", rule.id)))?;
+        let hits: Vec<Hit> = self
+            .comments_of(rule)?
+            .into_iter()
+            .filter(|(_, comment)| !comment.doc && matcher.is_match(&comment.text))
+            .map(|(path, comment)| Hit {
+                path,
+                line: Some(comment.line),
+                text: comment.text,
+            })
+            .collect();
+        if hits.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![Failure::new(
+            &rule.id,
+            rule.message(),
+            body_for(&hits, self.redact()),
+        )])
+    }
+
+    fn trivial_comment_failures(&self, rule: &Rule) -> Result<Vec<Failure>> {
+        let hits: Vec<Hit> = self
+            .comments_of(rule)?
+            .into_iter()
+            .filter(|(_, comment)| crate::comments::is_trivial(comment))
+            .map(|(path, comment)| Hit {
+                path,
+                line: Some(comment.line),
+                text: comment.text,
+            })
+            .collect();
+        if hits.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![Failure::new(
+            &rule.id,
+            rule.message(),
+            body_for(&hits, self.redact()),
+        )])
     }
 
     // -- forbidden literals -------------------------------------------------
@@ -640,12 +733,12 @@ impl<'a> Scan<'a> {
                 .map_err(|error| Fatal::at(&self.root.join(relative), error))?;
             let text = match String::from_utf8(bytes) {
                 Ok(text) => text,
-                // A non-UTF-8 file used to be SILENTLY SKIPPED here -- a file
-                // nobody read, reported as clean, which is the
-                // `explicit-unknown` failure by name. Now: bytes an `encoding`
-                // rule declares are decoded under that declaration and their
-                // scripts read; bytes nothing declares are a file this check
-                // cannot look at, which is exit-2 territory, never a pass.
+                // A non-UTF-8 file is never silently skipped here: a file nobody
+                // read, reported as clean, is the `explicit-unknown` failure by
+                // name. Bytes an `encoding` rule declares are decoded under that
+                // declaration and their scripts read; bytes nothing declares are
+                // a file this check cannot look at, which is exit-2 territory
+                // and never a pass.
                 Err(error) => {
                     let raw = error.into_bytes();
                     let covering = declared_encodings

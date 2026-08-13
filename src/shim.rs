@@ -753,10 +753,10 @@ fn consult(root: &Path, rule: &Rule, subject: &Subject) -> Result<Option<String>
             "{} refused a {} subject: {report}",
             rule.id, subject.kind
         ))),
-        // The write result used to be dropped with `.ok()`, and a subject that
-        // never arrived is the one case where a 0 means nothing at all: the
-        // checker approved whatever part of it got through, which is not what
-        // this invocation is about to publish.
+        // The write result is an answer, not something to drop with `.ok()`: a
+        // subject that never arrived is the one case where a 0 means nothing at
+        // all, because the checker approved whatever part of it got through and
+        // that is not what this invocation is about to publish.
         (_, Err(error)) => Err(Fatal::new(format!(
             "{} did not take the whole {} subject ({error}), so its answer is not about what \
              would be published: {report}",
@@ -1178,11 +1178,10 @@ pub(crate) fn run(
         };
     };
 
-    // Only the rules that name THIS command line. A checker used to be
-    // consulted by every shim -- a check written for a pull-request body was
-    // also asked about a branch name on `git push` and a tarball on `npm
-    // publish` -- because the only thing selecting it was `kind = "command"`,
-    // which says nothing about which command.
+    // Only the rules that name THIS command line. Selecting a checker by
+    // anything coarser -- a `kind` saying it stands in front of some command,
+    // without saying which -- asks a check written for a pull-request body
+    // about a branch name on `git push` and a tarball on `npm publish`.
     // Two kinds stand in front of a command, and both are scoped by the same
     // `command.before`. An `exec` checker is a program this repository names.
     // A text-capable BUILT-IN is one the binary already carries -- and a

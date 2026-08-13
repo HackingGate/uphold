@@ -501,15 +501,14 @@ pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
         }));
     }
 
-    // COULD NOT LOOK, which is exit 2, and it used to be exit 0.
+    // COULD NOT LOOK, which is exit 2 and never exit 0.
     //
-    // `remote_refs` returns `Ok(None)` for a remote it could not reach and says
-    // in a comment that this is never a pass -- and then the caller made it one.
-    // The pin went into `unchecked`, `unchecked` was printed to stderr and
-    // dropped, `stale` returned `Ok(None)`, and `guard::run` counted the guard
-    // among the ones that passed and exited 0. A network that was down, a token
-    // that had expired, a remote that had been renamed: every one of them read
-    // as a pin that was up to date.
+    // `remote_refs` returns `Ok(None)` for a remote it could not reach, and the
+    // whole weight of that answer rests here: a pin in `unchecked` has to reach
+    // the caller as a failure to establish anything. Report it to stderr and
+    // return `Ok(None)` instead and `guard::run` counts this guard among the
+    // ones that passed -- which turns a network that is down, a token that has
+    // expired and a remote nobody can resolve into a pin that is up to date.
     //
     // A `Fatal` rather than a `Refusal`, because this is not a violation: the
     // repository may be perfectly pinned. It is this run failing to establish

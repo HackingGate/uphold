@@ -79,6 +79,59 @@ regexp = '(?i)\b(?:became|was renamed|renamed to|formerly|previously (?:called|n
 files.glob = ["*.md"]
 files.exclude = ["CHANGELOG*", "**/tests/**", "**/test/**"]
 
+# The same sentence, in the files the *.md rule was never able to reach.
+#
+# A `regexp` over source finds the phrase in a string literal as readily as in a
+# comment, and this repository has both -- the message a rule prints is a string
+# containing the prose the rule is about. So the subject is the comment, read off
+# the parse, and `///` is excluded because a doc comment is published output
+# rather than a remark to the next reader.
+#
+# The pattern is not the *.md one. `used to be` is shared, and `no longer
+# needed` and `previously, this` are added because those are the tenses a
+# comment reaches for when it explains the diff to whoever arrives next.
+#
+# `was renamed`, `renamed to` and `formerly` are deliberately NOT here, though
+# the *.md rule carries all three. Each was measured against this tree and each
+# fired on domain prose rather than on history: `guard/names.rs` is about
+# repositories that get renamed, and `selection.rs:309` about a root renamed
+# away underneath a walk. A document does not talk about renaming; the code that
+# handles it does nothing else.
+[rule.no-before-after-narrative-in-source]
+message = """
+State what holds, not what it replaced. A comment that explains what the code
+used to do goes stale the day either version moves again, and the story of the
+change belongs in the commit that made it.
+"""
+comment_regexp = '(?i)\b(?:used to be|used to (?:use|call|return|do|have|rely)|previously[,:]?\s+(?:this|we|it|the)|no longer (?:needed|used|required|necessary))\b'
+files.include = ["src", "scripts", "uphold_check.py"]
+files.glob = ["*.rs", "*.py"]
+files.exclude = ["**/tests/**", "**/test/**"]
+
+# A comment carrying no word its own code does not already name.
+#
+# The test is a subset and not a list of boring verbs: every word the comment
+# contributes has to be a word the statements under it already say, counting
+# their string literals. `// Stop and disable dnsmasq` over `systemd::stop(...)`
+# and `systemd::disable(...)` is trivial because all three words are in the code;
+# the same comment with a reason attached is not, and no list had to be edited
+# to know that.
+#
+# Tests are excluded because a test's comment names the case rather than the
+# code -- `// Delete the applied local IPv6` above an assertion is what tells a
+# reader which of nine assertions this one is.
+[rule.no-trivial-comment]
+message = """
+This comment says only what the code beneath it already says. Delete it, or
+replace it with the reason the code is that way -- a comment that repeats an
+identifier goes stale the moment the identifier changes and helps nobody until
+it does.
+"""
+trivial_comments = true
+files.include = ["src", "scripts", "uphold_check.py"]
+files.glob = ["*.rs", "*.py"]
+files.exclude = ["**/tests/**", "**/test/**"]
+
 # ---------------------------------------------------------------------------
 # Guards -- what git is about to do.
 #

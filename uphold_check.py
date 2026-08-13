@@ -61,11 +61,11 @@ from catalog import load_catalog, resolve
 HERE = Path(__file__).resolve().parent
 DECLARATION_RELPATH = Path("policy") / "upheld.toml"
 
-# The declaration is the only file this still reads out of a consumer's tree,
-# and `--oscal` is the only mode that reads it. Everything that used to be here
-# -- the pre-commit and lefthook scanners, the published-id table, the content
-# policy reader -- answered "which rules run here", and `uphold check` answers
-# that now, out of the loader that decides it.
+# The declaration is the only file this reads out of a consumer's tree, and
+# `--oscal` is the only mode that reads it. Anything answering "which rules run
+# here" -- the pre-commit and lefthook scanners, the published-id table, the
+# content policy reader -- belongs to `uphold check` instead, out of the loader
+# that decides it, rather than to a second reader here that can disagree.
 
 
 class Refused(Exception):

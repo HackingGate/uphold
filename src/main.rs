@@ -24,6 +24,7 @@
 mod audit;
 mod catalog;
 mod check;
+mod comments;
 mod config;
 mod engine;
 mod error;
