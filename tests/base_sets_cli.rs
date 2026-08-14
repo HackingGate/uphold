@@ -275,3 +275,158 @@ fn a_push_allowed_by_a_named_repository_says_nothing_about_origin() {
         stderr(&output)
     );
 }
+
+// ---------------------------------------------------------------------------
+// The guard sets, and the one field that lets a set carry a push guard.
+// ---------------------------------------------------------------------------
+
+fn write(root: &Path, relative: &str, contents: &str) {
+    std::fs::write(root.join(relative), contents).unwrap();
+}
+
+fn commit_one(root: &Path) {
+    write(root, "a.txt", "one\n");
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "one", "--no-verify"]);
+}
+
+#[test]
+fn a_refusal_from_an_inherited_guard_set_names_the_set() {
+    // The case set provenance was built for, now that a set can carry a guard:
+    // this policy contains no `[rule.prevent-ai-author]` at all, and a reader
+    // grepping for the id that refused them would find nothing.
+    let root = repository("[inherit]\nsets = [\"commit-message-residue\"]\n");
+    write(&root, "msg.txt", "x\n\nGenerated with Claude Code\n");
+
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("prevent-ai-author [set: commit-message-residue]"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn unowned_push_refuses_to_guess_who_this_repository_is() {
+    // A set carrying `prevent-public-push` with nothing pinned would be
+    // deciding, for every repository that inherits it, that origin is who they
+    // are -- which is the mode that cannot catch the accident the guard exists
+    // for. Exit 2: not a refusal of the push, an answer that it could not be
+    // judged.
+    let root = repository("[inherit]\nsets = [\"unowned-push\"]\n");
+    commit_one(&root);
+    git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+
+    let output = guard(
+        &root,
+        &[
+            "--stage",
+            "pre-push",
+            "--remote-url",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("owner_required"), "{text}");
+    assert!(text.contains("owner = \"acme\""), "{text}");
+}
+
+#[test]
+fn an_owner_declared_once_for_the_policy_answers_for_an_inherited_rule() {
+    // Where the owner goes when the rule is not in this file: the top of the
+    // policy, because a rule arriving from a set cannot be handed a parameter
+    // and identity was never a property of one rule.
+    let root = repository("owner = \"acme\"\n\n[inherit]\nsets = [\"unowned-push\"]\n");
+    commit_one(&root);
+
+    let allowed = guard(
+        &root,
+        &[
+            "--stage",
+            "pre-push",
+            "--remote-url",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    assert_eq!(code(&allowed), 0, "{}", stderr(&allowed));
+    // Declared, so it is the strong mode and has nothing to report.
+    assert!(!stderr(&allowed).contains("DERIVED FROM ORIGIN"));
+
+    let refused = guard(
+        &root,
+        &[
+            "--stage",
+            "pre-push",
+            "--remote-url",
+            "https://github.com/someone-else/thing.git",
+        ],
+    );
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("pinned to acme"),
+        "{}",
+        stderr(&refused)
+    );
+}
+
+#[test]
+fn naming_the_destinations_is_a_way_of_saying_who_you_are() {
+    // `owner_required` is satisfied by an allow-list too. A repository whose
+    // pushes legitimately go somewhere other than its own owner -- a fork, a
+    // mirror -- has answered the question in the only form the guard needed,
+    // and demanding a second declaration of the same fact is ceremony.
+    let root = repository(
+        "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\nowner_required = true\n\
+         allowed_repos = [\"other/thing\"]\n\n[rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
+    );
+    commit_one(&root);
+
+    let output = guard(
+        &root,
+        &[
+            "--stage",
+            "pre-push",
+            "--remote-url",
+            "https://github.com/other/thing.git",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn every_guard_set_declares_the_stages_its_rules_install() {
+    // The ceiling and the rules have to agree, and nothing else checks that
+    // they do for a set that is inside its ceiling: a set admitting
+    // `pre-commit` while shipping nothing at `pre-commit` is a permission
+    // granted for no reason, and the next rule added to it inherits that
+    // permission silently.
+    for name in [
+        "commit-message-residue",
+        "unreviewed-history",
+        "invisible-characters",
+        "stale-pins",
+        "unowned-push",
+    ] {
+        let root = repository(&format!("[inherit]\nsets = [\"{name}\"]\n"));
+        let listed = Command::new(env!("CARGO_BIN_EXE_uphold"))
+            .args(["rules", "--set", name])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&listed.stdout).into_owned();
+        assert!(
+            text.contains("may install at:"),
+            "{name} declares no stage and it carries guards: {text}"
+        );
+    }
+}

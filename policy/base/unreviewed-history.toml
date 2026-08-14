@@ -1,0 +1,40 @@
+# Base rule set: unreviewed-history (a merge nobody reviewed, made locally)
+#
+# The two guards that refuse a merge performed on a workstation rather than on
+# the forge. Pull in with:
+#
+#   [inherit]
+#   sets = ["process-residue", "unreviewed-history"]
+#
+# WHAT THIS IS ABOUT, and it is not "merges are bad". A merge made through a
+# pull request has a diff somebody looked at and a record of who approved it. A
+# merge made locally has neither, and it is indistinguishable afterwards: the
+# resulting commit looks the same in the history whichever way it was made. The
+# check has to be at the moment the merge is performed, because that is the last
+# moment the difference is observable.
+#
+# `no-local-merge` fires at `pre-merge-commit`, which git runs before recording
+# a merge; `no-merge-commit` fires at `pre-commit` and catches the same act
+# arriving by the other route -- a commit finishing a merge, or a squash merge
+# somebody resolved by hand. Two stages because there are two ways in, not
+# because there are two rules.
+#
+# Measured across the consuming fleet: both are declared byte for byte in every
+# repository that declares either, with no parameters and no variation.
+#
+# WHAT INHERITING THIS COSTS. Two git hooks, and one of them stands in front of
+# every commit. `git merge` of a local branch will be refused: the way through
+# is a pull request, or `UPHOLD_ALLOW=no-local-merge` once, by whoever is
+# standing there. A repository that merges locally on purpose -- a release train,
+# a vendor drop -- should not inherit this set, and that is what naming sets one
+# at a time is for.
+[set]
+stages = ["pre-commit", "pre-merge-commit"]
+
+[rule.no-local-merge]
+builtin = "no-local-merge"
+git.hooks = ["pre-merge-commit"]
+
+[rule.no-merge-commit]
+builtin = "no-merge-commit"
+git.hooks = ["pre-commit"]

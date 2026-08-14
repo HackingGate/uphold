@@ -279,7 +279,7 @@ pub(crate) fn evaluate(request: &Request<'_>) -> Result<Option<Refusal>> {
 /// way it refuses a second check field and for the same reason.
 pub(crate) fn parameters(builtin: &str) -> &'static [&'static str] {
     match builtin {
-        "prevent-public-push" => &["owner", "allowed_owners", "allowed_repos"],
+        "prevent-public-push" => &["owner", "owner_required", "allowed_owners", "allowed_repos"],
         "no-private-repo-names"
         | "no-private-repo-names-staged"
         | "no-private-repo-names-in-files" => &[

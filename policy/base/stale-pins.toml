@@ -1,0 +1,42 @@
+# Base rule set: stale-pins (a hook pinned at a version its upstream has left)
+#
+# The guard that asks every hook configuration in the tree whether the revisions
+# it pins still name anything, and whether the tag they name is still the
+# newest. Pull in with:
+#
+#   [inherit]
+#   sets = ["process-residue", "stale-pins"]
+#
+# SEPARATE FROM EVERY OTHER GUARD SET, AND THE REASON IS THE NETWORK. This is
+# the only bundled rule that talks to a remote. That makes it the only one whose
+# verdict depends on where the machine running it is standing: on a train, in a
+# locked-down runner, behind a proxy that rewrites git URLs, the question cannot
+# be answered at all. It answers exit 2 there rather than 0 -- a pin that could
+# not be checked is not a pin that passed -- and a repository that cannot live
+# with a network-dependent gate should not inherit this set. That decision is
+# the whole reason it has a name of its own.
+#
+# WHAT IT REFUSES. A `rev:` in a .pre-commit-config.yaml, or a `ref:` under a
+# lefthook `remotes:`, that names a tag its upstream has moved past, or that
+# names nothing at all. Read at any depth in the work tree, because a pin in
+# `sub/.pre-commit-config.yaml` is a pin a run touches. A tree holding no hook
+# configuration of either manager is exit 2 and not a clean pass: zero pins
+# found is not zero pins to find.
+#
+# A bare sha naming no tag passes, deliberately: a sha is neither behind a tag
+# nor missing, and reporting it would make the one form that cannot drift the
+# form that fails.
+#
+# THE STAGES ARE THE STRONGER OF THE TWO SHAPES FOUND IN THE FLEET. Some
+# repositories declare `manual` alone, some `pre-push` and `manual`. Bundling
+# the weaker one would make adoption a silent LOSS of coverage for everybody in
+# the second group, which is the one thing a preset must never do. `pre-push` is
+# the last local moment before work is shared, and it is off `pre-commit` on
+# purpose -- one network round trip per pinned repository in front of every
+# commit is a check that gets commented out.
+[set]
+stages = ["pre-push", "manual"]
+
+[rule.no-stale-hook-pins]
+builtin = "no-stale-hook-pins"
+git.hooks = ["pre-push", "manual"]

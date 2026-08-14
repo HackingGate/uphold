@@ -25,6 +25,13 @@ fn workspace_owner(request: &Request<'_>) -> (Option<String>, bool) {
     if let Some(owner) = request.rule.owner.as_deref() {
         return (Some(owner.to_owned()), true);
     }
+    // The policy's own `owner`, which is the pin a rule arriving from a bundled
+    // set can still reach: a set cannot be handed a parameter without writing
+    // the rule out again, and identity is a property of the repository rather
+    // than of any one rule in it.
+    if let Some(owner) = request.policy.owner.as_deref() {
+        return (Some(owner.to_owned()), true);
+    }
     let derived = git::remote_url(request.root, "origin")
         .and_then(|url| git::owner_repo(&url))
         .map(|(owner, _)| owner);
@@ -60,6 +67,33 @@ pub(crate) fn prevent_public_push(request: &Request<'_>) -> Result<Option<Refusa
     let name = format!("{owner}/{repo}");
 
     let (workspace, pinned) = workspace_owner(request);
+
+    // A rule that says it will not guess, in a repository that has not said
+    // who it is. Fatal rather than a refusal, because the two are different
+    // answers: a refusal says "this push is wrong", and this says "nothing
+    // here can tell whether it is". Exit 2 is that answer everywhere else in
+    // this binary.
+    //
+    // The allow-list is checked FIRST, so an explicit `allowed_owners` or
+    // `allowed_repos` still settles the question -- a repository that has
+    // written down where its pushes may go has answered, in the only form the
+    // guard needed, and demanding a second declaration of the same fact would
+    // be ceremony.
+    if request.rule.owner_required.unwrap_or(false)
+        && !pinned
+        && request.rule.allowed_owners().is_empty()
+        && request.rule.allowed_repos().is_empty()
+    {
+        return Err(crate::error::Fatal::new(format!(
+            "rule {:?}: `owner_required` is set and nothing here says who this repository \
+             belongs to, so the only owner available is the one read off `origin` -- which \
+             is the remote this guard exists to catch being wrong. Declare it once, at the \
+             top of the policy file:\n\n  owner = \"{}\"\n\nor name the destinations \
+             directly with `allowed_owners` / `allowed_repos` on the rule.",
+            request.rule.id,
+            workspace.as_deref().unwrap_or("your-org")
+        )));
+    }
 
     // An owner is a blunt unit: allowing one to let a single repository through
     // allows every repository it will ever have. `allowed_repos` is the finer
@@ -101,7 +135,8 @@ pub(crate) fn prevent_public_push(request: &Request<'_>) -> Result<Option<Refusa
                     "uphold guard: {} allowed this push to {name}, judged against {workspace} \
                      -- DERIVED FROM ORIGIN, not pinned. Repointing origin at a public \
                      upstream moves this answer with it, which is the accident this guard \
-                     exists for. Pin it with `owner = \"{workspace}\"` on the rule.",
+                     exists for. Pin it with `owner = \"{workspace}\"` at the top of the \
+                     policy file, which is a place an inherited rule can reach.",
                     request.rule.id
                 );
             }

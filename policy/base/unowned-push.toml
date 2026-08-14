@@ -1,0 +1,43 @@
+# Base rule set: unowned-push (a push to a destination nobody named)
+#
+# The guard that refuses a push to any owner the repository has not named. Pull
+# in with:
+#
+#   [inherit]
+#   sets = ["process-residue", "unowned-push"]
+#
+#   owner = "your-org"        # at the top of policy/principles.toml
+#
+# THE SECOND LINE IS NOT OPTIONAL, and that is what this set is about.
+#
+# Left to itself, this guard works out who you are from `origin`. That answer is
+# tautological for the one remote most likely to be wrong: repointing origin at
+# a public upstream -- the exact accident the guard exists to prevent -- also
+# repoints the allow-list, so the push is permitted and the guard exits 0.
+# Measured across the consuming fleet: fifty of sixty-five repositories run this
+# rule with nothing pinned, which is fifty repositories running the mode that
+# cannot catch the accident it was installed for.
+#
+# So the rule here carries `owner_required = true`, and a repository that has
+# not said who it is gets exit 2 with the line to write, rather than a green
+# tick from a check that read the answer off the thing it was guarding.
+# Inheriting a set must never decide who you are.
+#
+# WHERE THE OWNER GOES. `owner` at the TOP of the policy file, not on the rule.
+# A rule arriving from a set cannot be handed a parameter -- the only way would
+# be to write the rule out again, and a transcribed rule is what
+# `no-hand-copied-base-rule` refuses. Identity is a property of the repository
+# rather than of one rule in it, so the policy holds it and every rule that
+# needs it reads it from there.
+#
+# `allowed_owners` and `allowed_repos` also answer the question, on the rule,
+# for a repository whose pushes legitimately go somewhere other than its own
+# owner -- a fork, a mirror, a vendor drop. Naming the destinations IS saying
+# who you are, so `owner_required` is satisfied by either.
+[set]
+stages = ["pre-push"]
+
+[rule.prevent-public-push]
+builtin = "prevent-public-push"
+owner_required = true
+git.hooks = ["pre-push"]
