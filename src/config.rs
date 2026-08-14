@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{read_to_string, Fatal, Result};
 
@@ -181,7 +181,7 @@ impl std::fmt::Display for Check {
 /// An absent table is not a default. It is a place the rule does not run, which
 /// is the whole of the configuration story and the reason "the gh shim and the
 /// file scan, but install no git hook" is now something a person can write down.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Files {
     /// Search roots. `["."]` when absent.
@@ -205,7 +205,7 @@ pub(crate) struct Files {
 }
 
 /// git's own hook names, as written in githooks(5).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Git {
     /// `pre-commit`, `commit-msg`, `pre-merge-commit`, `pre-push`, `manual`.
@@ -219,7 +219,7 @@ pub(crate) struct Git {
 }
 
 /// The command lines a rule stands in front of.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CommandWhere {
     /// `"gh pr create"`, `"git push"`, `"npm publish"` -- the command and as
@@ -324,7 +324,7 @@ impl Origin {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Rule {
     /// Which file this rule was read from, filled in by [`load`] and by nothing
@@ -343,7 +343,7 @@ pub(crate) struct Rule {
     /// silently. With the id as the header, everything about a rule lives
     /// inside its section, and a duplicate id is a TOML parse error rather than
     /// a runtime check.
-    #[serde(skip)]
+    #[serde(skip_deserializing)]
     pub id: String,
 
     /// What a reader should do about a hit. Required for every check that can
@@ -1117,6 +1117,10 @@ impl Rule {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PolicyFile {
+    /// What a BUNDLED set is allowed to install. Refused in any other file --
+    /// see [`SetHeader`].
+    #[serde(default)]
+    pub set: Option<SetHeader>,
     #[serde(default)]
     pub inherit: Option<Inherit>,
     #[serde(default)]
@@ -1134,6 +1138,37 @@ pub(crate) struct PolicyFile {
     pub rules: BTreeMap<String, Rule>,
     #[serde(default, rename = "shim")]
     pub shims: Vec<crate::shim::Shim>,
+}
+
+/// The ceiling on what one bundled set may install, declared in the set.
+///
+/// A set ships compiled into the binary, so a rule added to one starts running
+/// in every repository that inherits it with NOTHING IN ANY TREE TO REVIEW. For
+/// a content rule that is a finding somebody argues about; for a guard it is a
+/// commit refused in up to sixty-five repositories on the strength of a version
+/// bump. The constraint that makes the difference safe -- "a new guard gets a
+/// new set name rather than joining an existing one" -- was written down as a
+/// risk to hold, which is another way of saying nothing enforced it.
+///
+/// This is the enforcement, and it is deliberately a DECLARATION rather than a
+/// derivation. `stages` is what this set is permitted to install, and a rule in
+/// it declaring any hook outside that list is refused at load: the set cannot
+/// quietly grow a `pre-commit` guard, because doing so means editing a line
+/// that says in words what the set is allowed to do. An empty list -- the
+/// default -- is a content-only set, which is what five of the six bundled sets
+/// are.
+///
+/// It is refused in a repository's own policy and in an `inherit.paths` file.
+/// Nothing there ships compiled in, so nothing there has the problem, and a
+/// field that looks like a permission but constrains nothing is worse than no
+/// field at all.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SetHeader {
+    /// Git hook stages the rules in this set may declare. Empty means none:
+    /// the set carries content rules only.
+    #[serde(default)]
+    pub stages: Vec<String>,
 }
 
 /// A loaded policy: inherited rules merged with the repository's own, ids
@@ -1221,10 +1256,67 @@ fn parse(path: &Path, text: &str) -> Result<PolicyFile> {
     Ok(file)
 }
 
+/// A file that is NOT a bundled set may not declare what a bundled set is
+/// allowed to install.
+///
+/// The ceiling exists because a set's rules arrive with no diff in the tree
+/// they run in. A repository's own policy has the opposite property -- every
+/// rule in it is a line somebody committed -- so a `[set]` header there would
+/// be a permission granted to the author by the author, which is not a
+/// permission. Refused rather than ignored: a field read by nothing is the
+/// shape this schema exists to make unrepresentable.
+fn refuse_set_header(path: &Path, file: &PolicyFile) -> Result<()> {
+    if file.set.is_some() {
+        return Err(Fatal::at(
+            path,
+            "`[set]` declares what a BUNDLED rule set may install, and this file is not one. \
+             A rule here runs because this repository wrote it down, which is the review a \
+             set header exists to stand in for. Drop the table",
+        ));
+    }
+    Ok(())
+}
+
+/// Parse one bundled set and hold it to its own declared ceiling.
+///
+/// The one place a bundled set is read, so the ceiling cannot be skipped by a
+/// caller that forgot it existed -- `load`, `bundled_set` and `bundled_ids` all
+/// arrive here.
+fn parse_bundled(name: &str, text: &str) -> Result<PolicyFile> {
+    let path = Path::new("<bundled>").join(format!("{name}.toml"));
+    let file = parse(&path, text)?;
+    let allowed = file.set.clone().unwrap_or_default().stages;
+    for rule in file.rules.values() {
+        for hook in rule.hooks() {
+            if !allowed.iter().any(|stage| stage == hook) {
+                return Err(Fatal::at(
+                    &path,
+                    format!(
+                        "rule {:?} declares the {hook:?} hook, and the set's `[set] stages` \
+                         admits {}. A set ships compiled in, so a guard joining one starts \
+                         refusing work in every repository that inherits it with nothing in \
+                         any tree to review. Give the guard a new set named for what it \
+                         refuses, or widen `stages` -- which is a line a reader of this file \
+                         will see.",
+                        rule.id,
+                        if allowed.is_empty() {
+                            String::from("no hook at all")
+                        } else {
+                            format!("only {}", allowed.join(", "))
+                        }
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(file)
+}
+
 /// Load a policy file, resolving `[inherit]` and validating the result.
 pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     let text = read_to_string(policy_path)?;
     let file = parse(policy_path, &text)?;
+    refuse_set_header(policy_path, &file)?;
     let inherit = file.inherit.clone().unwrap_or_default();
 
     let mut inherited: Vec<Rule> = Vec::new();
@@ -1243,9 +1335,8 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
                     ),
                 )
             })?;
-        let virtual_path = Path::new("<bundled>").join(format!("{name}.toml"));
         inherited.extend(
-            parse(&virtual_path, bundled.1)?
+            parse_bundled(name, bundled.1)?
                 .rules
                 .into_values()
                 .map(|mut rule| {
@@ -1259,6 +1350,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         let path = root.join(relative);
         let extended = read_to_string(&path)?;
         let parsed = parse(&path, &extended)?;
+        refuse_set_header(&path, &parsed)?;
         // Refused rather than merged, and refused rather than ignored. Only
         // `.rules` is merged below, so an inherited `[[shim]]` used to vanish --
         // and vanish in the worst possible way, because the `exec` rule that
@@ -1308,8 +1400,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         let mut names = Vec::new();
         for name in &inherit.sets {
             if let Some((_, bundled)) = BUNDLED.iter().find(|(bundled, _)| *bundled == name) {
-                let path = Path::new("<bundled>").join(format!("{name}.toml"));
-                names.extend(parse(&path, bundled)?.rules.into_keys());
+                names.extend(parse_bundled(name, bundled)?.rules.into_keys());
             }
         }
         for relative in &inherit.paths {
@@ -1387,13 +1478,22 @@ fn report_reshaped_shadows(inherited: &[Rule], own: &BTreeMap<String, Rule>) {
     }
 }
 
+/// One bundled set: its name, its ceiling, and its rules.
+#[derive(Debug, Clone)]
+pub(crate) struct BundledSet {
+    pub name: String,
+    /// The hook stages this set is allowed to install. See [`SetHeader`].
+    pub stages: Vec<String>,
+    pub rules: Vec<Rule>,
+}
+
 /// The rules one bundled set ships, for `uphold rules --set <name>`.
 ///
 /// The set names are the adoption surface: a stranger decides whether to
 /// inherit one from its name, and this is what lets the binary answer "what is
 /// in it" without a docs round-trip -- the name must predict the rule list,
 /// and here is the rule list.
-pub(crate) fn bundled_set(name: &str) -> Result<Vec<Rule>> {
+pub(crate) fn bundled_set(name: &str) -> Result<BundledSet> {
     let Some((_, bundled)) = BUNDLED
         .iter()
         .find(|(bundled_name, _)| *bundled_name == name)
@@ -1404,15 +1504,30 @@ pub(crate) fn bundled_set(name: &str) -> Result<Vec<Rule>> {
             known.join(", ")
         )));
     };
-    let path = Path::new("<bundled>").join(format!("{name}.toml"));
-    Ok(parse(&path, bundled)?
-        .rules
-        .into_values()
-        .map(|mut rule| {
-            rule.origin = Origin::Set(name.to_owned());
-            rule
-        })
-        .collect())
+    let file = parse_bundled(name, bundled)?;
+    Ok(BundledSet {
+        name: name.to_owned(),
+        stages: file.set.clone().unwrap_or_default().stages,
+        rules: file
+            .rules
+            .into_values()
+            .map(|mut rule| {
+                rule.origin = Origin::Set(name.to_owned());
+                rule
+            })
+            .collect(),
+    })
+}
+
+/// Every bundled set, in the order the binary ships them.
+///
+/// The whole of what a version of this binary would install in a repository
+/// that inherited everything -- which is the document `rules --sets --json`
+/// prints and `policy/base/sets.lock.json` holds, so that a set changing shape
+/// between two versions is a diff somebody reads rather than a behaviour change
+/// with no diff anywhere.
+pub(crate) fn bundled_sets() -> Result<Vec<BundledSet>> {
+    BUNDLED.iter().map(|(name, _)| bundled_set(name)).collect()
 }
 
 /// Which bundled set owns each id, and what else that set brings.
@@ -1425,8 +1540,10 @@ pub(crate) fn bundled_ids() -> Result<Vec<(&'static str, Vec<String>)>> {
     BUNDLED
         .iter()
         .map(|(name, text)| {
-            let path = Path::new("<bundled>").join(format!("{name}.toml"));
-            Ok((*name, parse(&path, text)?.rules.into_keys().collect()))
+            Ok((
+                *name,
+                parse_bundled(name, text)?.rules.into_keys().collect(),
+            ))
         })
         .collect()
 }
@@ -2190,6 +2307,40 @@ mod tests {
             .rules
             .iter()
             .any(|rule| rule.id == "no-pinned-tool-install"));
+    }
+
+    #[test]
+    fn a_bundled_set_may_not_reach_past_the_stages_it_declares() {
+        // The constraint the fleet audit could only state as a risk to hold:
+        // "a new guard gets a new set name rather than joining an existing
+        // one". A set's rules arrive in every inheriting repository with no
+        // diff in any of them, so the permission has to be written in the set
+        // -- and reaching past it has to be a load error rather than a
+        // convention somebody remembers.
+        let error = parse_bundled(
+            "pretend",
+            "[set]\nstages = [\"manual\"]\n\n[rule.thing]\nbuiltin = \"no-merge-commit\"\ngit.hooks = [\"pre-commit\"]\n",
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("pre-commit"), "{text}");
+        assert!(text.contains("only manual"), "{text}");
+
+        // The default is the strict one: a set that says nothing about stages
+        // installs nothing.
+        let silent = parse_bundled(
+            "pretend",
+            "[rule.thing]\nbuiltin = \"no-merge-commit\"\ngit.hooks = [\"pre-commit\"]\n",
+        )
+        .unwrap_err();
+        assert!(silent.to_string().contains("no hook at all"));
+
+        // And a set staying inside its ceiling loads.
+        parse_bundled(
+            "pretend",
+            "[set]\nstages = [\"manual\"]\n\n[rule.thing]\nbuiltin = \"no-merge-commit\"\ngit.hooks = [\"manual\"]\n",
+        )
+        .unwrap();
     }
 
     #[test]

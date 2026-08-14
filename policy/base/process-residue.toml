@@ -31,6 +31,17 @@
 # That cost was already accepted for every file under `tests/`, and a gate nobody
 # can keep green is a gate that gets ignored wholesale rather than per-rule.
 
+# WHAT THIS SET MAY INSTALL. `stages` is the ceiling, and this is the one
+# bundled set that carries anything at a hook: `no-hand-copied-base-rule`, at
+# `manual`. `manual` is the whole of the permission on purpose -- nothing runs
+# a manual stage on its own, so the rule is a report a reader asks for rather
+# than a gate that arrives with a version bump. Any rule here declaring
+# `pre-commit`, `commit-msg`, `pre-merge-commit` or `pre-push` is refused at
+# load: a guard gets a new set named for what it refuses, and widening this
+# line is the diff that says otherwise.
+[set]
+stages = ["manual"]
+
 [rule.no-merge-conflict-markers]
 message = """
 Do not commit Git merge-conflict markers. Resolve the conflict and remove the

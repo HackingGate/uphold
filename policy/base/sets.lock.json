@@ -1,0 +1,403 @@
+[
+  {
+    "rules": [
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go",
+            "CHANGELOG*"
+          ],
+          "exclude_cfg_test": false,
+          "glob": [
+            "*.md",
+            "*.rst",
+            "*.txt"
+          ],
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-dated-source-metadata",
+        "message": "Do not commit dated status metadata in source docs. Use Git history for\nchronology and keep source files stable.\n",
+        "regexp": "^Da[t]e:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}"
+      },
+      {
+        "builtin": "no-hand-copied-base-rule",
+        "git": {
+          "hooks": [
+            "manual"
+          ]
+        },
+        "id": "no-hand-copied-base-rule",
+        "message": "A rule a bundled set already ships is written out here by hand, from a set this\npolicy does not inherit. The bundled copy is re-read from the binary on every\nrun; a transcription is frozen at the moment it was typed, and nothing compares\nthe two.\n\nRun `uphold guard --stage manual` to see which ids, which set owns them, and\nwhat else that set would bring.\n"
+      },
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go",
+            "policy/**",
+            "README.md"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-hardcoded-home-paths",
+        "message": "Do not commit hardcoded user home paths. Use neutral paths such as\n/srv/example/... or discover runtime paths from configuration and system state.\n",
+        "regexp": "(?:/home|/Users)/[A-Za-z0-9._-]+|[A-Za-z]:\\\\Users\\\\[A-Za-z0-9._-]+"
+      },
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": true,
+          "word": false
+        },
+        "id": "no-merge-conflict-markers",
+        "message": "Do not commit Git merge-conflict markers. Resolve the conflict and remove the\n<<<<<<< / ======= / >>>>>>> lines before committing.\n",
+        "regexp": "^<{7} [\\s\\S]*?^={7}$[\\s\\S]*?^>{7} "
+      },
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go",
+            "CHANGELOG*"
+          ],
+          "exclude_cfg_test": false,
+          "glob": [
+            "*.md",
+            "*.rst",
+            "*.txt"
+          ],
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-process-history-references",
+        "message": "Do not reference process-history records (issue/PR/thread numbers) in final\ndocs. Extract the durable rule or final state instead.\n",
+        "regexp": "(?i)\\b(?:issue|pr)\\s+#[0-9]+\\b|\\bas discussed in (?:an? )?(?:issue|thread|pr)\\b|(?:https?://)?github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull)/[0-9]+\\b"
+      },
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go",
+            "**/docs/adr/**"
+          ],
+          "exclude_cfg_test": false,
+          "glob": [
+            "*.md",
+            "*.rst",
+            "*.txt"
+          ],
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-status-source-metadata",
+        "message": "Do not commit workflow-state metadata in source docs. Track decision state in\nyour tracker, not in tracked files. An architecture decision record is the\nexception: its status is the record's own standing, and docs/adr/ is excluded.\n",
+        "regexp": "^Sta[t]us:[[:space:]]*[[:alnum:]_-]+"
+      },
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go",
+            "CHANGELOG*"
+          ],
+          "exclude_cfg_test": false,
+          "glob": [
+            "*.md",
+            "*.rst",
+            "*.txt"
+          ],
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-task-tracker-references",
+        "message": "Do not commit task-tracker references in source docs. Keep task tracking in\ntracker metadata, not in tracked files.\n",
+        "regexp": "github\\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|(?:^|[[:space:]]|\\(|\\[)#[0-9]+\\b"
+      },
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-tracked-private-data-paths",
+        "message": "Do not commit local private data, build artifacts, traces, or HAR captures.\nKeep these under ignored local paths only.\n",
+        "path_regexp": "^(?:data/private|artifacts|traces)(?:/|$)|\\.(?:har|trace)$"
+      }
+    ],
+    "set": "process-residue",
+    "stages": [
+      "manual"
+    ]
+  },
+  {
+    "rules": [
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-browser-profile-artifacts",
+        "message": "Do not commit browser profile or session-store files. Cookie jars, login\nstores, session stores, and profile databases can contain authenticated data.\n",
+        "path_regexp": "(?i)(?:^|/)(?:cookies\\.sqlite|key4\\.db|logins\\.json|places\\.sqlite|sessionstore(?:-backups)?|sessionstore\\.jsonlz4|Login Data|Network Persistent State|Cookies)(?:$|/)"
+      },
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go",
+            "policy/**",
+            "README.md"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-committed-auth-key-values",
+        "message": "Do not commit literal credential, cookie, session, token, or secret values. Use\nenvironment-variable names or explicit redacted placeholders.\n",
+        "regexp": "(?i)\\b(?:cookie|session|password|passwd|token|credential|secret)\\b\\s*[=:]\\s*[\"']?[A-Za-z0-9_./+=:@-]{16,}"
+      },
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go",
+            "policy/**"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-committed-secret-material",
+        "message": "Do not commit private keys or service tokens. Keep real credentials in an\nappropriate local secret store and use placeholders in tracked files.\n",
+        "regexp": "-----BEGIN [A-Z ]*PRIVATE KEY-----|\\bssh-rsa\\s+[A-Za-z0-9+/]{20,}={0,3}\\b|\\b(?:A3T[A-Z0-9]|AKIA|ASIA)[A-Z0-9]{16}\\b|\\b(?:gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{20,})\\b|\\bxox[baprs]-[A-Za-z0-9-]{24,}\\b|\\bsk-[A-Za-z0-9]{32,}\\b"
+      },
+      {
+        "files": {
+          "exclude": [
+            ".env.example",
+            "*.enc.env",
+            ".env.enc",
+            "*.env.enc",
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go"
+          ],
+          "exclude_cfg_test": false,
+          "glob": [
+            ".env",
+            ".env.*",
+            "*.env",
+            "*.env.*"
+          ],
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-env-secret-values",
+        "message": "Do not commit populated environment files. Use .env.example with empty or\nplaceholder values and keep real values in ignored local .env files.\n",
+        "regexp": "^\\s*(?:[A-Z0-9_]*)(?:USERNAME|PASSWORD|TOKEN|COOKIE|SESSION|SECRET|API_?KEY|APP_ID|SUBSCRIPTION_KEY)\\s*=\\s*[^#\\s].*$"
+      }
+    ],
+    "set": "credentials",
+    "stages": []
+  },
+  {
+    "rules": [
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go",
+            "policy/**",
+            "README.md",
+            "third_party/**",
+            "vendor/**"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-pinned-release-download",
+        "message": "Do not fetch a pinned release artifact by URL. `releases/download/vX.Y.Z` names\na specific build in a path no manifest holds, so nothing tracks it and nothing\nre-verifies that the artifact behind it is still the one that was reviewed.\n\nUse the package manager, or a manifest entry a dependency bot can read.\n",
+        "regexp": "releases/download/v?[0-9]"
+      },
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go",
+            "policy/**",
+            "README.md",
+            "third_party/**",
+            "vendor/**"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-pinned-tool-install",
+        "message": "Do not pin a tool version in an install command. A version typed into a shell\nline is a pin nothing watches: no manifest holds it and no dependency bot can\nopen a pull request against it, so it goes stale silently.\n\nInstall the floating version and let the toolchain resolve it, or move the pin\ninto a manifest something reads (go.mod, pyproject.toml, package.json, a\nlockfile) where a bot can see it move.\n\nThe same applies to a git tag given to an installer -- `cargo install --git URL\n--tag vX.Y.Z` -- and to the ref a hook manager pins a remote config at.\n",
+        "regexp": "(?i)(go install \\S+@v?[0-9]+\\.[0-9]|pip[x]? install [^\\n]*==[0-9]|npm (i|install)( -g)? \\S+@[0-9]+\\.[0-9]|npx \\S+@[0-9]+\\.[0-9]|cargo install [^\\n]*(--version[ =]|--tag[ =]v?|@)[0-9]|--with [A-Za-z0-9_.-]+==[0-9]|^\\s*ref:\\s*[\"']?v?[0-9]+\\.[0-9])"
+      },
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go",
+            "policy/**",
+            "README.md",
+            "third_party/**",
+            "vendor/**"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-pinned-versioned-fetch",
+        "message": "Do not curl or wget a versioned URL. The version in the path is a pin nothing\nwatches, and the failure mode is not a stale dependency -- it is a 404 on a URL\nthat stopped existing, in the middle of a build, long after whoever typed it\nmoved on.\n",
+        "regexp": "(?i)(curl|wget)\\b.*https?://\\S+/v?[0-9]+\\.[0-9]+\\.[0-9]"
+      }
+    ],
+    "set": "unmanaged-pins",
+    "stages": []
+  },
+  {
+    "rules": [
+      {
+        "files": {
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": true
+        },
+        "forbidden_literals": "running-os-identity",
+        "id": "no-running-os-identity-metadata",
+        "message": "Do not commit identity metadata from the running OS. The scan reads the current\nusername, home path, hostname and default route at runtime, then searches the\ntracked files for what it read. Use neutral placeholders instead --\nexample-user, example-host, example.test, /srv/example.\n"
+      }
+    ],
+    "set": "host-identity",
+    "stages": []
+  },
+  {
+    "rules": [
+      {
+        "builtin": "links-resolve",
+        "files": {
+          "exclude_cfg_test": false,
+          "glob": [
+            "*.md"
+          ],
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-broken-doc-links",
+        "message": "A documentation link points at a path that does not exist, or escapes the\nrepository. Repoint it or drop it: a reference nothing can follow is worse than\nno reference, because it reads as though someone checked -- and it pushes the\nnext author toward pasting a copy instead, which is the drift a citation exists\nto prevent. A link that has to leave this repository is an absolute forge URL\nnaming the owning repository and the path within it.\n",
+        "require_any_link": true
+      }
+    ],
+    "set": "broken-links",
+    "stages": []
+  },
+  {
+    "rules": [
+      {
+        "files": {
+          "exclude_cfg_test": false,
+          "glob": [
+            "**/testdata/**",
+            "**/tests/fixtures/**",
+            "**/test/fixtures/**",
+            "**/fixtures/**",
+            "*_test.go"
+          ],
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-non-ascii-in-fixtures",
+        "message": "A test fixture holds non-ASCII content, which is what a capture from a live\nupstream looks like and is not what a synthetic fixture looks like. Replace it\nwith ASCII placeholders -- Fixture Account A, EXAMPLE.T, [REDACTED] -- so the\nfixture states what the test needs rather than what one session returned.\n",
+        "regexp": "[^\\x09\\x0a\\x0d\\x20-\\x7e]"
+      }
+    ],
+    "set": "captured-fixtures",
+    "stages": []
+  }
+]

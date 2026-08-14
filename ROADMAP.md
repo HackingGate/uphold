@@ -86,16 +86,30 @@ carries a guard, not alongside:
    whole declaration is one word in an `[inherit]` line is astonishment unless
    the refusal says where it came from.
 
+Then the two constraints that had been written down as risks to hold, which is
+another way of saying nothing enforced them:
+
+5. **`[set] stages`** — each bundled set declares the hook stages it may
+   install, and a rule reaching past that ceiling is refused at load. Five of
+   the six bundled sets declare none; `process-residue` declares `manual` and
+   nothing else. A guard cannot join a set without editing a line that says the
+   set is allowed to carry one.
+6. **`policy/base/sets.lock.json`** — every bundled set, field for field,
+   committed, with a test that refuses a tree where it has drifted. A set
+   changing shape is a diff in this repository, where it can be reviewed,
+   rather than a behaviour change in sixty-five repositories with a diff in
+   none of them. `uphold rules --sets --json` is the same document, so two
+   versions of the binary are diffable against each other as well.
+
 Not shipped, and the gate is deliberate: the sets themselves --
 `commit-message-residue`, `unreviewed-history`, `invisible-characters`,
 `stale-pins`, and an `unowned-push` carrying `prevent-public-push` behind a new
-`owner_required` field so inheriting a set never decides who you are. What
-holds them back is that a set ships compiled in, so a rule joining an existing
-one starts refusing commits in every inheriting repository with **nothing in
-any tree to review**. Two constraints have to be real before that is
-acceptable: sets are additive-only within a major version, a new guard gets a
-new set name rather than joining an existing one, and `uphold rules --set NAME`
-has to be diffable across versions. Nothing enforces the first two today.
+`owner_required` field so inheriting a set never decides who you are. What held
+them back was that a set ships compiled in, so a rule joining an existing one
+starts refusing commits in every inheriting repository with **nothing in any
+tree to review**. Items 5 and 6 above turned that from a convention somebody
+remembers into a load error and a committed diff; what remains is writing the
+sets, each under a new name, and deciding the `owner_required` field.
 
 Adopting `host-identity` is the standing evidence that a set is not a no-op:
 the bundled rule scans `["."]` while all twenty-nine hand-copies scan a strict

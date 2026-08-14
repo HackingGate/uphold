@@ -39,6 +39,17 @@ is installed can reach them. The coverage floor lives in `scripts/coverage.sh`
 and nowhere else — the workflow calls the same script, so the number that fails a
 push is the number that fails locally. Raise it in the commit that earns it.
 
+Editing anything under `policy/base/` means regenerating the set lock in the
+same commit, because a bundled set ships inside the binary and its diff exists
+nowhere else:
+
+```sh
+cargo run --quiet -- rules --sets --json > policy/base/sets.lock.json
+```
+
+`tests/base_set_lock.rs` refuses a tree where the two disagree. Read the diff
+before you regenerate — it is what a consumer would have felt and never seen.
+
 The MSRV is written twice, in `Cargo.toml` as `rust-version` and in
 `toolchain.toml` as the rustc `want`, because cargo and the preflight cannot read
 each other's manifest. Bump both together; `tests/test_toolchain.py` refuses a

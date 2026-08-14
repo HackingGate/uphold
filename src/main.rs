@@ -53,7 +53,9 @@ usage:
   uphold check                       reconcile policy/upheld.toml against what runs
   uphold check --coverage            which rules run here and carry no principle
   uphold audit --for-publication     what a private->public flip would republish
-  uphold rules --set NAME            what a bundled rule set refuses, rule by rule
+  uphold rules --set NAME [--json]   what a bundled rule set refuses, rule by rule
+  uphold rules --sets --json         every bundled set, field for field, so two
+                                     versions of this binary can be diffed
   uphold rules --effective [--json]  every rule this repository resolves to, and
                                      the git hooks each one fires at
   uphold shim <command> [args...]     check what a command would publish, then run it
@@ -239,12 +241,17 @@ fn run() -> Result<Exit> {
         },
         "rules" => match rest {
             [flag, name] if flag == "--set" => rules_command(text_of(name)?),
+            [flag, name, format] if flag == "--set" && format == "--json" => {
+                set_json_command(Some(text_of(name)?))
+            }
+            [flag, format] if flag == "--sets" && format == "--json" => set_json_command(None),
             [flag] if flag == "--effective" => effective_rules_command(false),
             [flag, format] if flag == "--effective" && format == "--json" => {
                 effective_rules_command(true)
             }
             _ => Err(Fatal::new(format!(
-                "usage: uphold rules --set NAME | uphold rules --effective [--json]\n\n{USAGE}"
+                "usage: uphold rules --set NAME [--json] | uphold rules --sets --json | \
+                 uphold rules --effective [--json]\n\n{USAGE}"
             ))),
         },
         "shim" => {
@@ -523,9 +530,14 @@ fn audit_command(arguments: &[OsString]) -> Result<Exit> {
 /// What one bundled set refuses, so nobody has to read the docs -- or the
 /// source -- to learn what a name they are about to inherit means.
 fn rules_command(name: &str) -> Result<Exit> {
-    let rules = config::bundled_set(name)?;
-    println!("{name}: {} rule(s)", rules.len());
-    for rule in rules {
+    let set = config::bundled_set(name)?;
+    println!("{name}: {} rule(s)", set.rules.len());
+    if set.stages.is_empty() {
+        println!("  installs no git hook");
+    } else {
+        println!("  may install at: {}", set.stages.join(", "));
+    }
+    for rule in set.rules {
         let check = rule
             .check()
             .map_or_else(|| String::from("?"), |check| check.to_string());
@@ -536,6 +548,73 @@ fn rules_command(name: &str) -> Result<Exit> {
         }
     }
     Ok(Exit::Clean)
+}
+
+/// What a bundled set IS, field for field, for a reader who has to compare two
+/// versions of this binary.
+///
+/// The human form above is a summary, and a summary cannot answer the question
+/// this one exists for: a set ships compiled in, so a pattern that changed
+/// between two releases changes what is refused in every inheriting repository
+/// with NO DIFF IN ANY OF THEM. `diff <(uphold-a rules --sets --json)
+/// <(uphold-b rules --sets --json)` is that diff, and `policy/base/sets.lock.json`
+/// is the same document committed here so the change is reviewable in the one
+/// repository that can review it.
+///
+/// Serialized from the rule struct itself rather than field by field. A writer
+/// naming the fields it knows about is a list that drifts from the schema, and
+/// a field missing from THIS output is a behaviour change that diffs to
+/// nothing -- which is the exact failure the output exists to catch.
+fn set_json_command(only: Option<&str>) -> Result<Exit> {
+    let sets = match only {
+        Some(name) => vec![config::bundled_set(name)?],
+        None => config::bundled_sets()?,
+    };
+    let document: Vec<serde_json::Value> = sets
+        .iter()
+        .map(|set| {
+            let rules: Vec<serde_json::Value> = set
+                .rules
+                .iter()
+                .map(|rule| pruned(serde_json::to_value(rule).unwrap_or(serde_json::Value::Null)))
+                .collect();
+            serde_json::json!({
+                "set": set.name,
+                "stages": set.stages,
+                "rules": rules,
+            })
+        })
+        .collect();
+    let text = serde_json::to_string_pretty(&document)
+        .map_err(|error| Fatal::new(format!("could not render the set document: {error}")))?;
+    println!("{text}");
+    Ok(Exit::Clean)
+}
+
+/// Drop what an absent field serializes to, so the document says what the file
+/// says.
+///
+/// A `null` and an empty list are how "the author did not write this" arrives
+/// here, and printing them would make every rule carry thirty lines of things
+/// it is not. Lossless in the direction that matters: nothing in the schema
+/// distinguishes an absent list from an empty one -- `Rule::validate` refuses
+/// a written parameter its check does not read, so an explicit `[]` is not a
+/// state a loaded rule can be in.
+fn pruned(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(fields) => serde_json::Value::Object(
+            fields
+                .into_iter()
+                .filter(|(_, field)| match field {
+                    serde_json::Value::Null => false,
+                    serde_json::Value::Array(items) => !items.is_empty(),
+                    _ => true,
+                })
+                .map(|(name, field)| (name, pruned(field)))
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 /// One JSON string, escaped.
