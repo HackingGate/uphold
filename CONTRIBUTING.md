@@ -50,6 +50,13 @@ cargo run --quiet -- rules --sets --json > policy/base/sets.lock.json
 `tests/base_set_lock.rs` refuses a tree where the two disagree. Read the diff
 before you regenerate — it is what a consumer would have felt and never seen.
 
+A rule added to a bundled set needs a line in `tests/base_set_corpus.rs`: at
+least one sample it must refuse, and the forms it must let through.
+`every_content_rule_in_every_bundled_set_is_in_the_corpus` fails without one.
+The reason it is mandatory rather than encouraged is that a rule which stops
+matching produces **no output at all** — the gate goes green and stays green,
+and no report anywhere says the check has stopped working.
+
 The MSRV is written twice, in `Cargo.toml` as `rust-version` and in
 `toolchain.toml` as the rustc `want`, because cargo and the preflight cannot read
 each other's manifest. Bump both together; `tests/test_toolchain.py` refuses a
