@@ -39,7 +39,7 @@ use regex::Regex;
 
 use super::scope;
 use super::{Refusal, Request, Stage};
-use crate::config::Rule;
+use crate::config::{Policy, Rule};
 use crate::error::{Fatal, Result};
 use crate::git;
 
@@ -926,6 +926,7 @@ pub(crate) fn in_tracked(request: &Request<'_>) -> Result<Option<Refusal>> {
 /// API without passing a single hook, and the rule for all of them is this one.
 pub(crate) fn in_text(
     root: &Path,
+    policy: &Policy,
     rule: &Rule,
     label: &str,
     text: &str,
@@ -933,6 +934,7 @@ pub(crate) fn in_text(
     let request = Request {
         root,
         rule,
+        policy,
         stage: Stage::Manual,
         message_file: None,
         push_refs: "",

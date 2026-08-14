@@ -460,7 +460,7 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
         };
         let refusals = guard::over_text(&root, &policy, &source, &text)?;
         for refusal in &refusals {
-            eprintln!("guard refused: {}", refusal.id);
+            eprintln!("guard refused: {}", guard::refused_by(&policy, refusal));
             eprintln!("{}", refusal.report.trim_end());
         }
         if refusals.is_empty() {

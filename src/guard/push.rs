@@ -71,15 +71,41 @@ pub(crate) fn prevent_public_push(request: &Request<'_>) -> Result<Option<Refusa
         }
     }
 
-    if allowed_owners
+    let by_owner = allowed_owners
         .iter()
-        .any(|allowed| allowed.eq_ignore_ascii_case(&owner))
-        || request
-            .rule
-            .allowed_repos()
-            .iter()
-            .any(|allowed| allowed.eq_ignore_ascii_case(&name))
-    {
+        .any(|allowed| allowed.eq_ignore_ascii_case(&owner));
+    let by_repo = request
+        .rule
+        .allowed_repos()
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(&name));
+
+    if by_owner || by_repo {
+        // The allow path says which mode allowed it, and it only says so where
+        // the answer rested on the derived owner.
+        //
+        // The refusal has always named the weaker mode; the pass never did, so
+        // a repository running the tautological version of this guard heard
+        // nothing for as long as nothing went wrong -- which is exactly as long
+        // as the note is worth reading. Measured across the fleet: 50 of 65
+        // repositories pin no `owner`.
+        //
+        // Scoped to `!pinned && !by_repo` on purpose. A pinned owner is the
+        // strong mode and has nothing to report, and an `allowed_repos` hit
+        // decided the question from a written list whatever origin says -- a
+        // note on either would be a line on every push, and a line on every
+        // push is a line nobody reads by the time it matters.
+        if !pinned && !by_repo {
+            if let Some(workspace) = workspace.as_deref() {
+                eprintln!(
+                    "uphold guard: {} allowed this push to {name}, judged against {workspace} \
+                     -- DERIVED FROM ORIGIN, not pinned. Repointing origin at a public \
+                     upstream moves this answer with it, which is the accident this guard \
+                     exists for. Pin it with `owner = \"{workspace}\"` on the rule.",
+                    request.rule.id
+                );
+            }
+        }
         return Ok(None);
     }
 

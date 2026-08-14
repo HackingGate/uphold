@@ -113,3 +113,27 @@ Keep these under ignored local paths only.
 path_regexp = '^(?:data/private|artifacts|traces)(?:/|$)|\.(?:har|trace)$'
 files.include = ["."]
 files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go"]
+
+# The residue a PROCESS leaves in a policy file, which is the same category as
+# the six rules above it: a rule copied out of a bundled set is the artefact of
+# somebody having once had no other way to get it, kept long after the set
+# existed. It reads the policy rather than the tree, which is why it is the one
+# rule here with no `files` table.
+#
+# `manual` and nowhere else, for one release. Every other rule in this set fires
+# where the residue is written; this one would fire on every commit in every
+# repository that inherits the set -- 48 of them at the time it shipped -- over
+# a shape none of them reviewed and some of them may have chosen. A report
+# first, and a gate only once what it reports has been seen.
+[rule.no-hand-copied-base-rule]
+message = """
+A rule a bundled set already ships is written out here by hand, from a set this
+policy does not inherit. The bundled copy is re-read from the binary on every
+run; a transcription is frozen at the moment it was typed, and nothing compares
+the two.
+
+Run `uphold guard --stage manual` to see which ids, which set owns them, and
+what else that set would bring.
+"""
+builtin = "no-hand-copied-base-rule"
+git.hooks = ["manual"]

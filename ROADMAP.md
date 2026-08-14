@@ -61,3 +61,43 @@ What it deliberately does **not** do, and why:
   enforces a principle is specific to one repository, so a shared profile could
   only have carried principle ids with no rule behind them -- a list with no
   trigger, which is the failure `enforcement-needs-a-trigger` names.
+
+### Bundled sets that carry guards
+
+Five guard declarations are byte-identical across the consuming fleet, with
+zero variation: `prevent-ai-author`, `prevent-unusual-unicode`,
+`no-merge-commit`, `no-local-merge` and `prevent-public-push`. That is one
+decision and sixty-four transcriptions, and it is the same argument that
+promoted the content rules into `policy/base/`.
+
+Shipped, and the order was the design -- these had to exist **before** any set
+carries a guard, not alongside:
+
+1. `no-hand-copied-base-rule`, at `manual`, in `process-residue`. A
+   transcription is invisible to every other check here: the id resolves and
+   the claim reconciles. This makes it a report.
+2. The derived-owner note on `prevent-public-push`'s **allow** path. Fifty of
+   sixty-five repositories pin no `owner`, and the guard used to say so only
+   when refusing -- which is never, for as long as nothing has gone wrong.
+3. A load-time note when a repository shadows an inherited id with a
+   **different check**. Without it, a set arriving over a forked copy hides the
+   fork behind the very rule the set was added to supply.
+4. Set provenance in refusal output: `refused by 'X' [set: Y]`. A guard whose
+   whole declaration is one word in an `[inherit]` line is astonishment unless
+   the refusal says where it came from.
+
+Not shipped, and the gate is deliberate: the sets themselves --
+`commit-message-residue`, `unreviewed-history`, `invisible-characters`,
+`stale-pins`, and an `unowned-push` carrying `prevent-public-push` behind a new
+`owner_required` field so inheriting a set never decides who you are. What
+holds them back is that a set ships compiled in, so a rule joining an existing
+one starts refusing commits in every inheriting repository with **nothing in
+any tree to review**. Two constraints have to be real before that is
+acceptable: sets are additive-only within a major version, a new guard gets a
+new set name rather than joining an existing one, and `uphold rules --set NAME`
+has to be diffable across versions. Nothing enforces the first two today.
+
+Adopting `host-identity` is the standing evidence that a set is not a no-op:
+the bundled rule scans `["."]` while all twenty-nine hand-copies scan a strict
+subset, quietly avoiding vendored trees, `target/`, and test corpora. Per
+repository, not a fleet sweep.
