@@ -11,13 +11,33 @@
 # what \p{Script=Latin} matches.
 allowed_scripts = ["Latin"]
 
+# Who this repository belongs to. One declaration for the whole policy, because
+# identity is a property of the repository rather than of any rule in it -- and
+# because a rule arriving from a bundled set cannot be handed a parameter, so a
+# guard that needs to know reads it from here. `unowned-push` refuses to run
+# without it, which is the point of that set.
+owner = "HackingGate"
+
 [inherit]
 # The shared process-residue set -- conflict markers, home paths, dated and
 # status metadata, tracker and thread references, private data paths --
 # compiled into the binary rather than fetched from a pinned checkout of
 # another repository. `uphold rules --set process-residue` prints its
 # rules.
-sets = ["process-residue", "host-identity", "broken-links"]
+sets = [
+    "process-residue",
+    "host-identity",
+    "broken-links",
+    # The guard sets. Each installs git hooks, and each is named separately
+    # because taking one is a separate decision -- `stale-pins` reaches the
+    # network, `invisible-characters` reads the whole tree at four stages, and
+    # `unowned-push` refuses to guess who this repository is.
+    "commit-message-residue",
+    "unreviewed-history",
+    "invisible-characters",
+    "stale-pins",
+    "unowned-push",
+]
 
 # The engine's own tests write Japanese, because the two rules they exercise --
 # which scripts a path may use, and which variation selectors are earned -- can
@@ -146,38 +166,15 @@ files.exclude = ["**/tests/**", "**/test/**"]
 # holds several workspaces. A per-workspace file IS the workspace scope.
 # ---------------------------------------------------------------------------
 
-[rule.prevent-ai-author]
-builtin = "prevent-ai-author"
-git.hooks = ["commit-msg"]
-
-[rule.prevent-unusual-unicode]
-builtin = "prevent-unusual-unicode"
-git.hooks = ["commit-msg"]
-
-[rule.prevent-unusual-unicode-in-files]
-builtin = "prevent-unusual-unicode-in-files"
-git.hooks = ["pre-commit", "pre-merge-commit", "pre-push", "manual"]
-
-[rule.no-merge-commit]
-builtin = "no-merge-commit"
-git.hooks = ["pre-commit"]
-
-[rule.no-local-merge]
-builtin = "no-local-merge"
-git.hooks = ["pre-merge-commit"]
-
-[rule.no-stale-hook-pins]
-builtin = "no-stale-hook-pins"
-git.hooks = ["pre-push", "manual"]
-
-[rule.prevent-public-push]
-builtin = "prevent-public-push"
-# Pinned rather than derived. Deriving the owner from `origin` is tautological
-# for the one remote most likely to be wrong: repointing origin at a public
-# upstream -- the exact accident this guard exists to prevent -- also repoints
-# the allow-list, so the push is permitted and the guard exits 0.
-owner = "HackingGate"
-git.hooks = ["pre-push"]
+# Every guard this repository runs now arrives from a bundled set, named in the
+# `[inherit]` block at the top of this file. The seven declarations that stood
+# here were byte-identical to the sets' -- which is the whole argument the sets
+# were promoted on, and a repository that ships them while transcribing them
+# would be running the shape `no-hand-copied-base-rule` refuses.
+#
+# `owner` moved with `prevent-public-push`: it is at the top of this file now,
+# because a rule arriving from a set cannot be handed a parameter, and who this
+# repository belongs to was never a property of one rule anyway.
 
 [rule.no-private-repo-names]
 builtin = "no-private-repo-names"

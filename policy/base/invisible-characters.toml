@@ -1,0 +1,42 @@
+# Base rule set: invisible-characters (a character that draws nothing, in a
+# file or in the name of one)
+#
+# The tree-wide half of the Unicode guard: zero-width joiners, bidirectional
+# controls, unearned variation selectors and homoglyphs, in committed content
+# and in the paths that carry it. Pull in with:
+#
+#   [inherit]
+#   sets = ["process-residue", "invisible-characters"]
+#
+# SEPARATE FROM `commit-message-residue`, AND THE REASON IS COST. The message
+# guard reads one message. This one reads the tree at four stages, including
+# every blob a push introduces -- a file added in one pushed commit and deleted
+# in the next is on the remote permanently and is in no tip tree, so the push
+# stage cannot be dropped without losing the case the rule is for. On a large
+# repository that is the slowest thing in the hook, and a check somebody
+# disables for being slow is a check that is off. Bundling it with the message
+# guards would have made the cheap one hostage to the expensive one.
+#
+# WHY IT IS WORTH THE TIME. The failure is invisible by construction: an
+# identifier containing a zero-width joiner reads exactly like the one it
+# shadows, a right-to-left override reorders a line in the diff view without
+# changing a byte the eye can find, and a Cyrillic `a` in a package name is a
+# different package. The whole class is one a reader cannot catch by reading.
+#
+# THE PATH IS SCANNED BEFORE THE CONTENT, because a filename is committed text
+# too, and a blob that cannot be decoded is reported rather than skipped.
+#
+# ADOPTING THIS IS NOT A NO-OP, and it must not be sold as one. Repositories
+# holding this rule by hand typically carry an `allow` list -- an ideographic
+# space earned by a Japanese fixture, a variation selector earned by an emoji
+# test corpus. The bundled rule has no `allow`, so a repository with one is
+# taking a STRICTER rule by inheriting this set. Read `uphold rules --set
+# invisible-characters` first, run `uphold guard --stage manual` before the
+# hooks are live, and keep the local rule if the allowance is real -- an id of
+# its own if it is genuinely a different rule.
+[set]
+stages = ["pre-commit", "pre-merge-commit", "pre-push", "manual"]
+
+[rule.prevent-unusual-unicode-in-files]
+builtin = "prevent-unusual-unicode-in-files"
+git.hooks = ["pre-commit", "pre-merge-commit", "pre-push", "manual"]

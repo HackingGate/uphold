@@ -1,0 +1,44 @@
+# Base rule set: commit-message-residue (what a message says about how it was
+# written)
+#
+# The two guards that read the message a commit is about to record, and every
+# message a push is about to publish. Pull in with:
+#
+#   [inherit]
+#   sets = ["process-residue", "commit-message-residue"]
+#
+# WHY THIS IS A SET AT ALL. Measured across the consuming fleet: both rules
+# below are declared, byte for byte, in every repository that declares either --
+# same builtin, same single stage, no parameters, no variation anywhere. That is
+# one decision and sixty-four transcriptions, and a transcription is a rule that
+# has stopped moving: the compiled-in check grows a case, and the copy does not,
+# because a copy has no way to hear about it.
+#
+# WHAT A GUARD SET COSTS, said plainly, because this is the first bundled set
+# that carries one. Inheriting this name installs two git hooks. A commit whose
+# message carries an authorship marker will be refused, and the declaration
+# doing the refusing is one word in an `[inherit]` line rather than a rule in
+# the tree -- which is why a refusal from a set names the set it came from.
+#
+# `commit-msg` is the whole of what this set may install, and the `[set]`
+# header below is that promise in the form the loader enforces. A rule here
+# reaching for `pre-commit` is refused at load.
+#
+# THE PUSH HALF IS NOT A SECOND RULE. Both builtins read the pushed range as
+# well as the message being written, because `commit-msg` fires only when
+# `git commit` writes a message: not for `commit-tree`, a rebase, a cherry-pick,
+# `git am`, `--no-verify`, or a fast import. That is one rule with two
+# artefacts, and it is why neither declares `pre-push` here -- the guard reaches
+# the pushed messages from its own stage list in `policy/principles.toml` where
+# a repository wants it, and this set stays at the stage all sixty-five agreed
+# on.
+[set]
+stages = ["commit-msg"]
+
+[rule.prevent-ai-author]
+builtin = "prevent-ai-author"
+git.hooks = ["commit-msg"]
+
+[rule.prevent-unusual-unicode]
+builtin = "prevent-unusual-unicode"
+git.hooks = ["commit-msg"]

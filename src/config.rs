@@ -57,6 +57,30 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
         "captured-fixtures",
         include_str!("../policy/base/captured-fixtures.toml"),
     ),
+    // The guard sets. They install git hooks, which the six above do not, and
+    // each is a separate name because taking one is a separate decision: what
+    // it costs, when it runs, and what it will refuse are different arguments
+    // for each. The `[set] stages` header in every one of them is the ceiling
+    // the loader holds them to -- a guard cannot join a set that did not say it
+    // carries guards, which is the constraint that makes shipping these safe at
+    // all.
+    (
+        "commit-message-residue",
+        include_str!("../policy/base/commit-message-residue.toml"),
+    ),
+    (
+        "unreviewed-history",
+        include_str!("../policy/base/unreviewed-history.toml"),
+    ),
+    (
+        "invisible-characters",
+        include_str!("../policy/base/invisible-characters.toml"),
+    ),
+    ("stale-pins", include_str!("../policy/base/stale-pins.toml")),
+    (
+        "unowned-push",
+        include_str!("../policy/base/unowned-push.toml"),
+    ),
 ];
 
 /// What a rule checks. NOT a field -- there is nothing in the file to read it
@@ -512,6 +536,18 @@ pub(crate) struct Rule {
     /// The owner this workspace belongs to. Was `WORKSPACE_PINNED_OWNER`.
     #[serde(default)]
     pub owner: Option<String>,
+    /// Refuse to run this guard in the mode where it works out the owner for
+    /// itself.
+    ///
+    /// The field a BUNDLED set needs. A set that carried `prevent-public-push`
+    /// with no owner would be deciding, on behalf of every repository that
+    /// inherits it, that origin is who they are -- which is the tautology the
+    /// guard's own documentation warns about, shipped as a default. With this
+    /// set, a repository that has not said who it is hears so, once, instead of
+    /// being told its pushes are fine by a rule that read the answer off the
+    /// thing it is guarding.
+    #[serde(default)]
+    pub owner_required: Option<bool>,
     #[serde(default)]
     pub allowed_owners: Option<Vec<String>>,
     #[serde(default)]
@@ -563,6 +599,7 @@ impl Rule {
             refuse_unknown: None,
             visibility: None,
             owner: None,
+            owner_required: None,
             allowed_owners: None,
             allowed_repos: None,
             allow: None,
@@ -1121,6 +1158,17 @@ pub(crate) struct PolicyFile {
     /// see [`SetHeader`].
     #[serde(default)]
     pub set: Option<SetHeader>,
+    /// Who this repository belongs to, declared once for the whole policy.
+    ///
+    /// Identity is a property of the repository and not of any one rule, and
+    /// this is the field that makes that true. It exists because a rule
+    /// arriving from a bundled set cannot be given a parameter -- the only way
+    /// to set one is to write the rule out again, which is the transcription
+    /// `no-hand-copied-base-rule` refuses. So the guard asks the POLICY who
+    /// this is, and inheriting a set never decides that on the repository's
+    /// behalf.
+    #[serde(default)]
+    pub owner: Option<String>,
     #[serde(default)]
     pub inherit: Option<Inherit>,
     #[serde(default)]
@@ -1175,6 +1223,9 @@ pub(crate) struct SetHeader {
 /// checked unique across the whole set.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Policy {
+    /// Who this repository belongs to, from the policy file's own `owner`.
+    /// See [`PolicyFile::owner`].
+    pub owner: Option<String>,
     pub redact_matches: bool,
     pub allowed_scripts: Vec<String>,
     pub rules: Vec<Rule>,
@@ -1426,6 +1477,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     validate_shims(policy_path, &rules, &file.shims)?;
 
     Ok(Policy {
+        owner: file.owner.clone(),
         redact_matches: file.redact_matches,
         allowed_scripts: file.allowed_scripts,
         rules,

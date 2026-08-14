@@ -90,10 +90,10 @@ Then the two constraints that had been written down as risks to hold, which is
 another way of saying nothing enforced them:
 
 5. **`[set] stages`** — each bundled set declares the hook stages it may
-   install, and a rule reaching past that ceiling is refused at load. Five of
-   the six bundled sets declare none; `process-residue` declares `manual` and
-   nothing else. A guard cannot join a set without editing a line that says the
-   set is allowed to carry one.
+   install, and a rule reaching past that ceiling is refused at load. The
+   content sets declare none; `process-residue` declares `manual` and nothing
+   else. A guard cannot join a set without editing a line that says the set is
+   allowed to carry one.
 6. **`policy/base/sets.lock.json`** — every bundled set, field for field,
    committed, with a test that refuses a tree where it has drifted. A set
    changing shape is a diff in this repository, where it can be reviewed,
@@ -101,15 +101,19 @@ another way of saying nothing enforced them:
    none of them. `uphold rules --sets --json` is the same document, so two
    versions of the binary are diffable against each other as well.
 
-Not shipped, and the gate is deliberate: the sets themselves --
-`commit-message-residue`, `unreviewed-history`, `invisible-characters`,
-`stale-pins`, and an `unowned-push` carrying `prevent-public-push` behind a new
-`owner_required` field so inheriting a set never decides who you are. What held
-them back was that a set ships compiled in, so a rule joining an existing one
-starts refusing commits in every inheriting repository with **nothing in any
-tree to review**. Items 5 and 6 above turned that from a convention somebody
-remembers into a load error and a committed diff; what remains is writing the
-sets, each under a new name, and deciding the `owner_required` field.
+Then the sets, once the two above made them safe to ship:
+
+7. **`commit-message-residue`**, **`unreviewed-history`**,
+   **`invisible-characters`**, **`stale-pins`** and **`unowned-push`**, each a
+   new name rather than a rule added to an existing set. `unowned-push` carries
+   `prevent-public-push` behind `owner_required = true`, and the owner it needs
+   is declared once at the top of a policy file rather than on the rule --
+   inheriting a set never decides who you are, and a rule arriving from a set
+   cannot be handed a parameter.
+
+This repository inherits all five. The seven guard declarations that stood in
+its own policy were byte-identical to the sets', which is the argument the sets
+were promoted on.
 
 Adopting `host-identity` is the standing evidence that a set is not a no-op:
 the bundled rule scans `["."]` while all twenty-nine hand-copies scan a strict

@@ -399,5 +399,118 @@
     ],
     "set": "captured-fixtures",
     "stages": []
+  },
+  {
+    "rules": [
+      {
+        "builtin": "prevent-ai-author",
+        "git": {
+          "hooks": [
+            "commit-msg"
+          ]
+        },
+        "id": "prevent-ai-author"
+      },
+      {
+        "builtin": "prevent-unusual-unicode",
+        "git": {
+          "hooks": [
+            "commit-msg"
+          ]
+        },
+        "id": "prevent-unusual-unicode"
+      }
+    ],
+    "set": "commit-message-residue",
+    "stages": [
+      "commit-msg"
+    ]
+  },
+  {
+    "rules": [
+      {
+        "builtin": "no-local-merge",
+        "git": {
+          "hooks": [
+            "pre-merge-commit"
+          ]
+        },
+        "id": "no-local-merge"
+      },
+      {
+        "builtin": "no-merge-commit",
+        "git": {
+          "hooks": [
+            "pre-commit"
+          ]
+        },
+        "id": "no-merge-commit"
+      }
+    ],
+    "set": "unreviewed-history",
+    "stages": [
+      "pre-commit",
+      "pre-merge-commit"
+    ]
+  },
+  {
+    "rules": [
+      {
+        "builtin": "prevent-unusual-unicode-in-files",
+        "git": {
+          "hooks": [
+            "pre-commit",
+            "pre-merge-commit",
+            "pre-push",
+            "manual"
+          ]
+        },
+        "id": "prevent-unusual-unicode-in-files"
+      }
+    ],
+    "set": "invisible-characters",
+    "stages": [
+      "pre-commit",
+      "pre-merge-commit",
+      "pre-push",
+      "manual"
+    ]
+  },
+  {
+    "rules": [
+      {
+        "builtin": "no-stale-hook-pins",
+        "git": {
+          "hooks": [
+            "pre-push",
+            "manual"
+          ]
+        },
+        "id": "no-stale-hook-pins"
+      }
+    ],
+    "set": "stale-pins",
+    "stages": [
+      "pre-push",
+      "manual"
+    ]
+  },
+  {
+    "rules": [
+      {
+        "builtin": "prevent-public-push",
+        "git": {
+          "hooks": [
+            "pre-push"
+          ]
+        },
+        "id": "prevent-public-push",
+        "owner_required": true
+      }
+    ],
+    "set": "unowned-push",
+    "stages": [
+      "pre-push"
+    ]
   }
 ]

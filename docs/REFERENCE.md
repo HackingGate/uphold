@@ -111,7 +111,7 @@ files.glob = ["*.yml", "*.yaml"]
 
 `inherit.sets` names bundled sets to inherit; it does not add settings. There
 is no `true` shorthand — naming the sets is cheap, and what a repository
-inherits should be written in the repository. Six are compiled into the
+inherits should be written in the repository. Eleven are compiled into the
 binary and mirrored in [`policy/base/`](../policy/base), each **named by what
 it refuses** so the name predicts the rule list:
 
@@ -123,6 +123,35 @@ it refuses** so the name predicts the rule list:
 | `host-identity` | the machine the author is standing on — its username, home path, hostname and default route, read at scan time and searched for in content |
 | `broken-links` | a markdown link naming a path that does not exist or leaving the repository, and a selection that yields no links at all |
 | `captured-fixtures` | a test fixture holding non-ASCII content, as the one signal that a capture from a live upstream survives redaction |
+| `commit-message-residue` | authorship markers and unusual characters in the message a commit records — **installs `commit-msg`** |
+| `unreviewed-history` | a merge made locally rather than through a pull request — **installs `pre-commit` and `pre-merge-commit`** |
+| `invisible-characters` | characters that draw nothing, in committed content and in the paths that carry it — **installs four stages**, and reads the whole tree at each |
+| `stale-pins` | a hook pinned at a revision its upstream has left, or at none — **installs `pre-push` and `manual`**, and reaches the network |
+| `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |
+
+The last five install git hooks. Taking one is a decision about what will be
+refused and when, so each is named and argued separately: `stale-pins` reaches
+the network and cannot answer on a train, `invisible-characters` reads the tree
+at four stages and is the slowest thing in a hook, `unreviewed-history` stands
+in front of every commit, and `unowned-push` demands one line before it will run
+at all:
+
+```toml
+owner = "your-org"          # at the top of the policy file
+
+[inherit]
+sets = ["unowned-push"]
+```
+
+`owner` is a top-level field rather than a rule parameter because a rule
+arriving from a set cannot be handed one — the only way would be to write the
+rule out again, which is the transcription `no-hand-copied-base-rule` refuses —
+and because who a repository belongs to was never a property of one rule in it.
+`owner_required = true` on the rule is what makes the omission an exit `2`
+rather than a guard that quietly reads the answer off `origin`, which is the
+remote most likely to be the thing that went wrong. `allowed_owners` or
+`allowed_repos` satisfy it too: naming the destinations is a way of saying who
+you are.
 
 Each is named separately because taking one is a separate decision:
 `unmanaged-pins` refuses a shape a repository that vendors its dependencies
