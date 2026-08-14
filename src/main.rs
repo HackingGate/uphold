@@ -32,6 +32,7 @@ mod git;
 mod guard;
 mod hooks;
 mod pins;
+mod probe;
 mod report;
 mod runner;
 mod scan;
@@ -55,6 +56,7 @@ usage:
   uphold check --coverage            which rules run here and carry no principle
   uphold audit --for-publication     what a private->public flip would republish
   uphold hooks --identity DIR...     do these repositories declare the same hooks
+  uphold probe [--runner NAME]       can each declared hook actually refuse
   uphold rules --set NAME [--json]   what a bundled rule set refuses, rule by rule
   uphold rules --sets --json         every bundled set, field for field, so two
                                      versions of this binary can be diffed
@@ -259,6 +261,20 @@ fn run() -> Result<Exit> {
                 "usage: uphold hooks --identity DIR [DIR...]\n\n{USAGE}"
             ))),
         },
+        "probe" => {
+            let runner = match rest {
+                [] => None,
+                [flag, name] if flag == "--runner" => Some(text_of(name)?),
+                _ => {
+                    return Err(Fatal::new(format!(
+                        "usage: uphold probe [--runner prek|pre-commit|lefthook]\n\n{USAGE}"
+                    )))
+                }
+            };
+            let working = std::env::current_dir()?;
+            let (root, _) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
+            probe::run(&root, runner)
+        }
         "rules" => match rest {
             [flag, name] if flag == "--set" => rules_command(text_of(name)?),
             [flag, name, format] if flag == "--set" && format == "--json" => {
