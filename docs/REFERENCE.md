@@ -10,6 +10,7 @@ namespace — that is what lets a claim in
 - [`uphold shim` — the shims](#uphold-shim--the-shims)
 - [`uphold audit --for-publication`](#uphold-audit---for-publication)
 - [`uphold hooks --identity` — across repositories](#uphold-hooks---identity--across-repositories)
+- [`uphold probe` — can each hook refuse?](#uphold-probe--can-each-hook-refuse)
 - [`uphold check --coverage` and `--oscal`](#uphold-check---coverage-and---oscal)
 - [The review tier](#the-review-tier)
 
@@ -864,6 +865,63 @@ does. A waiver that matches nothing is **reported** — an exemption that no
 longer describes the fleet reads as a decision that is doing something while
 doing nothing. Whether a waiver is stale depends on which repositories were
 compared, because the comparison set is whatever was named on the command line.
+
+## `uphold probe` — can each hook refuse?
+
+```sh
+uphold probe                       # runner detected from the config and PATH
+uphold probe --runner lefthook     # or named
+```
+
+A hook that **cannot fail** reports the same green tick as a hook that keeps
+finding nothing, run after run, for as long as nobody plants what it is supposed
+to catch. The case this exists for is not hypothetical: an entry declared as
+`gofmt -l .` can never exit non-zero, because `gofmt -l` *prints* its findings
+and exits 0.
+
+So each probe drives one hook to both verdicts, in a throwaway `git worktree` at
+HEAD — never the tree you are standing in:
+
+1. plant the fixture it must refuse, run that hook **alone**, expect non-zero;
+2. put the clean fixture in its place, run it again, expect zero.
+
+Isolation is what makes step 1 an answer about the hook rather than about the
+stage: the runner is asked for one id, so a non-zero exit is that hook refusing
+and not a neighbour.
+
+```toml
+# policy/hooks.toml
+[[probe]]
+id = "gofmt"
+path = "probe/fixture.go"
+refuses = "package main\nfunc  main( ){}\n"
+allows = "package main\n\nfunc main() {}\n"
+stage = "pre-commit"        # optional; pre-commit is the default
+```
+
+| report | means |
+|---|---|
+| refuses its fixture, accepts a clean one | a demonstrated gate |
+| refuses its fixture, no `allows` | one verdict driven, and the report says so |
+| **ACCEPTED what it is declared to refuse** | the hook cannot fail |
+| refused the clean fixture as well | it refuses everything, so its refusal says nothing |
+
+Fixtures are written down rather than generated. uphold knows what its own rules
+match and knows nothing about `gofmt`, `ruff`, or a hook somebody wrote this
+morning — and the hooks worth probing are exactly the ones it knows nothing
+about. A fixture in a file is also reviewable, which matters more than the
+typing it saves.
+
+The count of declared hooks with **no** probe is printed every run: "two hooks
+were probed" means one thing beside two declarations and another beside twenty.
+A probe naming a hook nothing declares is refused, and so is an empty `refuses`
+— an empty fixture demonstrates nothing, and a hook that accepted it would be
+reported as unable to fail.
+
+Exit `0` when every probed hook behaved, `1` when one could not fail or refuses
+everything, `2` when there is no runner to drive them with — a hook that could
+not be run has not been shown to refuse anything. `probe` runs the repository's
+own hooks, which means the programs it already trusts on every commit.
 
 ## `uphold check --coverage` and `--oscal`
 
