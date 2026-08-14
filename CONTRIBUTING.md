@@ -57,6 +57,31 @@ The reason it is mandatory rather than encouraged is that a rule which stops
 matching produces **no output at all** — the gate goes green and stays green,
 and no report anywhere says the check has stopped working.
 
+### Mutation testing
+
+Coverage says a line ran. It does not say a test would have noticed the line
+being wrong, and the failures this repository keeps having are exactly that
+shape: a check that could not look reporting a pass.
+
+```sh
+cargo install cargo-mutants
+cargo mutants --file src/check.rs -j 4      # one module, minutes
+cargo mutants -j 4                          # the crate, hours
+```
+
+Scope it. Measured here: `src/check.rs` is 98 mutants and about eight minutes
+at `-j 4`; the crate is 1,573 mutants, which is hours. One module at a time is
+the useful unit, and the modules worth starting from are the ones that decide an
+exit state -- `check.rs`, `config.rs`, `guard/mod.rs`, `pins.rs` -- because the
+failures this repository keeps having are `UNKNOWN -> PASS` and those are where
+an unknown becomes a verdict.
+
+A surviving mutant is a claim about the tests, not about the code: something
+could be wrong here and every test would still pass. Read it before writing
+anything. Some survivors are equivalent mutants and some are unreachable, and
+both are worth a sentence in the commit rather than a test written to silence
+them.
+
 The MSRV is written twice, in `Cargo.toml` as `rust-version` and in
 `toolchain.toml` as the rustc `want`, because cargo and the preflight cannot read
 each other's manifest. Bump both together; `tests/test_toolchain.py` refuses a

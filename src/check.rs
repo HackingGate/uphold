@@ -43,9 +43,19 @@ const DECLARATION: &str = "policy/upheld.toml";
 /// a second copy of a value cargo already holds. This one cannot drift from the
 /// crate it is compiled into.
 fn upstream_slug() -> Option<(&'static str, &'static str)> {
-    let url = env!("CARGO_PKG_REPOSITORY")
-        .trim_end_matches('/')
-        .trim_end_matches(".git");
+    slug_of(env!("CARGO_PKG_REPOSITORY"))
+}
+
+/// The parse, taking the url as an argument so it can be asked about one.
+///
+/// Split out because a mutation run said so: the whole function read a
+/// compile-time constant, so every mutation of the emptiness test survived --
+/// there was no input a test could hand it, and therefore no test. What the
+/// test now pins is the answer for a url that names no owner or no repository,
+/// which is the case that decides whether a consumer's configuration is read as
+/// pinning this repository at all.
+fn slug_of(url: &str) -> Option<(&str, &str)> {
+    let url = url.trim_end_matches('/').trim_end_matches(".git");
     let (rest, name) = url.rsplit_once('/')?;
     let owner = rest.rsplit('/').next()?;
     (!owner.is_empty() && !name.is_empty()).then_some((owner, name))
@@ -756,5 +766,265 @@ fn report_coverage(
         Ok(Exit::Clean)
     } else {
         Ok(Exit::Broken)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_url_naming_no_owner_or_no_repository_resolves_to_neither() {
+        assert_eq!(
+            slug_of("https://github.com/HackingGate/uphold.git"),
+            Some(("HackingGate", "uphold"))
+        );
+        assert_eq!(
+            slug_of("https://github.com/HackingGate/uphold/"),
+            Some(("HackingGate", "uphold"))
+        );
+        // Half a slug is not a slug, and it takes BOTH of these to say so:
+        // under `||` each of them resolves, and a consumer configuration would
+        // be read as pinning a repository one half of whose name was never
+        // established.
+        assert_eq!(slug_of("/uphold"), None, "no owner");
+        assert_eq!(slug_of("HackingGate/.git"), None, "no repository");
+        // Nothing that could be a slug at all.
+        assert_eq!(slug_of("uphold"), None);
+    }
+
+    #[test]
+    fn a_text_scan_is_not_the_seam_a_content_rule_runs_at() {
+        // `uphold scan --text` reads a message on stdin and establishes nothing
+        // about the tree, so a repository that pins only that hook has not
+        // installed the file scan -- and a claim on a content rule there is a
+        // claim nothing supplies.
+        let (scans, guards) = published().unwrap();
+        assert!(scans.contains("uphold-scan"));
+        assert!(!scans.contains("uphold-scan-text"));
+        assert!(guards
+            .values()
+            .any(|hook| hook == "uphold-guard-commit-msg"));
+    }
+
+    #[test]
+    fn a_lefthook_text_scan_is_not_the_file_scan_either() {
+        // The same distinction as above, in the other reader, and it needs its
+        // own test for the reason the two readers exist: `uphold scan --text`
+        // judges a message on stdin and establishes nothing about the tree.
+        // Counting it as the scan seam would reconcile a claim on a content
+        // rule in a repository where no content rule runs.
+        let root = std::env::temp_dir().join(format!(
+            "uphold-check-lefthook-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        drop(std::fs::remove_dir_all(&root));
+        std::fs::create_dir_all(&root).unwrap();
+
+        // The real stage table: `lefthook_seams` only reads a top-level key
+        // git knows as a hook, and an empty table here would make this test
+        // pass by looking at nothing.
+        let (_, guards) = published().unwrap();
+        std::fs::write(
+            root.join("lefthook.yml"),
+            "commit-msg:\n  commands:\n    message:\n      run: uphold scan --text {1}\n",
+        )
+        .unwrap();
+        assert!(
+            !lefthook_seams(&root, &guards).unwrap().scan,
+            "a --text scan is not the file scan"
+        );
+
+        std::fs::write(
+            root.join("lefthook.yml"),
+            "pre-commit:\n  commands:\n    policy:\n      run: uphold scan\n",
+        )
+        .unwrap();
+        let found = lefthook_seams(&root, &guards).unwrap();
+        assert!(found.scan, "a plain scan is the file scan");
+        // And the evidence line says how it was established. A reconcile that
+        // passes should not pass for a reason the reader cannot see, so the
+        // note counting the commands is part of the answer rather than
+        // decoration -- inverted, it appears over a config that defines none
+        // and disappears over one that does.
+        let note = found.how.join(" ");
+        assert!(note.contains("lefthook.yml defines 1 command(s)"), "{note}");
+
+        std::fs::write(root.join("lefthook.yml"), "colors: false\n").unwrap();
+        let bare = lefthook_seams(&root, &guards).unwrap();
+        assert!(!bare.how.join(" ").contains("defines"), "{:?}", bare.how);
+        drop(std::fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    fn a_run_line_nested_under_a_sequence_is_still_a_run_line() {
+        // lefthook nests freely, and a `run:` under a list is a `run:`. Losing
+        // the sequence arm would make a config read as declaring nothing --
+        // which reconciles as "no seam here supplies it" over a repository
+        // whose hooks are installed and running.
+        let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            "commands:\n  - first:\n      run: uphold scan\n  - second:\n      run: uphold guard --stage pre-commit\n",
+        )
+        .unwrap();
+        let runs = runs_in(&config);
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        assert!(runs.iter().any(|run| run.contains("scan")), "{runs:?}");
+        assert!(runs.iter().any(|run| run.contains("guard")), "{runs:?}");
+    }
+
+    #[test]
+    fn the_note_names_every_published_id_this_tree_pins() {
+        // A reconcile that passes should not pass for a reason the reader
+        // cannot see, so the note lists what was found. Under `&&` it lists
+        // only ids that are a scan AND a guard, which is none of them, and the
+        // note disappears while the answer stays green.
+        let root = std::env::temp_dir().join(format!(
+            "uphold-check-note-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        drop(std::fs::remove_dir_all(&root));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join(".pre-commit-config.yaml"),
+            "repos:\n  - repo: https://github.com/HackingGate/uphold\n    rev: v1.1.1\n    hooks:\n      - id: uphold-scan\n      - id: uphold-guard-commit-msg\n  - repo: https://github.com/pre-commit/pre-commit-hooks\n    rev: v6.0.0\n    hooks:\n      - id: trailing-whitespace\n",
+        )
+        .unwrap();
+
+        let found = installed(&root).unwrap();
+        let note = found.how.join(" ");
+        assert!(note.contains("uphold-scan"), "{note}");
+        assert!(note.contains("uphold-guard-commit-msg"), "{note}");
+        // And nothing else. The note is evidence about THIS binary's seams, so
+        // a hook from anywhere else does not belong in it -- and naming
+        // everything pinned would make the line say nothing, which is the
+        // failure mode of a report that grows to cover its own uncertainty.
+        assert!(!note.contains("trailing-whitespace"), "{note}");
+        assert!(found.scan, "the scan hook is pinned here");
+        // `local` is the other half and it IS everything pinned: a claim may
+        // name a formatter or a linter, and those are rules that fire here.
+        assert!(found.local.contains("trailing-whitespace"));
+        // A tree that pins hooks -- any hooks -- has a runner configuration,
+        // so it must not also be told there is none. Both halves decide that:
+        // nothing of ours is installed AND nothing was found to say how.
+        assert!(
+            !found
+                .how
+                .iter()
+                .any(|line| line.contains("no runner configuration here")),
+            "{:?}",
+            found.how
+        );
+        drop(std::fs::remove_dir_all(&root));
+
+        // And the other side of it: a tree with no configuration at all hears
+        // exactly that, which is the answer that keeps "nothing is installed"
+        // apart from "everything passed".
+        let bare = std::env::temp_dir().join(format!(
+            "uphold-check-bare-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        drop(std::fs::remove_dir_all(&bare));
+        std::fs::create_dir_all(&bare).unwrap();
+        let empty = installed(&bare).unwrap();
+        assert!(empty.nothing());
+        // And the case between the two, which is what makes this an AND: a
+        // tree that runs hooks, none of them ours. Nothing of this binary's is
+        // installed -- so `nothing()` is true -- and the report already says
+        // what WAS found, so adding "no runner configuration here" on top of
+        // it would contradict the line above it.
+        std::fs::write(
+            bare.join("lefthook.yml"),
+            "pre-commit:\n  commands:\n    fmt:\n      run: cargo fmt --check\n",
+        )
+        .unwrap();
+        let others = installed(&bare).unwrap();
+        assert!(others.nothing(), "none of ours is installed");
+        assert!(
+            !others
+                .how
+                .iter()
+                .any(|line| line.contains("no runner configuration here")),
+            "{:?}",
+            others.how
+        );
+        assert!(
+            others.how.iter().any(|line| line.contains("defines")),
+            "{:?}",
+            others.how
+        );
+        assert!(
+            empty
+                .how
+                .iter()
+                .any(|line| line.contains("no runner configuration here")),
+            "{:?}",
+            empty.how
+        );
+        drop(std::fs::remove_dir_all(&bare));
+    }
+
+    #[test]
+    fn a_content_rule_in_a_tree_that_runs_no_scan_is_not_supplied_by_one() {
+        // The `UNKNOWN -> PASS` shape, at the seam that decides it. A
+        // repository can declare every content rule in the catalog and install
+        // no scan, and the honest answer is that nothing supplies them --
+        // reported as unestablished rather than credited to a seam that is not
+        // there.
+        let mut rule = crate::config::Rule::synthetic("no-shouting", crate::config::Check::Regexp);
+        rule.regexp = Some(String::from("SHOUTING"));
+        rule.files = Some(crate::config::Files::default());
+        let policy = Policy {
+            rules: vec![rule],
+            ..Policy::default()
+        };
+
+        let absent = suppliers(&policy, &Installed::default());
+        assert!(
+            !absent.supplied.contains_key("no-shouting"),
+            "{:?}",
+            absent.supplied
+        );
+        assert!(
+            absent
+                .unestablished
+                .iter()
+                .any(|note| note.contains("no-shouting")),
+            "{:?}",
+            absent.unestablished
+        );
+
+        let present = suppliers(
+            &policy,
+            &Installed {
+                scan: true,
+                ..Installed::default()
+            },
+        );
+        assert_eq!(
+            present.supplied.get("no-shouting").map(Vec::as_slice),
+            Some(["uphold scan".to_owned()].as_slice())
+        );
+    }
+
+    #[test]
+    fn nothing_installed_and_something_installed_are_different_answers() {
+        // Every mutation of `Installed::nothing` survived a mutation run,
+        // which is another way of saying nothing asked it anything. It decides
+        // whether a reconcile says "no runner configuration here runs `uphold
+        // scan` or `uphold guard`" -- the note a repository sees when its hooks
+        // are not installed at all, which is the one state that looks exactly
+        // like a clean reconcile from the outside.
+        let mut installed = Installed::default();
+        assert!(installed.nothing());
+
+        installed.scan = true;
+        assert!(!installed.nothing());
+
+        let mut staged = Installed::default();
+        staged.stages.insert(String::from("pre-push"));
+        assert!(!staged.nothing());
     }
 }

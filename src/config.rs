@@ -2322,6 +2322,224 @@ mod tests {
     }
 
     #[test]
+    fn two_checks_on_one_rule_are_refused_however_they_are_spelled() {
+        // `forbidden_literals` and `forbidden_literals_from` are ONE check
+        // written two ways, so they count once; anything else beside them is a
+        // second check, and a rule carrying two has one of them read by
+        // nothing while its author believes both are enforced.
+        let error = policy_from(
+            "[rule.two]\nmessage = \"x\"\nregexp = 'a'\nmax_lines = 10\nfiles.include = [\".\"]\n",
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("regexp and max_lines"), "{text}");
+        assert!(text.contains("a rule checks one thing"), "{text}");
+
+        // The pair together is still one check and still loads.
+        policy_from(
+            "[rule.one]\nmessage = \"x\"\nforbidden_literals = \"running-os-identity\"\nfiles.include = [\".\"]\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_command_checker_that_cannot_judge_text_is_refused() {
+        // The shim consults `exec` checkers and the built-ins that judge
+        // arbitrary text. Anything else reads an index, an identity or a push
+        // range, so standing it in front of a command collects a subject and
+        // checks it with nothing -- an invocation that passed because nobody
+        // looked.
+        let error =
+            policy_from("[rule.merge]\nbuiltin = \"no-merge-commit\"\ncommand.before = [\"gh\"]\n")
+                .unwrap_err();
+        let text = error.to_string();
+        assert!(
+            text.contains("cannot stand in front of a command"),
+            "{text}"
+        );
+        // And it names the ones that can, so the fix is in the message.
+        assert!(text.contains("prevent-ai-author"), "{text}");
+
+        // A text-capable built-in in the same place is the documented shape.
+        policy_from(
+            "[rule.author]\nbuiltin = \"prevent-ai-author\"\ncommand.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-t\"]\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_builtin_that_reads_no_parameter_at_all_says_that_instead() {
+        // The other arm of the same refusal, and a different sentence: a
+        // built-in that reads NOTHING cannot be told "reads only ", which is
+        // what the collapsed version says -- and it sends the author looking
+        // for a list that is not there. The arm for a built-in that reads SOME
+        // parameters is covered by
+        // `a_parameter_belonging_to_a_different_builtin_is_refused`.
+        let error = policy_from(
+            "[rule.merge]\nbuiltin = \"no-merge-commit\"\nowner = \"acme\"\n\n[rule.merge.git]\nhooks = [\"pre-commit\"]\n",
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("reads no parameters"), "{text}");
+        assert!(text.contains("owner"), "{text}");
+    }
+
+    #[test]
+    fn a_check_is_named_by_the_field_that_declares_it() {
+        // These strings are what a reader sees in `uphold rules --set NAME`,
+        // in the lock document, and in the error a duplicate id raises. A
+        // check whose name was empty or wrong would make every one of those
+        // reports say nothing while still reporting.
+        for (check, name) in [
+            (Check::Regexp, "regexp"),
+            (Check::PathRegexp, "path_regexp"),
+            (Check::Builtin, "builtin"),
+            (Check::Exec, "exec"),
+            (Check::MaxLines, "max_lines"),
+        ] {
+            assert_eq!(check.to_string(), name);
+        }
+        // Every kind is named, and no two share a name: `Check::ALL` is the
+        // only enumeration, so a new kind arriving with a duplicate spelling
+        // would be invisible everywhere the name is the whole report.
+        let names: BTreeSet<String> = Check::ALL.iter().map(ToString::to_string).collect();
+        assert_eq!(names.len(), Check::ALL.len());
+        assert!(!names.iter().any(String::is_empty));
+    }
+
+    #[test]
+    fn an_unwritten_parameter_reads_as_its_documented_default() {
+        // The accessors fill in the default exactly once, and `Option` is what
+        // lets `validate` tell WRITTEN from ABSENT. A default that drifted --
+        // `refuse_unknown` defaulting to true, `allow_outside_repo` to false --
+        // changes what a guard does in every repository that never wrote the
+        // field, which is most of them.
+        let rule = Rule::synthetic("x", Check::Builtin);
+        assert!(rule.public_repos().is_empty());
+        assert!(rule.allowed_owners().is_empty());
+        assert!(rule.allowed_repos().is_empty());
+        assert!(rule.private_owners().is_empty());
+        assert!(
+            !rule.refuse_unknown(),
+            "an unknown name is not private by default"
+        );
+        assert!(
+            !rule.require_any_link(),
+            "a selection yielding no links is not a finding by default"
+        );
+        assert!(
+            !rule.allow_outside_repo(),
+            "a link leaving the repository is not allowed by default"
+        );
+    }
+
+    #[test]
+    fn a_written_parameter_is_the_one_the_check_reads() {
+        // The other half, and it is the half that catches an accessor which
+        // has quietly become a constant: with the defaults tested alone, an
+        // accessor returning its default ALWAYS passes every test while every
+        // repository that wrote the field is silently running the default.
+        let policy = policy_from(
+            r#"
+            [rule.names]
+            builtin = "no-private-repo-names"
+            public_repos = ["acme/public"]
+            refuse_unknown = true
+
+            [rule.names.git]
+            hooks = ["commit-msg"]
+
+            [rule.push]
+            builtin = "prevent-public-push"
+            allowed_owners = ["acme", "acme-mirror"]
+
+            [rule.push.git]
+            hooks = ["pre-push"]
+            "#,
+        )
+        .unwrap();
+        let names = policy
+            .rules
+            .iter()
+            .find(|rule| rule.id == "names")
+            .expect("the rule loaded");
+        assert_eq!(names.public_repos(), ["acme/public".to_owned()]);
+        assert!(names.refuse_unknown());
+
+        let push = policy
+            .rules
+            .iter()
+            .find(|rule| rule.id == "push")
+            .expect("the rule loaded");
+        assert_eq!(
+            push.allowed_owners(),
+            ["acme".to_owned(), "acme-mirror".to_owned()]
+        );
+    }
+
+    #[test]
+    fn which_seam_runs_a_rule_is_decided_by_what_it_declares() {
+        // `check` reads this to answer "which seam supplies this rule", so a
+        // wrong answer here is a claim reconciled against a seam that never
+        // runs it -- or an unestablished note about a rule that does.
+        let mut content = Rule::synthetic("content", Check::Regexp);
+        content.regexp = Some(String::from("x"));
+        content.files = Some(Files::default());
+        assert_eq!(content.seams(), vec!["scan"]);
+
+        // A built-in that reads files AND declares hooks is the guard's, not
+        // the scan's: the tree-wide unicode guard runs at four stages and the
+        // scan does not dispatch it.
+        let mut guard = Rule::synthetic("guard", Check::Builtin);
+        guard.builtin = Some(String::from("prevent-unusual-unicode-in-files"));
+        guard.files = Some(Files::default());
+        guard.git = Some(Git {
+            hooks: vec![String::from("pre-commit")],
+        });
+        assert_eq!(guard.seams(), vec!["guard"]);
+
+        // And one that reads files while declaring no hook is the scan's --
+        // `links-resolve` is the case, and it is why the condition is an OR
+        // rather than a plain "not a built-in".
+        let mut hookless = Rule::synthetic("links", Check::Builtin);
+        hookless.builtin = Some(String::from("links-resolve"));
+        hookless.files = Some(Files::default());
+        assert_eq!(hookless.seams(), vec!["scan"]);
+    }
+
+    #[test]
+    fn provenance_answers_about_the_id_it_was_asked_about() {
+        // A refusal names the set the rule came from, so answering with some
+        // other rule's set is worse than answering nothing: the reader goes to
+        // `uphold rules --set <name>` and finds no such rule there. The
+        // repository's own rule has no set, and an inherited one has exactly
+        // its own.
+        let policy = policy_from(
+            r#"
+            [inherit]
+            sets = ["process-residue", "credentials"]
+
+            [rule.mine]
+            message = "local"
+            regexp = "local"
+            files.include = ["."]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            policy.set_of("no-merge-conflict-markers"),
+            Some("process-residue")
+        );
+        assert_eq!(policy.set_of("no-env-secret-values"), Some("credentials"));
+        assert_eq!(
+            policy.set_of("mine"),
+            None,
+            "a rule written here came from no set"
+        );
+        assert_eq!(policy.set_of("no-such-rule"), None);
+    }
+
+    #[test]
     fn a_repo_rule_shadows_the_inherited_rule_of_the_same_id() {
         let policy = policy_from(
             r#"

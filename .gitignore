@@ -6,3 +6,5 @@ lcov.info
 .DS_Store
 .pytest_cache/
 .ruff_cache/
+# cargo-mutants writes its report here; see CONTRIBUTING.
+mutants.out/
