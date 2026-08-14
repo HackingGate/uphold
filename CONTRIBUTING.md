@@ -72,6 +72,28 @@ tmpfs, and killed a `cargo mutants` run with `No space left on device` -- which
 that run then reported as 158 mutants "unviable". A tool reporting a measurement
 it could not make is what this repository exists to refuse.
 
+### The dependency graph
+
+```sh
+cargo install cargo-deny
+cargo deny check
+```
+
+`deny.toml` says what this crate may depend on and under what terms: advisories,
+licences named one at a time, no wildcard version, and crates.io as the only
+source. It answers three questions no rule in `policy/principles.toml` can,
+because they are facts about the dependency graph rather than about this tree's
+files -- which is the boundary between a rule here and an external provider.
+
+It is deliberately not wired into a hook. The advisory half reaches the network,
+and this repository already decided where that belongs: `no-stale-hook-pins`
+runs at pre-push and manual and not at every commit, because a check that adds a
+network round trip to a commit is one somebody switches off.
+
+Keep the licence allow-list to what the tree carries. `cargo deny` reports an
+allowance that matched nothing, and an entry describing no dependency reads as a
+decision while doing nothing.
+
 ### Mutation testing
 
 Coverage says a line ran. It does not say a test would have noticed the line
