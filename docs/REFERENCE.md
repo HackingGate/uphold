@@ -9,6 +9,7 @@ namespace — that is what lets a claim in
 - [`uphold guard` — the guards](#uphold-guard--the-guards)
 - [`uphold shim` — the shims](#uphold-shim--the-shims)
 - [`uphold audit --for-publication`](#uphold-audit---for-publication)
+- [`uphold hooks --identity` — across repositories](#uphold-hooks---identity--across-repositories)
 - [`uphold check --coverage` and `--oscal`](#uphold-check---coverage-and---oscal)
 - [The review tier](#the-review-tier)
 
@@ -806,6 +807,63 @@ clean answer this command exists to be able to give. Exit `1` for something
 found, `2` where a surface this run tried to read could not be read, `0` when
 every surface a flip would republish was read and was clean — subject to the
 standing caveats, which the clean line says.
+
+## `uphold hooks --identity` — across repositories
+
+```sh
+uphold hooks --identity ../repo-a ../repo-b ../repo-c
+```
+
+Every other command here reads one repository. This one reads several, because
+the question has no answer inside any of them: **a forked hook declaration is
+byte-perfect in every repository that holds it**, and only the comparison shows
+that the copies stopped agreeing. A claim naming that id then means one thing in
+one repository and something else next door, and `uphold check` reconciles both
+green.
+
+Three findings, and they are three different failures:
+
+| finding | means |
+|---|---|
+| `forked` | one id, two declarations — different `args:`, a different `entry:`, a different glob |
+| `pinned apart` | one id, one upstream, two revisions. Everybody runs the check; some run an older one |
+| `absent` | an id **most** of the set declares and one does not |
+
+`absent` is deliberately reported only where a majority declares the id. "This
+repository has a hook the others do not" is the normal state of a fleet — a
+repository with no Go in it has no business declaring `gofmt` — and reporting
+every such id turns the answer into a list nobody reads.
+
+The same id in a `.pre-commit-config.yaml` and in a `lefthook.yml` is one check
+written twice in two formats, which is what supporting both runners means; the
+two are never compared against each other. A lefthook command under two hook
+names is two declarations, not one that disagrees with itself.
+
+Exit `0` when every declaration agrees, `1` on a divergence, `2` when a named
+directory is not a repository — a directory that declares nothing and one that
+could not be read are different answers.
+
+### Waivers
+
+`policy/hooks.toml`, in the repository the command is run **from** — a
+fleet-wide exemption written inside one of the repositories it exempts is a
+repository excusing itself.
+
+```toml
+[[waive]]
+id = "uphold-guard-push"
+findings = ["absent"]        # or omit: covers all three
+repos = ["uphold"]           # or omit: every repository in the comparison
+reason = "the hooks repository cannot pin itself"
+```
+
+`reason` is required and an empty one is refused: a waiver with no reason is a
+check switched off with nobody's name on it. A waiver naming a finding that does
+not exist is refused, since it would waive nothing while reading as though it
+does. A waiver that matches nothing is **reported** — an exemption that no
+longer describes the fleet reads as a decision that is doing something while
+doing nothing. Whether a waiver is stale depends on which repositories were
+compared, because the comparison set is whatever was named on the command line.
 
 ## `uphold check --coverage` and `--oscal`
 

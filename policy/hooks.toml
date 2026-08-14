@@ -1,0 +1,54 @@
+# Waivers for `uphold hooks --identity`.
+#
+# The command compares hook declarations ACROSS repositories, which is the one
+# question no repository can answer about itself: a forked declaration is
+# byte-perfect in every tree that holds it, and only the comparison shows that
+# the copies stopped agreeing.
+#
+# Every waiver carries a `reason`, and an empty one is refused at load. A waiver
+# with no reason is a check switched off with nobody's name on it, and the
+# next reader has no way to tell a decision from an oversight. A waiver that
+# matches nothing is reported rather than kept silently, for the reason a stale
+# `disabled_rules` entry is: an exemption that no longer describes the fleet
+# reads as a decision that is doing something while doing nothing.
+#
+# `findings` narrows a waiver to `forked`, `pinned-apart` or `absent`; absent,
+# it covers all three, which is the blunt form. `repos` narrows it to named
+# repositories, and a waiver naming repositories covers a finding only when
+# every repository the finding is about is named -- half a divergence waived is
+# still a divergence.
+#
+# WHETHER A WAIVER IS STALE DEPENDS ON WHICH REPOSITORIES WERE COMPARED, since
+# the comparison set is whatever the operator named on the command line. The
+# entries below are the ones this repository needs against the fleet it is
+# published for; a narrower comparison can leave some of them matching nothing,
+# and the report says so rather than passing over it.
+
+# This repository is the hooks repository. It cannot pin itself, so it runs the
+# same guards through `repo: local` entries that call the binary out of the
+# working tree -- which is also what makes a change to a guard testable before
+# it is published. Every consuming repository pins the published ids instead, so
+# `uphold-*` reads as absent from exactly the one tree that owns them.
+[[waive]]
+id = "uphold-guard-commit-msg"
+findings = ["absent"]
+repos = ["uphold"]
+reason = "the hooks repository runs its own guards from the working tree; a repository cannot pin itself"
+
+[[waive]]
+id = "uphold-guard-merge"
+findings = ["absent"]
+repos = ["uphold"]
+reason = "the hooks repository runs its own guards from the working tree; a repository cannot pin itself"
+
+[[waive]]
+id = "uphold-guard-push"
+findings = ["absent"]
+repos = ["uphold"]
+reason = "the hooks repository runs its own guards from the working tree; a repository cannot pin itself"
+
+[[waive]]
+id = "uphold-guard-manual"
+findings = ["absent"]
+repos = ["uphold"]
+reason = "the hooks repository runs its own guards from the working tree; a repository cannot pin itself"

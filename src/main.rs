@@ -30,6 +30,7 @@ mod engine;
 mod error;
 mod git;
 mod guard;
+mod hooks;
 mod pins;
 mod report;
 mod runner;
@@ -53,6 +54,7 @@ usage:
   uphold check                       reconcile policy/upheld.toml against what runs
   uphold check --coverage            which rules run here and carry no principle
   uphold audit --for-publication     what a private->public flip would republish
+  uphold hooks --identity DIR...     do these repositories declare the same hooks
   uphold rules --set NAME [--json]   what a bundled rule set refuses, rule by rule
   uphold rules --sets --json         every bundled set, field for field, so two
                                      versions of this binary can be diffed
@@ -237,6 +239,24 @@ fn run() -> Result<Exit> {
             [flag] if flag == "--coverage" => check_command(true),
             _ => Err(Fatal::new(format!(
                 "usage: uphold check [--coverage]\n\n{USAGE}"
+            ))),
+        },
+        "hooks" => match rest {
+            [flag, paths @ ..] if flag == "--identity" && !paths.is_empty() => {
+                let mut directories = Vec::new();
+                for path in paths {
+                    directories.push(PathBuf::from(path));
+                }
+                let working = std::env::current_dir()?;
+                // The waivers belong to the repository the operator is standing
+                // in, not to any repository being compared: a fleet-wide
+                // exemption written inside one of the repositories it exempts
+                // is a repository excusing itself.
+                let root = discover(&working).map_or(working, |(root, _)| root);
+                hooks::identity(&root, &directories)
+            }
+            _ => Err(Fatal::new(format!(
+                "usage: uphold hooks --identity DIR [DIR...]\n\n{USAGE}"
             ))),
         },
         "rules" => match rest {
