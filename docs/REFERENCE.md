@@ -132,8 +132,40 @@ None of those arguments should stand between anyone and `process-residue`. The
 binary answers "what is in it" directly:
 
 ```sh
-uphold rules --set process-residue    # the set's rules, one per line
+uphold rules --set process-residue           # the set's rules, one per line
+uphold rules --set process-residue --json    # the same set, field for field
+uphold rules --sets --json                   # every bundled set, field for field
 ```
+
+The JSON form exists for one question the summary cannot answer. A set ships
+compiled in, so a pattern edited between two releases changes what is refused in
+every repository that inherits it, **with no diff in any of them**:
+
+```sh
+diff <(uphold-1.1 rules --sets --json) <(uphold-1.2 rules --sets --json)
+```
+
+The same document is committed here as
+[`policy/base/sets.lock.json`](../policy/base/sets.lock.json), and a test
+refuses a tree where it has drifted from what the binary would install — so a
+change to a bundled set is a reviewable diff in the repository that owns it.
+
+**What a set may install is declared in the set**, and it is a ceiling rather
+than a description:
+
+```toml
+[set]
+stages = ["manual"]   # empty (the default) means: no git hook at all
+```
+
+A rule in a bundled set declaring a hook outside that list is refused at load.
+The constraint it makes mechanical is *a new guard gets a new set name rather
+than joining an existing one*: a content rule arriving with a version bump is a
+finding somebody argues about, and a guard arriving the same way is a commit
+refused in every inheriting repository at once. Widening `stages` is possible
+and is a one-line diff that says so. `[set]` in a repository's own policy, or in
+an `inherit.paths` file, is refused — nothing there ships compiled in, so
+nothing there has the problem the ceiling exists for.
 
 A repository's own rule of the same `id` shadows the inherited one;
 `inherit.disabled_rules` drops it, and naming an id nothing inherited defines

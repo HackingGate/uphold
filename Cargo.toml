@@ -33,6 +33,14 @@ ignore = "0.4"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+# Already in the tree under tree-sitter, so this is a name for something the
+# build already compiles rather than a new dependency. It is here because
+# `rules --set --json` has to emit the WHOLE of a rule -- a set ships compiled
+# in, and a regex that changed between two versions with no diff in any
+# consuming tree is the risk that output exists to close. A hand-rolled writer
+# naming the fields it knows about is a list that drifts from the struct, which
+# is the failure the schema collapse in this file was about.
+serde_json = "1"
 
 # The Unicode Script property, which the Python engine could not read and
 # approximated by matching tokens in character names.
