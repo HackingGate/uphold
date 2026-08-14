@@ -2340,6 +2340,17 @@ mod tests {
             "[rule.one]\nmessage = \"x\"\nforbidden_literals = \"running-os-identity\"\nfiles.include = [\".\"]\n",
         )
         .unwrap();
+
+        // And the pair counts AS one rather than as none: a literals rule
+        // carrying a second check is two checks, and the counter that folds
+        // the two spellings together has to say so. Counted as none, this
+        // loads with a `regexp` nothing reads.
+        let paired = policy_from(
+            "[rule.both]\nmessage = \"x\"\nforbidden_literals = \"running-os-identity\"\nregexp = 'a'\nfiles.include = [\".\"]\n",
+        )
+        .unwrap_err();
+        let paired = paired.to_string();
+        assert!(paired.contains("a rule checks one thing"), "{paired}");
     }
 
     #[test]
