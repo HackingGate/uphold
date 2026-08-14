@@ -2598,6 +2598,107 @@ mod tests {
             .any(|rule| rule.id == "no-pinned-tool-install"));
     }
 
+    /// A policy nobody would write, and the two answers it may never give.
+    ///
+    /// The fuzz target `#13` asks for wants a library to link against, and this
+    /// crate is deliberately one binary -- adding a `[lib]` to make libFuzzer
+    /// happy would change what the crate IS for the sake of how it is tested.
+    /// What that target would assert is assertable here: throw malformed input
+    /// at the loader and hold it to the two invariants that matter.
+    ///
+    /// 1. It never panics. `load` is reached by `uphold shim` standing in front
+    ///    of `git`, so a panic here is a panic in front of every command in a
+    ///    repository whose policy somebody mistyped.
+    /// 2. Unparseable is never CLEAN. A `Result` is the whole answer: an `Err`
+    ///    is exit 2 and a policy with no rules in it is exit 0, and the second
+    ///    over a file that could not be read is the failure this repository
+    ///    exists to refuse.
+    ///
+    /// The corpus is this repository's own policy and every bundled set, cut
+    /// and corrupted mechanically. Real input mangled beats invented input:
+    /// every byte offset in it means something to the parser.
+    #[test]
+    fn a_policy_that_was_damaged_is_never_read_as_an_empty_one() {
+        let mut corpus: Vec<String> = vec![std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/policy/principles.toml"
+        ))
+        .expect("this repository's own policy")];
+        for (_, text) in BUNDLED {
+            corpus.push((*text).to_owned());
+        }
+
+        let mut checked = 0_usize;
+        for source in &corpus {
+            let bytes = source.as_bytes();
+            // Every prefix at a step that is not a multiple of anything the
+            // file is structured by, so cuts land inside keys, inside strings,
+            // and inside multi-line values.
+            for cut in (0..bytes.len()).step_by(97) {
+                let damaged = String::from_utf8_lossy(&bytes[..cut]).into_owned();
+                // The assertion is that this RETURNS -- an `Err` for a cut
+                // that broke the syntax, an `Ok` for one that landed between
+                // two tables. A prefix holding only comments is a policy with
+                // no rules and that is correct: the file said nothing, and
+                // saying nothing is not the same as being unreadable.
+                if let Ok(policy) = policy_from(&damaged) {
+                    for rule in &policy.rules {
+                        assert!(!rule.id.is_empty(), "a rule with no id loaded");
+                        assert!(
+                            rule.check().is_some() || rule.builtin().is_some(),
+                            "a rule with no check survived a truncation: {}",
+                            rule.id
+                        );
+                    }
+                }
+                checked += 1;
+            }
+
+            // Bytes replaced rather than removed, which reaches the arms a
+            // truncation cannot: a quote inside a value, a NUL, a brace where a
+            // key was.
+            for (index, byte) in b"\"\0[=\n".iter().enumerate() {
+                let mut damaged = bytes.to_vec();
+                for position in (index..damaged.len()).step_by(311) {
+                    damaged[position] = *byte;
+                }
+                let damaged = String::from_utf8_lossy(&damaged).into_owned();
+                // The assertion is that this returns rather than panicking, and
+                // that an `Ok` is a policy somebody could have written.
+                if let Ok(policy) = policy_from(&damaged) {
+                    for rule in &policy.rules {
+                        assert!(!rule.id.is_empty(), "a rule with no id loaded");
+                    }
+                }
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 100,
+            "the corpus produced too few cases to mean anything: {checked}"
+        );
+    }
+
+    #[test]
+    fn a_policy_that_cannot_be_parsed_is_an_error_and_not_an_empty_policy() {
+        // The invariant stated directly, since the sweep above can only assert
+        // it over inputs that happen to be damaged the right way.
+        for damaged in [
+            "this is not toml [[[",
+            "[rule.a]\nregexp = \"unterminated",
+            "[rule.a]\n[rule.a]\n",
+            "[[rule]]\nid = \"array-of-tables-is-the-old-schema\"\n",
+            "\u{0}\u{0}\u{0}",
+        ] {
+            let outcome = policy_from(damaged);
+            assert!(
+                outcome.is_err(),
+                "{damaged:?} loaded as a policy with {} rule(s)",
+                outcome.map_or(0, |policy| policy.rules.len())
+            );
+        }
+    }
+
     #[test]
     fn a_bundled_set_may_not_reach_past_the_stages_it_declares() {
         // The constraint the fleet audit could only state as a risk to hold:
