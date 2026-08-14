@@ -158,6 +158,33 @@ pub(crate) fn bypassed(id: &str) -> bool {
         .any(|allowed| allowed == id || allowed == "all")
 }
 
+/// Is EVERY rule bypassed for this invocation?
+///
+/// `UPHOLD_ALLOW=all` already means "run this unchecked": with a policy that
+/// loads, every rule reports itself bypassed and the command runs. This is the
+/// same question asked before the policy is read, and it exists because of the
+/// one state where the two answers differed -- a policy file that cannot be
+/// parsed.
+///
+/// There, the shim refused every invocation of the command it stands in front
+/// of, including the `git checkout` that would put the file back. The refusal
+/// was right and the trap was real: the tool that stops you publishing an
+/// unchecked change also stopped you repairing the declaration that says what
+/// checking means, and the only ways out were to know the real binary's path or
+/// to take the link off PATH.
+pub(crate) fn bypassed_entirely() -> bool {
+    // Spelled out rather than `bypassed("")`, which would answer yes to an
+    // EMPTY `UPHOLD_ALLOW=`: the empty string splits to one empty field, and a
+    // variable somebody exported and then blanked would switch the whole seam
+    // off while reading as though it had been cleared.
+    std::env::var("UPHOLD_ALLOW").is_ok_and(|value| {
+        value
+            .split(',')
+            .map(str::trim)
+            .any(|allowed| allowed == "all")
+    })
+}
+
 /// The guards that can judge arbitrary text.
 ///
 /// Not all of them can. A guard that reads the index, an identity, or a push

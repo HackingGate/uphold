@@ -791,7 +791,40 @@ fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result
             ))),
         };
     };
-    let policy = config::load(&root, &policy_path)?;
+    // Asked BEFORE the policy is read, and only here. `UPHOLD_ALLOW=all` already
+    // means "run this unchecked" wherever a policy loads: every rule reports
+    // itself bypassed and the command runs. The one state where the two answers
+    // differed was a policy file that cannot be parsed -- there the shim refused
+    // every invocation of the command it stands in front of, including the `git
+    // checkout` that would put the file back.
+    //
+    // The refusal is right and the trap was real: the tool that stops an
+    // unchecked change reaching a forge also stopped the repair of the
+    // declaration that says what checking means, and the ways out were to know
+    // the real binary's path or to take the link off PATH. Neither is something
+    // to learn while holding a broken tree.
+    //
+    // It is still not a pass. Nothing is checked here and nothing pretends to
+    // be: the line below says so on stderr, every time, so a bypass that became
+    // habit is visible in a shell history and in a CI log.
+    if guard::bypassed_entirely() {
+        eprintln!(
+            "uphold shim: {name} ran unchecked, by UPHOLD_ALLOW=all. Nothing here looked at \
+             what it publishes."
+        );
+        return shim::exec_through(name, argv);
+    }
+    // A policy that exists and cannot be read is fatal, and the refusal names
+    // the way out. Without that line the reader is holding a broken declaration
+    // and a command that will not run until they know something the tool never
+    // told them.
+    let policy = config::load(&root, &policy_path).map_err(|error| {
+        Fatal::new(format!(
+            "{error}\n\nNothing checked what `{name}` would publish, so it did not run. To \
+             run it anyway -- to repair the file above, for instance -- say so for this one \
+             invocation:\n\n  UPHOLD_ALLOW=all {name} ..."
+        ))
+    })?;
     // The shimmed command's arguments stay bytes all the way to the exec. On
     // Unix an argument is an arbitrary byte string -- `git add` on a file named
     // in latin-1 is an ordinary thing to type, and this binary is installed in

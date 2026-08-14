@@ -809,6 +809,23 @@ found, `2` where a surface this run tried to read could not be read, `0` when
 every surface a flip would republish was read and was clean — subject to the
 standing caveats, which the clean line says.
 
+### When the policy itself will not load
+
+A policy that exists and cannot be read is fatal for every command the shim
+stands in front of, because the declaration that could not be read might have
+been the one standing in front of *this* invocation. That leaves one problem to
+solve rather than to argue with: the `git checkout` that would put the file back
+is itself a shimmed command.
+
+```sh
+UPHOLD_ALLOW=all git checkout policy/principles.toml
+```
+
+`UPHOLD_ALLOW=all` is asked **before** the policy is read, so it works when
+nothing else does. It is not a pass — the shim says on stderr that the command
+ran unchecked, every time, so a bypass that becomes habit is visible in a shell
+history and in a CI log. An empty `UPHOLD_ALLOW=` switches nothing off.
+
 ## `uphold hooks --identity` — across repositories
 
 ```sh
