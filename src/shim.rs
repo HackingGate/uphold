@@ -989,6 +989,22 @@ pub(crate) enum Invoked {
     AsTheCommand,
     /// As `uphold shim <command>`, with the command named as an argument.
     ByName,
+    /// As the command's own EDITOR, re-entered through the variable this shim
+    /// put itself in. argv here is an editor's argv -- one file path -- and the
+    /// text to check is what the editor leaves in that file.
+    ///
+    /// A word on the command line rather than a variable in the environment, and
+    /// the difference is not cosmetic. An environment is inherited by every
+    /// descendant, and the checkers this pass consults run `git` and `gh` --
+    /// which, on a machine that installed the shim the way `README.md` describes,
+    /// ARE this binary under a link. Each of those children read the marker,
+    /// decided it was somebody's editor, opened the user's editor on whatever
+    /// its last argument happened to be, consulted the same checkers, and ran
+    /// `git` again: a fork bomb that reached this repository's own test suite and
+    /// wedged it for sixty seconds, and that on a consumer's machine sits between
+    /// `gh pr create` and every process on it. A process is re-entered as an
+    /// editor because it was invoked as one, and only argv can say that.
+    AsEditor,
 }
 
 /// Run the command with nothing standing in front of it.
@@ -1035,14 +1051,45 @@ fn real_command(name: &str, own: Option<&Path>) -> Option<PathBuf> {
         if ourselves.is_some() && file_identity(&candidate) == ourselves {
             continue;
         }
+        if is_another_shim(&candidate) {
+            continue;
+        }
         return Some(candidate);
     }
     None
 }
 
+/// A link named for the command that lands on ANOTHER copy of this binary.
+///
+/// Identity answers for one installation and cannot answer for two. A second
+/// copy -- a `cargo install` beside a packaged one, a release binary beside a
+/// `target/debug` build under test, a link left by an older version -- is a
+/// different file, so the identity check above passes it through as "the real
+/// git". That copy then walks the same PATH, finds the first link, sees a file
+/// that is not ITSELF either, and execs back. Two shims each holding the door
+/// for the other is not a wrong answer that gets reported: it is an exec loop,
+/// and every guard that shells out to `git` on the way round leaves a process
+/// behind it. Measured, on a machine with exactly this pair installed: the run
+/// stopped when the kernel ran out of process ids.
+///
+/// Judged by where the link LANDS, which is the shape the install documents: a
+/// link named for the command, pointing at a binary named `uphold`. A copy
+/// renamed to something else is not caught here and cannot be -- the honest
+/// bound on this check, and the reason `install.sh` links rather than copies.
+fn is_another_shim(candidate: &Path) -> bool {
+    std::fs::canonicalize(candidate).is_ok_and(|target| {
+        target
+            .file_stem()
+            .is_some_and(|stem| stem.eq_ignore_ascii_case("uphold"))
+    })
+}
+
 /// The command this process was re-entered for, when it was re-entered as that
 /// command's editor.
-const EDITOR_MARKER: &str = "UPHOLD_SHIM_EDITOR";
+///
+/// A flag and not a variable: see `Invoked::AsEditor` for what an inherited one
+/// did to every `git` this pass runs.
+pub(crate) const EDITOR_FLAG: &str = "--as-editor";
 /// The editor the user actually has, remembered while this shim stands in the
 /// variable that used to name it.
 const EDITOR_REAL: &str = "UPHOLD_SHIM_EDITOR_REAL";
@@ -1137,15 +1184,18 @@ fn install_editor(
         .or_else(|| nonempty_env("EDITOR"))
         .unwrap_or_else(|| String::from("vi"));
     command.env(EDITOR_REAL, editor);
-    command.env(EDITOR_MARKER, name);
     // Only the words that decide WHICH checkers stand in front of this command
     // line. They are matched as a subsequence and never re-executed, so joining
     // them is enough and quoting them would be pretending otherwise.
     command.env(EDITOR_ARGV, argv.join(" "));
+    // These two are data the editor pass reads, and neither one routes anything:
+    // a `git` that inherits them is a `git` that does nothing with them. What
+    // says "you are the editor" is the flag below, which only the process the
+    // command actually launches as its editor is given. See `Invoked::AsEditor`.
     command.env(
         variable,
         format!(
-            "{} shim {}",
+            "{} shim {EDITOR_FLAG} {}",
             shell_word(&exe.to_string_lossy()),
             shell_word(name)
         ),
@@ -1180,7 +1230,6 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
         .arg("sh")
         .arg(file)
         .current_dir(root)
-        .env_remove(EDITOR_MARKER)
         .env_remove(EDITOR_REAL)
         .env_remove(EDITOR_ARGV)
         .status()
@@ -1351,8 +1400,8 @@ pub(crate) fn run(
     // Re-entered as the command's own editor, which is answered before anything
     // else: in this pass argv is an editor's argv -- one file path -- and none
     // of the flag reading below applies to it.
-    if let Some(shimmed) = nonempty_env(EDITOR_MARKER) {
-        return edit_and_check(root, policy, &shimmed, &words);
+    if invoked == Invoked::AsEditor {
+        return edit_and_check(root, policy, name, &words);
     }
 
     let shims: BTreeMap<&str, &Shim> = policy
@@ -1388,6 +1437,14 @@ pub(crate) fn run(
                 } else {
                     shims.keys().copied().collect::<Vec<&str>>().join(", ")
                 }
+            ))),
+            // The editor pass answered at the top of this function and never
+            // reaches the shim table. Stated as a refusal rather than as an
+            // `unreachable!`, because the two are only kept in step by the early
+            // return above, and a panic here would be a shim killing a command.
+            Invoked::AsEditor => Err(Fatal::new(format!(
+                "{name}: an editor pass reached the shim table, which is answered \
+                 before it. Nothing was published"
             ))),
         };
     };

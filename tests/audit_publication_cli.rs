@@ -300,3 +300,74 @@ fn a_pull_ref_the_forge_no_longer_serves_is_not_audited() {
         "a pruned pull ref was still read as a surface this forge serves:\n{report}"
     );
 }
+
+/// A forge that retains no pull-request head refs is a fact, not an unread
+/// surface.
+///
+/// The empty log these two produce is identical, and the difference between them
+/// is this subcommand's exit code: "the forge retains none" is something the
+/// audit established, and "the fetch matched nothing" is a published surface
+/// nobody opened. Both went into the unreadable list, so a repository that has
+/// never opened a pull request could not reach exit 0 through this path however
+/// clean it was -- and a check that always answers "could not look" is one its
+/// reader stops reading.
+#[test]
+fn a_forge_retaining_no_pull_refs_is_not_an_unread_surface() {
+    let root = repository();
+    // A real remote, because the question is what `ls-remote` says about it: a
+    // bare repository with no `refs/pull/*` retains none, which is the fact.
+    let origin = std::env::temp_dir().join(format!(
+        "uphold-publication-no-pulls-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&origin);
+    git(&root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
+    git(
+        &root,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    git(&root, &["push", "-q", "origin", "main"]);
+
+    let report = text(&audit(&root));
+    assert!(
+        !report.contains("refs/pull/*/head fetched no commits"),
+        "a forge that retains none was reported as a surface this run failed to \
+         read:\n{report}"
+    );
+    let _ = std::fs::remove_dir_all(&origin);
+}
+
+/// The reachable blobs are read by one process, and the run says how far it got.
+///
+/// This spawned `git cat-file blob <sha>` once per object, with no cap and
+/// nothing printed between the first and the last. On a repository whose
+/// reachable set runs to five figures that is five figures of process spawns in
+/// silence, and from outside a slow audit and a hung one look the same -- so the
+/// reader's only move is to kill it, which answers nothing.
+#[test]
+fn a_large_reachable_set_is_read_in_one_pass_and_reports_progress() {
+    let root = repository();
+    for index in 0..2100_u32 {
+        std::fs::write(
+            root.join(format!("blob-{index:05}.txt")),
+            format!("blob number {index}\n"),
+        )
+        .unwrap();
+    }
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "many", "--no-verify"]);
+
+    let output = audit(&root);
+    let report = text(&output);
+    assert!(
+        report.contains("reading") && report.contains("reachable object(s)"),
+        "a run this size said nothing about what it was doing:\n{report}"
+    );
+    assert!(
+        report.contains("object(s)") && report.contains("read "),
+        "the run never said how far it had got:\n{report}"
+    );
+}

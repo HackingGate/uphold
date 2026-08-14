@@ -216,7 +216,10 @@ fn a_body_composed_in_an_editor_makes_the_editor_the_checkpoint() {
     let output = shim(&root, &["faux", "pr", "create"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(
-        stdout(&output).contains("editor: ") && stdout(&output).contains("shim 'faux'"),
+        // `--as-editor` is the word that routes the re-entry. It was an
+        // environment variable, which every descendant of the checking pass
+        // inherited -- see `an_editor_pass_does_not_re_enter_the_git_it_runs`.
+        stdout(&output).contains("editor: ") && stdout(&output).contains("shim --as-editor 'faux'"),
         "the command was handed no checkpoint to open: {}",
         stdout(&output)
     );
