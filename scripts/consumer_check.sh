@@ -122,31 +122,35 @@ mkdir -p "$CONSUMER/policy"
 git init -q -b main "$CONSUMER"
 git -C "$CONSUMER" remote add origin "$REMOTE"
 
-# A policy that reaches every stage: a commit-msg guard, a guard that reads the
-# tree an operation introduces (so pre-commit AND pre-push), and an inherited
-# base set -- which a consuming repository does not have a copy of, and never
-# will, because the engine compiles the bundled sets in.
+# A policy that reaches every stage, and takes every guard from a bundled set
+# rather than writing one out.
+#
+# The guards used to be transcribed here, which is the shape this tool argues
+# against: a consuming repository has no copy of a bundled set and never will,
+# because the engine compiles them in. Taking them by name means the questions
+# below are asked of the SETS -- a commit-msg guard, a guard reading the tree an
+# operation introduces (so pre-commit and pre-push), and a merge guard all
+# arriving through `[inherit]` and installed by a real runner. A refusal here
+# names the set it came from, which is the other half of what these questions
+# are for.
 cat > "$CONSUMER/policy/principles.toml" <<'POLICY'
 allowed_scripts = ["Latin"]
 
 [inherit]
-sets = ["process-residue"]
-
-[rule.prevent-ai-author]
-builtin = "prevent-ai-author"
-git.hooks = ["commit-msg"]
-
-[rule.prevent-unusual-unicode]
-builtin = "prevent-unusual-unicode"
-git.hooks = ["commit-msg"]
-
-[rule.prevent-unusual-unicode-in-files]
-builtin = "prevent-unusual-unicode-in-files"
-git.hooks = ["pre-commit", "pre-merge-commit", "pre-push", "manual"]
-
-[rule.no-merge-commit]
-builtin = "no-merge-commit"
-git.hooks = ["pre-commit"]
+sets = [
+    "process-residue",
+    "commit-message-residue",
+    "unreviewed-history",
+    "invisible-characters",
+]
+# The seventh question makes an ordinary merge and expects it to pass, so the
+# guard that refuses every local merge is dropped from the set it arrives in --
+# which is the documented way to take a set minus one rule, and is exercised
+# here because a consumer that wants three of a set's four rules is the normal
+# case rather than the exotic one. `no-merge-commit`, the other half of
+# `unreviewed-history`, stays: it fires at pre-commit and an ordinary `git
+# merge` does not reach that stage.
+disabled_rules = ["no-local-merge"]
 
 # The fifth question below. This rule names a place and it is not a git hook,
 # so no hook may run it -- and a rule that runs nowhere would answer the same
