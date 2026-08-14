@@ -130,6 +130,157 @@ pub(crate) fn blob_shas(root: &Path, shas: &[String]) -> Result<BTreeSet<String>
     Ok(blobs)
 }
 
+/// The bytes of every named object, from ONE `git cat-file --batch`.
+///
+/// The audit read its blobs one `git cat-file blob <sha>` at a time, with no cap
+/// and nothing printed between the first object and the last. On a repository
+/// whose reachable set runs to five figures that is five figures of process
+/// spawns, and the run is silent for all of them: a slow audit and a hung audit
+/// look identical from outside, so the reader's only available move is to kill
+/// it and not find out which it was. One process answers the whole list, and
+/// `visit` is called as each object arrives, so the caller can say how far it
+/// has got.
+///
+/// Streamed rather than collected, because these are every blob a repository
+/// ever reached and holding them twice is holding a repository twice. The
+/// caller keeps what it needs from each and this function keeps one.
+///
+/// The two pipes move at the same time, on two threads, for the reason
+/// `blob_shas` states at length: a parent that writes the whole list before
+/// reading a byte back deadlocks against a child that has stopped reading stdin
+/// because nobody is draining its stdout. `--batch` is worse than
+/// `--batch-check` here, not better -- it answers with whole file contents
+/// rather than fifty bytes -- so a full pipe arrives sooner.
+///
+/// Returns the objects git could not produce. A missing object is an answer,
+/// not a failure: `--batch` writes "<oid> missing" and exits 0, and a shallow or
+/// partial clone is the ordinary way to arrive here. It is the caller's to
+/// report, and reporting it is what keeps "the audit did not read this" out of
+/// the same bucket as "the audit read this and found nothing".
+pub(crate) fn each_blob<F>(
+    root: &Path,
+    shas: &[String],
+    mut visit: F,
+) -> Result<Vec<(String, String)>>
+where
+    F: FnMut(&str, &[u8]),
+{
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut absent = Vec::new();
+    if shas.is_empty() {
+        return Ok(absent);
+    }
+    let asked = shas.len();
+
+    let mut child = Command::new("git")
+        .args(["cat-file", "--batch"])
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| Fatal::new(format!("git cat-file --batch: {error}")))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| Fatal::new("git cat-file --batch: no stdin"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| Fatal::new("git cat-file --batch: no stdout"))?;
+
+    let read = std::thread::scope(|scope| {
+        let writer = scope.spawn(move || {
+            for sha in shas {
+                writeln!(stdin, "{sha}")?;
+            }
+            // Closing stdin is what tells `--batch` the list is finished; see
+            // `blob_shas`, where the same drop is the difference between an end
+            // of file and a wait for input that is never coming.
+            drop(stdin);
+            Ok::<(), std::io::Error>(())
+        });
+        let drained = drain_batch(stdout, &mut absent, &mut visit);
+        // The writer's error outranks the reader's, for `blob_shas`'s reason: a
+        // child that died early reaches the writer as a broken pipe and reaches
+        // the reader as a short read, and only the first of those says why.
+        writer.join().map_or_else(
+            |_| {
+                Err(std::io::Error::other(
+                    "git cat-file --batch: writer thread panicked",
+                ))
+            },
+            |result| result.and(drained),
+        )
+    });
+    read.map_err(|error| Fatal::new(format!("git cat-file --batch: {error}")))?;
+
+    let status = child
+        .wait()
+        .map_err(|error| Fatal::new(format!("git cat-file --batch: {error}")))?;
+    // Refused rather than swallowed, exactly as in `blob_shas`: a non-zero exit
+    // means git itself could not run, and the objects not yet answered for would
+    // otherwise read as objects with nothing in them.
+    if !status.success() {
+        return Err(Fatal::new(format!(
+            "git cat-file --batch exited {}: the contents of one or more of {asked} object(s) \
+             were never read, and reporting them as empty would read as nothing to check",
+            status.code().unwrap_or(-1)
+        )));
+    }
+    Ok(absent)
+}
+
+/// One `--batch` record at a time: a header line, then exactly the bytes it
+/// says, then the newline git writes after them.
+///
+/// By size rather than by line, because a blob is not text. A reader that split
+/// this stream on newlines would take the first line of a file for the header of
+/// the next object, and a file holding a NUL or a lone CR would be read as a
+/// different object entirely.
+fn drain_batch<R, F>(
+    stdout: R,
+    absent: &mut Vec<(String, String)>,
+    visit: &mut F,
+) -> std::result::Result<(), std::io::Error>
+where
+    R: std::io::Read,
+    F: FnMut(&str, &[u8]),
+{
+    use std::io::{BufRead, BufReader, Read};
+
+    let mut reader = BufReader::new(stdout);
+    let mut header = Vec::new();
+    loop {
+        header.clear();
+        if reader.read_until(b'\n', &mut header)? == 0 {
+            return Ok(());
+        }
+        let line = String::from_utf8_lossy(&header).trim_end().to_owned();
+        let mut fields = line.split_whitespace();
+        let (Some(oid), Some(kind)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        // "missing", "ambiguous", and any other one-word verdict git grows: what
+        // they share is that no content follows, so the only correct move is to
+        // name the object and read the next header.
+        let Some(size) = fields.next().and_then(|size| size.parse::<usize>().ok()) else {
+            absent.push((oid.to_owned(), kind.to_owned()));
+            continue;
+        };
+        let mut body = vec![0_u8; size];
+        reader.read_exact(&mut body)?;
+        // The newline git writes after every object, which is not part of it.
+        let mut terminator = [0_u8; 1];
+        reader.read_exact(&mut terminator)?;
+        if kind == "blob" {
+            visit(oid, &body);
+        }
+    }
+}
+
 /// NUL-separated output, for the paths git will not quote.
 pub(crate) fn run_z(root: &Path, args: &[&str]) -> Result<Vec<String>> {
     Ok(run(root, args)?
@@ -307,5 +458,72 @@ mod tests {
     #[test]
     fn an_empty_list_asks_git_nothing() {
         assert!(blob_shas(&std::env::temp_dir(), &[]).unwrap().is_empty());
+        assert!(each_blob(&std::env::temp_dir(), &[], |_, _| ())
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn a_batch_read_returns_whole_blobs_and_names_the_ones_git_has_not_got() {
+        // The content is the point: `--batch` writes a header line, then exactly
+        // the bytes it announced, then a newline of its own. A reader that split
+        // this stream on newlines would take the second line of this file for
+        // the header of the next object -- so the fixture holds a newline, a
+        // NUL, and something that looks exactly like a header.
+        let root = std::env::temp_dir().join(format!("uphold-git-read-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["config", "user.name", "Test"][..],
+            &["config", "user.email", "test@example.test"][..],
+        ] {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?} failed");
+        }
+        let awkward: Vec<u8> = b"first line\n0123456789abcdef blob 12\n\0trailing".to_vec();
+        std::fs::write(root.join("awkward.bin"), &awkward).unwrap();
+        std::fs::write(root.join("plain.txt"), "plain\n").unwrap();
+        let status = Command::new("git")
+            .args(["add", "-A", "."])
+            .current_dir(&root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git add failed");
+
+        let staged = run(&root, &["ls-files", "-s"]).unwrap();
+        let mut shas: Vec<String> = staged
+            .lines()
+            .filter_map(|line| line.split_whitespace().nth(1).map(str::to_owned))
+            .collect();
+        assert_eq!(shas.len(), 2, "the fixture did not stage");
+        // An object this repository has never held, which `--batch` answers for
+        // by name and still exits 0. A shallow or partial clone is the ordinary
+        // way to meet one, and it is not a blob that was read and found clean.
+        let absent_sha = String::from("0123456789012345678901234567890123456789");
+        shas.push(absent_sha.clone());
+
+        let mut read: Vec<(String, Vec<u8>)> = Vec::new();
+        let absent = each_blob(&root, &shas, |sha, bytes| {
+            read.push((sha.to_owned(), bytes.to_vec()));
+        })
+        .unwrap();
+
+        assert_eq!(read.len(), 2, "{read:?}");
+        assert!(
+            read.iter().any(|(_, bytes)| bytes == &awkward),
+            "a blob holding a newline and a NUL did not come back whole"
+        );
+        assert_eq!(absent.len(), 1);
+        assert_eq!(absent[0].0, absent_sha);
+        std::fs::remove_dir_all(&root).ok();
     }
 }

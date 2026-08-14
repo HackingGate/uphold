@@ -14,8 +14,8 @@
     reason = "A CLI test asserts on the outcome; a panic in the harness that builds the fixture IS the failure report, and there is no caller to hand a Result to"
 )]
 
-use std::io::Write;
-use std::os::unix::process::ExitStatusExt;
+use std::io::{Read, Write};
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -134,26 +134,73 @@ impl Run<'_> {
         for (name, value) in self.envs {
             command.env(name, value);
         }
-        let Some(bytes) = self.stdin else {
-            return command.output().unwrap();
-        };
-        // `output()` pipes these for us; `spawn()` does not, and inheriting
-        // them here would hand the assertions an empty stdout while the real
-        // one went to the test harness.
-        let mut child = command
+        // Its own process group, and everything left in it is killed when the
+        // run returns. `timeout` ends the process it started; it cannot end the
+        // ones that process left behind, and what these cases drive is a shim
+        // that RUNS things -- an editor, a checker, `git`. A regression that
+        // spawns without end therefore outlived both the timeout and the suite:
+        // one arrived as tens of thousands of orphaned `git` processes reparented
+        // to init, on a developer machine, until the kernel ran out of process
+        // ids. A test that can wedge the machine it is run on does not get to
+        // rely on the code under test terminating.
+        command.process_group(0);
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(bytes)
-            .expect("the shim reads its stdin whole before it writes anything");
-        child.wait_with_output().unwrap()
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().unwrap();
+        let group = child.id();
+        let mut stdin = child.stdin.take().unwrap();
+        if let Some(bytes) = self.stdin {
+            stdin
+                .write_all(bytes)
+                .expect("the shim reads its stdin whole before it writes anything");
+        }
+        // Closed either way: a command that reads stdin and is handed a pipe
+        // nobody closes waits for input that is not coming.
+        drop(stdin);
+
+        // Drained on threads, and the group killed on the DIRECT child's exit
+        // rather than on end of file. The pipes are inherited, so a descendant
+        // that outlives the process `timeout` killed is still holding the write
+        // end: waiting for end of file first is waiting for the runaway to
+        // finish, which is the hang this whole arrangement exists to end.
+        // Reading has to happen on another thread all the same -- a child that
+        // fills a pipe nobody is draining stops, and would never reach the exit
+        // this waits for.
+        let mut out = child.stdout.take().unwrap();
+        let mut err = child.stderr.take().unwrap();
+        let output = std::thread::scope(|scope| {
+            let reading_out = scope.spawn(move || {
+                let mut bytes = Vec::new();
+                out.read_to_end(&mut bytes).ok();
+                bytes
+            });
+            let reading_err = scope.spawn(move || {
+                let mut bytes = Vec::new();
+                err.read_to_end(&mut bytes).ok();
+                bytes
+            });
+            let status = child.wait().unwrap();
+            quell(group);
+            Output {
+                status,
+                stdout: reading_out.join().unwrap(),
+                stderr: reading_err.join().unwrap(),
+            }
+        });
+        output
     }
+}
+
+/// Kill everything left in one run's process group.
+fn quell(group: u32) {
+    Command::new("pkill")
+        .args(["-9", "-g", &group.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .ok();
 }
 
 /// Is GNU `timeout` on this machine to wrap a case that could hang?
@@ -533,11 +580,11 @@ fn an_editor_checkpoint_with_nothing_to_consult_is_not_a_pass() {
     );
     let editor = root.join("bin/clean-editor");
     let output = Run {
-        args: &["faux", "body.md"],
-        envs: &[
-            ("UPHOLD_SHIM_EDITOR", "faux"),
-            ("UPHOLD_SHIM_EDITOR_REAL", &editor.to_string_lossy()),
-        ],
+        // `--as-editor` is what says this process IS the editor. It used to be
+        // an environment variable, which every child of the checking pass
+        // inherited: see `an_editor_pass_does_not_re_enter_the_git_it_runs`.
+        args: &["--as-editor", "faux", "body.md"],
+        envs: &[("UPHOLD_SHIM_EDITOR_REAL", &editor.to_string_lossy())],
         ..Run::default()
     }
     .go(&root);
@@ -647,4 +694,89 @@ fn a_gitlab_project_that_is_internal_is_not_public() {
     .go(&root);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(stdout(&output).contains("glab ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn an_editor_pass_does_not_re_enter_the_git_it_runs() {
+    // The fork bomb. The editor re-entry was routed by an environment variable,
+    // and an environment reaches every descendant: the checkers this pass
+    // consults run `git`, and on a machine that installed the shim the way
+    // `README.md` describes, `git` on PATH IS this binary under a link. That
+    // child read the marker, decided it was somebody's editor, ran the user's
+    // editor on whatever its last argument happened to be, consulted the same
+    // checkers, ran `git` again -- and did not stop. It wedged this suite for
+    // sixty seconds on a developer machine while passing in CI, where no such
+    // link exists, which is the whole reason the link is planted here.
+    let root = workspace(
+        &format!("{BUILTIN_RULE}{EDITOR_POLICY}"),
+        &[
+            ("faux", EDITING_COMMAND),
+            (
+                "private-editor",
+                "#!/bin/sh\nprintf 'this fixes acme-private/thing\\n' > \"$1\"\n",
+            ),
+        ],
+    );
+    // The install this repository documents: a link named for the command,
+    // ahead of the real one on PATH.
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_uphold"), root.join("bin/git")).unwrap();
+    std::fs::write(root.join("body.md"), "placeholder\n").unwrap();
+
+    // A witness BEHIND the link, so the assertions can tell "no recursion" from
+    // "no descendant". `no-private-repo-names` asks git which repository this is
+    // before it judges anything, and that question is what the recursion rode:
+    // the shim resolves `git`, skips its own link, and reaches this -- which
+    // records the call and runs the real one. A run that never touches it proves
+    // nothing about the path the fork bomb took.
+    let behind = root.join("behind");
+    std::fs::create_dir_all(&behind).unwrap();
+    let witness = root.join("git-calls.log");
+    let wrapper = behind.join("git");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\necho \"$@\" >> {}\nexec /usr/bin/git \"$@\"\n",
+            witness.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&wrapper, permissions).unwrap();
+
+    let editor = root.join("bin/private-editor");
+    // Written out rather than inherited, so the only `git` this run can reach is
+    // the link and the witness behind it. A machine that has its own shim
+    // installed would otherwise put a third one in the middle.
+    let path = format!(
+        "{}:{}:/usr/bin:/bin",
+        root.join("bin").display(),
+        behind.display()
+    );
+    let output = Run {
+        args: &["--as-editor", "faux", "body.md"],
+        envs: &[
+            ("PATH", &path),
+            ("UPHOLD_SHIM_EDITOR_REAL", &editor.to_string_lossy()),
+            ("UPHOLD_SHIM_EDITOR_ARGV", "faux pr create"),
+        ],
+        ..Run::default()
+    }
+    .go(&root);
+
+    // 124 is `timeout` reporting a run that never finished, which is what the
+    // recursion looked like from here.
+    assert_ne!(code(&output), 124, "the editor pass re-entered itself");
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("acme-private"),
+        "{}",
+        stderr(&output)
+    );
+    let calls = std::fs::read_to_string(&witness).unwrap_or_default();
+    assert!(
+        calls.contains("remote get-url origin"),
+        "the checkers never ran a `git` through the link, so this case did not \
+         exercise the path it is named for: {calls:?}"
+    );
 }

@@ -248,10 +248,24 @@ fn run() -> Result<Exit> {
             ))),
         },
         "shim" => {
+            // `--as-editor` is the shim re-entering itself as the command's own
+            // editor, and it is a word here rather than a variable in the
+            // environment for the reason `shim::Invoked::AsEditor` gives: an
+            // environment reaches every descendant, and the descendants of this
+            // pass include the `git` that IS this binary under a link.
+            let (invoked, rest) =
+                rest.split_first()
+                    .map_or((shim::Invoked::ByName, rest), |(leading, after)| {
+                        if leading == shim::EDITOR_FLAG {
+                            (shim::Invoked::AsEditor, after)
+                        } else {
+                            (shim::Invoked::ByName, rest)
+                        }
+                    });
             let (name, shimmed) = rest
                 .split_first()
                 .ok_or_else(|| Fatal::new(format!("shim needs a command\n\n{USAGE}")))?;
-            shim_command(text_of(name)?, shimmed, shim::Invoked::ByName)
+            shim_command(text_of(name)?, shimmed, invoked)
         }
         other => Err(Fatal::new(format!(
             "unknown subcommand {other:?}\n\n{USAGE}"
@@ -646,6 +660,18 @@ fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result
         return match invoked {
             shim::Invoked::AsTheCommand => shim::exec_through(name, argv),
             shim::Invoked::ByName => Err(no_policy_here(&working)),
+            // Re-entered as an editor with no policy to read, which is a body
+            // written for publication and nothing to check it against. Not
+            // `exec_through`: the argv here is an editor's, so running the real
+            // command with it would hand `gh` a file path where a subcommand
+            // goes. The editor variable was installed by a pass that HAD a
+            // policy, so arriving here means the two disagree about where the
+            // repository is -- and the honest answer to that is exit 2.
+            shim::Invoked::AsEditor => Err(Fatal::new(format!(
+                "{name}: re-entered as this command's editor from {}, where no policy \
+                 was found. Nothing was checked, so nothing should be published",
+                working.display()
+            ))),
         };
     };
     let policy = config::load(&root, &policy_path)?;

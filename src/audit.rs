@@ -41,13 +41,13 @@
 //! is reserved for what this run actually failed to open, and a clean report
 //! still carries the caveat in its body.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
 use crate::config::{Check, Policy, Rule};
 use crate::error::{Exit, Fatal, Result};
-use crate::guard::scope::{self, Blob};
+use crate::git;
 use crate::guard::{names, Refusal};
 
 /// True of every run of this subcommand, on every repository, forever.
@@ -212,9 +212,17 @@ fn retained_pull_refs(root: &Path) -> Result<(Vec<Surface>, Vec<String>)> {
         &["log", "--format=%H%x1f%B%x1e", "--glob=refs/audit/pull/*"],
     )?;
     if listed.trim().is_empty() {
-        unreadable.push(String::from(
-            "refs/pull/*/head fetched no commits. Either the forge retains none, or the              fetch matched nothing -- and those are different facts.",
-        ));
+        // Asked, rather than assumed either way. "The forge retains none" and
+        // "the fetch matched nothing" produce the identical empty log, and the
+        // difference between them is this subcommand's whole exit code: the
+        // first is a fact about a repository with no pull requests, the second
+        // is a surface nobody read. Pushing both into `unreadable` made exit 0
+        // unreachable for every repository that has never opened one -- a check
+        // that always says "could not look" is one nobody can act on, which is
+        // the same defect from the other side.
+        if let Some(note) = no_pull_refs(root) {
+            unreadable.push(note);
+        }
     }
     for record in listed.split('\u{1e}') {
         let record = record.trim_start_matches('\n');
@@ -233,6 +241,52 @@ fn retained_pull_refs(root: &Path) -> Result<(Vec<Surface>, Vec<String>)> {
         });
     }
     Ok((surfaces, unreadable))
+}
+
+/// Whether the forge holds no pull-request head refs, or the fetch missed them.
+///
+/// `ls-remote` answers the question the empty log cannot: it lists what the
+/// forge has under `refs/pull/*/head` without bringing any of it down. An empty
+/// listing from a remote that answered is the fact "there are none", and there
+/// is nothing there to audit -- so `None`, and the run may still reach exit 0.
+/// Anything else is a surface this audit did not read, and it says so.
+///
+/// Through git rather than through `gh`, because the audit's other half already
+/// reaches the forge through `gh` and this one must stay answerable for a remote
+/// `gh` does not serve. A GitLab remote publishes merge-request refs under a
+/// different namespace, which `ls-remote` reports as an empty match here: that
+/// is honestly "this reader found none", and a note about a fetch that matched
+/// nothing is the correct thing for it to leave behind.
+fn no_pull_refs(root: &Path) -> Option<String> {
+    let unread = |detail: &str| {
+        Some(format!(
+            "refs/pull/*/head fetched no commits, and {detail}. A forge retains \
+             pull-request head refs permanently and renders them on the closed pull \
+             request, so this is a published surface that went unread rather than one \
+             that is empty."
+        ))
+    };
+    match Command::new("git")
+        .args(["ls-remote", "origin", "refs/pull/*/head"])
+        .current_dir(root)
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            if output.stdout.iter().all(u8::is_ascii_whitespace) {
+                None
+            } else {
+                unread("the forge lists some under that namespace")
+            }
+        }
+        Ok(output) => unread(&format!(
+            "git ls-remote origin exited {}, so whether the forge retains any is unknown",
+            output.status.code().unwrap_or(-1)
+        )),
+        Err(error) => unread(&format!(
+            "git ls-remote origin could not be run ({error}), so whether the forge retains \
+             any is unknown"
+        )),
+    }
 }
 
 /// How many issues or pull requests one `gh list` is asked for.
@@ -404,14 +458,6 @@ fn forge_conversations(root: &Path) -> (Vec<Surface>, Vec<String>) {
     (surfaces, unreadable)
 }
 
-/// Which of these objects git says are blobs, asked once rather than once each.
-///
-/// `git::blob_shas` holds the pumping and the exit-status refusal, because the
-/// pre-push guard asks the identical question and had the version that hangs.
-fn blob_shas(root: &Path, shas: &[String]) -> Result<BTreeSet<String>> {
-    crate::git::blob_shas(root, shas)
-}
-
 /// Every blob a flip would serve, not every path HEAD still names.
 ///
 /// This read `git ls-tree -r HEAD` and `git show HEAD:<path>`, which is the tree
@@ -441,60 +487,86 @@ fn reachable_blobs(root: &Path) -> Result<(Vec<Surface>, Vec<String>)> {
             "--glob=refs/audit/pull/*",
         ],
     )?;
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut candidates: Vec<Blob> = Vec::new();
+    // `rev-list --objects` names an object and a path it once appeared at, and
+    // no mode. A gitlink cannot arrive here mislabelled as a blob regardless:
+    // `cat-file` calls it a commit, and only what it calls a blob is read.
+    let mut shas: Vec<String> = Vec::new();
+    let mut paths: BTreeMap<String, String> = BTreeMap::new();
     for line in listed.lines() {
         // A commit is listed with no path beside it; a tree and a blob both
         // carry one, which is why `cat-file` still has to say which is which.
         let Some((sha, path)) = line.split_once(' ') else {
             continue;
         };
-        if path.is_empty() || !seen.insert(sha.to_owned()) {
+        if path.is_empty() || paths.contains_key(sha) {
             continue;
         }
-        candidates.push(Blob {
-            path: path.to_owned(),
-            sha: sha.to_owned(),
-            // `rev-list --objects` names an object and a path it once appeared
-            // at, and no mode. A gitlink cannot arrive here mislabelled as a
-            // blob regardless: `cat-file` calls it a commit and the filter below
-            // drops it.
-            mode: String::new(),
-        });
+        paths.insert(sha.to_owned(), path.to_owned());
+        shas.push(sha.to_owned());
     }
-    let shas: Vec<String> = candidates.iter().map(|blob| blob.sha.clone()).collect();
-    let blobs = blob_shas(root, &shas)?;
 
     let mut surfaces = Vec::new();
     let mut unreadable = Vec::new();
-    for candidate in candidates
-        .into_iter()
-        .filter(|candidate| blobs.contains(&candidate.sha))
-    {
-        // An object the audit could not open is not an object the audit found
-        // clean. The path this replaces dropped one with a bare `continue`,
-        // which kept it out of the "could NOT be read" list -- the list that
-        // drives this subcommand's exit code and the paragraph telling the
-        // reader their coverage is incomplete. A missing object in a shallow or
-        // partial clone is the ordinary case here, and it is exactly the case
-        // where a reader has to know the audit answered about less than the
-        // whole repository.
-        match scope::read(root, &candidate) {
-            Ok(bytes) => surfaces.push(Surface {
-                label: format!(
-                    "{} (blob {})",
-                    candidate.path,
-                    &candidate.sha[..8.min(candidate.sha.len())]
-                ),
-                text: String::from_utf8_lossy(&bytes).into_owned(),
-            }),
-            Err(error) => unreadable.push(format!(
-                "{} (blob {}) is reachable and could not be read: {error}",
-                candidate.path, candidate.sha
-            )),
-        }
+    let total = shas.len();
+    let mut read = 0_usize;
+    announce(total);
+    // One `git cat-file --batch` for the whole reachable set, and the kind and
+    // the content in the same answer -- so the pass that asked which objects are
+    // blobs is the pass that reads them. This spawned two processes per object
+    // and printed nothing between the first and the last, which on a repository
+    // of any size is a run indistinguishable from a hung one.
+    let absent = git::each_blob(root, &shas, |sha, bytes| {
+        read += 1;
+        progress(read, total);
+        surfaces.push(Surface {
+            label: format!(
+                "{} (blob {})",
+                paths.get(sha).map_or("?", String::as_str),
+                &sha[..8.min(sha.len())]
+            ),
+            text: String::from_utf8_lossy(bytes).into_owned(),
+        });
+    })?;
+    // An object the audit could not open is not an object the audit found clean.
+    // The path this replaces dropped one with a bare `continue`, which kept it
+    // out of the "could NOT be read" list -- the list that drives this
+    // subcommand's exit code and the paragraph telling the reader their coverage
+    // is incomplete. A missing object in a shallow or partial clone is the
+    // ordinary case here, and it is exactly the case where a reader has to know
+    // the audit answered about less than the whole repository.
+    for (sha, verdict) in absent {
+        unreadable.push(format!(
+            "{} (blob {sha}) is reachable and could not be read: git cat-file says {verdict}",
+            paths.get(&sha).map_or("?", String::as_str)
+        ));
     }
     Ok((surfaces, unreadable))
+}
+
+/// How many objects have to be read before the run says so.
+///
+/// Above the count where a machine takes long enough that a reader starts
+/// wondering, and above every fixture in the test suite, so the suite's expected
+/// output does not become a transcript of its own progress.
+const NOISY: usize = 2000;
+
+/// What is about to be read, before the first object rather than after the last.
+fn announce(total: usize) {
+    if total >= NOISY {
+        eprintln!("audit: reading {total} reachable object(s)");
+    }
+}
+
+/// That the run is moving.
+///
+/// On stderr, because stdout is the report and a report is something a reader
+/// pipes. The line exists so that "slow" and "hung" stop looking alike: an audit
+/// that has said nothing for ten minutes offers its reader no move except to
+/// kill it, and killing it answers nothing.
+fn progress(read: usize, total: usize) {
+    if total >= NOISY && read.is_multiple_of(1000) {
+        eprintln!("audit: read {read}/{total} object(s)");
+    }
 }
 
 /// The exit code this run owes its reader, in one place.

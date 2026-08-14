@@ -615,13 +615,28 @@ consults the same checkers over what was actually typed. A refusal exits 1,
 which is what makes `gh` or `glab` abandon the publication; an editor that
 itself fails is exit `2`, not a pass.
 
-Three environment variables carry the re-entry, all set by the shim on the
-command it execs: `UPHOLD_SHIM_EDITOR` (whose presence routes the re-entered
-binary into the editor path), `UPHOLD_SHIM_EDITOR_REAL` (the user's actual
-editor command line) and `UPHOLD_SHIM_EDITOR_ARGV` (the original argv words,
-read only to decide which `command.before` rules apply). They are environment
-rather than a flag because the re-entry has to work whether the binary is
-installed under its own name or as a link named for the command it shims.
+The re-entry is routed by a WORD on the command line. The editor variable is set
+to `<this binary> shim --as-editor <command>`, and `--as-editor` is what tells
+the re-entered process that it is the editor. Two environment variables carry
+the data it then needs, both set by the shim on the command it execs:
+`UPHOLD_SHIM_EDITOR_REAL` (the user's actual editor command line) and
+`UPHOLD_SHIM_EDITOR_ARGV` (the original argv words, read only to decide which
+`command.before` rules apply). Neither routes anything, so a process that
+inherits them does nothing with them.
+
+Routing an editor re-entry through the environment is a defect, and the reason
+is worth holding: an environment is inherited by every descendant, and the
+descendants of the editor pass include the `git` its own checkers run — which,
+after the install above, *is this binary* under a link. A child that reads such
+a marker takes itself for somebody's editor, opens the user's editor on whatever
+its last argument happens to be, consults the same checkers, runs `git`, and
+recurses without bound. A process is the editor because it was invoked as one,
+and only argv can say that.
+
+For the same reason the shim will not hand off to a link that lands on another
+`uphold`: two copies on `PATH` — a `cargo install` beside a packaged one, a
+release binary beside a build under test — are two different files, so each one
+reads the other as "the real `git`" and execs it back.
 
 Where `current_exe()` cannot be resolved there is nothing to install as the
 editor, and the invocation is refused with exit `2`. It warned and execed anyway,
@@ -674,6 +689,23 @@ request cap is reported as truncated rather than quietly cut short.
 
 Two surfaces survive a history rewrite: `refs/pull/<n>/head`, which is fetched
 explicitly and scanned, and comment **edit history**, which no API exposes.
+
+A fetch of `refs/pull/*/head` that brings back nothing is asked about rather
+than assumed: `git ls-remote origin 'refs/pull/*/head'` separates "the forge
+retains none", which is a fact about a repository that has never opened a pull
+request and leaves the run able to exit `0`, from "the fetch matched nothing",
+which is a published surface that went unread. Reading both as unread meant no
+such repository could reach a clean answer through this path.
+
+The reachable blobs are read by **one** `git cat-file --batch`, and a run over
+more than a couple of thousand objects prints what it is reading and how far it
+has got, on stderr. It read one object per process and said nothing until it
+finished, which from outside makes a slow audit and a hung one look alike.
+
+An object the batch names without content -- the ordinary case in a shallow or
+partial clone -- is reported as a surface this run could not read, and so is exit
+`2`. It is not skipped: an object the audit could not open is not an object the
+audit found clean.
 
 The edit history is a **standing caveat**, not an unreadable surface. It is true
 of every run, on every repository, and nothing about this run could change it —
