@@ -875,6 +875,11 @@ repos = ["uphold"]           # or omit: every repository in the comparison
 reason = "the hooks repository cannot pin itself"
 ```
 
+One file holds both halves: the waivers this command reads and the `[[probe]]`
+fixtures `uphold probe` drives. Each reader names the other's table, so neither
+refuses a well-formed file, and both still refuse a misspelled field of their
+own -- which is what `deny_unknown_fields` is for.
+
 `reason` is required and an empty one is refused: a waiver with no reason is a
 check switched off with nobody's name on it. A waiver naming a finding that does
 not exist is refused, since it would waive nothing while reading as though it
