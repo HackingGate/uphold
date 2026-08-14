@@ -312,3 +312,21 @@ fn a_probe_run_from_inside_a_hook_does_not_borrow_that_hooks_index() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn a_probe_file_carrying_waivers_is_read_by_the_probe_reader_too() {
+    // The mirror of the identity test: one file, two features, and each reader
+    // has to tolerate the other's table while still refusing a typo in its own.
+    let root = repository(
+        "[[waive]]\nid = \"no-markers\"\nfindings = [\"absent\"]\nreason = \"the hooks repository cannot pin itself\"\n\n[[probe]]\nid = \"no-markers\"\npath = \"sample.txt\"\nrefuses = \"MARKER\\n\"\nallows = \"clean\\n\"\n",
+    );
+    let stub = runner("grep -q MARKER sample.txt && exit 1\nexit 0");
+
+    let output = probe(&root, Some(&stub));
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains("refuses its fixture, accepts a clean one"),
+        "{}",
+        text(&output)
+    );
+}

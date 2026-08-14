@@ -315,3 +315,51 @@ fn a_lefthook_command_under_two_hooks_is_two_declarations_not_a_fork() {
     let report = text(&output);
     assert!(!report.contains("forked: `guards`"), "{report}");
 }
+
+#[test]
+fn one_file_holds_both_features_and_each_reader_tolerates_the_other() {
+    // `policy/hooks.toml` carries waivers for this command and fixtures for
+    // `uphold probe`. Both readers use `deny_unknown_fields`, which is what
+    // catches a typo like `waivee` -- and which cannot tell a typo from a
+    // sibling feature's table unless the sibling is named.
+    //
+    // Only one direction was named, so the first `[[probe]]` written into this
+    // repository's own file made `hooks --identity` exit 2 on it: a check that
+    // could not look, over a file that was perfectly well-formed.
+    let workspace = workspace();
+    let from = workspace.join("from");
+    std::fs::create_dir_all(&from).unwrap();
+    waivers(
+        &from,
+        "[[waive]]\nid = \"ruff-check\"\nfindings = [\"forked\"]\nreason = \"two answers about two languages\"\n\n[[probe]]\nid = \"ruff-check\"\npath = \"probe/fixture.py\"\nrefuses = \"x=1\\n\"\n",
+    );
+    let one = repository(&workspace, "one", PINNED);
+    let two = repository(&workspace, "two", PINNED);
+
+    let output = identity(&from, &[&one, &two]);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains("every declaration agrees"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn a_misspelled_waiver_field_is_still_refused() {
+    // The other half of the same decision: naming the sibling's table must not
+    // turn `deny_unknown_fields` into a shrug. A waiver whose `reason` was typed
+    // as `resaon` has no reason at all, and that is the state this file refuses.
+    let workspace = workspace();
+    let from = workspace.join("from");
+    std::fs::create_dir_all(&from).unwrap();
+    waivers(
+        &from,
+        "[[waive]]\nid = \"ruff-check\"\nresaon = \"a typo\"\n",
+    );
+    let one = repository(&workspace, "one", PINNED);
+    let two = repository(&workspace, "two", PINNED);
+
+    let output = identity(&from, &[&one, &two]);
+    assert_eq!(code(&output), 2, "{}", text(&output));
+}

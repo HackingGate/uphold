@@ -43,6 +43,18 @@ const WAIVERS: &str = "policy/hooks.toml";
 struct Waivers {
     #[serde(default, rename = "waive")]
     waivers: Vec<Waiver>,
+    /// The fixtures `uphold probe` reads. Named here so that one file can hold
+    /// both without either reader refusing the other's table.
+    ///
+    /// `deny_unknown_fields` is the reason this field has to exist rather than
+    /// being ignored: it is what catches `waivee` and a misplaced `reason`, and
+    /// it cannot tell a typo from a sibling feature's table unless the sibling
+    /// is named. `probe`'s reader already names `waive` for the same reason;
+    /// only this direction was missing, so adding the first `[[probe]]` to this
+    /// repository's own `policy/hooks.toml` made `hooks --identity` exit 2 on
+    /// it.
+    #[serde(default, rename = "probe")]
+    _probes: Vec<toml::Value>,
 }
 
 #[derive(Debug, Deserialize)]
