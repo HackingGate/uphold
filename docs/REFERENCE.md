@@ -117,7 +117,7 @@ it refuses** so the name predicts the rule list:
 
 | set | refuses |
 |---|---|
-| `process-residue` | authoring and process residue in committed content — conflict markers, home paths, dated and status metadata, tracker and thread references, private data paths |
+| `process-residue` | authoring and process residue in committed content — conflict markers, home paths, dated and status metadata, tracker and thread references, private data paths — and, at `manual`, the residue a process leaves in the policy file itself: a rule transcribed out of a set |
 | `credentials` | credential material — private keys and service tokens, literal credential values, populated environment files, browser profile and session stores |
 | `unmanaged-pins` | a version pinned where no manifest holds it — a shell install line, a `releases/download/vX.Y.Z` URL, a versioned `curl` or `wget` |
 | `host-identity` | the machine the author is standing on — its username, home path, hostname and default route, read at scan time and searched for in content |
@@ -139,6 +139,25 @@ A repository's own rule of the same `id` shadows the inherited one;
 `inherit.disabled_rules` drops it, and naming an id nothing inherited defines
 is an error rather than a line that quietly does nothing. `inherit.paths`
 merges extra policy files, repository-relative, after the bundled sets.
+
+Two things a set says out loud, because a set is the one place a rule can run
+from without appearing in any file in the repository it runs in:
+
+- **A refusal names the set it came from**: `guard refused: no-merge-commit
+  [set: unreviewed-history]`. A reader greps their policy for that id and finds
+  nothing, because the whole declaration is one word in an `[inherit]` line.
+- **An override that changes the CHECK is reported at load**, on stderr, as a
+  note and not a refusal. Narrowing an inherited rule is supported; replacing a
+  compiled-in `builtin` with a `regexp` of your own under the same id is a
+  private copy of somebody else's rule, and it is invisible to everything else
+  here — the id resolves, so every claim naming it reconciles green.
+
+The same argument in the other direction is a check: `no-hand-copied-base-rule`
+(shipped in `process-residue`, at `manual`) refuses a rule written out by hand
+under an id a set already ships, from a set the repository does not inherit. It
+names the id, the owning set, and what else inheriting that set would bring.
+A rule of the same id from a set the repository **does** inherit is the
+documented override and stays silent.
 
 Those five fields interact, so "which rules does this repository run" is not a
 question anyone can answer by reading the `[rule.*]` tables. The loader answers
@@ -427,6 +446,7 @@ stamped on it, the range about to be pushed.
 | `no-local-merge` | a merge that would make a merge commit |
 | `no-merge-commit` | a commit finishing a merge or a squash merge |
 | `no-stale-hook-pins` | a pin left behind its upstream, or naming no ref — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree; a pin it **could not check** is exit `2` |
+| `no-hand-copied-base-rule` | a rule this policy writes out by hand under an id a bundled set already ships, from a set it does not inherit. Reads the **policy**, not the tree |
 
 Declared like any other rule, in the same file and the same id namespace.
 **`git.hooks` is the whole registration.**
@@ -448,8 +468,17 @@ git.hooks = ["pre-commit", "pre-merge-commit", "pre-push", "manual"]
 tautological for the one remote most likely to be wrong — repointing origin at a
 public upstream, the exact accident the guard exists to prevent, also repoints
 the allow-list. Where nothing is pinned the guard still runs off origin, and
-says so at the point of refusal rather than passing itself off as the pinned
-answer.
+says so — at the point of refusal, and **on the allow path too**, since a guard
+running in its weaker mode is silent for exactly as long as nothing has gone
+wrong. The note is exit `0` and it is scoped to the case where the derived owner
+is what allowed the push: a pinned `owner` has nothing to report, and an
+`allowed_repos` hit decided the question from a written list.
+
+```text
+uphold guard: prevent-public-push allowed this push to acme/widget, judged
+against acme -- DERIVED FROM ORIGIN, not pinned. […] Pin it with
+`owner = "acme"` on the rule.
+```
 
 ### Built-in parameters
 

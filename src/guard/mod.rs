@@ -19,6 +19,7 @@ pub(crate) mod message;
 pub(crate) mod names;
 pub(crate) mod push;
 pub(crate) mod scope;
+pub(crate) mod sets;
 pub(crate) mod unicode;
 
 use std::path::Path;
@@ -49,6 +50,10 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     "no-local-merge",
     "no-merge-commit",
     "no-stale-hook-pins",
+    // Reads the POLICY rather than the tree or what git is about to do: the
+    // only check here whose subject is the repository's own declarations. See
+    // `sets` for why that is a check at all.
+    "no-hand-copied-base-rule",
     // Reads the tree rather than what git is about to do, so it never runs at a
     // hook -- but it is a check compiled in here with no regex that expresses
     // it, which is exactly what `builtin` names. It was `kind = "link"`.
@@ -104,6 +109,11 @@ impl Stage {
 pub(crate) struct Request<'a> {
     pub root: &'a Path,
     pub rule: &'a Rule,
+    /// The whole loaded policy, for the one guard whose subject IS the policy.
+    /// Every other guard reads `rule` and the repository; `no-hand-copied-base-rule`
+    /// asks what else this repository declared and what it inherited, and there
+    /// is nowhere else to read that from.
+    pub policy: &'a Policy,
     pub stage: Stage,
     /// The commit-message file, for the guards that read one.
     pub message_file: Option<&'a Path>,
@@ -169,7 +179,7 @@ pub(crate) fn over_text(
 ) -> Result<Vec<Refusal>> {
     let mut refusals = Vec::new();
     for rule in policy.of_check(Check::Builtin) {
-        if let Some(refusal) = text_refusal(root, rule, label, text)? {
+        if let Some(refusal) = text_refusal(root, policy, rule, label, text)? {
             refusals.push(refusal);
         }
     }
@@ -186,6 +196,7 @@ pub(crate) fn over_text(
 /// way and a PR body another would be two rules under one id.
 pub(crate) fn text_refusal(
     root: &Path,
+    policy: &Policy,
     rule: &Rule,
     label: &str,
     text: &str,
@@ -199,9 +210,24 @@ pub(crate) fn text_refusal(
     Ok(match builtin {
         "prevent-ai-author" => message::ai_author_in(rule, label, text),
         "prevent-unusual-unicode" => message::unusual_unicode_in(rule, label, text),
-        "no-private-repo-names" => names::in_text(root, rule, label, text)?,
+        "no-private-repo-names" => names::in_text(root, policy, rule, label, text)?,
         _ => None,
     })
+}
+
+/// What a refusal is named by, and where the rule behind it came from.
+///
+/// A guard arriving from a set is a guard whose declaration is in NO file in
+/// the repository it just refused: `sets = ["unreviewed-history"]` is the whole
+/// of it, and a reader who greps their policy for the id that refused them
+/// finds nothing. That is astonishment the moment a set carries a guard, and
+/// naming the set is the cheapest possible answer to it -- `uphold rules --set
+/// <name>` is then one command away from the declaration itself.
+pub(crate) fn refused_by(policy: &Policy, refusal: &Refusal) -> String {
+    policy.set_of(&refusal.id).map_or_else(
+        || refusal.id.clone(),
+        |set| format!("{} [set: {set}]", refusal.id),
+    )
 }
 
 /// Run one guard.
@@ -239,6 +265,7 @@ pub(crate) fn evaluate(request: &Request<'_>) -> Result<Option<Refusal>> {
         "no-private-repo-names-in-files" => names::in_tracked(request),
         "prevent-public-push" => push::prevent_public_push(request),
         "no-stale-hook-pins" => crate::pins::stale(request),
+        "no-hand-copied-base-rule" => sets::no_hand_copied_base_rule(request),
         other => Err(Fatal::new(format!("no built-in called {other:?}"))),
     }
 }
@@ -292,6 +319,7 @@ pub(crate) fn run(root: &Path, policy: &Policy, request: &RunRequest<'_>) -> Res
         let one = Request {
             root,
             rule,
+            policy,
             stage: request.stage,
             message_file: request.message_file,
             push_refs: request.push_refs,
@@ -305,7 +333,7 @@ pub(crate) fn run(root: &Path, policy: &Policy, request: &RunRequest<'_>) -> Res
     }
 
     for refusal in &refusals {
-        eprintln!("guard refused: {}", refusal.id);
+        eprintln!("guard refused: {}", refused_by(policy, refusal));
         eprintln!("{}", refusal.report.trim_end());
         eprintln!();
     }
@@ -364,7 +392,7 @@ mod tests {
                 "{id} is in EVERY_BUILTIN with no dispatch arm"
             );
         }
-        assert_eq!(EVERY_BUILTIN.len(), 12);
+        assert_eq!(EVERY_BUILTIN.len(), 13);
     }
 
     #[test]

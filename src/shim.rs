@@ -1290,7 +1290,7 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
         }
         if rule.is(Check::Builtin) {
             if let Some(refusal) =
-                crate::guard::text_refusal(root, rule, subject.kind, &subject.value)?
+                crate::guard::text_refusal(root, policy, rule, subject.kind, &subject.value)?
             {
                 refusals.push(refusal.report);
             }
@@ -1538,9 +1538,13 @@ pub(crate) fn run(
                         // The same dispatch `uphold guard --text` runs, so a
                         // guard cannot judge a commit message one way and a
                         // pull-request body another under one id.
-                        if let Some(refusal) =
-                            crate::guard::text_refusal(root, rule, subject.kind, &subject.value)?
-                        {
+                        if let Some(refusal) = crate::guard::text_refusal(
+                            root,
+                            policy,
+                            rule,
+                            subject.kind,
+                            &subject.value,
+                        )? {
                             refusals.push(refusal.report);
                         }
                         continue;

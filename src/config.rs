@@ -293,9 +293,46 @@ pub(crate) struct Inherit {
     pub disabled_rules: Vec<String>,
 }
 
+/// Where a rule in a loaded policy came from.
+///
+/// Not a field either -- nothing in a file says it, because a file cannot: the
+/// answer is which file the loader was reading, and only the loader knows. It
+/// exists because a rule with no `git.hooks` line anywhere in the repository
+/// can still refuse a commit, and a refusal that cannot say where the rule came
+/// from is astonishment by construction. It is also what makes a hand-copied
+/// base rule detectable at all: "this id belongs to a set" and "this repository
+/// wrote it out itself" are the two halves, and without provenance the second
+/// half is unrepresentable.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) enum Origin {
+    /// Written in the repository's own policy file.
+    #[default]
+    Own,
+    /// Inherited from a bundled base set, named by the set.
+    Set(String),
+    /// Inherited from an `inherit.paths` entry, named by the path as written.
+    Path(String),
+}
+
+impl Origin {
+    /// The bundled set this rule arrived from, if it arrived from one.
+    pub(crate) fn set(&self) -> Option<&str> {
+        match self {
+            Self::Set(name) => Some(name),
+            Self::Own | Self::Path(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Rule {
+    /// Which file this rule was read from, filled in by [`load`] and by nothing
+    /// else. `#[serde(skip)]` for the reason [`Rule::id`] is skipped: a rule
+    /// that could declare its own provenance could declare a false one.
+    #[serde(skip)]
+    pub origin: Origin,
+
     /// The section header, not a field: `[rule.no-conflict-markers]` names the
     /// rule, and `parse` copies the key here so every consumer keeps reading
     /// `rule.id`.
@@ -498,6 +535,7 @@ impl Rule {
     /// synthesised rule quietly acquires a setting nobody chose for it.
     pub(crate) fn synthetic(id: &str, check: Check) -> Self {
         let mut rule = Self {
+            origin: Origin::Own,
             id: id.to_owned(),
             message: None,
             regexp: None,
@@ -1106,9 +1144,27 @@ pub(crate) struct Policy {
     pub allowed_scripts: Vec<String>,
     pub rules: Vec<Rule>,
     pub shims: Vec<crate::shim::Shim>,
+    /// The bundled sets this policy named, in the order it named them.
+    ///
+    /// Not derivable from `rules`: a set every one of whose rules the
+    /// repository shadows or disables leaves no rule behind carrying its name,
+    /// and "inherited and overridden" is precisely the case a check about
+    /// hand-copied rules must stay silent about.
+    pub inherited_sets: Vec<String>,
 }
 
 impl Policy {
+    /// The bundled set a rule id arrived from, for the one line a reader sees.
+    ///
+    /// By id, because a refusal carries the id and ids are one namespace --
+    /// which is the property `validate_unique` exists to hold.
+    pub(crate) fn set_of(&self, id: &str) -> Option<&str> {
+        self.rules
+            .iter()
+            .find(|rule| rule.id == id)
+            .and_then(|rule| rule.origin.set())
+    }
+
     pub(crate) fn of_check(&self, check: Check) -> impl Iterator<Item = &Rule> {
         self.rules.iter().filter(move |rule| rule.is(check))
     }
@@ -1188,7 +1244,15 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
                 )
             })?;
         let virtual_path = Path::new("<bundled>").join(format!("{name}.toml"));
-        inherited.extend(parse(&virtual_path, bundled.1)?.rules.into_values());
+        inherited.extend(
+            parse(&virtual_path, bundled.1)?
+                .rules
+                .into_values()
+                .map(|mut rule| {
+                    rule.origin = Origin::Set(name.clone());
+                    rule
+                }),
+        );
     }
 
     for relative in &inherit.paths {
@@ -1219,11 +1283,16 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
                 ),
             ));
         }
-        inherited.extend(parsed.rules.into_values());
+        inherited.extend(parsed.rules.into_values().map(|mut rule| {
+            rule.origin = Origin::Path(relative.clone());
+            rule
+        }));
     }
 
     let own_ids: Vec<&str> = file.rules.keys().map(String::as_str).collect();
     let disabled = &inherit.disabled_rules;
+
+    report_reshaped_shadows(&inherited, &file.rules);
 
     let mut rules: Vec<Rule> = inherited
         .into_iter()
@@ -1270,7 +1339,52 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         allowed_scripts: file.allowed_scripts,
         rules,
         shims: file.shims,
+        inherited_sets: inherit.sets.clone(),
     })
+}
+
+/// Say so when a repository's own rule takes an inherited id and checks
+/// something else with it.
+///
+/// Overriding an inherited rule is documented and supported: write the id
+/// yourself and yours wins. What this reports is the narrower case where the
+/// override changes the CHECK -- a `regexp` where the set ships a `builtin` --
+/// because the two are not versions of one rule. The builtin is compiled in and
+/// moves when the binary moves; a regex copy of it is frozen at the moment it
+/// was typed, and it is invisible to every check uphold has: the id is present,
+/// the claim resolves, and `uphold check` reconciles green over a rule that has
+/// silently stopped being the rule it names.
+///
+/// A note on stderr and not a refusal, deliberately. A repository may have a
+/// reason to hold a narrower copy, and turning that into a hard failure at load
+/// would break the tree of anyone who has one before they have read a word
+/// about why. It is the report that has to exist before a set carrying guards
+/// can ship -- without it, inheriting the set hides the fork behind it.
+fn report_reshaped_shadows(inherited: &[Rule], own: &BTreeMap<String, Rule>) {
+    for rule in inherited {
+        let Some(mine) = own.get(&rule.id) else {
+            continue;
+        };
+        let (Some(theirs), Some(ours)) = (rule.check(), mine.check()) else {
+            continue;
+        };
+        if theirs == ours {
+            continue;
+        }
+        let from = match &rule.origin {
+            Origin::Set(name) => format!("the bundled set {name:?}"),
+            Origin::Path(path) => format!("the inherited file {path:?}"),
+            Origin::Own => continue,
+        };
+        eprintln!(
+            "uphold: {id:?} in this policy shadows {from}, which checks {theirs} where this \
+             one checks {ours}. An override that changes the check is a private copy of the \
+             rule, not a setting on it: the inherited one moves with the binary and this one \
+             does not. Rename it, or drop it and take the inherited rule with \
+             `inherit.disabled_rules` if what you want is neither.",
+            id = rule.id,
+        );
+    }
 }
 
 /// The rules one bundled set ships, for `uphold rules --set <name>`.
@@ -1291,7 +1405,30 @@ pub(crate) fn bundled_set(name: &str) -> Result<Vec<Rule>> {
         )));
     };
     let path = Path::new("<bundled>").join(format!("{name}.toml"));
-    Ok(parse(&path, bundled)?.rules.into_values().collect())
+    Ok(parse(&path, bundled)?
+        .rules
+        .into_values()
+        .map(|mut rule| {
+            rule.origin = Origin::Set(name.to_owned());
+            rule
+        })
+        .collect())
+}
+
+/// Which bundled set owns each id, and what else that set brings.
+///
+/// The question a hand-copied rule is detected by, and it has to be asked of
+/// the binary rather than of a list somebody keeps: a set gaining a rule with
+/// nobody updating a table elsewhere is the drift this whole file exists to
+/// make impossible.
+pub(crate) fn bundled_ids() -> Result<Vec<(&'static str, Vec<String>)>> {
+    BUNDLED
+        .iter()
+        .map(|(name, text)| {
+            let path = Path::new("<bundled>").join(format!("{name}.toml"));
+            Ok((*name, parse(&path, text)?.rules.into_keys().collect()))
+        })
+        .collect()
 }
 
 /// One flat namespace, checked here and nowhere else.

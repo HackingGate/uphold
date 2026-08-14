@@ -685,7 +685,9 @@ pub(crate) fn for_publication(root: &Path, policy: &Policy) -> Result<Exit> {
     }
 
     for surface in &surfaces {
-        if let Some(refusal) = names::in_text(root, &published, &surface.label, &surface.text)? {
+        if let Some(refusal) =
+            names::in_text(root, policy, &published, &surface.label, &surface.text)?
+        {
             refusals.push(refusal);
         }
     }
