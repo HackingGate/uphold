@@ -29,6 +29,8 @@
     reason = "A CLI test asserts on the outcome; a panic in the harness that builds the fixture IS the failure report, and there is no caller to hand a Result to"
 )]
 
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -83,7 +85,7 @@ fn a_set_may_not_install_a_hook_its_header_does_not_admit() {
     // ceiling is checked by the same `parse_bundled` either way; what this
     // asserts is that a header outside a bundled set is refused outright,
     // which is the other half of the same rule.
-    let root = std::env::temp_dir().join(format!("uphold-set-header-{}", std::process::id()));
+    let root = support::scratch("set-header");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
     Command::new("git")

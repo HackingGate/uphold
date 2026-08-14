@@ -12,9 +12,10 @@
     reason = "A CLI test asserts on the outcome; a panic in the harness that builds the fixture IS the failure report, and there is no caller to hand a Result to"
 )]
 
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 const POLICY: &str = r#"
 [rule.no-stale-hook-pins]
@@ -25,12 +26,7 @@ hooks = ["pre-push", "manual"]
 "#;
 
 fn repository() -> PathBuf {
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let root = std::env::temp_dir().join(format!(
-        "uphold-pins-cli-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+    let root = support::scratch("pins-cli");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
     std::fs::write(root.join("policy/principles.toml"), POLICY).unwrap();

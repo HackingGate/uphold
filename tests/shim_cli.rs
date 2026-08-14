@@ -13,9 +13,10 @@
     reason = "A CLI test asserts on the outcome; a panic in the harness that builds the fixture IS the failure report, and there is no caller to hand a Result to"
 )]
 
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A shim whose scope is `always`, so the tests do not need a forge.
 const POLICY: &str = r#"
@@ -48,12 +49,7 @@ scope = "always"
 "#;
 
 fn workspace(policy: &str) -> PathBuf {
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let root = std::env::temp_dir().join(format!(
-        "uphold-shim-cli-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+    let root = support::scratch("shim-cli");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
     std::fs::create_dir_all(root.join("bin")).unwrap();
@@ -334,9 +330,8 @@ fn a_directory_with_no_policy_at_all_does_not_break_the_command() {
     let root = workspace(POLICY);
     // Outside `root`, deliberately: a subdirectory of it would find the policy
     // by walking up, which is the case this test is not about.
-    let elsewhere = std::env::temp_dir().join(format!(
-        "uphold-shim-no-policy-{}-{}",
-        std::process::id(),
+    let elsewhere = support::run_root().join(format!(
+        "shim-no-policy-{}",
         root.file_name().unwrap().to_string_lossy()
     ));
     let _ = std::fs::remove_dir_all(&elsewhere);

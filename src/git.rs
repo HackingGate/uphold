@@ -397,7 +397,7 @@ mod tests {
         // On a thread with a deadline, because a test that proves a deadlock is
         // gone has to FAIL when it is not, and a test that hangs reports nothing
         // at all -- it stops the suite with no failing test named.
-        let root = std::env::temp_dir().join(format!("uphold-git-batch-{}", std::process::id()));
+        let root = crate::fixture::scratch("git-batch");
         std::fs::remove_dir_all(&root).ok();
         std::fs::create_dir_all(&root).unwrap();
         for args in [
@@ -470,7 +470,7 @@ mod tests {
         // this stream on newlines would take the second line of this file for
         // the header of the next object -- so the fixture holds a newline, a
         // NUL, and something that looks exactly like a header.
-        let root = std::env::temp_dir().join(format!("uphold-git-read-{}", std::process::id()));
+        let root = crate::fixture::scratch("git-read");
         std::fs::remove_dir_all(&root).ok();
         std::fs::create_dir_all(&root).unwrap();
         for args in [

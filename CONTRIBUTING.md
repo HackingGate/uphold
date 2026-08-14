@@ -57,6 +57,21 @@ The reason it is mandatory rather than encouraged is that a rule which stops
 matching produces **no output at all** — the gate goes green and stays green,
 and no report anywhere says the check has stopped working.
 
+### Where a test's fixture lives
+
+Every CLI test builds a real repository, under `<temp>/uphold-tests/<pid>/`, and
+the first fixture in a run sweeps every sibling whose process is gone. Use
+`support::scratch("name")` in `tests/`, `crate::fixture::scratch("name")` in
+`src/`, and do not reach for `std::env::temp_dir()` directly.
+
+The reason is measured rather than stylistic: the old shape cleared a fixture on
+the way IN and never on the way out, which frees nothing, because the directory
+name carries the pid precisely so that it cannot collide with a live run. One
+working session left 84,992 directories under `/tmp`, filled 15 GB of a 16 GB
+tmpfs, and killed a `cargo mutants` run with `No space left on device` -- which
+that run then reported as 158 mutants "unviable". A tool reporting a measurement
+it could not make is what this repository exists to refuse.
+
 ### Mutation testing
 
 Coverage says a line ran. It does not say a test would have noticed the line

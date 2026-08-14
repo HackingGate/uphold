@@ -14,11 +14,12 @@
     reason = "A CLI test asserts on the outcome; a panic in the harness that builds the fixture IS the failure report, and there is no caller to hand a Result to"
 )]
 
+mod support;
+
 use std::io::{Read, Write};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The rule every case here shares: the binary consulting itself over text,
 /// which is the point of a checker -- the rule that judges a commit message and
@@ -41,12 +42,7 @@ hooks = ["commit-msg"]
 /// A workspace with a policy, this binary on PATH under its own name, and the
 /// stub commands one case needs.
 fn workspace(policy: &str, stubs: &[(&str, &str)]) -> PathBuf {
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let root = std::env::temp_dir().join(format!(
-        "uphold-shim-handoff-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+    let root = support::scratch("shim-handoff");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
     std::fs::create_dir_all(root.join("bin")).unwrap();

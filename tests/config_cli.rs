@@ -21,9 +21,10 @@
     reason = "A CLI test asserts on the outcome; a panic in the harness that builds the fixture IS the failure report, and there is no caller to hand a Result to"
 )]
 
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A repository whose policy is exactly `policy`, with a stub `faux` on PATH.
 ///
@@ -32,12 +33,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// failed -- so the stub announces itself on stdout, and "the command did not
 /// run" is then something a test can assert rather than assume.
 fn workspace(policy: &str) -> PathBuf {
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let root = std::env::temp_dir().join(format!(
-        "uphold-config-cli-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+    let root = support::scratch("config-cli");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
     std::fs::create_dir_all(root.join("bin")).unwrap();

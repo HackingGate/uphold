@@ -13,18 +13,14 @@
     reason = "A CLI test asserts on the outcome; a panic in the harness that builds the fixture IS the failure report, and there is no caller to hand a Result to"
 )]
 
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A repository with one declared hook, and a policy so the root is found.
 fn repository(probes: &str) -> PathBuf {
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let root = std::env::temp_dir().join(format!(
-        "uphold-probe-cli-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+    let root = support::scratch("probe-cli");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
 
@@ -68,12 +64,7 @@ fn git(root: &Path, args: &[&str]) {
 /// `script` is the body: it is handed the same arguments the real runner is,
 /// with the worktree as its working directory.
 fn runner(script: &str) -> PathBuf {
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let directory = std::env::temp_dir().join(format!(
-        "uphold-probe-runner-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+    let directory = support::scratch("probe-runner");
     let _ = std::fs::remove_dir_all(&directory);
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("prek");

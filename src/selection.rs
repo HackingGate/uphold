@@ -510,9 +510,8 @@ mod tests {
     /// leftover on a failure says which one left it.
     fn workspace(label: &str) -> PathBuf {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let root = std::env::temp_dir().join(format!(
-            "uphold-selection-{label}-{}-{}",
-            std::process::id(),
+        let root = crate::fixture::scratch(&format!(
+            "selection-{label}-{}",
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::remove_dir_all(&root).ok();

@@ -846,7 +846,7 @@ mod tests {
 
     /// A directory of its own per test, since `read_pins` now walks one.
     fn tree(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("uphold-pins-{name}-{}", std::process::id()));
+        let dir = crate::fixture::scratch(&format!("pins-{name}"));
         if dir.exists() {
             std::fs::remove_dir_all(&dir).unwrap();
         }

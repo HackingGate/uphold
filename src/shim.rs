@@ -1784,7 +1784,7 @@ mod tests {
     fn a_hard_link_carries_the_identity_of_its_target() {
         // A hard link canonicalizes to its own path, so a path comparison
         // would exec it as "the real command" -- this program again, forever.
-        let dir = std::env::temp_dir().join(format!("uphold-shim-link-{}", std::process::id()));
+        let dir = crate::fixture::scratch("shim-link");
         std::fs::create_dir_all(&dir).unwrap();
         let original = dir.join("uphold");
         std::fs::write(&original, "binary").unwrap();
@@ -1801,7 +1801,7 @@ mod tests {
     fn npm_is_out_of_scope_when_the_package_says_private() {
         // The reason `scope` is an enum and not a boolean: there is no
         // repository, no owner and no visibility endpoint in npm's question.
-        let dir = std::env::temp_dir().join(format!("uphold-shim-{}", std::process::id()));
+        let dir = crate::fixture::scratch("shim");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("package.json"), r#"{"private": true}"#).unwrap();
         let mut npm = gh();
