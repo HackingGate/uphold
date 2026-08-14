@@ -707,3 +707,71 @@ fn a_builtin_checker_satisfies_the_shim_that_would_otherwise_check_nothing() {
     let output = shim(&root, &["faux", "--version"]);
     assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
 }
+
+#[test]
+fn a_policy_that_cannot_be_read_refuses_the_command_and_names_the_way_out() {
+    // The trap this closes: with an unparseable policy, the shim refused every
+    // invocation of the command it stands in front of -- including the `git
+    // checkout` that would put the file back. The refusal is right. Being
+    // unable to repair the declaration without knowing the real binary's path
+    // is not.
+    let root = workspace("this is not toml [[[\n");
+
+    let refused = shim(&root, &["faux", "pr", "create", "-t", "a title"]);
+    assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+    let text = stderr(&refused);
+    assert!(text.contains("did not run"), "{text}");
+    assert!(text.contains("UPHOLD_ALLOW=all"), "{text}");
+
+    // And the way out works, says so, and is not silent about it: a bypass that
+    // became habit has to be visible in a shell history and a CI log.
+    let allowed = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["shim", "faux", "pr", "create", "-t", "a title"])
+        .current_dir(&root)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                root.join("bin").display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("UPHOLD_ALLOW", "all")
+        .output()
+        .unwrap();
+    assert_eq!(allowed.status.code().unwrap(), 0, "{}", stderr(&allowed));
+    assert!(
+        String::from_utf8_lossy(&allowed.stdout).contains("faux ran"),
+        "the real command did not run"
+    );
+    assert!(
+        stderr(&allowed).contains("ran unchecked"),
+        "{}",
+        stderr(&allowed)
+    );
+}
+
+#[test]
+fn an_empty_allow_variable_switches_nothing_off() {
+    // `UPHOLD_ALLOW=` is a variable somebody exported and then cleared. Read as
+    // a list it is one empty field, and an early version of the whole-invocation
+    // bypass answered yes to it -- which would have switched the seam off in
+    // every shell that had ever set the variable.
+    let root = workspace("this is not toml [[[\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["shim", "faux", "pr", "create", "-t", "a title"])
+        .current_dir(&root)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                root.join("bin").display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("UPHOLD_ALLOW", "")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap(), 2, "{}", stderr(&output));
+}
