@@ -2475,6 +2475,29 @@ mod tests {
             push.allowed_owners(),
             ["acme".to_owned(), "acme-mirror".to_owned()]
         );
+
+        // The links knobs are the same pair in a different built-in, and the
+        // second of them is the one a mutation run kept alive: a repository
+        // that wrote `allow_outside_repo = true` and silently got `false`
+        // would have every outward citation refused, with the field it wrote
+        // sitting right there in the file.
+        let links = policy_from(
+            r#"
+            [rule.links]
+            builtin = "links-resolve"
+            require_any_link = true
+            allow_outside_repo = true
+            files.include = ["docs"]
+            "#,
+        )
+        .unwrap();
+        let links = links
+            .rules
+            .iter()
+            .find(|rule| rule.id == "links")
+            .expect("the rule loaded");
+        assert!(links.require_any_link());
+        assert!(links.allow_outside_repo());
     }
 
     #[test]
