@@ -12,6 +12,8 @@
     reason = "A CLI test asserts on the outcome; a panic in the harness that builds the fixture IS the failure report, and there is no caller to hand a Result to"
 )]
 
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -26,16 +28,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 fn repository() -> PathBuf {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-    let outside = std::env::temp_dir().join(format!(
-        "uphold-publication-owners-{}-{serial}.txt",
-        std::process::id()
-    ));
+    let outside = support::run_root().join(format!("publication-owners-{serial}.txt"));
     std::fs::write(&outside, "PrivateOrg\n").unwrap();
 
-    let root = std::env::temp_dir().join(format!(
-        "uphold-publication-{}-{serial}",
-        std::process::id()
-    ));
+    let root = support::run_root().join(format!("publication-{serial}"));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
     std::fs::write(
@@ -257,8 +253,7 @@ fn a_pull_ref_the_forge_no_longer_serves_is_not_audited() {
     let root = repository();
     // A real remote, because the fetch is what prunes: with no origin at all the
     // subcommand reports the surface unreadable and never walks a ref.
-    let origin =
-        std::env::temp_dir().join(format!("uphold-publication-origin-{}", std::process::id()));
+    let origin = support::scratch("publication-origin");
     let _ = std::fs::remove_dir_all(&origin);
     git(&root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
     git(
@@ -316,10 +311,7 @@ fn a_forge_retaining_no_pull_refs_is_not_an_unread_surface() {
     let root = repository();
     // A real remote, because the question is what `ls-remote` says about it: a
     // bare repository with no `refs/pull/*` retains none, which is the fact.
-    let origin = std::env::temp_dir().join(format!(
-        "uphold-publication-no-pulls-{}",
-        std::process::id()
-    ));
+    let origin = support::scratch("publication-no-pulls");
     let _ = std::fs::remove_dir_all(&origin);
     git(&root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
     git(

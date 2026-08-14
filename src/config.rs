@@ -1737,13 +1737,7 @@ mod tests {
     /// path keyed on the process id is the SAME path for all of them, and one
     /// case read the policy another had just written.
     fn policy_from(text: &str) -> Result<Policy> {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "uphold-config-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
+        let dir = crate::fixture::scratch("config");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("rg-policy.toml");
         std::fs::write(&path, text).unwrap();
@@ -1922,13 +1916,7 @@ mod tests {
 
     #[test]
     fn two_inherited_files_may_not_define_one_id() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "uphold-config-inherit-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
+        let dir = crate::fixture::scratch("config-inherit");
         std::fs::create_dir_all(dir.join("policy")).unwrap();
         let same = "[rule.same]\nmessage = \"no\"\nregexp = \"x\"\nfiles.include = [\".\"]\n";
         std::fs::write(dir.join("policy/a.toml"), same).unwrap();
@@ -2158,10 +2146,7 @@ mod tests {
     /// fact declared, in the file they were pointing at.
     #[test]
     fn a_shim_in_an_inherited_file_is_refused_rather_than_ignored() {
-        let dir = std::env::temp_dir().join(format!(
-            "uphold-config-inherited-shim-{}",
-            std::process::id()
-        ));
+        let dir = crate::fixture::scratch("config-inherited-shim");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("shared.toml"),

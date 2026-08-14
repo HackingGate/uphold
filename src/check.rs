@@ -814,11 +814,7 @@ mod tests {
         // judges a message on stdin and establishes nothing about the tree.
         // Counting it as the scan seam would reconcile a claim on a content
         // rule in a repository where no content rule runs.
-        let root = std::env::temp_dir().join(format!(
-            "uphold-check-lefthook-{}-{}",
-            std::process::id(),
-            line!()
-        ));
+        let root = crate::fixture::scratch("check-lefthook");
         drop(std::fs::remove_dir_all(&root));
         std::fs::create_dir_all(&root).unwrap();
 
@@ -879,11 +875,7 @@ mod tests {
         // cannot see, so the note lists what was found. Under `&&` it lists
         // only ids that are a scan AND a guard, which is none of them, and the
         // note disappears while the answer stays green.
-        let root = std::env::temp_dir().join(format!(
-            "uphold-check-note-{}-{}",
-            std::process::id(),
-            line!()
-        ));
+        let root = crate::fixture::scratch("check-note");
         drop(std::fs::remove_dir_all(&root));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
@@ -921,11 +913,7 @@ mod tests {
         // And the other side of it: a tree with no configuration at all hears
         // exactly that, which is the answer that keeps "nothing is installed"
         // apart from "everything passed".
-        let bare = std::env::temp_dir().join(format!(
-            "uphold-check-bare-{}-{}",
-            std::process::id(),
-            line!()
-        ));
+        let bare = crate::fixture::scratch("check-bare");
         drop(std::fs::remove_dir_all(&bare));
         std::fs::create_dir_all(&bare).unwrap();
         let empty = installed(&bare).unwrap();

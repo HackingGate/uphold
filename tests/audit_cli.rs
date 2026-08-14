@@ -7,6 +7,8 @@
     reason = "A CLI test asserts on the outcome; a panic in the harness that builds the fixture IS the failure report, and there is no caller to hand a Result to"
 )]
 
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -52,21 +54,15 @@ hooks = ["commit-msg"]
 /// A repository whose private-owner list lives outside it.
 fn with_outside_owners() -> PathBuf {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let outside = std::env::temp_dir().join(format!(
-        "uphold-audit-owners-{}-{}.txt",
-        std::process::id(),
+    let outside = support::run_root().join(format!(
+        "audit-owners-{}.txt",
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     repository(&policy_reading_owners_from(&outside))
 }
 
 fn repository(policy: &str) -> PathBuf {
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let root = std::env::temp_dir().join(format!(
-        "uphold-audit-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+    let root = support::scratch("audit");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
     std::fs::write(root.join("policy/principles.toml"), policy).unwrap();
@@ -237,10 +233,7 @@ fn without_a_private_name_rule_the_audit_refuses_to_guess() {
 /// clean.
 #[test]
 fn the_owner_list_does_not_depend_on_rule_order() {
-    let outside = std::env::temp_dir().join(format!(
-        "uphold-audit-owners-{}-order.txt",
-        std::process::id()
-    ));
+    let outside = support::run_root().join("audit-owners-order.txt");
     std::fs::write(&outside, "PrivateOrg\n").unwrap();
 
     // The variant WITHOUT owners written first, which is the losing order.

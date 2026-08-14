@@ -28,6 +28,8 @@ mod comments;
 mod config;
 mod engine;
 mod error;
+#[cfg(test)]
+mod fixture;
 mod git;
 mod guard;
 mod hooks;
@@ -821,13 +823,7 @@ mod tests {
     /// process, so a path keyed on the process id alone is the SAME path for
     /// every case, and one case reads the tree another just built.
     fn workspace() -> PathBuf {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let root = std::env::temp_dir().join(format!(
-            "uphold-discover-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
+        let root = crate::fixture::scratch("discover");
         std::fs::create_dir_all(&root).unwrap();
         root
     }
