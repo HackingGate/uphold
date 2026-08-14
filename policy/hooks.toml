@@ -79,3 +79,23 @@ allows = "a line with none\n"
 # A third-party hook, deliberately: the case this command exists for is a hook
 # whose failure path nobody has ever seen, and every hook here that is not
 # uphold's own is in that class until it is driven.
+
+# The three third-party hooks this fleet declares differently, and why each
+# difference is a decision rather than drift. `hooks --identity` reports a fork
+# whatever the reason, which is correct -- the reason is not in either tree, so
+# only a file like this one can hold it.
+
+[[waive]]
+id = "ruff-check"
+findings = ["forked"]
+reason = "this repository runs ruff with --fix at commit time, where a workspace whose Python is a handful of scripts runs it check-only over a files scope. Autofixing somebody else's tree on their commit is not a default to share, and the scope is a fact about where each repository keeps its Python"
+
+[[waive]]
+id = "ruff-format"
+findings = ["forked"]
+reason = "the same decision as ruff-check, and it travels with it: a repository that formats on commit and one that only checks are running the same tool at two different moments on purpose"
+
+[[waive]]
+id = "shellcheck"
+findings = ["forked"]
+reason = "a workspace whose shell scripts stand up lab images runs shellcheck at four stages and at --severity=style; this repository has a handful of scripts and runs the default at commit time. Worth revisiting if these scripts grow, which is why the difference is recorded rather than hidden"
