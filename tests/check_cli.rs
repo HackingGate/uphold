@@ -769,3 +769,30 @@ fn a_forge_url_under_another_owner_is_somebody_elses() {
         assert_eq!(code(&check(&root, &[])), 1, "{url}");
     }
 }
+
+#[test]
+fn a_claim_with_a_blank_principle_or_a_blank_rule_is_unreadable() {
+    // Both halves, because it takes both to say OR. A claim naming an empty
+    // string names nothing, and resolving it would report a verdict about a
+    // rule nobody wrote down -- which is a green tick over an assertion no
+    // human made.
+    let root = workspace();
+    write(&root, "policy/principles.toml", GUARD_POLICY);
+    write(
+        &root,
+        "policy/upheld.toml",
+        "[[enforce]]\nprinciple = \"explicit-unknown\"\nrule = \"\"\n",
+    );
+    let output = check(&root, &[]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(stderr(&output).contains("blank"), "{}", stderr(&output));
+
+    write(
+        &root,
+        "policy/upheld.toml",
+        "[[enforce]]\nprinciple = \"  \"\nrule = \"prevent-ai-author\"\n",
+    );
+    let second = check(&root, &[]);
+    assert_eq!(code(&second), 2, "{}", stderr(&second));
+    assert!(stderr(&second).contains("blank"), "{}", stderr(&second));
+}

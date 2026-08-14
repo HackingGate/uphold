@@ -144,6 +144,9 @@ uphold guard --stage pre-push   # the guards for that git hook
 uphold shim gh pr create ...    # stand in front of a command, then exec
 uphold audit --for-publication  # before flipping private -> public
 
+uphold hooks --identity ../a ../b   # do these repositories declare the same hooks
+uphold probe                        # can each declared hook actually refuse
+
 uphold_check.py --explain ID    # one record in full; also accepts a name
 uphold_check.py --list          # every id in the catalog
 uphold_check.py --init          # a starter declaration
@@ -181,6 +184,15 @@ ahead of the real one — that is what a multicall binary is for, and why there 
 no installer. Where the body is composed in an **editor**, the shim makes itself
 the editor and checks what the editor leaves in the file when it closes — so
 there is no invocation whose published text goes unread.
+
+**`uphold hooks --identity DIR...`** and **`uphold probe`** ask the two
+questions a single repository cannot answer about itself. A forked hook
+declaration is byte-perfect in every tree that holds it, so only a comparison
+across repositories shows that the copies stopped agreeing — and a hook that
+*cannot fail* reports the same green tick as one that keeps finding nothing, so
+only planting something it must refuse tells the two apart. The probe does that
+in a throwaway `git worktree`, never in the tree you are standing in. Both read
+`policy/hooks.toml`: waivers for the first, fixtures for the second.
 
 ## The catalog
 
