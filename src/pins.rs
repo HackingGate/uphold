@@ -71,6 +71,15 @@ struct RepoEntry {
     repo: String,
     #[serde(default)]
     rev: Option<String>,
+    /// The hook entries themselves, kept WHOLE rather than field by field.
+    ///
+    /// `uphold hooks --identity` asks whether two repositories declare the same
+    /// hook, and any list of fields kept here would answer that question about
+    /// the fields somebody thought of. A hook entry gaining an `args:` in one
+    /// repository and not in another is a fork whether or not this struct knows
+    /// what `args` is, so the comparison is over the mapping as written.
+    #[serde(default)]
+    hooks: Vec<serde_yaml_ng::Value>,
 }
 
 /// lefthook's own remote-config block: another repository's hook definitions,
@@ -79,6 +88,13 @@ struct RepoEntry {
 struct LefthookConfig {
     #[serde(default)]
     remotes: Vec<LefthookRemote>,
+    /// Every other top-level key, which is where lefthook keeps the hooks: a
+    /// mapping per git hook name, each holding `commands:` or `scripts:`. Kept
+    /// whole for the reason [`RepoEntry::hooks`] gives, and flattened rather
+    /// than named because lefthook's hook names are githooks(5)'s and this
+    /// crate has no business carrying a second copy of that list.
+    #[serde(flatten)]
+    rest: BTreeMap<String, serde_yaml_ng::Value>,
     /// lefthook's older singular spelling, still accepted by lefthook and still
     /// in the wild. Read for the reason the plural one is: the pin a consumer
     /// wrote is the pin that runs, whichever key they wrote it under.
@@ -371,6 +387,180 @@ pub(crate) fn read_pins(root: &Path) -> Result<Reading> {
         notes,
         configs: configs.len(),
     })
+}
+
+/// One hook declaration, as one repository wrote it.
+///
+/// The unit `uphold hooks --identity` compares. `id` is what a claim names and
+/// what a runner installs; `body` is the declaration as written, canonicalized
+/// so that two repositories writing the same thing in a different key order
+/// compare equal and two writing different things do not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Manager {
+    PreCommit,
+    Lefthook,
+}
+
+impl Manager {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::PreCommit => "pre-commit",
+            Self::Lefthook => "lefthook",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Declaration {
+    pub id: String,
+    /// Which manager's file this was written in.
+    ///
+    /// Load-bearing for the comparison: the same hook id in a
+    /// `.pre-commit-config.yaml` and in a `lefthook.yml` is the same CHECK
+    /// written twice in two formats, which is what runner parity means. Reading
+    /// those two as one declaration makes every repository that supports both
+    /// runners report itself as forked from itself.
+    pub manager: Manager,
+    /// The git hook this declaration sits under, where the FORMAT puts it
+    /// there. lefthook keys its commands by hook name, so one command name
+    /// under two hooks is two declarations; pre-commit writes `stages:` inside
+    /// the entry, so the entry is the whole declaration and this is `None`.
+    /// Without it, a repository declaring `guards` at five stages read as five
+    /// repositories disagreeing with each other.
+    pub stage: Option<String>,
+    /// The repository this pins the id from, where there is one: two
+    /// repositories running the same id from different upstreams are not
+    /// running the same hook, whatever the entry says.
+    pub from: Option<String>,
+    pub rev: Option<String>,
+    pub body: String,
+    pub source: String,
+}
+
+/// Every hook declaration in one tree, from either manager.
+///
+/// Reads the same files `read_pins` reads, through the same walk and the same
+/// parse. Two readers of one format is the drift this crate keeps arguing
+/// against, and a second walk would answer a different question about the same
+/// tree the first time a `.gitignore` changed.
+pub(crate) fn declarations(root: &Path) -> Result<Vec<Declaration>> {
+    let mut found = Vec::new();
+    for path in hook_configs(root)? {
+        let source = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        let text = read_to_string(&path)?;
+        if path
+            .file_name()
+            .is_some_and(|name| name == PRE_COMMIT_CONFIG)
+        {
+            let config: HookConfig =
+                serde_yaml_ng::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
+            let Some(repos) = config.repos else {
+                return Err(Fatal::at(
+                    &path,
+                    "has no top-level `repos:` key, so this is not a file hook declarations                      can be read out of",
+                ));
+            };
+            for entry in repos {
+                for hook in entry.hooks {
+                    let Some(id) = hook.get("id").and_then(serde_yaml_ng::Value::as_str) else {
+                        return Err(Fatal::at(
+                            &path,
+                            format!(
+                                "{}: a hook entry with no `id:` is a declaration nothing can \
+                                 name, install, or claim",
+                                entry.repo
+                            ),
+                        ));
+                    };
+                    found.push(Declaration {
+                        id: id.to_owned(),
+                        manager: Manager::PreCommit,
+                        stage: None,
+                        from: Some(entry.repo.clone()),
+                        rev: entry.rev.clone(),
+                        body: canonical(&hook),
+                        source: source.clone(),
+                    });
+                }
+            }
+        } else {
+            let config: LefthookConfig =
+                serde_yaml_ng::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
+            let pinned = config
+                .remotes
+                .first()
+                .or(config.remote.as_ref())
+                .map(|remote| (remote.git_url.clone(), remote.reference.clone()));
+            for (hook, body) in &config.rest {
+                // `commands:` under a git hook name. Anything else at the top
+                // level -- `colors:`, `skip_output:`, `min_version:` -- is
+                // lefthook's own configuration and declares no hook.
+                let Some(commands) = body.get("commands").and_then(|value| value.as_mapping())
+                else {
+                    continue;
+                };
+                for (name, command) in commands {
+                    let Some(name) = name.as_str() else {
+                        continue;
+                    };
+                    found.push(Declaration {
+                        id: name.to_owned(),
+                        manager: Manager::Lefthook,
+                        stage: Some(hook.clone()),
+                        from: pinned.as_ref().map(|(url, _)| url.clone()),
+                        rev: pinned.as_ref().and_then(|(_, rev)| rev.clone()),
+                        body: canonical(command),
+                        source: source.clone(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// One declaration as a string that two repositories can be compared by.
+///
+/// Serialized rather than formatted with `Debug`, because `Debug` renders the
+/// parser's own types and a change to `serde_yaml_ng` would then read as every
+/// repository in the fleet having forked at once. Mappings come back in the
+/// order they were written, so the key order is normalized here -- two
+/// repositories that wrote the same declaration with `args:` above `stages:`
+/// and below it are not two declarations.
+fn canonical(value: &serde_yaml_ng::Value) -> String {
+    fn sorted(value: &serde_yaml_ng::Value) -> serde_yaml_ng::Value {
+        match value {
+            serde_yaml_ng::Value::Mapping(mapping) => {
+                let mut keyed: Vec<(String, serde_yaml_ng::Value)> = mapping
+                    .iter()
+                    .map(|(key, item)| {
+                        (
+                            serde_yaml_ng::to_string(key).unwrap_or_default(),
+                            sorted(item),
+                        )
+                    })
+                    .collect();
+                keyed.sort_by(|left, right| left.0.cmp(&right.0));
+                let mut out = serde_yaml_ng::Mapping::new();
+                for (key, item) in keyed {
+                    out.insert(serde_yaml_ng::Value::String(key.trim().to_owned()), item);
+                }
+                serde_yaml_ng::Value::Mapping(out)
+            }
+            serde_yaml_ng::Value::Sequence(items) => {
+                serde_yaml_ng::Value::Sequence(items.iter().map(sorted).collect())
+            }
+            other => other.clone(),
+        }
+    }
+    serde_yaml_ng::to_string(&sorted(value))
+        .unwrap_or_default()
+        .trim_end()
+        .to_owned()
 }
 
 /// Compare two tags the way a person reads them.
