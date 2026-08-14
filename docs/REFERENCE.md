@@ -702,6 +702,11 @@ more than a couple of thousand objects prints what it is reading and how far it
 has got, on stderr. It read one object per process and said nothing until it
 finished, which from outside makes a slow audit and a hung one look alike.
 
+An object the batch names without content -- the ordinary case in a shallow or
+partial clone -- is reported as a surface this run could not read, and so is exit
+`2`. It is not skipped: an object the audit could not open is not an object the
+audit found clean.
+
 The edit history is a **standing caveat**, not an unreadable surface. It is true
 of every run, on every repository, and nothing about this run could change it —
 so it is stated in the body of every report and is *not* counted as something

@@ -14,7 +14,7 @@
     reason = "A CLI test asserts on the outcome; a panic in the harness that builds the fixture IS the failure report, and there is no caller to hand a Result to"
 )]
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -159,15 +159,48 @@ impl Run<'_> {
         // Closed either way: a command that reads stdin and is handed a pipe
         // nobody closes waits for input that is not coming.
         drop(stdin);
-        let output = child.wait_with_output().unwrap();
-        Command::new("pkill")
-            .args(["-9", "-g", &group.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .ok();
+
+        // Drained on threads, and the group killed on the DIRECT child's exit
+        // rather than on end of file. The pipes are inherited, so a descendant
+        // that outlives the process `timeout` killed is still holding the write
+        // end: waiting for end of file first is waiting for the runaway to
+        // finish, which is the hang this whole arrangement exists to end.
+        // Reading has to happen on another thread all the same -- a child that
+        // fills a pipe nobody is draining stops, and would never reach the exit
+        // this waits for.
+        let mut out = child.stdout.take().unwrap();
+        let mut err = child.stderr.take().unwrap();
+        let output = std::thread::scope(|scope| {
+            let reading_out = scope.spawn(move || {
+                let mut bytes = Vec::new();
+                out.read_to_end(&mut bytes).ok();
+                bytes
+            });
+            let reading_err = scope.spawn(move || {
+                let mut bytes = Vec::new();
+                err.read_to_end(&mut bytes).ok();
+                bytes
+            });
+            let status = child.wait().unwrap();
+            quell(group);
+            Output {
+                status,
+                stdout: reading_out.join().unwrap(),
+                stderr: reading_err.join().unwrap(),
+            }
+        });
         output
     }
+}
+
+/// Kill everything left in one run's process group.
+fn quell(group: u32) {
+    Command::new("pkill")
+        .args(["-9", "-g", &group.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .ok();
 }
 
 /// Is GNU `timeout` on this machine to wrap a case that could hang?
@@ -689,10 +722,41 @@ fn an_editor_pass_does_not_re_enter_the_git_it_runs() {
     std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_uphold"), root.join("bin/git")).unwrap();
     std::fs::write(root.join("body.md"), "placeholder\n").unwrap();
 
+    // A witness BEHIND the link, so the assertions can tell "no recursion" from
+    // "no descendant". `no-private-repo-names` asks git which repository this is
+    // before it judges anything, and that question is what the recursion rode:
+    // the shim resolves `git`, skips its own link, and reaches this -- which
+    // records the call and runs the real one. A run that never touches it proves
+    // nothing about the path the fork bomb took.
+    let behind = root.join("behind");
+    std::fs::create_dir_all(&behind).unwrap();
+    let witness = root.join("git-calls.log");
+    let wrapper = behind.join("git");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\necho \"$@\" >> {}\nexec /usr/bin/git \"$@\"\n",
+            witness.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&wrapper, permissions).unwrap();
+
     let editor = root.join("bin/private-editor");
+    // Written out rather than inherited, so the only `git` this run can reach is
+    // the link and the witness behind it. A machine that has its own shim
+    // installed would otherwise put a third one in the middle.
+    let path = format!(
+        "{}:{}:/usr/bin:/bin",
+        root.join("bin").display(),
+        behind.display()
+    );
     let output = Run {
         args: &["--as-editor", "faux", "body.md"],
         envs: &[
+            ("PATH", &path),
             ("UPHOLD_SHIM_EDITOR_REAL", &editor.to_string_lossy()),
             ("UPHOLD_SHIM_EDITOR_ARGV", "faux pr create"),
         ],
@@ -708,5 +772,11 @@ fn an_editor_pass_does_not_re_enter_the_git_it_runs() {
         stderr(&output).contains("acme-private"),
         "{}",
         stderr(&output)
+    );
+    let calls = std::fs::read_to_string(&witness).unwrap_or_default();
+    assert!(
+        calls.contains("remote get-url origin"),
+        "the checkers never ran a `git` through the link, so this case did not \
+         exercise the path it is named for: {calls:?}"
     );
 }
