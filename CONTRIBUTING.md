@@ -119,6 +119,30 @@ anything. Some survivors are equivalent mutants and some are unreachable, and
 both are worth a sentence in the commit rather than a test written to silence
 them.
 
+### Proving the exit-state ranking
+
+```sh
+cargo install --locked kani-verifier && cargo kani setup
+cargo kani                                 # four harnesses, about a second each
+```
+
+`error::verdict` is the one function in this crate where an unknown becomes a
+number a caller acts on, and `#[cfg(kani)] mod proofs` states what it must do
+over every pair of counts rather than over the four pairs a unit test can name:
+a run that could not look never exits 0, a violation outranks an unread surface,
+and clean means read everything and found nothing.
+
+The reason it is worth a model checker for this one function and for nothing
+else here is measured. Change `could_not_look > 0` to `could_not_look > 1` and
+every one of the 197 in-crate unit tests still passes -- including the four that
+test `verdict` directly, since they name 3 and 0 and never 1. Kani refuses in
+15 milliseconds, with the counterexample. The rest of this crate reads files,
+runs git and formats reports, none of which CBMC can say anything useful about.
+
+Not wired into a hook, and for the same reason as `cargo deny`: the toolchain is
+half a gigabyte fetched by `cargo kani setup`, which is not something a commit
+should wait for. The proofs are cheap once it is installed.
+
 The MSRV is written twice, in `Cargo.toml` as `rust-version` and in
 `toolchain.toml` as the rustc `want`, because cargo and the preflight cannot read
 each other's manifest. Bump both together; `tests/test_toolchain.py` refuses a

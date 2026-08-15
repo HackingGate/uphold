@@ -32,7 +32,7 @@ use serde::Deserialize;
 
 use crate::catalog;
 use crate::config::Policy;
-use crate::error::{Exit, Fatal, Result};
+use crate::error::{verdict, Exit, Fatal, Result};
 
 const DECLARATION: &str = "policy/upheld.toml";
 
@@ -762,11 +762,9 @@ fn report_coverage(
         claimable.len()
     );
 
-    if installed.unreadable.is_empty() {
-        Ok(Exit::Clean)
-    } else {
-        Ok(Exit::Broken)
-    }
+    // Nothing here refuses -- see the docstring -- so the only question left is
+    // whether every seam could be read.
+    Ok(verdict(0, installed.unreadable.len()))
 }
 
 #[cfg(test)]

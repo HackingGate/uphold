@@ -98,7 +98,7 @@ mod text;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use crate::error::{Exit, Fatal, Result};
+use crate::error::{verdict, Exit, Fatal, Result};
 
 const USAGE: &str = "\
 usage:
@@ -462,19 +462,17 @@ fn scan_command(arguments: &[OsString]) -> Result<Exit> {
         }
     }
 
-    if !failures.is_empty() {
-        // A violation outranks an unreadable path, the way it does in `audit`
-        // and in the pin guard: something was found, and exit 1 is the answer
-        // to "is this tree publishable" that the reader has to act on first.
-        // The unreadable list is printed either way, so nothing is hidden by
-        // the ranking -- only the exit code is decided by it.
-        return Ok(Exit::Violations);
+    // A violation outranks an unreadable path: something was found, and exit 1
+    // is the answer to "is this tree publishable" that the reader has to act on
+    // first. The unreadable list is printed either way, so nothing is hidden by
+    // the ranking -- only the exit code is decided by it. The ranking itself is
+    // `error::verdict`, which `audit` and `check` also ask, because three
+    // transcriptions of one decision is three places for it to drift.
+    let exit = verdict(failures.len(), unreadable.len());
+    if exit == Exit::Clean {
+        println!("policy checks passed");
     }
-    if !unreadable.is_empty() {
-        return Ok(Exit::Broken);
-    }
-    println!("policy checks passed");
-    Ok(Exit::Clean)
+    Ok(exit)
 }
 
 fn guard_command(arguments: &[OsString]) -> Result<Exit> {
