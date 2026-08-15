@@ -74,6 +74,11 @@ strip = true
 # looser standard than the projects it gates.
 [lints.rust]
 warnings = "deny"
+# `cfg(kani)` is set by the model checker and by nothing else, so an ordinary
+# build has to be told the name exists before it will accept a module gated on
+# it. Declared here rather than allowed at the module, which would switch the
+# lint off for every other misspelling in the same file.
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(kani)'] }
 # Safety
 unsafe_code = "deny"
 

@@ -46,7 +46,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::config::{Check, Policy, Rule};
-use crate::error::{Exit, Fatal, Result};
+use crate::error::{verdict, Exit, Fatal, Result};
 use crate::git;
 use crate::guard::{names, Refusal};
 
@@ -566,22 +566,6 @@ fn announce(total: usize) {
 fn progress(read: usize, total: usize) {
     if total >= NOISY && read.is_multiple_of(1000) {
         eprintln!("audit: read {read}/{total} object(s)");
-    }
-}
-
-/// The exit code this run owes its reader, in one place.
-///
-/// A function rather than three bare `return`s so that the clean answer is
-/// something a test can reach at all. It was unreachable in practice and there
-/// was no way to say so short of standing in front of a forge: `unreadable`
-/// carried a caveat true of every run, so the branch above it always won.
-const fn verdict(refusals: usize, unreadable: usize) -> Exit {
-    if refusals > 0 {
-        Exit::Violations
-    } else if unreadable > 0 {
-        Exit::Broken
-    } else {
-        Exit::Clean
     }
 }
 
