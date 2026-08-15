@@ -142,14 +142,52 @@ fn every_command_probe_builds_has_gits_environment_taken_away() {
          and found nothing there -- which is not the same as the rule holding"
     );
 
-    let offenders: Vec<String> = calls(&source)
+    let offenders = bare_constructions(&source);
+    assert!(
+        offenders.is_empty(),
+        "src/probe.rs builds a command without going through `detached`, so it inherits \
+         GIT_DIR and GIT_INDEX_FILE from whatever ran this binary -- under a hook runner \
+         those name another repository's index: {}",
+        offenders.join(", ")
+    );
+
+    // And the helper still strips, read off its own body rather than off the
+    // file. A `source.contains("\"GIT_DIR\"")` is satisfied by this very
+    // sentence, and by a `GIT_DIR` in any other function -- which is the
+    // required-shape direction a matcher cannot express, in the file arguing
+    // that it cannot.
+    let stripped = stripped_names(&source);
+    for name in [
+        "GIT_DIR",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_WORK_TREE",
+        "GIT_PREFIX",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG_PARAMETERS",
+    ] {
+        assert!(
+            stripped.iter().any(|found| found == name),
+            "`detached` no longer calls env_remove({name}), so a child of this module is \
+             answered about the repository the hook fired in. It strips: {stripped:?}"
+        );
+    }
+}
+
+/// Every construction of a command outside the helper, by line and function.
+///
+/// `detached` is the helper: its own `Command::new` is the one that is allowed
+/// to exist, because it is the construction every other one has to go through.
+/// A call with no enclosing function -- a static initializer, or a module-level
+/// const -- is an offender rather than a skip, since the rule is about where the
+/// construction happens and "nowhere in particular" is not `detached`.
+fn bare_constructions(source: &str) -> Vec<String> {
+    calls(source)
         .into_iter()
         .filter(|(function, _)| function == "Command::new")
         .filter_map(|(_, node)| {
-            let inside = enclosing_function(&source, node);
-            // `detached` is the helper. Its own `Command::new` is the one that
-            // is allowed to exist, because it is the construction every other
-            // one has to go through.
+            let inside = enclosing_function(source, node);
             match inside.as_deref() {
                 Some("detached") => None,
                 other => Some(format!(
@@ -159,42 +197,65 @@ fn every_command_probe_builds_has_gits_environment_taken_away() {
                 )),
             }
         })
-        .collect();
-
-    assert!(
-        offenders.is_empty(),
-        "src/probe.rs builds a command without going through `detached`, so it inherits \
-         GIT_DIR and GIT_INDEX_FILE from whatever ran this binary -- under a hook runner \
-         those name another repository's index: {}",
-        offenders.join(", ")
-    );
-
-    // And the helper still exists and still strips: a test that only counted
-    // call sites would pass over a `detached` that had quietly stopped removing
-    // anything.
-    for name in ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE"] {
-        assert!(
-            source.contains(&format!("\"{name}\"")),
-            "`detached` no longer names {name}, so nothing takes it away"
-        );
-    }
-    assert!(
-        source.contains("env_remove"),
-        "`detached` no longer removes anything from the environment"
-    );
+        .collect()
 }
 
-/// What the check counts: constructions outside the helper.
+/// The environment names `detached` takes away, read off `detached`'s body.
 ///
-/// One function rather than the same four lines at each call site, because the
-/// three tests below differ by the source they are handed and by nothing else.
-fn bare_constructions(source: &str) -> usize {
-    calls(source)
-        .iter()
-        .filter(|(function, _)| function == "Command::new")
-        .filter_map(|(_, node)| enclosing_function(source, *node))
-        .filter(|inside| inside != "detached")
-        .count()
+/// Empty when there is no such function and empty when it calls no
+/// `env_remove`, because both leave the environment in place and the assertion
+/// reading this should not have to tell them apart.
+///
+/// WHAT THIS DOES NOT PROVE, and it is the same boundary the ADR draws. The
+/// helper hands `env_remove` a loop variable, so the argument at the call site
+/// is an identifier: what is read here is that the helper removes SOMETHING and
+/// that the name appears as a literal in the same function. Tying this literal
+/// to that call means following the value into the loop, which is the tier
+/// above a syntax tree.
+fn stripped_names(source: &str) -> Vec<String> {
+    let Some(helper) = function_named(source, "detached") else {
+        return Vec::new();
+    };
+    let mut cursor = helper.walk();
+    let mut pending = vec![helper];
+    let mut removes = false;
+    let mut names = Vec::new();
+    while let Some(node) = pending.pop() {
+        if node.kind() == "call_expression"
+            && node
+                .child_by_field_name("function")
+                .is_some_and(|function| source[function.byte_range()].ends_with("env_remove"))
+        {
+            removes = true;
+        }
+        if node.kind() == "string_literal" {
+            names.push(source[node.byte_range()].trim_matches('"').to_owned());
+        }
+        pending.extend(node.children(&mut cursor));
+    }
+    if removes {
+        names
+    } else {
+        Vec::new()
+    }
+}
+
+/// The `function_item` called `name`, if this source declares one.
+fn function_named<'a>(source: &'a str, name: &str) -> Option<Node<'a>> {
+    let tree = parse(source);
+    let mut cursor = tree.walk();
+    let mut pending = vec![tree.root_node()];
+    while let Some(node) = pending.pop() {
+        if node.kind() == "function_item"
+            && node
+                .child_by_field_name("name")
+                .is_some_and(|found| source[found.byte_range()] == *name)
+        {
+            return Some(node);
+        }
+        pending.extend(node.children(&mut cursor));
+    }
+    None
 }
 
 #[test]
@@ -215,7 +276,7 @@ fn the_check_can_tell_the_helper_from_a_bare_construction() {
         }
     "#;
     assert_eq!(
-        bare_constructions(offending),
+        bare_constructions(offending).len(),
         1,
         "the bare construction was not found"
     );
@@ -230,12 +291,25 @@ fn the_check_can_tell_the_helper_from_a_bare_construction() {
             let _ = detached("git").arg("status").output();
         }
     "#;
-    assert_eq!(
-        bare_constructions(clean),
-        0,
+    assert!(
+        bare_constructions(clean).is_empty(),
         "a comment or a helper call was read as a violation"
     );
     assert_eq!(unparsed(clean), None, "the fixture itself is Rust");
+
+    // The other direction, driven both ways as well: the helper in `offending`
+    // removes something and names it, the one in `clean` removes nothing. A
+    // required-shape assertion nobody has seen fail is a required-shape
+    // assertion that may be reading the wrong thing.
+    assert_eq!(
+        stripped_names(offending),
+        ["GIT_DIR"],
+        "the names were not read out of the helper's own body"
+    );
+    assert!(
+        stripped_names(clean).is_empty(),
+        "a helper that calls no env_remove was reported as stripping something"
+    );
 }
 
 #[test]
@@ -251,15 +325,14 @@ fn a_source_that_did_not_parse_is_not_a_source_that_passed() {
     // it says when everything is in order.
     let swallowed = r#"
         fn earlier() {
-            let unterminated = "quote that never closes;
+            let text = "one quote away from parsing;
         }
         fn worktree(root: &Path) {
             let _ = Command::new("git").arg("worktree").current_dir(root).output();
         }
     "#;
-    assert_eq!(
-        bare_constructions(swallowed),
-        0,
+    assert!(
+        bare_constructions(swallowed).is_empty(),
         "the fixture no longer hides its defect from the walk, so this test has \
          stopped standing for the case it was written for"
     );
@@ -275,7 +348,7 @@ fn a_source_that_did_not_parse_is_not_a_source_that_passed() {
 
     let repaired = r#"
         fn earlier() {
-            let terminated = "quote that closes";
+            let text = "one quote away from parsing";
         }
         fn worktree(root: &Path) {
             let _ = Command::new("git").arg("worktree").current_dir(root).output();
@@ -283,7 +356,7 @@ fn a_source_that_did_not_parse_is_not_a_source_that_passed() {
     "#;
     assert_eq!(unparsed(repaired), None, "the repaired twin is Rust");
     assert_eq!(
-        bare_constructions(repaired),
+        bare_constructions(repaired).len(),
         1,
         "the same defect, now that the grammar can reach it"
     );

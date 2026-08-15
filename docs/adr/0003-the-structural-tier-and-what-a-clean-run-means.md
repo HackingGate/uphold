@@ -74,14 +74,22 @@ implementations in N languages.
 
 **A matcher fires on what is there. It cannot require what must be there.**
 Beyond the forbidden shape, the check in this repository asserts that the helper
-still names `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_WORK_TREE`, and still calls
-`env_remove`. That is a rule about a construct that MUST exist, and a rule
-engine whose output is a list of matched nodes has no way to say it: the absence
-of a node is not a node. This repository already carries the same distinction
-one tier down, where `regexp` refuses a file that matches and `require_regexp`
-refuses a file that does not. A structural tier without the second direction can
-watch the calls and cannot watch the helper they are required to go through --
-which is the half that goes quietly wrong.
+still calls `env_remove` and still names all eight of the variables git exports,
+read out of `detached`'s own body rather than out of the file. That is a rule
+about a construct that MUST exist, and a rule engine whose output is a list of
+matched nodes has no way to say it: the absence of a node is not a node. This
+repository already carries the same distinction one tier down, where `regexp`
+refuses a file that matches and `require_regexp` refuses a file that does not. A
+structural tier without the second direction can watch the calls and cannot
+watch the helper they are required to go through -- which is the half that goes
+quietly wrong.
+
+Reading it off the body rather than off the file is not a detail. A
+`source.contains("\"GIT_DIR\"")` is satisfied by a comment, by a message string,
+and by any other function in the module; scoped to the helper, it is satisfied
+only by the helper. What it still does not prove is which name reaches which
+call, because `detached` hands `env_remove` a loop variable -- and following a
+value into a loop is the tier above a syntax tree, which is the next section.
 
 **A clean run means nothing on its own.** tree-sitter recovers a tree from
 almost any input, so a source whose parse collapsed produces a walk that finds
