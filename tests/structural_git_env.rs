@@ -52,83 +52,14 @@
 
 #![expect(
     clippy::expect_used,
+    clippy::let_underscore_must_use,
     clippy::tests_outside_test_module,
-    clippy::unwrap_used,
     reason = "A test asserts on the outcome; a panic in the harness IS the failure report, and there is no caller to hand a Result to"
 )]
 
-use tree_sitter::{Node, Parser};
+mod support;
 
-/// The tree, kept alive for the nodes handed out of these readers.
-fn parse(source: &str) -> &'static tree_sitter::Tree {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_rust::LANGUAGE.into())
-        .unwrap();
-    let tree = parser.parse(source, None).unwrap();
-    Box::leak(Box::new(tree))
-}
-
-/// The line of the first region the grammar could not read, if there is one.
-///
-/// A structural check over a source this returns `Some` for has established
-/// nothing about that source, and reporting it clean is the `UNKNOWN -> PASS`
-/// this repository keeps refusing one seam at a time.
-fn unparsed(source: &str) -> Option<usize> {
-    let tree = parse(source);
-    if !tree.root_node().has_error() {
-        return None;
-    }
-    let mut cursor = tree.walk();
-    let mut pending = vec![tree.root_node()];
-    let mut first = None;
-    while let Some(node) = pending.pop() {
-        if node.is_error() || node.is_missing() {
-            let line = node.start_position().row + 1;
-            first = Some(first.map_or(line, |earlier: usize| earlier.min(line)));
-        }
-        pending.extend(node.children(&mut cursor));
-    }
-    // `has_error` is true and no node carries the flag only if the grammar
-    // changed shape underneath this reader. Line 1 is the honest answer then:
-    // something is wrong and the reader cannot say where.
-    Some(first.unwrap_or(1))
-}
-
-/// Every call expression in `source`, with the text of the function called.
-///
-/// What the grammar recovered, which over a broken source is less than what is
-/// there. Every caller asks `unparsed` first.
-fn calls(source: &str) -> Vec<(String, Node<'_>)> {
-    let tree = parse(source);
-
-    let mut found = Vec::new();
-    let mut cursor = tree.walk();
-    let mut pending = vec![tree.root_node()];
-    while let Some(node) = pending.pop() {
-        if node.kind() == "call_expression" {
-            if let Some(function) = node.child_by_field_name("function") {
-                let text = source[function.byte_range()].to_owned();
-                found.push((text, node));
-            }
-        }
-        pending.extend(node.children(&mut cursor));
-    }
-    found
-}
-
-/// The function a node sits inside, by name.
-fn enclosing_function<'a>(source: &'a str, node: Node<'a>) -> Option<String> {
-    let mut current = node;
-    while let Some(parent) = current.parent() {
-        if parent.kind() == "function_item" {
-            let name = parent.child_by_field_name("name")?;
-            return Some(source[name.byte_range()].to_owned());
-        }
-        current = parent;
-    }
-    None
-}
+use support::syntax::{calls, enclosing_function, function_named, unparsed};
 
 #[test]
 fn every_command_probe_builds_has_gits_environment_taken_away() {
@@ -238,24 +169,6 @@ fn stripped_names(source: &str) -> Vec<String> {
     } else {
         Vec::new()
     }
-}
-
-/// The `function_item` called `name`, if this source declares one.
-fn function_named<'a>(source: &'a str, name: &str) -> Option<Node<'a>> {
-    let tree = parse(source);
-    let mut cursor = tree.walk();
-    let mut pending = vec![tree.root_node()];
-    while let Some(node) = pending.pop() {
-        if node.kind() == "function_item"
-            && node
-                .child_by_field_name("name")
-                .is_some_and(|found| source[found.byte_range()] == *name)
-        {
-            return Some(node);
-        }
-        pending.extend(node.children(&mut cursor));
-    }
-    None
 }
 
 #[test]
