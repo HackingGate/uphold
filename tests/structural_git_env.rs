@@ -26,6 +26,21 @@
 //! crate already depends on for `comment_regexp`, so the tier costs no new
 //! dependency.
 //!
+//! WHAT A CLEAN RUN IS NOT. tree-sitter recovers a tree from almost any input,
+//! so a reader that only counts what it found reports the same silence over a
+//! compliant module and over one whose parse collapsed. An unterminated string
+//! literal early in a file swallows everything after it into one ERROR node,
+//! and a `Command::new` inside that region is invisible to the walk -- the
+//! check goes green over the exact defect it was written for. `unparsed` is
+//! what makes that case loud, and the third test below is what proves the
+//! invisibility is real rather than theoretical.
+//!
+//! `comments.rs` answers this differently for the rule it carries, and the
+//! difference is the point: a forbidden-comment rule reads what error recovery
+//! recovered because comments survive it, and a comment it missed is a comment
+//! nobody wrote a rule about. A structural rule asking "does this shape appear
+//! anywhere" has no such luck -- the shape it missed is the shape it was hunting.
+//!
 //! WHAT THE CHEAP VERSION DOES NOT DO, said plainly because it is the finding.
 //! One consuming repository carries a 492-line Python checker for the same rule,
 //! and the length is not waste: it traces the `env=` argument through wrappers,
@@ -44,14 +59,48 @@
 
 use tree_sitter::{Node, Parser};
 
-/// Every call expression in `source`, with the text of the function called.
-fn calls(source: &str) -> Vec<(String, Node<'_>)> {
+/// The tree, kept alive for the nodes handed out of these readers.
+fn parse(source: &str) -> &'static tree_sitter::Tree {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_rust::LANGUAGE.into())
         .unwrap();
     let tree = parser.parse(source, None).unwrap();
-    let tree = Box::leak(Box::new(tree));
+    Box::leak(Box::new(tree))
+}
+
+/// The line of the first region the grammar could not read, if there is one.
+///
+/// A structural check over a source this returns `Some` for has established
+/// nothing about that source, and reporting it clean is the `UNKNOWN -> PASS`
+/// this repository keeps refusing one seam at a time.
+fn unparsed(source: &str) -> Option<usize> {
+    let tree = parse(source);
+    if !tree.root_node().has_error() {
+        return None;
+    }
+    let mut cursor = tree.walk();
+    let mut pending = vec![tree.root_node()];
+    let mut first = None;
+    while let Some(node) = pending.pop() {
+        if node.is_error() || node.is_missing() {
+            let line = node.start_position().row + 1;
+            first = Some(first.map_or(line, |earlier: usize| earlier.min(line)));
+        }
+        pending.extend(node.children(&mut cursor));
+    }
+    // `has_error` is true and no node carries the flag only if the grammar
+    // changed shape underneath this reader. Line 1 is the honest answer then:
+    // something is wrong and the reader cannot say where.
+    Some(first.unwrap_or(1))
+}
+
+/// Every call expression in `source`, with the text of the function called.
+///
+/// What the grammar recovered, which over a broken source is less than what is
+/// there. Every caller asks `unparsed` first.
+fn calls(source: &str) -> Vec<(String, Node<'_>)> {
+    let tree = parse(source);
 
     let mut found = Vec::new();
     let mut cursor = tree.walk();
@@ -85,6 +134,13 @@ fn enclosing_function<'a>(source: &'a str, node: Node<'a>) -> Option<String> {
 fn every_command_probe_builds_has_gits_environment_taken_away() {
     let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/probe.rs"))
         .expect("probe.rs is where the rule applies");
+
+    assert_eq!(
+        unparsed(&source),
+        None,
+        "src/probe.rs did not parse, so this check looked at a recovered fragment of it \
+         and found nothing there -- which is not the same as the rule holding"
+    );
 
     let offenders: Vec<String> = calls(&source)
         .into_iter()
@@ -128,6 +184,19 @@ fn every_command_probe_builds_has_gits_environment_taken_away() {
     );
 }
 
+/// What the check counts: constructions outside the helper.
+///
+/// One function rather than the same four lines at each call site, because the
+/// three tests below differ by the source they are handed and by nothing else.
+fn bare_constructions(source: &str) -> usize {
+    calls(source)
+        .iter()
+        .filter(|(function, _)| function == "Command::new")
+        .filter_map(|(_, node)| enclosing_function(source, *node))
+        .filter(|inside| inside != "detached")
+        .count()
+}
+
 #[test]
 fn the_check_can_tell_the_helper_from_a_bare_construction() {
     // The negative control. A test that cannot fail is worth nothing, and this
@@ -145,13 +214,12 @@ fn the_check_can_tell_the_helper_from_a_bare_construction() {
             let _ = Command::new("git").arg("worktree").current_dir(root).output();
         }
     "#;
-    let bare = calls(offending)
-        .iter()
-        .filter(|(function, _)| function == "Command::new")
-        .filter_map(|(_, node)| enclosing_function(offending, *node))
-        .filter(|inside| inside != "detached")
-        .count();
-    assert_eq!(bare, 1, "the bare construction was not found");
+    assert_eq!(
+        bare_constructions(offending),
+        1,
+        "the bare construction was not found"
+    );
+    assert_eq!(unparsed(offending), None, "the fixture itself is Rust");
 
     let clean = r#"
         fn detached(program: &str) -> Command {
@@ -162,14 +230,61 @@ fn the_check_can_tell_the_helper_from_a_bare_construction() {
             let _ = detached("git").arg("status").output();
         }
     "#;
-    let quiet = calls(clean)
-        .iter()
-        .filter(|(function, _)| function == "Command::new")
-        .filter_map(|(_, node)| enclosing_function(clean, *node))
-        .filter(|inside| inside != "detached")
-        .count();
     assert_eq!(
-        quiet, 0,
+        bare_constructions(clean),
+        0,
         "a comment or a helper call was read as a violation"
+    );
+    assert_eq!(unparsed(clean), None, "the fixture itself is Rust");
+}
+
+#[test]
+fn a_source_that_did_not_parse_is_not_a_source_that_passed() {
+    // Two sources one character apart, with opposite verdicts from the walk.
+    //
+    // The defect is the same line in both. In the first, an unterminated string
+    // literal above it collapses the rest of the file into one ERROR region and
+    // the call inside it is not a `call_expression` any more -- so the walk
+    // finds nothing, and a check that reported what it found would call this
+    // file clean. That is the whole failure mode: not a rule that says the wrong
+    // thing, a rule that has stopped being able to look and says the same silence
+    // it says when everything is in order.
+    let swallowed = r#"
+        fn earlier() {
+            let unterminated = "quote that never closes;
+        }
+        fn worktree(root: &Path) {
+            let _ = Command::new("git").arg("worktree").current_dir(root).output();
+        }
+    "#;
+    assert_eq!(
+        bare_constructions(swallowed),
+        0,
+        "the fixture no longer hides its defect from the walk, so this test has \
+         stopped standing for the case it was written for"
+    );
+    // Line 6 and not line 3: the grammar keeps lexing past the opening quote and
+    // gives up further down, so what this reports is where recovery failed
+    // rather than where the mistake is. Pinned rather than smoothed over,
+    // because a reader sent to the wrong line by a check is owed the difference.
+    assert_eq!(
+        unparsed(swallowed),
+        Some(6),
+        "the reader did not notice that it was looking at a fragment"
+    );
+
+    let repaired = r#"
+        fn earlier() {
+            let terminated = "quote that closes";
+        }
+        fn worktree(root: &Path) {
+            let _ = Command::new("git").arg("worktree").current_dir(root).output();
+        }
+    "#;
+    assert_eq!(unparsed(repaired), None, "the repaired twin is Rust");
+    assert_eq!(
+        bare_constructions(repaired),
+        1,
+        "the same defect, now that the grammar can reach it"
     );
 }
