@@ -21,6 +21,56 @@
     )
 )]
 
+// Defined BEFORE the modules, which is not style: a `macro_rules!` is in scope
+// for what follows it in source order, modules included, and one written after
+// this list would shadow the prelude's in `main.rs` alone while every other file
+// went on panicking.
+//
+// Shadowing rather than a helper function beside them. `println!` unwraps its
+// write and panics -- exit 101, on a closed pipe, out of a binary whose whole
+// contract is three exit codes -- and a helper is a rule that 114 call sites
+// have to remember and that the next line of code can silently break. What
+// cannot be forgotten is the spelling everybody already types. See `out`, which
+// is where the two failures are told apart.
+/// `println!` that reports rather than panics when the write fails.
+macro_rules! println {
+    () => { $crate::out::line($crate::out::Stream::Out, "") };
+    ($($argument:tt)*) => {
+        $crate::out::line($crate::out::Stream::Out, &format!($($argument)*))
+    };
+}
+
+/// `print!` that reports rather than panics when the write fails.
+macro_rules! print {
+    ($($argument:tt)*) => {
+        $crate::out::text($crate::out::Stream::Out, &format!($($argument)*))
+    };
+}
+
+/// `eprintln!` that reports rather than panics when the write fails.
+macro_rules! eprintln {
+    () => { $crate::out::line($crate::out::Stream::Err, "") };
+    ($($argument:tt)*) => {
+        $crate::out::line($crate::out::Stream::Err, &format!($($argument)*))
+    };
+}
+
+/// `eprint!` that reports rather than panics when the write fails.
+///
+/// Nothing in this crate spells it today, and it is here so that the day
+/// something does, it is this one. The expectation below is what says so out
+/// loud: the first use turns the attribute into an unfulfilled expectation and
+/// the build stops, pointing at a line whose fix is to delete it.
+#[expect(
+    unused_macros,
+    reason = "the prelude's eprint! panics; this one exists so a first use does not reach it"
+)]
+macro_rules! eprint {
+    ($($argument:tt)*) => {
+        $crate::out::text($crate::out::Stream::Err, &format!($($argument)*))
+    };
+}
+
 mod audit;
 mod catalog;
 mod check;
@@ -34,6 +84,7 @@ mod git;
 mod guard;
 mod hooks;
 mod install;
+mod out;
 mod pins;
 mod probe;
 mod report;
@@ -982,6 +1033,19 @@ fn main() {
             Exit::Broken
         }
     };
+    // A verdict nobody received is not a verdict. Where a write failed for a
+    // reason that is not a reader closing a pipe -- a full disk under a
+    // redirected report, a file this process may no longer write -- the findings
+    // are not wherever they were sent, and exiting on the run's own code would
+    // report a clean tree to a caller holding half a file. A reader that went
+    // away is the other case and is not this one: see `out`.
+    if let Some(problem) = out::unwritten() {
+        eprintln!(
+            "policy check error: part of this report could not be written ({problem}), so what \
+             was printed is not what this run found"
+        );
+        std::process::exit(Exit::Broken.code());
+    }
     std::process::exit(exit.code());
 }
 
