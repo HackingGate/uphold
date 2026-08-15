@@ -366,10 +366,13 @@ fn each_hook_is_run_by_the_shell_it_was_written_for() {
     let root = workspace("hook-run");
     let dir = root.join("shims").display().to_string();
     let mut ran = 0;
+    // `source HOOK; echo $PATH` exits with the status of `echo`, so a hook that
+    // failed while being sourced still left this test reading a PATH and
+    // passing. The status of the `source` is the thing under test.
     for (shell, script) in [
-        ("bash", "source HOOK; echo $PATH"),
-        ("zsh", "source HOOK; echo $PATH"),
-        ("fish", "source HOOK; echo $PATH"),
+        ("bash", "source HOOK || exit $?; echo $PATH"),
+        ("zsh", "source HOOK || exit $?; echo $PATH"),
+        ("fish", "source HOOK; or exit $status; echo $PATH"),
     ] {
         let written = links(&root, &plain_path(&root), &["--hook", shell]);
         let path = root.join(format!("hook.{shell}"));
@@ -385,6 +388,11 @@ fn each_hook_is_run_by_the_shell_it_was_written_for() {
             continue;
         };
         ran += 1;
+        assert!(
+            output.status.success(),
+            "{shell} could not source its own hook: {}",
+            stderr(&output)
+        );
         assert!(
             stdout(&output).contains(&dir),
             "{shell} sourced its hook and the shims directory is not on PATH: {} {}",

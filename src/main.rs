@@ -812,7 +812,11 @@ fn links_command(mode: &str, rest: &[OsString]) -> Result<Exit> {
         }
         index += 1;
     }
-    let directory = install::directory(explicit_dir.as_deref(), std::env::var_os("HOME"))?;
+    let directory = install::directory(
+        explicit_dir.as_deref(),
+        std::env::var_os("HOME"),
+        &std::env::current_dir()?,
+    )?;
     match mode {
         "--install" => install::install(&directory, &link_names(words)?),
         "--hook" => match words.as_slice() {

@@ -54,14 +54,26 @@ const DIRECTORY: &str = ".local/uphold/shims";
 
 /// The directory the links live in, or the one the operator named.
 ///
-/// The home directory arrives as an argument rather than being read here, so
-/// that the two answers this makes -- `--dir` wins, and an unset or empty `HOME`
-/// is a refusal rather than links under `/.local` -- are decidable without a
-/// test reaching into the process environment. Every other reader of the
-/// environment in this binary is in `main`, which is where this one is too.
-pub(crate) fn directory(explicit: Option<&Path>, home: Option<OsString>) -> Result<PathBuf> {
+/// The home directory and the working directory arrive as arguments rather than
+/// being read here, so that the answers this makes -- `--dir` wins, a relative
+/// one is resolved once, and an unset or empty `HOME` is a refusal rather than
+/// links under `/.local` -- are decidable without a test reaching into the
+/// process environment. Every other reader of the environment in this binary is
+/// in `main`, which is where these two are read.
+///
+/// Resolved to an absolute path HERE rather than at each use, because one of the
+/// uses writes the path into a file that outlives this process: `--hook --dir
+/// shims` would put the word `shims` in a shell profile, and the hook runs at
+/// every prompt in whatever directory the shell is standing in. That names a
+/// different directory per prompt, and puts an unrelated `./shims` on PATH ahead
+/// of the real commands wherever one happens to exist.
+pub(crate) fn directory(
+    explicit: Option<&Path>,
+    home: Option<OsString>,
+    working: &Path,
+) -> Result<PathBuf> {
     if let Some(named) = explicit {
-        return Ok(named.to_path_buf());
+        return Ok(working.join(named));
     }
     // `HOME=` is how a stripped environment arrives, and joining onto it puts
     // the links in `/.local/uphold/shims` -- a path the operator will not find
@@ -594,22 +606,50 @@ mod tests {
         assert!(!same_file(Path::new("/nowhere/at/all"), &dir));
     }
 
-    /// `--dir` wins, and a home directory that is not there is a refusal rather
-    /// than a link under `/.local/uphold/shims`.
+    /// `--dir` wins, a relative one is resolved against the directory the
+    /// command was run in, and a home directory that is not there is a refusal
+    /// rather than a link under `/.local/uphold/shims`.
     #[test]
     fn where_the_links_go_is_the_named_directory_or_a_home_that_exists() {
+        let working = Path::new("/srv/example/work");
         assert_eq!(
-            directory(Some(Path::new("/srv/links")), None).unwrap(),
+            directory(Some(Path::new("/srv/links")), None, working).unwrap(),
             Path::new("/srv/links")
         );
+        // Resolved once, here. A relative word written into a shell hook names
+        // a different directory at every prompt.
         assert_eq!(
-            directory(None, Some(OsString::from("/srv/example"))).unwrap(),
+            directory(Some(Path::new("shims")), None, working).unwrap(),
+            Path::new("/srv/example/work/shims")
+        );
+        assert_eq!(
+            directory(None, Some(OsString::from("/srv/example")), working).unwrap(),
             Path::new("/srv/example/.local/uphold/shims")
         );
         for absent in [None, Some(OsString::new())] {
-            let error = directory(None, absent).expect_err("no home is no directory");
+            let error = directory(None, absent, working).expect_err("no home is no directory");
             assert!(error.to_string().contains("--dir"), "{error}");
         }
+    }
+
+    /// A link whose target has moved is still ours: the tool that made it has to
+    /// be able to repair it and to take it back. Judged on `canonicalize` alone,
+    /// `--install` refused to rewrite it and `--uninstall` reported nothing of
+    /// its own to remove, leaving dead links on PATH that nothing owned.
+    #[test]
+    fn a_link_whose_target_has_moved_is_still_ours() {
+        let root = workspace("install-dangling");
+        let dir = root.join("shims");
+        let own = root.join("uphold");
+        let gone = root.join("was-here/uphold");
+        std::os::unix::fs::symlink(&gone, dir.join("git")).unwrap();
+
+        assert_eq!(links(&dir).unwrap(), vec![String::from("git")]);
+        assert!(matches!(
+            place(&dir, "git", &own).unwrap(),
+            Placed::Repointed(was) if was == gone
+        ));
+        assert_eq!(std::fs::read_link(dir.join("git")).unwrap(), own);
     }
 
     #[test]
