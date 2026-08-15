@@ -33,6 +33,7 @@ mod fixture;
 mod git;
 mod guard;
 mod hooks;
+mod install;
 mod pins;
 mod probe;
 mod report;
@@ -65,11 +66,20 @@ usage:
   uphold rules --effective [--json]  every rule this repository resolves to, and
                                      the git hooks each one fires at
   uphold shim <command> [args...]     check what a command would publish, then run it
+  uphold shim --install [COMMAND...]  link this binary under each command's name
+  uphold shim --status                what is linked, and whether PATH reaches it
+  uphold shim --uninstall             take back the links this tool made
+  uphold shim --hook bash|zsh|fish    those links on PATH only inside a policy tree
+  uphold shim --path                  the PATH a shell should have, standing here
+  uphold --version
 
 Invoked under a command's own name -- a link called `gh` on PATH ahead of the
 real one -- the binary runs that command's shim directly. That is what a
-multicall binary is for: argv[0] decides, and there is no installer.
-  uphold --version
+multicall binary is for: argv[0] decides, and there is nothing to install but a
+link. `--install` makes those links in one directory (`~/.local/uphold/shims` by
+default, `--dir` names another) so the whole seam is one PATH entry to add,
+inspect or drop. What the shim then DOES is per repository already: no policy
+where the command was typed and it execs the real one and says nothing.
 
 STAGE is one of commit-msg, pre-commit, pre-merge-commit, pre-push, manual.
 `--message FILE` forwards the commit message. At pre-push the ref lines come
@@ -292,26 +302,7 @@ fn run() -> Result<Exit> {
                  uphold rules --effective [--json]\n\n{USAGE}"
             ))),
         },
-        "shim" => {
-            // `--as-editor` is the shim re-entering itself as the command's own
-            // editor, and it is a word here rather than a variable in the
-            // environment for the reason `shim::Invoked::AsEditor` gives: an
-            // environment reaches every descendant, and the descendants of this
-            // pass include the `git` that IS this binary under a link.
-            let (invoked, rest) =
-                rest.split_first()
-                    .map_or((shim::Invoked::ByName, rest), |(leading, after)| {
-                        if leading == shim::EDITOR_FLAG {
-                            (shim::Invoked::AsEditor, after)
-                        } else {
-                            (shim::Invoked::ByName, rest)
-                        }
-                    });
-            let (name, shimmed) = rest
-                .split_first()
-                .ok_or_else(|| Fatal::new(format!("shim needs a command\n\n{USAGE}")))?;
-            shim_command(text_of(name)?, shimmed, invoked)
-        }
+        "shim" => shim_or_links(rest),
         other => Err(Fatal::new(format!(
             "unknown subcommand {other:?}\n\n{USAGE}"
         ))),
@@ -756,6 +747,149 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
     document.push(']');
     println!("{document}");
     Ok(Exit::Clean)
+}
+
+/// `uphold shim` answers two questions, and the first word says which.
+///
+/// A command name is what follows it in every other case, and no command is
+/// called `--install`. Keeping the links under the same word rather than under a
+/// subcommand of its own is not tidiness: what a link IS -- this binary reached
+/// through a name that is not its own -- is the whole of the shim, and a reader
+/// looking for where the seam comes from looks where the seam is documented.
+fn shim_or_links(rest: &[OsString]) -> Result<Exit> {
+    let (first, after) = rest
+        .split_first()
+        .ok_or_else(|| Fatal::new(format!("shim needs a command\n\n{USAGE}")))?;
+    // `--as-editor` is the shim re-entering itself as the command's own editor,
+    // and it is a word here rather than a variable in the environment for the
+    // reason `shim::Invoked::AsEditor` gives: an environment reaches every
+    // descendant, and the descendants of this pass include the `git` that IS
+    // this binary under a link.
+    if first == shim::EDITOR_FLAG {
+        let (name, shimmed) = after
+            .split_first()
+            .ok_or_else(|| Fatal::new(format!("shim needs a command\n\n{USAGE}")))?;
+        return shim_command(text_of(name)?, shimmed, shim::Invoked::AsEditor);
+    }
+    let word = text_of(first)?;
+    match word {
+        "--install" | "--uninstall" | "--status" | "--path" | "--hook" => {
+            links_command(word, after)
+        }
+        // No command is spelt with a leading dash, so an option here is a
+        // mistyped mode rather than a command to stand in front of. Read as a
+        // command it becomes `no shim declares the command "--dir"`, which names
+        // the wrong problem: the mode is what the reader meant and the order is
+        // what they got wrong.
+        other if other.starts_with('-') => Err(Fatal::new(format!(
+            "{other:?} is not one of the shim modes, and no command is called that. The mode \
+             comes first:\n\n  uphold shim --install|--status|--uninstall|--hook|--path \
+             [--dir PATH]\n\n{USAGE}"
+        ))),
+        _ => shim_command(word, after, shim::Invoked::ByName),
+    }
+}
+
+/// The links on PATH: made, taken back, reported on, or handed to a shell.
+fn links_command(mode: &str, rest: &[OsString]) -> Result<Exit> {
+    let mut explicit_dir: Option<PathBuf> = None;
+    let mut words: Vec<String> = Vec::new();
+    let mut index = 0;
+    while let Some(argument) = rest.get(index) {
+        match text_of(argument)? {
+            "--dir" => {
+                index += 1;
+                let value = rest
+                    .get(index)
+                    .ok_or_else(|| Fatal::new("--dir needs a path"))?;
+                // A path keeps its bytes; only the option NAME had to be text.
+                explicit_dir = Some(PathBuf::from(value));
+            }
+            other if other.starts_with('-') => {
+                return Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}")))
+            }
+            other => words.push(other.to_owned()),
+        }
+        index += 1;
+    }
+    let directory = install::directory(explicit_dir.as_deref(), std::env::var_os("HOME"))?;
+    match mode {
+        "--install" => install::install(&directory, &link_names(words)?),
+        "--hook" => match words.as_slice() {
+            [shell] => install::hook(shell, &directory),
+            _ => Err(Fatal::new(format!(
+                "usage: uphold shim --hook bash|zsh|fish [--dir PATH]\n\n{USAGE}"
+            ))),
+        },
+        // The rest read the directory and take no names: what is linked there is
+        // what is there, and a repository standing somewhere else has no say in
+        // it.
+        _ if !words.is_empty() => Err(Fatal::new(format!(
+            "uphold shim {mode} takes no command names -- it reads the directory. \
+             Names are for --install\n\n{USAGE}"
+        ))),
+        "--uninstall" => install::uninstall(&directory),
+        "--status" => install::status(&directory),
+        "--path" => install::shell_path(&directory),
+        other => Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}"))),
+    }
+}
+
+/// The commands to stand in front of: the ones named, or the ones this
+/// repository declares.
+///
+/// Defaulting to the policy is the only evidence there is about which commands
+/// matter, and it is deliberately not a claim that they are all of them -- the
+/// links are machine-wide and the next repository declares its own. Running this
+/// again in that tree adds what is missing and leaves the rest, which is why
+/// nothing here removes a link it did not ask for.
+fn link_names(from_argv: Vec<String>) -> Result<Vec<String>> {
+    let mut names = from_argv;
+    if names.is_empty() {
+        let working = std::env::current_dir()?;
+        let (root, policy_path) = discover(&working).ok_or_else(|| {
+            Fatal::new(format!(
+                "nothing here says which commands to stand in front of, so name them, or \
+                 run this inside a repository that declares them:\n\n  uphold shim --install \
+                 git gh\n\n{}",
+                no_policy_here(&working)
+            ))
+        })?;
+        let policy = config::load(&root, &policy_path)?;
+        names = policy
+            .shims
+            .iter()
+            .map(|shim| shim.command.clone())
+            .collect();
+        if names.is_empty() {
+            return Err(Fatal::new(format!(
+                "{} declares no `[[shim]]`, so this repository stands in front of no \
+                 command. Name the commands to link if you want them anyway",
+                policy_path.display()
+            )));
+        }
+    }
+    // A name is a file name in one directory. `--install ../../bin/git` would
+    // write a link outside the directory this command is reporting on, which is
+    // both a surprise and a link `--uninstall` would never find again.
+    for name in &names {
+        if Path::new(name)
+            .file_name()
+            .is_none_or(|file| file != name.as_str())
+        {
+            return Err(Fatal::new(format!(
+                "{name:?} is not a command name. A link is made in the shims directory \
+                 under the command's own name, and a name carrying a path separator would \
+                 put it somewhere else"
+            )));
+        }
+    }
+    // One link per name however many times it was written -- `dedup` alone drops
+    // only neighbours, and the report would say `linked` and then `already` for
+    // one file.
+    let mut seen = std::collections::BTreeSet::new();
+    names.retain(|name| seen.insert(name.clone()));
+    Ok(names)
 }
 
 fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result<Exit> {

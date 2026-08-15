@@ -11,6 +11,9 @@
 //! coupling, where a shim shelled into adjacent clones of two other
 //! repositories to find its checkers.
 //!
+//! Where those links live, and what puts them within a shell's reach, is
+//! `install`. This module is what happens once one is reached.
+//!
 //! ## Most of a spec was already data
 //!
 //! `SPEC_MATCH` and the `SPEC_*_FLAGS` were space-separated lists in a bash
@@ -1051,7 +1054,7 @@ fn real_command(name: &str, own: Option<&Path>) -> Option<PathBuf> {
         if ourselves.is_some() && file_identity(&candidate) == ourselves {
             continue;
         }
-        if is_another_shim(&candidate) {
+        if lands_on_uphold(&candidate) {
             continue;
         }
         return Some(candidate);
@@ -1075,8 +1078,13 @@ fn real_command(name: &str, own: Option<&Path>) -> Option<PathBuf> {
 /// Judged by where the link LANDS, which is the shape the install documents: a
 /// link named for the command, pointing at a binary named `uphold`. A copy
 /// renamed to something else is not caught here and cannot be -- the honest
-/// bound on this check, and the reason `install.sh` links rather than copies.
-fn is_another_shim(candidate: &Path) -> bool {
+/// bound on this check, and the reason a shim is installed as a link rather than
+/// as a copy.
+///
+/// `install` asks the same question of a name it is about to write, so a link
+/// this tool declines to touch is a link the shim declines to exec: one answer
+/// to "is that file one of ours", rather than two that agree until they do not.
+pub(crate) fn lands_on_uphold(candidate: &Path) -> bool {
     std::fs::canonicalize(candidate).is_ok_and(|target| {
         target
             .file_stem()

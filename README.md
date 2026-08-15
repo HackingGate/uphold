@@ -142,6 +142,8 @@ uphold check --coverage         # which rules here carry a principle
 uphold rules --effective        # every rule inheritance resolved to, and where each runs
 uphold guard --stage pre-push   # the guards for that git hook
 uphold shim gh pr create ...    # stand in front of a command, then exec
+uphold shim --install           # link this binary under each command's name
+uphold shim --status            # what is linked, and whether PATH reaches it
 uphold audit --for-publication  # before flipping private -> public
 
 uphold hooks --identity ../a ../b   # do these repositories declare the same hooks
@@ -181,9 +183,19 @@ is about to publish, and execs through. A pull-request body reaches a public API
 without passing a single hook; so does a branch name, an issue title, and a
 commit written under `--no-verify`. Put a link named for the command on PATH
 ahead of the real one — that is what a multicall binary is for, and why there is
-no installer. Where the body is composed in an **editor**, the shim makes itself
-the editor and checks what the editor leaves in the file when it closes — so
-there is no invocation whose published text goes unread.
+nothing to install but a link. Where the body is composed in an **editor**, the
+shim makes itself the editor and checks what the editor leaves in the file when
+it closes — so there is no invocation whose published text goes unread.
+
+`uphold shim --install` makes those links, one per command this repository
+declares, in one directory (`~/.local/uphold/shims`) the operator adds to PATH —
+so the whole seam is one entry to add, inspect or drop, and `--status` says which
+of them the shell would actually reach. `uphold shim --hook bash|zsh|fish` is the
+other install: the same links, on PATH only inside a tree that declares a policy,
+in the shape `direnv` uses. What the shim *does* is per repository either way —
+no policy where the command was typed and it execs the real one and says nothing.
+The reasoning, and what was deliberately not built:
+[ADR 0002](docs/adr/0002-the-reach-of-a-command-shim.md).
 
 **`uphold hooks --identity DIR...`** and **`uphold probe`** ask the two
 questions a single repository cannot answer about itself. A forked hook
