@@ -30,6 +30,8 @@
     reason = "a shared test module is compiled into each test binary that includes it, and each uses the part of it that it needs"
 )]
 
+pub mod syntax;
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Once;
