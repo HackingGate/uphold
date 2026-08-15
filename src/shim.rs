@@ -11,6 +11,9 @@
 //! coupling, where a shim shelled into adjacent clones of two other
 //! repositories to find its checkers.
 //!
+//! Where those links live, and what puts them within a shell's reach, is
+//! `install`. This module is what happens once one is reached.
+//!
 //! ## Most of a spec was already data
 //!
 //! `SPEC_MATCH` and the `SPEC_*_FLAGS` were space-separated lists in a bash
@@ -1051,7 +1054,7 @@ fn real_command(name: &str, own: Option<&Path>) -> Option<PathBuf> {
         if ourselves.is_some() && file_identity(&candidate) == ourselves {
             continue;
         }
-        if is_another_shim(&candidate) {
+        if lands_on_uphold(&candidate) {
             continue;
         }
         return Some(candidate);
@@ -1075,13 +1078,31 @@ fn real_command(name: &str, own: Option<&Path>) -> Option<PathBuf> {
 /// Judged by where the link LANDS, which is the shape the install documents: a
 /// link named for the command, pointing at a binary named `uphold`. A copy
 /// renamed to something else is not caught here and cannot be -- the honest
-/// bound on this check, and the reason `install.sh` links rather than copies.
-fn is_another_shim(candidate: &Path) -> bool {
-    std::fs::canonicalize(candidate).is_ok_and(|target| {
-        target
-            .file_stem()
-            .is_some_and(|stem| stem.eq_ignore_ascii_case("uphold"))
-    })
+/// bound on this check, and the reason a shim is installed as a link rather than
+/// as a copy.
+///
+/// `install` asks the same question of a name it is about to write, so a link
+/// this tool declines to touch is a link the shim declines to exec: one answer
+/// to "is that file one of ours", rather than two that agree until they do not.
+///
+/// A link whose target is GONE is still ours, and it has to be: `canonicalize`
+/// alone answered "no" the moment the binary moved -- a `cargo install` over an
+/// older path, a `target/debug` build that was cleaned -- and the whole of what
+/// this tool would then say about a directory of its own dead links is that it
+/// did not put them there. `--install` would refuse to repair them and
+/// `--uninstall` would refuse to remove them, while every shimmed command fell
+/// through to whatever PATH resolved next with nothing reporting it. So the
+/// unresolved target is read when the resolved one cannot be. Nothing in the
+/// exec path changes: `real_command` requires `is_file()` before it asks, and a
+/// dangling link is not a file.
+pub(crate) fn lands_on_uphold(candidate: &Path) -> bool {
+    std::fs::canonicalize(candidate)
+        .or_else(|_| std::fs::read_link(candidate))
+        .is_ok_and(|target| {
+            target
+                .file_stem()
+                .is_some_and(|stem| stem.eq_ignore_ascii_case("uphold"))
+        })
 }
 
 /// The command this process was re-entered for, when it was re-entered as that

@@ -8,6 +8,7 @@ namespace — that is what lets a claim in
 - [`uphold scan` — the content policy](#uphold-scan--the-content-policy)
 - [`uphold guard` — the guards](#uphold-guard--the-guards)
 - [`uphold shim` — the shims](#uphold-shim--the-shims)
+  - [The links, and what reaches them](#the-links-and-what-reaches-them)
 - [`uphold audit --for-publication`](#uphold-audit---for-publication)
 - [`uphold hooks --identity` — across repositories](#uphold-hooks---identity--across-repositories)
 - [`uphold probe` — can each hook refuse?](#uphold-probe--can-each-hook-refuse)
@@ -631,6 +632,41 @@ exists precisely to skip `commit-msg`.
 `uphold shim` stands in front of the command, checks what the invocation is
 about to publish, and **execs through**. Put a link named for the command on
 PATH ahead of the real one and `argv[0]` does the rest.
+
+### The links, and what reaches them
+
+```sh
+uphold shim --install [COMMAND...]   # one link per command, in one directory
+uphold shim --status                 # what is linked, and what PATH would run
+uphold shim --uninstall              # take the links back
+uphold shim --hook bash|zsh|fish     # those links on PATH inside a policy tree
+uphold shim --path                   # the PATH a shell should have, standing here
+```
+
+The links live in `~/.local/uphold/shims` unless `--dir` names somewhere else,
+and they live **together** so that the whole seam is one PATH entry to add,
+inspect or drop and `ls` answers "what am I standing in front of". With no
+names, `--install` links the commands this repository's `[[shim]]` tables
+declare; it never overwrites a file it did not write, and `--uninstall` removes
+only links that land on this binary. Why the reach is shaped this way, and what
+was deliberately not built:
+[ADR 0002](adr/0002-the-reach-of-a-command-shim.md).
+
+**Installed and reached are different facts.** Both `--install` and `--status`
+end by walking PATH for each name and exit `1` when the shell would reach
+something else first, naming what wins — `SHADOWED gh (/usr/local/bin/gh comes
+first)`. A link nothing reaches refuses nothing, and reporting the install as
+done over one would be this tool's own failure mode.
+
+**The hook is the direnv shape**, for whoever does not want the links on PATH
+outside a participating tree: the same links, added on entering a tree that
+declares a policy and removed on leaving it. It decides nothing itself — it runs
+`uphold shim --path` once per prompt and installs what it is handed, so the walk
+that finds a policy is the loader's and not the shell's. What is asked is
+whether a policy is *discoverable*, never what it declares; parsing it would cost
+a parse per prompt and print its refusals there too. When the binary the hook
+names is gone the hook says so, once per prompt, because the alternative is
+commands publishing with nothing standing in front of them and nothing saying so.
 
 That link is on PATH for the whole machine, while a `[[shim]]` is a line in one
 repository's policy — so **where nothing declares the command, the command
