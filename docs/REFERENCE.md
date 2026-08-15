@@ -74,6 +74,12 @@ that publishes text to a forge, and only that one.
 
 Exit codes: `0` clean, `1` violations, `2` the check could not be made.
 
+There is no fourth. A reader that closes a pipe — `uphold scan | head` — is a
+reader's decision and not a failed check: the rest of the output is dropped and
+the code stays whatever the run decided. A write that fails for any other reason
+is `2`, because the report is then not where it was sent and a caller holding
+half a file must not read `0` as a clean tree.
+
 ## `uphold scan` — the content policy
 
 Evaluates every rule over the repository's own files, using ripgrep's search

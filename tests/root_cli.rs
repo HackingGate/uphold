@@ -20,7 +20,7 @@ mod support;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 /// A rule that names a file, so a report about the WRONG tree is legible as
 /// one: an exit code alone cannot say which repository was walked.
@@ -408,4 +408,92 @@ fn a_policy_path_that_is_not_text_still_opens_the_file_it_names() {
     );
     assert_eq!(code(&output), Some(1), "{}", stderr(&output));
     assert!(stderr(&output).contains("a.txt"), "{}", stderr(&output));
+}
+
+// --- a reader that goes away -------------------------------------------------
+
+/// `uphold rules --effective | head -2` exited 101.
+///
+/// `println!` unwraps its write and panics, and Rust ignores `SIGPIPE` at
+/// startup, so a reader closing a pipe reached the macro as an ordinary `EPIPE`
+/// and left this binary exiting on a code its own contract does not define --
+/// out of a process installed in front of `git`, `gh` and `npm`. The run had
+/// already decided its verdict; what failed was writing the tail of it to
+/// somebody who had stopped listening.
+///
+/// Driven by closing the pipe rather than by spawning `head`, because `head`
+/// puts its own status where the shell reads one and this test is about the
+/// status of THIS process.
+#[test]
+fn a_reader_that_closes_the_pipe_does_not_panic_the_run() {
+    let root = workspace();
+    write_policy(&root);
+    write(&root, "a.txt", "nothing to find here\n");
+
+    for arguments in [
+        // Long output, so the writes keep coming after the reader has gone, and
+        // short output, so the case where everything was already buffered is
+        // covered by the same assertion.
+        vec!["rules", "--sets", "--json"],
+        vec!["scan"],
+    ] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
+            .args(&arguments)
+            .current_dir(&root)
+            .env_remove("UPHOLD_ALLOW")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        // The reader goes away here: the read end is dropped while the child is
+        // still starting, so every write it makes lands on a pipe nobody holds.
+        drop(child.stdout.take());
+        let status = child.wait().unwrap();
+
+        assert_eq!(
+            status.code(),
+            Some(0),
+            "{arguments:?} exited {:?}, and the three codes this tool promises do not \
+             include 101",
+            status.code()
+        );
+    }
+}
+
+/// The other write that fails, and it is not the same answer.
+///
+/// A full disk under a redirected report is not a reader's decision: the
+/// findings are not in the file, nothing downstream has them, and a run that
+/// exited on its own verdict would report a clean tree to a caller holding half
+/// of one. `/dev/full` is that condition, available on every Linux runner this
+/// suite runs on -- and skipped OUT LOUD where it is not, because a test that
+/// silently checks nothing is the shape this repository refuses.
+#[test]
+fn a_report_that_could_not_be_written_is_not_a_report() {
+    if !Path::new("/dev/full").exists() {
+        println!("/dev/full is not here, so the unwritable-report case was not run");
+        return;
+    }
+    let root = workspace();
+    write_policy(&root);
+
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["rules", "--effective"])
+        .current_dir(&root)
+        .env_remove("UPHOLD_ALLOW")
+        .stdout(Stdio::from(full))
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+
+    assert_eq!(code(&output), Some(2), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("could not be written"),
+        "the reader has to be told which half they are holding: {}",
+        stderr(&output)
+    );
 }
