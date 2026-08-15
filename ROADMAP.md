@@ -43,6 +43,15 @@ What it deliberately does **not** do, and why:
   enforces. That limit is reported, not papered over, and a repository whose
   configuration is unreadable exits 2.
 
+  Half of it is closable, and that half is the one feature the provider
+  evaluations argue for. A provider whose configuration is LOCAL and readable --
+  `deny.toml`, an `ast-grep` rule directory, a `zizmor.yml`, a `repo: local`
+  hook, a lefthook command -- can be asked whether the claimed id is defined in
+  it, which turns "a hook id somebody pinned" into "a rule this repository can
+  name". It is a much smaller feature than a rule DSL and it does not tell the
+  tool what the id MEANS; `uphold probe` is what establishes that, by driving
+  the id to a refusal. See [ADR 0005](docs/adr/0005-what-a-provider-must-answer.md).
+
 - **Detect that an installed rule never fires.** A rule that cannot match is
   switched off, and no config file shows it. This needs firing counts from the
   tiers themselves, and separating "clean tree" from "dead rule" before the
