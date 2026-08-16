@@ -1509,3 +1509,82 @@ fn the_anchor_floor_is_refused_on_a_rule_that_reads_no_anchor() {
         stderr(&output)
     );
 }
+
+#[test]
+fn a_source_that_escapes_the_repository_is_refused_and_never_read() {
+    let root = workspace();
+    anchored(&root, "");
+    // `Path::join` REPLACES the path when handed an absolute one, so without a
+    // confinement check this reads the named file and prints what it found
+    // into a finding -- a document anchor as a file-disclosure primitive.
+    for (marker, expected) in [
+        (
+            "<!-- fact-anchor: source=/etc/hostname key=a states=b -->\n",
+            "absolute path",
+        ),
+        (
+            "<!-- fact-anchor: source=../outside.yaml key=a states=b -->\n",
+            "outside this repository",
+        ),
+    ] {
+        write(&root, "README.md", marker);
+        // Present and readable, so "refused" cannot be confused with "absent".
+        write(
+            root.parent().unwrap(),
+            "outside.yaml",
+            "a: the value next door\n",
+        );
+        let output = scan(&root);
+        assert_eq!(code(&output), 1, "{}", stderr(&output));
+        let text = stderr(&output);
+        assert!(text.contains(expected), "{text}");
+        // The whole point: whatever is over there is not quoted back.
+        assert!(!text.contains("the value next door"), "{text}");
+    }
+}
+
+#[test]
+fn an_ignored_artifact_is_still_present() {
+    let root = workspace();
+    anchored(
+        &root,
+        "<!-- data-anchor: artifact=captures/*.json states=a figure nobody here owns -->\n",
+    );
+    write(&root, "captures/filing.json", "{}\n");
+    // A captured artifact is very often exactly the thing a repository declines
+    // to track. Under the walker's default ignore filters this file is invisible
+    // and the finding reads "nobody captured this", which is the reverse of the
+    // truth and unarguable from the message.
+    write(&root, ".gitignore", "captures/\n");
+    let output = scan(&root);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn an_anchor_rule_wired_to_a_git_hook_is_refused() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.anchors-resolve]
+        builtin = "anchors-resolve"
+        message = "the fact moved"
+        git.hooks = ["pre-commit"]
+
+        [rule.anchors-resolve.files]
+        glob = ["*.md"]
+"#,
+    );
+    write(&root, "README.md", "nothing anchored here\n");
+    let output = scan(&root);
+    // `seams()` routes a file-reading built-in with a hook to the guard, and
+    // no guard arm dispatches this one -- so it would be installed, counted in
+    // "N guard(s) passed", and never run.
+    assert_eq!(code(&output), 2);
+    assert!(
+        stderr(&output).contains("never dispatches it"),
+        "{}",
+        stderr(&output)
+    );
+}

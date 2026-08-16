@@ -120,7 +120,7 @@ files.glob = ["*.yml", "*.yaml"]
 
 `inherit.sets` names bundled sets to inherit; it does not add settings. There
 is no `true` shorthand — naming the sets is cheap, and what a repository
-inherits should be written in the repository. Eleven are compiled into the
+inherits should be written in the repository. Twelve are compiled into the
 binary and mirrored in [`policy/base/`](../policy/base), each **named by what
 it refuses** so the name predicts the rule list:
 

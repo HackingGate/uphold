@@ -28,6 +28,7 @@ sets = [
     "process-residue",
     "host-identity",
     "broken-links",
+    "doc-claims",
     # The guard sets. Each installs git hooks, and each is named separately
     # because taking one is a separate decision -- `stale-pins` reaches the
     # network, `invisible-characters` reads the whole tree at four stages, and
@@ -355,3 +356,38 @@ target_flags = ["--registry"]
 skip_flags = ["--dry-run"]
 scope = "public-registry"
 collect = "npm-package"
+
+# The set this repository ships, taken by this repository, because a rule whose
+# only consumer is somebody else is a rule nobody here has ever watched refuse.
+#
+# An override that NARROWS an inherited rule is the documented shape and stays
+# silent; what gets reported at load is an override that changes the CHECK, so
+# `builtin` is restated here exactly as the set ships it and only the selection
+# moves.
+#
+# EVERY EXCLUSION IS A SYNTAX EXAMPLE, which is the first trap a repository hits
+# on inheriting this set and the reason the set's own comment names it. A
+# document that DEFINES the marker carries one, against a `source=` that was
+# never meant to exist: `docs/REFERENCE.md` shows the grammar, the set file
+# argues for it, and the checker and its tests carry fixtures. Excluded by path
+# so the exemption is visible in the policy rather than buried in the checker,
+# which is the shape every other rule here uses to say "not there".
+#
+# This is not a way of switching the rule off. No other file in this tree
+# declares an anchor, so what stays selected is every document that could
+# acquire one.
+[rule.no-stale-anchored-fact]
+builtin = "anchors-resolve"
+message = """
+A document states a fact that has moved. The anchor beside the sentence names
+where the value lives, and the file it names now says something else -- or no
+longer has the key, or is gone. Re-read the source and correct the sentence, or
+drop the anchor if the sentence no longer needs the value inline.
+"""
+files.include = ["."]
+files.exclude = [
+    "docs/REFERENCE.md",
+    "policy/base/doc-claims.toml",
+    "src/anchors.rs",
+    "tests/scan_cli.rs",
+]

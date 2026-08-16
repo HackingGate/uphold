@@ -1038,6 +1038,22 @@ impl Rule {
             )));
         }
 
+        // A built-in that reads files and names a hook belongs to the guard:
+        // `seams()` routes it there, and `guard::evaluate` has no arm for this
+        // one. It would be installed, collected by `at_hook`, counted inside
+        // "N guard(s) passed", and never run -- the same defect the refusals
+        // below name, arriving through the one door they leave open.
+        if self.builtin() == Some("anchors-resolve") && !self.hooks().is_empty() {
+            return Err(Fatal::new(format!(
+                "rule {:?}: `anchors-resolve` reads the tree rather than what git is about \
+                 to do, so it runs in `uphold scan` and at no git hook. `git.hooks` here \
+                 would install a seam that never dispatches it, and the rule would be \
+                 counted as having passed.\n\
+                 Drop `git.hooks`; the `uphold-scan` hook is what runs it at a hook.",
+                self.id
+            )));
+        }
+
         // The mirror of the `files.*` refusal above, and it was missing.
         // `guard::evaluate` dispatches on the BUILT-IN name and returns "no
         // violation" for a rule that has none, so a `regexp` or `exec` rule
@@ -1234,8 +1250,8 @@ pub(crate) struct PolicyFile {
 /// it declaring any hook outside that list is refused at load: the set cannot
 /// quietly grow a `pre-commit` guard, because doing so means editing a line
 /// that says in words what the set is allowed to do. An empty list -- the
-/// default -- is a content-only set, which is what six of the seven bundled
-/// sets are.
+/// default -- is a content-only set, which is what seven of the twelve
+/// bundled sets are.
 ///
 /// It is refused in a repository's own policy and in an `inherit.paths` file.
 /// Nothing there ships compiled in, so nothing there has the problem, and a

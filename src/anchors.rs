@@ -165,32 +165,120 @@ fn resolve_artifact(anchor: &Anchor, root: &Path) -> Option<String> {
             ))
         }
     };
-    // Walking the tree is the resolver here, so a glob naming a directory that
-    // does not exist costs nothing and a glob that matches costs one hit.
-    let present = ignore::WalkBuilder::new(root)
-        .hidden(false)
-        .build()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
-        .any(|entry| {
-            entry
-                .path()
-                .strip_prefix(root)
-                .is_ok_and(|relative| glob.is_match(relative))
-        });
-    (!present).then(|| {
+    // `standard_filters(false)`, and it is the difference between this check
+    // working and this check being wrong about the case it exists for. The
+    // default walk honours `.gitignore`, `.ignore`, `.git/info/exclude` and the
+    // global ignore file -- and a captured artifact is very often exactly the
+    // thing a repository declines to track. Under the default an ignored
+    // filing that is sitting right there reads as "nobody captured this",
+    // which is the reverse of the truth and unarguable from the message.
+    //
+    // Presence on DISK is the question a data-anchor asks. That is a
+    // deliberate departure from the tracked-files denominator the content
+    // rules use, because the artifact is the one thing here this repository
+    // does not commit.
+    let mut walk = ignore::WalkBuilder::new(root);
+    walk.standard_filters(false).hidden(false);
+
+    let mut unreadable: Vec<String> = Vec::new();
+    for entry in walk.build() {
+        match entry {
+            Ok(found) => {
+                if !found.file_type().is_some_and(|kind| kind.is_file()) {
+                    continue;
+                }
+                if found
+                    .path()
+                    .strip_prefix(root)
+                    .is_ok_and(|relative| glob.is_match(relative))
+                {
+                    return None;
+                }
+            }
+            // A subtree that could not be walked is not a subtree that held
+            // nothing. Swallowing the error would turn "could not look" into
+            // "looked and it is absent", which is the one substitution this
+            // whole catalog exists to refuse.
+            Err(error) => unreadable.push(error.to_string()),
+        }
+    }
+
+    Some(if unreadable.is_empty() {
         format!(
             "names artifact {:?}, which matches no file that is present. The literal beside \
              this marker stands in for a document nobody captured, so nothing has ever \
              compared the two.",
             anchor.source
         )
+    } else {
+        format!(
+            "names artifact {:?}, and no file matched -- but {} path(s) could not be walked, \
+             so this is \"could not look\" rather than \"it is absent\": {}",
+            anchor.source,
+            unreadable.len(),
+            unreadable.join("; ")
+        )
     })
 }
 
+/// The source path, confined to the repository.
+///
+/// `Path::join` REPLACES the whole path when handed an absolute one, so a
+/// marker reading `source=/etc/shadow` resolves there rather than under the
+/// root -- and this check prints the value it read into a finding, which turns
+/// a document anchor into a file-disclosure primitive. `..` walks out the same
+/// way, and `read_to_string` follows a symlink out.
+///
+/// So: refuse the shapes that escape, then canonicalize what is left and
+/// confirm it is still underneath. `links-resolve` holds the same boundary for
+/// the same reason; a checker that reads outside the tree it was pointed at is
+/// answering about a machine rather than about a repository.
+fn confined(source: &str, root: &Path) -> Result<std::path::PathBuf, String> {
+    let relative = Path::new(source);
+    if relative.is_absolute() {
+        return Err(format!(
+            "names source {source:?}, which is an absolute path. An anchor names a file in \
+             this repository, relative to its root."
+        ));
+    }
+    let path = root.join(relative);
+    let Ok(canonical_root) = root.canonicalize() else {
+        return Err(String::from(
+            "could not resolve the repository root, so no source could be confined to it",
+        ));
+    };
+    // Canonicalizing resolves the symlink as well as the `..`, so both ways out
+    // are answered by the one comparison below.
+    match path.canonicalize() {
+        Ok(canonical) if canonical.starts_with(&canonical_root) => Ok(canonical),
+        Ok(_) => Err(format!(
+            "names source {source:?}, which resolves outside this repository. An anchor \
+             reads a record this repository keeps, and nothing else."
+        )),
+        Err(_) => Err(format!(
+            "names source {source:?}, which is not present. The document rests on a file \
+             that is gone, and says so nowhere a reader can see."
+        )),
+    }
+}
+
 fn resolve_fact(anchor: &Anchor, root: &Path) -> Option<String> {
-    let path = root.join(&anchor.source);
-    let suffix = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    // CONFINEMENT FIRST, before anything that inspects the target. Ordering is
+    // the whole of it: with the suffix test ahead of this, `/etc/hostname` was
+    // refused for having no suffix -- the right verdict reached by reading a
+    // path this check had no business resolving, and a `.yaml` outside the tree
+    // would have sailed past to be opened. An authority question is answered
+    // before the object is touched, not after.
+    let path = match confined(&anchor.source, root) {
+        Ok(path) => path,
+        Err(refusal) => return Some(refusal),
+    };
+    // The suffix is read off the DECLARED path rather than the canonical one,
+    // so the refusal a reader gets names what they wrote.
+    let suffix = Path::new(&anchor.source)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("");
     // A table rather than a branch, so a fourth format is one arm beside the
     // three that already work.
     if !matches!(suffix, "yaml" | "yml" | "toml" | "json") {
@@ -202,8 +290,8 @@ fn resolve_fact(anchor: &Anchor, root: &Path) -> Option<String> {
     }
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Some(format!(
-            "names source {:?}, which is not present. The document rests on a file that \
-             is gone, and says so nowhere a reader can see.",
+            "names source {:?}, which could not be read. The document rests on a file it \
+             cannot reach, and says so nowhere a reader can see.",
             anchor.source
         ));
     };
