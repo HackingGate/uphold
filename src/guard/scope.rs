@@ -192,12 +192,24 @@ pub(crate) fn blobs(
                  which reads the tree on purpose.",
             ));
         }
+        // Lines that came back in the shape git sends, deletions included. This
+        // is the question the check below is actually asking, and counting blobs
+        // instead of lines was the bug: a push that only DELETES refs introduces
+        // no blob by construction, so `found` is legitimately empty and looked
+        // exactly like stdin nobody could parse.
+        let mut understood = 0usize;
         for line in push_refs.lines() {
             let fields: Vec<&str> = line.split_whitespace().collect();
             let [_, local_sha, _, remote_sha, ..] = fields.as_slice() else {
                 continue;
             };
+            understood += 1;
             // An all-zero local sha is a deletion. Nothing is being introduced.
+            //
+            // git spells the local ref of a deletion as the literal `(delete)`
+            // and its local sha as forty zeroes, so this arm is the whole of a
+            // `git push origin :refs/tags/v1` -- one line, understood, carrying
+            // nothing to scan. That is a determinate empty, not an unknown.
             if local_sha.chars().all(|character| character == '0') {
                 continue;
             }
@@ -211,7 +223,11 @@ pub(crate) fn blobs(
         // A push line the hook could not parse is not an empty push. Falling
         // through to the index here would scan the local branch instead of the
         // one being sent, and report on it as though it were.
-        if found.is_empty() && !push_refs.trim().is_empty() {
+        //
+        // "No line parsed" is what that argument is about, and it is not the
+        // same claim as "no blob was introduced". Keeping the two apart is what
+        // lets a deletion through while a garbled stdin still refuses.
+        if understood == 0 && !push_refs.trim().is_empty() {
             return Err(Fatal::new(
                 "pre-push: no ref line could be read from stdin; refusing to scan the \
                  working tree instead of what is being pushed",

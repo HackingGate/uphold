@@ -1005,3 +1005,134 @@ fn a_personal_textconv_cannot_blind_the_listing_the_scan_starts_from() {
         stderr(&output)
     );
 }
+
+/// A push that only DELETES refs carries no content, and that is an answer.
+///
+/// `git push origin :refs/tags/v1` sends one ref line whose local ref is the
+/// literal `(delete)` and whose local sha is forty zeroes. No blob reaches the
+/// remote, so there is nothing for a content rule to have an opinion about.
+///
+/// Until this test the emptiness was counted in BLOBS rather than in lines, so
+/// a deletion was indistinguishable from stdin nobody could parse and the guard
+/// exited 2 -- "could not look" -- at the one push where it could look perfectly
+/// well and there was simply nothing there. With `core.hooksPath` routing git at
+/// a hook that calls this binary, that made deleting a remote ref impossible:
+/// no rule id in the output, so nothing for `UPHOLD_ALLOW` to name, and no way
+/// through but `--no-verify` or the forge's own API.
+#[test]
+fn a_push_that_only_deletes_refs_has_nothing_to_scan_and_says_so() {
+    use std::io::Write;
+
+    let root = repository(IN_FILES);
+    // The tree holds a zero-width space, so a guard that fell through to the
+    // working tree here would refuse. Passing means it read the push instead.
+    write(&root, "a.txt", "one\u{200b}\n");
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    let deleted = head(&root);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["guard", "--stage", "pre-push"])
+        .current_dir(&root)
+        .env_remove("UPHOLD_ALLOW")
+        .env_remove("PRE_COMMIT_TO_REF")
+        .env_remove("PRE_COMMIT_SOURCE")
+        .env_remove("PRE_COMMIT_FROM_REF")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(
+        child.stdin.as_mut().unwrap(),
+        "(delete) {ZERO} refs/tags/v0.1.1 {deleted}"
+    )
+    .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+/// A deletion beside a real ref still scans the real one.
+///
+/// The fix counts understood lines rather than blobs, and the way to get that
+/// wrong in the other direction is to let one deletion excuse the whole push.
+#[test]
+fn a_deletion_beside_a_real_ref_still_scans_the_real_ref() {
+    use std::io::Write;
+
+    let root = repository(IN_FILES);
+    write(&root, "a.txt", "one\u{200b}\n");
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    let pushed = head(&root);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["guard", "--stage", "pre-push"])
+        .current_dir(&root)
+        .env_remove("UPHOLD_ALLOW")
+        .env_remove("PRE_COMMIT_TO_REF")
+        .env_remove("PRE_COMMIT_SOURCE")
+        .env_remove("PRE_COMMIT_FROM_REF")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(
+        child.stdin.as_mut().unwrap(),
+        "(delete) {ZERO} refs/tags/v0.1.1 {pushed}\nrefs/heads/main {pushed} refs/heads/main {ZERO}"
+    )
+    .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("prevent-unusual-unicode-in-files"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// Stdin that nobody could parse still refuses, which is the half being kept.
+///
+/// The check this change rewrote exists so that a ref line in a shape this
+/// binary does not understand cannot fall through to the index and be reported
+/// on as though it were the push. Counting understood lines has to preserve
+/// that, or the fix for the deletion case is a hole.
+#[test]
+fn stdin_that_parses_as_no_ref_line_at_all_still_refuses() {
+    use std::io::Write;
+
+    let root = repository(IN_FILES);
+    write(&root, "a.txt", "one\u{200b}\n");
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["guard", "--stage", "pre-push"])
+        .current_dir(&root)
+        .env_remove("UPHOLD_ALLOW")
+        .env_remove("PRE_COMMIT_TO_REF")
+        .env_remove("PRE_COMMIT_SOURCE")
+        .env_remove("PRE_COMMIT_FROM_REF")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Fewer than the four fields git sends. A line WITH four is taken as a ref
+    // line whatever the words are: `not a ref line` gets as far as
+    // `git ls-tree a` and refuses there instead. That is still exit 2 and still
+    // fail-closed, but it is a different sentence, and this test is about the
+    // one the rewritten check owns.
+    writeln!(child.stdin.as_mut().unwrap(), "garbage").unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no ref line could be read from stdin"),
+        "{}",
+        stderr(&output)
+    );
+}
