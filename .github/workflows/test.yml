@@ -17,9 +17,14 @@ permissions:
 # The lint profile in Cargo.toml denies the whole pedantic/nursery set for this
 # crate's own code; RUSTFLAGS carries the same answer into the dependency builds
 # and into the jobs below that build a throwaway consumer rather than this tree.
+#
+# LEFTHOOK_VERSION is here rather than beside each install because two jobs
+# install the same binary, and a version written twice is a version that only
+# ever agrees by accident.
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  LEFTHOOK_VERSION: 2.1.9
 
 jobs:
   unit-tests:
@@ -47,7 +52,20 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      # The debug target directory this job fills is the same one the three
+      # `hooks` legs fill: same toolchain, same lockfile, same profile. Four
+      # caches of it were four ~124MB uploads per commit that evicted each
+      # other, so they share one key and this job is the only writer -- a
+      # reader that also wrote would race the other three for the same slot and
+      # win with whatever subset of the tree its own commands happened to build.
+      #
+      # Written from main only. A pull request restores that cache through the
+      # prefix restore-key and builds the delta; letting it write back would
+      # spend the upload on a key nothing else will ever ask for.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: stable-debug
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The same preflight a contributor runs, on the runner that is supposed to
       # satisfy it. A manifest nothing reads goes stale the first time a tool is
@@ -100,9 +118,12 @@ jobs:
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
 
+      # Its own key, because the compiler differs from the stable jobs' and a
+      # target directory built by one is not readable by the other.
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv-${{ steps.msrv.outputs.version }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # `check`, not `test`: what MSRV promises is that the crate and its pinned
       # dependency graph COMPILE on that compiler. Behaviour is the stable job's
@@ -128,12 +149,16 @@ jobs:
         with:
           components: llvm-tools-preview
 
+      # Also its own key: this tree is built instrumented, so it shares nothing
+      # with the stable jobs' target directory beyond the dependency sources.
       - uses: Swatinem/rust-cache@v2
         with:
           key: coverage
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - uses: taiki-e/install-action@cargo-llvm-cov
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,nextest
 
       # nextest gives each test its own process, which is what makes the
       # integration suites count: they spawn `uphold` rather than calling
@@ -181,9 +206,14 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      # Read-only, against the key the `engine` job writes. All three legs build
+      # the same debug tree with the same toolchain, so three private copies of
+      # it bought nothing but eviction pressure; and a leg that wrote back would
+      # be racing the other two and `engine` for one slot.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.tool }}
+          shared-key: stable-debug
+          save-if: 'false'
 
       # ── pre-commit (Python) ──────────────────────────────────────
       - if: matrix.tool == 'pre-commit'
@@ -203,9 +233,25 @@ jobs:
         with:
           go-version: '>=1.26'
 
+      # The published binary rather than `go install`, which spent about a
+      # minute and a half compiling lefthook from source on every run to
+      # produce the same program. The download is checked against the
+      # checksum file the release ships, so what lands on PATH is still
+      # established rather than assumed.
+      #
+      # Into a temporary directory, not the workspace: the hooks this job then
+      # runs walk the tree, and a downloaded archive sitting in it is a file
+      # the content policy would be asked about.
+      - if: matrix.tool == 'lefthook'
+        name: lefthook ${{ env.LEFTHOOK_VERSION }}
+        run: ./scripts/install_lefthook.sh
+
+      # actionlint stays a `go install`, and unpinned. Nothing watches a version
+      # written in a workflow file -- Dependabot reads no such pin and
+      # `no-stale-hook-pins` reads hook configs -- so a number here would be one
+      # more copy going stale in the direction that passes.
       - if: matrix.tool == 'lefthook'
         run: |
-          go install github.com/evilmartians/lefthook/v2@v2.1.9
           go install github.com/rhysd/actionlint/cmd/actionlint@latest
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
@@ -272,10 +318,16 @@ jobs:
       - if: matrix.tool == 'lefthook'
         uses: dtolnay/rust-toolchain@stable
 
+      #
+      # Read-only against the release key the `consumer` job writes: both build
+      # `--release` from this same tree with this same toolchain, so the second
+      # copy of that cache was a second 72MB upload of a directory that already
+      # existed.
       - if: matrix.tool == 'lefthook'
         uses: Swatinem/rust-cache@v2
         with:
-          key: parity-${{ matrix.tool }}
+          shared-key: stable-release
+          save-if: 'false'
 
       # Both are on PyPI and both are installed the same way here, deliberately:
       # what differs between them is what this job is measuring, so nothing else
@@ -298,9 +350,10 @@ jobs:
           go-version: '>=1.26'
 
       - if: matrix.tool == 'lefthook'
+        run: ./scripts/install_lefthook.sh
+
+      - if: matrix.tool == 'lefthook'
         run: |
-          go install github.com/evilmartians/lefthook/v2@v2.1.9
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
           cargo build --release
           echo "$GITHUB_WORKSPACE/target/release" >> "$GITHUB_PATH"
 
@@ -323,6 +376,15 @@ jobs:
       # rather than pinning a release because what is under test is this
       # commit's reconcile against this commit's manifest.
       - uses: dtolnay/rust-toolchain@stable
+
+      # This job had no cache at all, so it paid a cold release build -- over
+      # two minutes -- on every run, while the parity job next to it kept a warm
+      # copy of the same directory. One key now, written here and read there.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: stable-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - run: cargo build --release
 
       # A hook is only proven by the path a consumer takes: a repository that

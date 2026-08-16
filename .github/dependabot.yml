@@ -1,3 +1,9 @@
+# Every pull request this file raises runs the full Test workflow: eleven jobs,
+# three hook runners, three consumer harnesses. Ungrouped, a quiet week of six
+# patch bumps is six of those. The groups below batch the updates that are read
+# the same way -- a compatible bump, reviewed as "did CI stay green" -- and
+# leave majors on their own, because those are read one at a time and a batch
+# that fails tells you nothing about which member failed.
 version: 2
 updates:
   # Cargo.toml and Cargo.lock are the crate's dependency authority. Keep both
@@ -6,6 +12,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      cargo-compatible:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # The wheel build has no Python runtime dependencies, but maturin is still a
   # build dependency declared in this root PEP 621 pyproject.toml.
@@ -14,20 +24,35 @@ updates:
     schedule:
       interval: "weekly"
 
+  # Grouped without an update-type filter, unlike cargo above. Every `uses:` in
+  # this repository pins a major tag, so nearly every bump Dependabot can see
+  # here IS a major and a filter on compatible ones would group nothing. What
+  # makes that safe to batch is that the workflow under review is the workflow
+  # doing the reviewing: an action that breaks fails the run that proposed it.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
 
   # The hook pins were the one set of versions nothing watched: no ecosystem
   # entry raised a pull request for them, so a pin only moved when somebody
   # edited it by hand -- which is how one got bumped to a tag that did not
   # exist. `no-stale-hook-pins` is the guard that fails loudly when this
   # updater goes quiet; this is the updater it watches.
+  #
+  # Grouped for the same reason as the actions above: the pins move as a set,
+  # and one pull request that runs the three hook runners once is the same
+  # evidence as four that each run them again.
   - package-ecosystem: "pre-commit"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      hook-pins:
+        patterns: ["*"]
 
   # NO LEFTHOOK ENTRY, AND THAT IS AN EXCLUSION RATHER THAN AN OVERSIGHT.
   #
