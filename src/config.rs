@@ -57,7 +57,8 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
         "captured-fixtures",
         include_str!("../policy/base/captured-fixtures.toml"),
     ),
-    // The guard sets. They install git hooks, which the six above do not, and
+    ("doc-claims", include_str!("../policy/base/doc-claims.toml")),
+    // The guard sets. They install git hooks, which the seven above do not, and
     // each is a separate name because taking one is a separate decision: what
     // it costs, when it runs, and what it will refuse are different arguments
     // for each. The `[set] stages` header in every one of them is the ceiling
@@ -303,8 +304,9 @@ impl CommandWhere {
 pub(crate) struct Inherit {
     /// Bundled rule sets, by what they refuse: `process-residue`,
     /// `credentials`, `unmanaged-pins`, `host-identity`, `broken-links`,
-    /// `captured-fixtures`. [`BUNDLED`] is the list; this is a reader's copy of
-    /// it, and the error a wrong name gets is built from the array.
+    /// `captured-fixtures`, `doc-claims`. [`BUNDLED`] is the list; this is a
+    /// reader's copy of it, and the error a wrong name gets is built from the
+    /// array.
     #[serde(default)]
     pub sets: Vec<String>,
     /// Extra policy files, repository-relative. Merged after the bundled sets
@@ -496,6 +498,17 @@ pub(crate) struct Rule {
     #[serde(default)]
     pub allow_outside_repo: Option<bool>,
 
+    /// anchors-resolve: refuse a selection that carries no anchor at all.
+    ///
+    /// Deliberately not the mirror of `require_any_link`, and the asymmetry is
+    /// the point. There, zero links means the selection was narrowed out from
+    /// under the rule. Here, zero anchors is the GOAL STATE -- every fact
+    /// rendered or read at runtime, no sentence needing one pinned -- so a
+    /// floor on by default would refuse the best outcome the check can
+    /// produce. A repository whose anchors are load-bearing opts in.
+    #[serde(default)]
+    pub require_any_anchor: Option<bool>,
+
     // -- settings the built-ins read ----------------------------------------
     //
     // These were environment variables, every one of them, because git-guards
@@ -593,6 +606,7 @@ impl Rule {
             command: None,
             require_any_link: None,
             allow_outside_repo: None,
+            require_any_anchor: None,
             private_owners: None,
             private_owners_from: None,
             public_repos: None,
@@ -710,6 +724,10 @@ impl Rule {
 
     pub(crate) fn allow_outside_repo(&self) -> bool {
         self.allow_outside_repo.unwrap_or(false)
+    }
+
+    pub(crate) fn require_any_anchor(&self) -> bool {
+        self.require_any_anchor.unwrap_or(false)
     }
 
     /// The built-in parameters this rule writes, by field name.
@@ -1007,6 +1025,35 @@ impl Rule {
             }
         }
 
+        // The same mechanism for the anchor floor, written the same way rather
+        // than folded in with the link knobs above: they are separate built-ins
+        // and a shared refusal would name the wrong one in its message, which
+        // is the whole failure mode this class of check exists to avoid.
+        if self.builtin() != Some("anchors-resolve") && self.require_any_anchor.is_some() {
+            return Err(Fatal::new(format!(
+                "rule {:?}: `require_any_anchor` is read by the `anchors-resolve` built-in \
+                 and nothing else -- on this rule the field would be read by nothing and \
+                 would look like configuration that works",
+                self.id
+            )));
+        }
+
+        // A built-in that reads files and names a hook belongs to the guard:
+        // `seams()` routes it there, and `guard::evaluate` has no arm for this
+        // one. It would be installed, collected by `at_hook`, counted inside
+        // "N guard(s) passed", and never run -- the same defect the refusals
+        // below name, arriving through the one door they leave open.
+        if self.builtin() == Some("anchors-resolve") && !self.hooks().is_empty() {
+            return Err(Fatal::new(format!(
+                "rule {:?}: `anchors-resolve` reads the tree rather than what git is about \
+                 to do, so it runs in `uphold scan` and at no git hook. `git.hooks` here \
+                 would install a seam that never dispatches it, and the rule would be \
+                 counted as having passed.\n\
+                 Drop `git.hooks`; the `uphold-scan` hook is what runs it at a hook.",
+                self.id
+            )));
+        }
+
         // The mirror of the `files.*` refusal above, and it was missing.
         // `guard::evaluate` dispatches on the BUILT-IN name and returns "no
         // violation" for a rule that has none, so a `regexp` or `exec` rule
@@ -1203,8 +1250,8 @@ pub(crate) struct PolicyFile {
 /// it declaring any hook outside that list is refused at load: the set cannot
 /// quietly grow a `pre-commit` guard, because doing so means editing a line
 /// that says in words what the set is allowed to do. An empty list -- the
-/// default -- is a content-only set, which is what five of the six bundled sets
-/// are.
+/// default -- is a content-only set, which is what seven of the twelve
+/// bundled sets are.
 ///
 /// It is refused in a repository's own policy and in an `inherit.paths` file.
 /// Nothing there ships compiled in, so nothing there has the problem, and a

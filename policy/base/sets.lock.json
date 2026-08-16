@@ -403,6 +403,25 @@
   {
     "rules": [
       {
+        "builtin": "anchors-resolve",
+        "files": {
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-stale-anchored-fact",
+        "message": "A document states a fact that has moved. The anchor beside the sentence names\nwhere the value lives, and the file it names now says something else -- or no\nlonger has the key, or is gone. Re-read the source and correct the sentence, or\ndrop the anchor if the sentence no longer needs the value inline. The document\nwas true when it was written, which is why nothing has failed until now.\n"
+      }
+    ],
+    "set": "doc-claims",
+    "stages": []
+  },
+  {
+    "rules": [
+      {
         "builtin": "prevent-ai-author",
         "git": {
           "hooks": [

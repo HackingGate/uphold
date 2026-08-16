@@ -1301,3 +1301,290 @@ fn a_rule_that_only_stands_in_front_of_a_command_names_the_shim_seam() {
         stdout(&human)
     );
 }
+
+// -- anchors-resolve --------------------------------------------------------
+//
+// The control comes first, and it is not a formality: if a document whose
+// anchors all agree is not accepted, every refusal below it is vacuous. Both
+// verdicts are driven here because a check observed saying only yes has not
+// been observed.
+
+/// A repository with one record and one document that leans on it.
+fn anchored(root: &Path, document: &str) {
+    write(
+        root,
+        "policy/principles.toml",
+        r#"
+        [rule.anchors-resolve]
+        builtin = "anchors-resolve"
+        message = "the fact moved"
+
+        [rule.anchors-resolve.files]
+        glob = ["*.md"]
+"#,
+    );
+    write(
+        root,
+        "config/svc.yaml",
+        "read_path: captured\nscope:\n  - read_only\n  - trade\nenabled: true\nabsent: null\n",
+    );
+    write(root, "README.md", document);
+}
+
+#[test]
+fn every_shape_of_agreeing_anchor_is_accepted() {
+    let root = workspace();
+    anchored(
+        &root,
+        // A string, a list index, a boolean, and a null -- the last because
+        // `absent: null` is a deliberate answer a record gives, and reporting
+        // it as a MISSING KEY would be the fail-open this check exists to name.
+        "<!-- fact-anchor: source=config/svc.yaml key=read_path states=captured -->\n\
+         <!-- fact-anchor: source=config/svc.yaml key=scope.1 states=trade -->\n\
+         <!-- fact-anchor: source=config/svc.yaml key=enabled states=true -->\n\
+         <!-- fact-anchor: source=config/svc.yaml key=absent states=none -->\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn a_value_that_moved_is_refused_and_names_both_readings() {
+    let root = workspace();
+    anchored(
+        &root,
+        "<!-- fact-anchor: source=config/svc.yaml key=read_path states=api -->\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1);
+    let text = stderr(&output);
+    // Both sides, because the reader of this failure did not write the sentence
+    // and has to decide which of the two is the thing that is wrong.
+    assert!(text.contains(r#"states "api" for read_path"#), "{text}");
+    assert!(text.contains(r#"which says "captured""#), "{text}");
+    assert!(text.contains("README.md:1"), "{text}");
+}
+
+#[test]
+fn a_key_that_is_gone_is_refused_as_a_missing_key_not_a_moved_value() {
+    let root = workspace();
+    anchored(
+        &root,
+        "<!-- fact-anchor: source=config/svc.yaml key=renamed states=captured -->\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1);
+    assert!(
+        stderr(&output).contains("which does not exist there"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_source_that_is_gone_is_refused() {
+    let root = workspace();
+    anchored(
+        &root,
+        "<!-- fact-anchor: source=config/departed.yaml key=read_path states=captured -->\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1);
+    assert!(
+        stderr(&output).contains("which is not present"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_data_anchor_is_required_to_be_present_and_never_compared() {
+    let root = workspace();
+    anchored(
+        &root,
+        "<!-- data-anchor: artifact=captures/*.json states=a figure nobody here owns -->\n",
+    );
+    let missing = scan(&root);
+    assert_eq!(code(&missing), 1);
+    assert!(
+        stderr(&missing).contains("matches no file that is present"),
+        "{}",
+        stderr(&missing)
+    );
+
+    // Present is the whole test. The artifact's CONTENTS disagree with the
+    // stated text in every way a string can, and that is not a finding: this
+    // repository does not get to say what a captured document contains.
+    write(&root, "captures/filing.json", "{\"unrelated\": 1}\n");
+    assert_eq!(code(&scan(&root)), 0);
+}
+
+#[test]
+fn a_stated_value_containing_spaces_is_compared_whole() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.anchors-resolve]
+        builtin = "anchors-resolve"
+        message = "the fact moved"
+
+        [rule.anchors-resolve.files]
+        glob = ["*.md"]
+"#,
+    );
+    write(&root, "config/svc.yaml", "note: the issuer's own figure\n");
+    // Stopping at the first space would compare "the" to "the", pass, and hide
+    // every disagreement after the first word.
+    write(
+        &root,
+        "README.md",
+        "<!-- fact-anchor: source=config/svc.yaml key=note states=the issuer's own guess -->\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1);
+    assert!(
+        stderr(&output).contains(r#"which says "the issuer's own figure""#),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_document_with_no_anchor_passes_and_the_floor_is_opt_in() {
+    let root = workspace();
+    anchored(&root, "prose that anchors nothing at all\n");
+    // Zero is the goal state, not a narrowed selection: every fact rendered or
+    // read at runtime, no sentence needing one pinned. Unlike `links-resolve`,
+    // the floor here is off unless a repository says otherwise.
+    assert_eq!(code(&scan(&root)), 0);
+
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.anchors-resolve]
+        builtin = "anchors-resolve"
+        message = "the fact moved"
+        require_any_anchor = true
+
+        [rule.anchors-resolve.files]
+        glob = ["*.md"]
+"#,
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1);
+    assert!(
+        stderr(&output).contains("found no anchor"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn the_anchor_floor_is_refused_on_a_rule_that_reads_no_anchor() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.links-resolve]
+        builtin = "links-resolve"
+        message = "fix the link"
+        require_any_anchor = true
+
+        [rule.links-resolve.files]
+        glob = ["*.md"]
+"#,
+    );
+    write(&root, "README.md", "[a](README.md)\n");
+    let output = scan(&root);
+    // Config that is accepted and does nothing is the failure this repository
+    // exists to make loud, so the knob is refused where nothing reads it.
+    assert_eq!(code(&output), 2);
+    assert!(
+        stderr(&output).contains("require_any_anchor"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_source_that_escapes_the_repository_is_refused_and_never_read() {
+    let root = workspace();
+    anchored(&root, "");
+    // `Path::join` REPLACES the path when handed an absolute one, so without a
+    // confinement check this reads the named file and prints what it found
+    // into a finding -- a document anchor as a file-disclosure primitive.
+    for (marker, expected) in [
+        (
+            "<!-- fact-anchor: source=/etc/hostname key=a states=b -->\n",
+            "absolute path",
+        ),
+        (
+            "<!-- fact-anchor: source=../outside.yaml key=a states=b -->\n",
+            "outside this repository",
+        ),
+    ] {
+        write(&root, "README.md", marker);
+        // Present and readable, so "refused" cannot be confused with "absent".
+        write(
+            root.parent().unwrap(),
+            "outside.yaml",
+            "a: the value next door\n",
+        );
+        let output = scan(&root);
+        assert_eq!(code(&output), 1, "{}", stderr(&output));
+        let text = stderr(&output);
+        assert!(text.contains(expected), "{text}");
+        // The whole point: whatever is over there is not quoted back.
+        assert!(!text.contains("the value next door"), "{text}");
+    }
+}
+
+#[test]
+fn an_ignored_artifact_is_still_present() {
+    let root = workspace();
+    anchored(
+        &root,
+        "<!-- data-anchor: artifact=captures/*.json states=a figure nobody here owns -->\n",
+    );
+    write(&root, "captures/filing.json", "{}\n");
+    // A captured artifact is very often exactly the thing a repository declines
+    // to track. Under the walker's default ignore filters this file is invisible
+    // and the finding reads "nobody captured this", which is the reverse of the
+    // truth and unarguable from the message.
+    write(&root, ".gitignore", "captures/\n");
+    let output = scan(&root);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn an_anchor_rule_wired_to_a_git_hook_is_refused() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.anchors-resolve]
+        builtin = "anchors-resolve"
+        message = "the fact moved"
+        git.hooks = ["pre-commit"]
+
+        [rule.anchors-resolve.files]
+        glob = ["*.md"]
+"#,
+    );
+    write(&root, "README.md", "nothing anchored here\n");
+    let output = scan(&root);
+    // `seams()` routes a file-reading built-in with a hook to the guard, and
+    // no guard arm dispatches this one -- so it would be installed, counted in
+    // "N guard(s) passed", and never run.
+    assert_eq!(code(&output), 2);
+    assert!(
+        stderr(&output).contains("never dispatches it"),
+        "{}",
+        stderr(&output)
+    );
+}
