@@ -110,6 +110,7 @@ impl<'a> Scan<'a> {
                     }
                     failures.extend(match rule.builtin().unwrap_or_default() {
                         "links-resolve" => self.link_failures(rule)?,
+                        "anchors-resolve" => self.anchor_failures(rule)?,
                         // A guard built-in's `[rule.files]` is not read by
                         // nothing: `guard::scope::in_file_scope` reads it, to
                         // scope the guard to part of the tree. So the question
@@ -604,6 +605,71 @@ impl<'a> Scan<'a> {
                 format!(
                     "selected {} file(s) and found no resolvable link; the selection no longer \
                      covers anything",
+                    files.len()
+                ),
+            )]);
+        }
+
+        if hits.is_empty() {
+            return Ok(Vec::new());
+        }
+        let body = if self.redact() {
+            crate::report::redacted_body(&hits)
+        } else {
+            detailed.join("\n")
+        };
+        Ok(vec![Failure::new(&rule.id, rule.message(), body)])
+    }
+
+    // -- anchors ------------------------------------------------------------
+
+    /// Fail every anchor whose source is gone, whose key is gone, or whose
+    /// stated value has moved.
+    ///
+    /// Three findings, one defect in three costumes: the document is wrong in
+    /// exactly the same way in each, and reads exactly as confident.
+    fn anchor_failures(&self, rule: &Rule) -> Result<Vec<Failure>> {
+        let files = self.select(rule)?;
+        let mut hits: Vec<Hit> = Vec::new();
+        let mut detailed: Vec<String> = Vec::new();
+        let mut checked = 0usize;
+
+        for relative in &files {
+            let text = match std::fs::read_to_string(self.root.join(relative)) {
+                Ok(text) => text,
+                // Bytes that are not text declare no anchor, and a sweep that
+                // died on the first PNG would report a clean tree by never
+                // reaching the rest. An I/O failure is a file NOBODY READ,
+                // which is the different fact `link_failures` separates here
+                // for the same reason.
+                Err(error) if error.kind() == std::io::ErrorKind::InvalidData => continue,
+                Err(error) => return Err(Fatal::at(&self.root.join(relative), error)),
+            };
+            for anchor in crate::anchors::parse(&text) {
+                checked += 1;
+                let Some(finding) = crate::anchors::resolve(&anchor, self.root) else {
+                    continue;
+                };
+                hits.push(Hit {
+                    path: relative.clone(),
+                    line: Some(anchor.line),
+                    text: anchor.source.clone(),
+                });
+                detailed.push(format!("{relative}:{}: {finding}", anchor.line));
+            }
+        }
+
+        if rule.require_any_anchor() && checked == 0 {
+            // Off by default, and the asymmetry with `require_any_link` is
+            // stated where the field is declared: zero anchors is the goal
+            // state here, not a narrowed selection. This fires only for a
+            // repository that has decided otherwise.
+            return Ok(vec![Failure::new(
+                &rule.id,
+                rule.message(),
+                format!(
+                    "selected {} file(s) and found no anchor; this repository declared its \
+                     anchors load-bearing with `require_any_anchor`",
                     files.len()
                 ),
             )]);

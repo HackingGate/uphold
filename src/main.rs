@@ -71,6 +71,7 @@ macro_rules! eprint {
     };
 }
 
+mod anchors;
 mod audit;
 mod catalog;
 mod check;

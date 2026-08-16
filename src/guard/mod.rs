@@ -58,6 +58,12 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     // hook -- but it is a check compiled in here with no regex that expresses
     // it, which is exactly what `builtin` names. It was `kind = "link"`.
     "links-resolve",
+    // The same shape one step further in: `links-resolve` resolves a path a
+    // reader would CLICK, this resolves a VALUE a reader would believe. Also
+    // scan-dispatched, and also expressible by no regex -- the comparison is
+    // against a parsed YAML/TOML/JSON document, which is by definition a check
+    // a content search cannot make.
+    "anchors-resolve",
 ];
 
 /// The moment a guard is being asked about.
@@ -409,9 +415,9 @@ mod tests {
         // config can declare, validate, install, and never run.
         let source = include_str!("mod.rs");
         for id in EVERY_BUILTIN {
-            if *id == "links-resolve" {
-                // Reads the tree rather than git, so `scan` dispatches it and
-                // this match never sees it.
+            if matches!(*id, "links-resolve" | "anchors-resolve") {
+                // Read the tree rather than git, so `scan` dispatches them and
+                // this match never sees them.
                 continue;
             }
             assert!(
@@ -419,7 +425,7 @@ mod tests {
                 "{id} is in EVERY_BUILTIN with no dispatch arm"
             );
         }
-        assert_eq!(EVERY_BUILTIN.len(), 13);
+        assert_eq!(EVERY_BUILTIN.len(), 14);
     }
 
     #[test]

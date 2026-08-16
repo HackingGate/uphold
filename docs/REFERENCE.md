@@ -132,6 +132,7 @@ it refuses** so the name predicts the rule list:
 | `host-identity` | the machine the author is standing on — its username, home path, hostname and default route, read at scan time and searched for in content |
 | `broken-links` | a markdown link naming a path that does not exist or leaving the repository, and a selection that yields no links at all |
 | `captured-fixtures` | a test fixture holding non-ASCII content, as the one signal that a capture from a live upstream survives redaction |
+| `doc-claims` | a document whose anchored fact disagrees with the record it names — a value the record does not hold, a key that is not there, a source or captured artifact that is absent |
 | `commit-message-residue` | authorship markers and unusual characters in the message a commit records — **installs `commit-msg`** |
 | `unreviewed-history` | a merge made locally rather than through a pull request — **installs `pre-commit` and `pre-merge-commit`** |
 | `invisible-characters` | characters that draw nothing, in committed content and in the paths that carry it — **installs four stages**, and reads the whole tree at each |
@@ -161,6 +162,33 @@ rather than a guard that quietly reads the answer off `origin`, which is the
 remote most likely to be the thing that went wrong. `allowed_owners` or
 `allowed_repos` satisfy it too: naming the destinations is a way of saying who
 you are.
+
+`doc-claims` is the one set whose rule needs the author to write something
+beside the prose, so its grammar is here rather than only in the set. A
+document that leans on a value carries a marker naming where the value lives:
+
+```markdown
+<!-- fact-anchor: source=config/services/db.yaml key=read_path states=api -->
+#    fact-anchor: source=config/accounts.toml key=sbi.tier states=broker
+//   data-anchor: artifact=captures/*/filing.json states=the issuer's own NAV
+```
+
+`source` is a repository-relative YAML, TOML or JSON file and `key` a dotted
+path into it, where an integer segment indexes a list and a negative one counts
+from the end. `states` is the value the prose relies on and **runs to the end of
+the marker** — a stated value has spaces in it often enough that stopping at the
+first would silently compare half of it — with a trailing `-->` or `*/` not part
+of it. A null renders as `none`, a boolean lowercase.
+
+`artifact` is a glob, and a `data-anchor` is checked only for **presence**. The
+value inside is never compared, because the point of a captured document is that
+this repository does not get to say what it contains; what fails is a literal
+standing in for a document nobody captured.
+
+Unlike `broken-links`, this set does **not** set a floor by default. Zero
+anchors is the goal state — every fact rendered or read at runtime, no sentence
+needing one pinned — so `require_any_anchor = true` is opt-in for a repository
+that has decided its anchors are load-bearing.
 
 Each is named separately because taking one is a separate decision:
 `unmanaged-pins` refuses a shape a repository that vendors its dependencies
@@ -573,8 +601,8 @@ The "family" is `no-private-repo-names`, `-staged` and `-in-files`. No other
 built-in reads any parameter. The same mechanism holds beside the checks:
 `exclude_cfg_test` is read only by the content searches (`regexp`, `values` —
 its job is dropping a matched *line* inside a `#[cfg(test)]` block, and no
-other check has one), and `require_any_link` / `allow_outside_repo` are read
-only by `links-resolve`.
+other check has one), `require_any_link` / `allow_outside_repo` are read only
+by `links-resolve`, and `require_any_anchor` only by `anchors-resolve`.
 
 **Which bytes a guard reads: the index, unless a push says otherwise.** At a
 push there is no index at all — the artifact is the pushed commit's whole tree
