@@ -707,6 +707,68 @@ fn refuse_unknown_governs_the_answer_and_not_the_absence_of_one() {
 }
 
 #[test]
+fn a_name_known_to_be_private_survives_a_name_nothing_could_answer_for() {
+    // The exit-state ranking this repository documents and proves: 1 when
+    // something was found, 2 when nothing was found and something could not be
+    // read, 0 only when everything was read and was clean.
+    //
+    // The unavailable check used to return before the report was built, so a
+    // private name the guard had ALREADY caught was discarded -- unprinted,
+    // exit 2 -- because some unrelated name in the same text had no answer.
+    // The name the guard exists to catch is the one that has to survive.
+    let root = repository(
+        "visibility = \"public\"\n\n\
+         [rule.no-private-repo-names]\nbuiltin = \"no-private-repo-names\"\n\
+         private_owners = [\"secretcorp\"]\n\n\
+         [rule.no-private-repo-names.git]\nhooks = [\"commit-msg\"]\n",
+    );
+    commit_one(&root);
+    // One name a declared owner settles with no network at all, and one the
+    // stub `gh` cannot answer for.
+    write(
+        &root,
+        "msg.txt",
+        "see secretcorp/thing and https://github.com/acme/widget\n",
+    );
+
+    let output = guard_with_gh(
+        &root,
+        "gh: Bad credentials (HTTP 401)",
+        &["--stage", "commit-msg", "--message", "msg.txt"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    // The finding, which is the whole point.
+    assert!(text.contains("secretcorp/thing"), "{text}");
+    // And the unread part, said alongside rather than instead of it.
+    assert!(text.contains("could not be asked"), "{text}");
+}
+
+#[test]
+fn a_source_declared_in_an_inherited_file_satisfies_the_optional_permission() {
+    // The check reads the RESOLVED policy. Asked of `file.rules` alone it
+    // refused a policy whose source is declared in an `inherit.paths` file,
+    // with a sentence saying no source is declared anywhere -- false of exactly
+    // the shape it was refusing.
+    let root = repository(
+        "visibility = \"public\"\nprivate_owners_optional = true\n\n\
+         [inherit]\npaths = [\"policy/shared.toml\"]\n",
+    );
+    std::fs::write(
+        root.join("policy/shared.toml"),
+        "[rule.no-private-repo-names]\nbuiltin = \"no-private-repo-names\"\n\
+         private_owners_from = \"printf 'secretcorp\\n'\"\n\n\
+         [rule.no-private-repo-names.git]\nhooks = [\"commit-msg\"]\n",
+    )
+    .unwrap();
+    commit_one(&root);
+    write(&root, "msg.txt", "a message\n");
+
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
 fn a_word_that_is_not_a_visibility_is_refused_at_load() {
     // At LOAD, not when a hook fires. A misspelt visibility is a fact about the
     // file, and hearing about it from whichever seam happened to run first is

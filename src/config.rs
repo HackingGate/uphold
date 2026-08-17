@@ -1531,24 +1531,6 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     // a fact about the file, and hearing about it when a hook fires means
     // hearing about it from whichever seam happened to run first, months after
     // the line was written.
-    // A permission over a source that does not exist. It reads as though the
-    // policy has thought about an absent private-owner list, and there is no
-    // list to be absent -- the same failure a parameter on a rule that cannot
-    // read it is refused for.
-    if file.private_owners_optional
-        && file.private_owners_from.is_none()
-        && !file
-            .rules
-            .values()
-            .any(|rule| rule.private_owners_from.is_some())
-    {
-        return Err(Fatal::at(
-            policy_path,
-            "`private_owners_optional` is set and no `private_owners_from` is declared \
-             anywhere in this policy, so it permits a failure that cannot happen. Declare \
-             the source, or drop the line",
-        ));
-    }
     if let Some(declared) = file.visibility.as_deref() {
         if visibility_is_public(declared).is_none() {
             return Err(Fatal::at(
@@ -1635,6 +1617,29 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         .filter(|rule| !disabled.contains(&rule.id) && !own_ids.iter().any(|own| *own == rule.id))
         .collect();
     rules.extend(file.rules.values().cloned());
+
+    // A permission over a source that does not exist. It reads as though the
+    // policy has thought about an absent private-owner list, and there is no
+    // list to be absent -- the same failure a parameter on a rule that cannot
+    // read it is refused for.
+    //
+    // Asked HERE, after the merge, and not beside the other file-level checks
+    // near the top. Up there only `file.rules` exists, so a policy that
+    // declares the source on a rule inside an `inherit.paths` file was refused
+    // with a sentence saying no source is declared anywhere -- which was false
+    // of exactly the shape it refused. The question is about the whole resolved
+    // policy, so it has to be asked of the whole resolved policy.
+    if file.private_owners_optional
+        && file.private_owners_from.is_none()
+        && !rules.iter().any(|rule| rule.private_owners_from.is_some())
+    {
+        return Err(Fatal::at(
+            policy_path,
+            "`private_owners_optional` is set and no `private_owners_from` is declared \
+             anywhere in this policy -- not here, not in an inherited file -- so it permits \
+             a failure that cannot happen. Declare the source, or drop the line",
+        ));
+    }
 
     // A disabled id that names nothing is the same failure as a stale baseline
     // entry: it reads as a decision that is doing something and it is doing

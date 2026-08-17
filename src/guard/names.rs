@@ -624,26 +624,34 @@ fn decide(request: &Request<'_>, sources: &[(String, String)]) -> Result<Option<
     let owners = declared_owners(request.root, request.policy, request.rule)?;
     let verdict = judge(request.root, request.rule, &owners, sources);
 
-    // The forge could not be asked at all, so this guard did not run. Exit 2
-    // and not a refusal, and NOT governed by `refuse_unknown`: that field
-    // decides what an ANSWER of "no repository by that name" means, and there
-    // was no answer. Reporting it as an inconclusive finding is how an
-    // unauthenticated `gh` used to pass every name in a tree while printing a
-    // line about each -- a check that did not happen, wearing the output of one
-    // that did.
-    if !verdict.unavailable.is_empty() {
-        return Err(Fatal::new(format!(
+    // The forge could not be asked about some names, so for THOSE this guard
+    // did not run. Exit 2 and not a refusal, and NOT governed by
+    // `refuse_unknown`: that field decides what an ANSWER of "no repository by
+    // that name" means, and there was no answer. Folding this into the
+    // inconclusive pile is how an unauthenticated `gh` used to pass every name
+    // in a tree while printing a line about each.
+    //
+    // Built here and DECIDED at the bottom, because a finding outranks it. The
+    // exit-state ranking this repository documents and proves is: 1 when
+    // something was found, 2 when nothing was found and something could not be
+    // read, 0 only when the whole selection was read and was clean. Returning
+    // early here inverted that -- a private name the guard had already caught
+    // was discarded, unprinted, because some unrelated name in the same text
+    // had no answer. The name the guard exists to catch is the one that must
+    // survive.
+    let unavailable = (!verdict.unavailable.is_empty()).then(|| {
+        Fatal::new(format!(
             "{}: the forge could not be asked about {} name(s), so their visibility is \
-             unestablished and this guard did not run:\n{}\n\n`gh` must be installed and \
-             authenticated for this rule -- `gh auth status` says which. A rate limit, a \
-             missing token and no network all land here. Names it ANSWERED for are judged \
-             normally; this is the absence of an answer, which is exit 2 rather than a \
-             refusal because nothing here is known to be wrong.",
+             unestablished and this guard did not run over them:\n{}\n\n`gh` must be \
+             installed and authenticated for this rule -- `gh auth status` says which. A \
+             rate limit, a missing token and no network all land here. Names it ANSWERED \
+             for are judged normally; this is the absence of an answer, which is exit 2 \
+             rather than a refusal because nothing here is known to be wrong.",
             request.rule.id,
             verdict.unavailable.len(),
             verdict.unavailable.join("\n")
-        )));
-    }
+        ))
+    });
 
     let mut report = String::new();
     if !verdict.refused.is_empty() {
@@ -668,7 +676,15 @@ fn decide(request: &Request<'_>, sources: &[(String, String)]) -> Result<Option<
         }
     }
     if report.is_empty() {
-        return Ok(None);
+        // Nothing was found, and something could not be read. Exit 2.
+        return unavailable.map_or(Ok(None), Err);
+    }
+    // Something WAS found, so the refusal is the answer and the unread part is
+    // said alongside it rather than instead of it. A reader who is shown only
+    // the exit code still sees the name; a reader who is shown only the names
+    // still learns that the list is incomplete.
+    if let Some(unread) = unavailable {
+        eprintln!("{unread}");
     }
     Ok(Some(Refusal {
         id: request.rule.id.clone(),
