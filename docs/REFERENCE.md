@@ -174,13 +174,25 @@ with no network, and answers about the visibility a repository has *today*,
 which is the thing that changes on the day it matters. `visibility = "private"`
 is a real answer, not an opt-out: it says the condition does not hold here.
 
-What `private-names` does **not** turn on is `refuse_unknown`. A name whose
-visibility could not be determined is reported and not refused, which is
-fail-open — and the alternative is worse as a *set* default: an unauthenticated
-or offline `gh` makes every name unresolvable and every commit refused. Measured
-on the tree that ships the set, fifteen names do not resolve and every one is a
-documentation or test fixture. Turn it on per repository, after naming those in
-`public_repos`.
+**Two different "unknowns", and only one of them is `refuse_unknown`'s.** A
+forge that *answers* `404` has told you something about the name: no repository
+it will show you is called that. A forge that could not be asked — no `gh`, no
+credentials, a rate limit, no network — has told you nothing, and the guard did
+not run. These were one state, which meant an unauthenticated `gh` printed a
+line per name and then permitted the commit. They are separate now:
+
+| what happened | outcome |
+|---|---|
+| forge answers `public` | passes |
+| forge answers `private` / `internal` | refused |
+| forge answers `404` | reported; refused only under `refuse_unknown` |
+| forge could not be asked | **exit `2`** — always, whatever `refuse_unknown` says |
+
+`private-names` does not turn `refuse_unknown` on. What is left fail-open under
+that default is the `404` alone, and a `404` is what every invented name in
+every document produces — measured on the tree that ships the set, fifteen names
+answer `404` and every one is a documentation or test fixture. Turn it on per
+repository after naming those in `public_repos`.
 
 `doc-claims` is the one set whose rule needs the author to write something
 beside the prose, so its grammar is here rather than only in the set. A

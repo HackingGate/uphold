@@ -78,8 +78,18 @@
 #   deliberately, so read it before assuming the default is an oversight. With
 #   it OFF -- as it is here -- a name whose visibility could not be determined
 #   is REPORTED and not refused, which is fail-open on a guard about disclosure.
-#   With it ON, a `gh` that is unauthenticated, rate-limited or offline makes
-#   every name unresolvable and every commit refused.
+#   With it ON, every name a forge answers 404 for -- which is every invented
+#   name in every document -- becomes a refusal.
+#
+#   Read that carefully, because the obvious objection has already been fixed
+#   somewhere else. "Unresolved" used to mean two unrelated things: the forge
+#   ANSWERED and knows no such repository, and the forge could not be asked at
+#   all. The second is not a fact about the name, it is the check not running,
+#   and with the two folded together an unauthenticated `gh` printed a line per
+#   name and then let the commit through. That is now `Visibility::Unavailable`
+#   and it is exit 2 -- always, whatever `refuse_unknown` says, because a field
+#   about what an ANSWER means cannot speak for a run that got none. So the
+#   fail-open this default leaves is narrow: it is the 404, and nothing else.
 #
 #   Measured, in this repository, on the tree that ships this set: fifteen names
 #   do not resolve. Every one is documentation or a test fixture --

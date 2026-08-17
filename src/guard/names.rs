@@ -62,7 +62,21 @@ fn clean_repo(name: &str) -> String {
 enum Visibility {
     Public,
     Private,
+    /// The forge ANSWERED, and no repository it will show us has this name.
+    ///
+    /// A real finding, and an ambiguous one: an invented name in a document
+    /// reads exactly like a private repository the token cannot see. Which of
+    /// those it is, is what `refuse_unknown` decides.
     Unknown,
+    /// The forge was not asked, or could not answer: no `gh` on PATH, no
+    /// credentials, a rate limit, a network that is not there.
+    ///
+    /// Separate from `Unknown` because it is not a fact about the NAME at all,
+    /// it is the absence of a check. Folding the two together made an
+    /// unauthenticated `gh` report every name as unresolved and then permit the
+    /// commit -- a guard that did not run, wearing the output of one that ran
+    /// and found something inconclusive.
+    Unavailable,
 }
 
 /// What the forge said about one name: how visible, and what it is really called.
@@ -301,8 +315,25 @@ fn lookup(cache: &mut BTreeMap<String, Resolved>, owner: &str, repo: &str) -> Re
                 canonical,
             }
         }
-        _ => Resolved {
-            visibility: Visibility::Unknown,
+        // The forge said no. WHICH no it said is the whole question, and it is
+        // in stderr: `gh` writes `gh: Not Found (HTTP 404)` for a name it will
+        // not show us, and `gh: Bad credentials (HTTP 401)` for a client it
+        // will not talk to. Only the first is a fact about the name.
+        //
+        // Anything else -- 401, 403 and a rate limit, 5xx, a status line that
+        // is not there, or no `gh` at all -- is the check not happening, and
+        // reporting that as an inconclusive finding is how an unauthenticated
+        // run passed every name in the tree.
+        Ok(output) => Resolved {
+            visibility: if String::from_utf8_lossy(&output.stderr).contains("(HTTP 404)") {
+                Visibility::Unknown
+            } else {
+                Visibility::Unavailable
+            },
+            canonical: None,
+        },
+        Err(_) => Resolved {
+            visibility: Visibility::Unavailable,
             canonical: None,
         },
     };
@@ -346,13 +377,20 @@ fn target_is_public(root: &Path, policy: &Policy, rule: &Rule) -> Result<Option<
     Ok(match lookup(&mut cache, &owner, &repo).visibility {
         Visibility::Public => Some(true),
         Visibility::Private => Some(false),
-        Visibility::Unknown => None,
+        // Both are "no answer" to the caller, which turns into the refusal that
+        // names `visibility`. The caller cannot act on the difference here --
+        // either way this repository has not said what it is, and that is the
+        // thing to fix.
+        Visibility::Unknown | Visibility::Unavailable => None,
     })
 }
 
 struct Verdict {
     refused: Vec<String>,
     unresolved: Vec<String>,
+    /// Names the forge was never able to answer for. Not findings: evidence
+    /// that the check did not run.
+    unavailable: Vec<String>,
 }
 
 /// The owner half of the repository doing the judging.
@@ -480,6 +518,7 @@ fn judge(root: &Path, rule: &Rule, owners: &[String], sources: &[(String, String
     let mut cache: BTreeMap<String, Resolved> = BTreeMap::new();
     let mut refused = Vec::new();
     let mut unresolved = Vec::new();
+    let mut unavailable = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let matchers = OwnerMatchers::new(owners, our_owner.as_deref());
 
@@ -520,6 +559,9 @@ fn judge(root: &Path, rule: &Rule, owners: &[String], sources: &[(String, String
                 Visibility::Unknown => {
                     unresolved.push(format!("{where_found}: {name} could not be resolved"));
                 }
+                Visibility::Unavailable => {
+                    unavailable.push(format!("{where_found}: {name}"));
+                }
                 Visibility::Public => {}
             }
         }
@@ -541,6 +583,7 @@ fn judge(root: &Path, rule: &Rule, owners: &[String], sources: &[(String, String
     Verdict {
         refused,
         unresolved,
+        unavailable,
     }
 }
 
@@ -580,6 +623,28 @@ fn decide(request: &Request<'_>, sources: &[(String, String)]) -> Result<Option<
 
     let owners = declared_owners(request.root, request.policy, request.rule)?;
     let verdict = judge(request.root, request.rule, &owners, sources);
+
+    // The forge could not be asked at all, so this guard did not run. Exit 2
+    // and not a refusal, and NOT governed by `refuse_unknown`: that field
+    // decides what an ANSWER of "no repository by that name" means, and there
+    // was no answer. Reporting it as an inconclusive finding is how an
+    // unauthenticated `gh` used to pass every name in a tree while printing a
+    // line about each -- a check that did not happen, wearing the output of one
+    // that did.
+    if !verdict.unavailable.is_empty() {
+        return Err(Fatal::new(format!(
+            "{}: the forge could not be asked about {} name(s), so their visibility is \
+             unestablished and this guard did not run:\n{}\n\n`gh` must be installed and \
+             authenticated for this rule -- `gh auth status` says which. A rate limit, a \
+             missing token and no network all land here. Names it ANSWERED for are judged \
+             normally; this is the absence of an answer, which is exit 2 rather than a \
+             refusal because nothing here is known to be wrong.",
+            request.rule.id,
+            verdict.unavailable.len(),
+            verdict.unavailable.join("\n")
+        )));
+    }
+
     let mut report = String::new();
     if !verdict.refused.is_empty() {
         report.push_str(&verdict.refused.join("\n"));

@@ -61,6 +61,42 @@ fn code(output: &Output) -> i32 {
     output.status.code().unwrap()
 }
 
+/// Run a guard with a stub `gh` ahead of the real one on PATH.
+///
+/// The two failure modes this distinguishes are only distinguishable by what
+/// `gh` writes to stderr, so the only honest test drives a `gh` that writes
+/// each. A test that called the classifier directly would be asserting on the
+/// function rather than on the behaviour a repository gets.
+fn guard_with_gh(root: &Path, stderr_line: &str, args: &[&str]) -> Output {
+    let bin = root.join("stub-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let gh = bin.join("gh");
+    std::fs::write(
+        &gh,
+        format!("#!/bin/sh\necho '{stderr_line}' >&2\nexit 1\n"),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .arg("guard")
+        .args(args)
+        .current_dir(root)
+        .env("PATH", path)
+        .env_remove("UPHOLD_ALLOW")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
@@ -582,6 +618,92 @@ fn permitting_an_absent_owner_source_that_no_rule_reads_is_refused_at_load() {
         "{}",
         stderr(&output)
     );
+}
+
+/// A policy whose private-name guard reads a commit message, with a name the
+/// stub `gh` will be asked about. The URL form, because a bare `owner/repo` is
+/// only extracted for a declared owner.
+const NAMES_AT_COMMIT: &str = "visibility = \"public\"\n\n\
+     [rule.no-private-repo-names]\nbuiltin = \"no-private-repo-names\"\n\n\
+     [rule.no-private-repo-names.git]\nhooks = [\"commit-msg\"]\n";
+
+#[test]
+fn a_forge_that_could_not_be_asked_is_exit_two_and_not_an_inconclusive_finding() {
+    // The distinction the whole split exists for. `gh` unauthenticated,
+    // rate-limited, or absent means this guard DID NOT RUN -- and folding that
+    // into "could not be resolved" made an unauthenticated run print a line per
+    // name and then permit the commit, which is a check that did not happen
+    // wearing the output of one that did.
+    let root = repository(NAMES_AT_COMMIT);
+    commit_one(&root);
+    write(&root, "msg.txt", "see https://github.com/acme/widget\n");
+
+    let output = guard_with_gh(
+        &root,
+        "gh: Bad credentials (HTTP 401)",
+        &["--stage", "commit-msg", "--message", "msg.txt"],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("could not be asked"), "{text}");
+    assert!(text.contains("did not run"), "{text}");
+}
+
+#[test]
+fn a_forge_that_answered_no_such_repository_is_a_finding_and_not_exit_two() {
+    // The other side, and it is why the split is not just "fail closed". An
+    // authenticated `gh` answers 404 for every invented name in a document --
+    // `acme/widget` in this repository's own tests and README. Treating that as
+    // "the check did not happen" would make a tree full of examples unusable,
+    // which is the state `refuse_unknown` exists to let a repository choose.
+    let root = repository(NAMES_AT_COMMIT);
+    commit_one(&root);
+    write(&root, "msg.txt", "see https://github.com/acme/widget\n");
+
+    let output = guard_with_gh(
+        &root,
+        "gh: Not Found (HTTP 404)",
+        &["--stage", "commit-msg", "--message", "msg.txt"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("could not be resolved"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn refuse_unknown_governs_the_answer_and_not_the_absence_of_one() {
+    // `refuse_unknown` turns the 404 case into a refusal. It must NOT be what
+    // decides the unavailable case: that one is exit 2 either way, because a
+    // field about what an answer means cannot speak for a run that got none.
+    let strict = NAMES_AT_COMMIT.replace(
+        "builtin = \"no-private-repo-names\"",
+        "builtin = \"no-private-repo-names\"\nrefuse_unknown = true",
+    );
+    let root = repository(&strict);
+    commit_one(&root);
+    write(&root, "msg.txt", "see https://github.com/acme/widget\n");
+
+    let answered = guard_with_gh(
+        &root,
+        "gh: Not Found (HTTP 404)",
+        &["--stage", "commit-msg", "--message", "msg.txt"],
+    );
+    assert_eq!(code(&answered), 1, "{}", stderr(&answered));
+    assert!(
+        stderr(&answered).contains("refuse_unknown"),
+        "{}",
+        stderr(&answered)
+    );
+
+    let unasked = guard_with_gh(
+        &root,
+        "gh: Bad credentials (HTTP 401)",
+        &["--stage", "commit-msg", "--message", "msg.txt"],
+    );
+    assert_eq!(code(&unasked), 2, "{}", stderr(&unasked));
 }
 
 #[test]
