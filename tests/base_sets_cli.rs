@@ -76,6 +76,17 @@ builtin = "no-hand-copied-base-rule"
 hooks = ["manual"]
 "#;
 
+/// The check at both stages the bundled set now registers it at: `pre-commit`,
+/// where a policy file changes, and `manual`, where the whole sweep is asked
+/// for. The two answer different questions and the tests below ask both.
+const AUDIT_SHIPPED: &str = r#"
+[rule.local-set-audit]
+builtin = "no-hand-copied-base-rule"
+
+[rule.local-set-audit.git]
+hooks = ["pre-commit", "manual"]
+"#;
+
 /// A transcription of a rule `process-residue` already ships.
 const COPIED: &str = r#"
 [rule.no-merge-conflict-markers]
@@ -83,6 +94,21 @@ message = "conflict markers"
 regexp = '^(<<<<<<<|>>>>>>>) '
 files.include = ["."]
 "#;
+
+/// A second one, from a different set, so a test can add one transcription to a
+/// policy that already has another and see which of the two is reported.
+const COPIED_TOO: &str = r#"
+[rule.no-hardcoded-home-paths]
+message = "home paths"
+regexp = '/home/[a-z]+'
+files.include = ["."]
+"#;
+
+fn commit_policy(root: &Path, policy: &str) {
+    std::fs::write(root.join("policy/principles.toml"), policy).unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "policy", "--no-verify"]);
+}
 
 #[test]
 fn a_hand_copied_rule_is_named_with_its_set_and_what_that_set_would_add() {
@@ -97,6 +123,71 @@ fn a_hand_copied_rule_is_named_with_its_set_and_what_that_set_would_add() {
     // to carry it: a reader deciding whether to inherit cannot weigh the
     // decision from the one id they already wrote out.
     assert!(text.contains("no-hardcoded-home-paths"), "{text}");
+}
+
+#[test]
+fn a_transcription_this_change_adds_is_refused_at_pre_commit() {
+    // The whole point of the hook. `manual` reported this and nobody ran it:
+    // 76 of 77 repositories inherited the set carrying the check and roughly
+    // forty carried a transcription it had never once reported.
+    let root = repository("");
+    commit_policy(&root, &format!("{AUDIT_SHIPPED}{COPIED}"));
+    // Committed above, so the copy that is NEW is the second one.
+    std::fs::write(
+        root.join("policy/principles.toml"),
+        format!("{AUDIT_SHIPPED}{COPIED}{COPIED_TOO}"),
+    )
+    .unwrap();
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("no-hardcoded-home-paths"), "{text}");
+    // And it says nothing about the one that was already there. A refusal that
+    // listed both would send the reader looking for a change they did not make.
+    assert!(!text.contains("no-merge-conflict-markers"), "{text}");
+    assert!(text.contains("this change adds"), "{text}");
+}
+
+#[test]
+fn a_transcription_already_committed_is_not_refused_at_pre_commit() {
+    // The ratchet, and it is what makes the hook installable at all. Arriving
+    // as a gate over declarations that already exist would refuse the next
+    // commit in roughly forty repositories on the strength of a version bump,
+    // with nothing in any of those trees to review.
+    let root = repository("");
+    commit_policy(&root, &format!("{AUDIT_SHIPPED}{COPIED}"));
+    std::fs::write(root.join("a.txt"), "one\n").unwrap();
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    // Still the sweep, though: the copy has not become invisible, it has become
+    // something a reader asks about rather than something a commit trips over.
+    let swept = guard(&root, &["--stage", "manual"]);
+    assert_eq!(code(&swept), 1, "{}", stderr(&swept));
+    assert!(
+        stderr(&swept).contains("no-merge-conflict-markers"),
+        "{}",
+        stderr(&swept)
+    );
+}
+
+#[test]
+fn a_policy_file_git_has_never_seen_has_no_baseline_to_be_old_against() {
+    // A repository adopting uphold writes its whole policy in one commit, and
+    // every id in it is an id being written now. Answering "no baseline, so
+    // nothing is new" would let the first commit carry any number of
+    // transcriptions past the check that exists to see them.
+    let root = repository(&format!("{AUDIT_SHIPPED}{COPIED}"));
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no-merge-conflict-markers"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
@@ -372,6 +463,58 @@ fn an_owner_declared_once_for_the_policy_answers_for_an_inherited_rule() {
         stderr(&refused).contains("pinned to acme"),
         "{}",
         stderr(&refused)
+    );
+}
+
+#[test]
+fn private_names_refuses_to_guess_whether_this_repository_is_published() {
+    // The `unowned-push` shape, transposed to the other fact a set cannot be
+    // handed. These guards fire on ONE condition -- is this tree public -- and
+    // left to itself the answer comes from the forge, which is unknown with no
+    // token, unknown with no network, and stale on the day a repository is
+    // flipped. Exit 2: not "this text is wrong", but "nothing here can tell".
+    let root = repository("[inherit]\nsets = [\"private-names\"]\n");
+    commit_one(&root);
+    write(&root, "msg.txt", "a message\n");
+
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("visibility_required"), "{text}");
+    // And it prints the line to write, because a refusal that names a field
+    // without saying where it goes sends the reader to the documentation.
+    assert!(text.contains("visibility = \"private\""), "{text}");
+}
+
+#[test]
+fn a_visibility_declared_once_for_the_policy_answers_for_an_inherited_rule() {
+    // Where the answer goes when the rule is not in this file. `private` is a
+    // real answer and not an opt-out: it says the condition these guards fire
+    // under does not hold here, which is a decision somebody made rather than a
+    // question nobody asked.
+    let root = repository("visibility = \"private\"\n\n[inherit]\nsets = [\"private-names\"]\n");
+    commit_one(&root);
+    write(&root, "msg.txt", "a message\n");
+
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn a_word_that_is_not_a_visibility_is_refused_at_load() {
+    // At LOAD, not when a hook fires. A misspelt visibility is a fact about the
+    // file, and hearing about it from whichever seam happened to run first is
+    // hearing about it months after the line was written -- by which time the
+    // guard has been reporting a clean tree the whole way.
+    let root = repository("visibility = \"pubic\"\n\n[inherit]\nsets = [\"private-names\"]\n");
+    commit_one(&root);
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("not a visibility"),
+        "{}",
+        stderr(&output)
     );
 }
 

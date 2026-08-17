@@ -1,0 +1,64 @@
+# Base rule set: default-token-grant (a workflow token scoped by a repository
+# setting instead of by the workflow)
+#
+# A GitHub Actions workflow with no top-level `permissions:` block runs with
+# whatever the repository's default grant is, and the default for a repository
+# whose setting has never been touched is write access to contents. Pull in
+# with:
+#
+#   [inherit]
+#   sets = ["default-token-grant"]
+#
+# WHAT IT REFUSES, and why that is a decidable question at all. `least-privilege`
+# is a record in this catalog and this is the cheapest complete instance of it:
+# whether a `permissions:` key is present is a fact about the file, so it needs
+# no judgement about which scopes the workflow ought to hold. What the rule
+# cannot say is whether a declared block is MINIMAL -- that remainder stays with
+# the review tier, and the rule is deliberately not stretched to reach it.
+#
+# WHY THIS IS ITS OWN SET rather than a rule added to `process-residue`. The
+# seven content sets are about residue in what a repository COMMITS -- authoring
+# artefacts, captured data, credentials, stale pins. This is about how CI is
+# configured, which is a different subject with a different audience and a
+# different reason to decline: a repository with no `.github/workflows`
+# directory has nothing here to enforce, and a repository whose workflows are
+# generated elsewhere may not own the file the rule would refuse. Naming it
+# separately is what lets those repositories not take it, and a set nobody can
+# decline is a default in all but name.
+#
+# WHY NOT LEAVE IT TO A LINTER. actionlint validates workflow SYNTAX and
+# expressions; it has no opinion about a missing `permissions:` key, because an
+# absent key is valid YAML and a valid workflow. No hygiene rule in the usual
+# ecosystem looks for it either. The gap is real and this is what stands in it.
+#
+# PROVENANCE. Promoted here after a sweep of 77 policy files found NINE
+# repositories declaring this rule independently, byte-identical in every one --
+# message, pattern, include and glob -- plus this repository's own. It reached
+# the ninth by code review on a repository that lacked it, while eight siblings
+# already enforced it and none of them knew about the others. Nine independent
+# implementations of one decision is the whole argument for a set, and it is the
+# same argument the content rules were promoted on. The id is the one those
+# copies already carry, so a repository still holding its own copy shadows this
+# rule rather than colliding with it.
+
+# WHAT THIS SET MAY INSTALL. `stages` is the ceiling, and an empty list means no
+# git hook at all: the one rule here is a content rule the scan owns. A set ships
+# compiled into the binary, so a rule added to one starts running in every
+# repository that inherits it with nothing in any tree to review -- for a content
+# rule that is a finding somebody argues about, and for a guard it is a commit
+# refused on the strength of a version bump. A rule here declaring a hook is
+# refused at load, so the set cannot grow one without editing this line, which is
+# a diff a reader sees.
+[set]
+stages = []
+
+[rule.workflow-declares-permissions]
+message = """
+A GitHub Actions workflow declares no `permissions:` block, so its GITHUB_TOKEN
+gets the repository's default grant rather than the scopes the workflow needs.
+Add a top-level `permissions:` block naming the minimum -- `contents: read` for
+a workflow that only checks out and tests.
+"""
+require_regexp = '^permissions:'
+files.include = [".github/workflows"]
+files.glob = ["*.yml", "*.yaml"]

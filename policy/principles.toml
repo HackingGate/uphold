@@ -18,6 +18,55 @@ allowed_scripts = ["Latin"]
 # without it, which is the point of that set.
 owner = "HackingGate"
 
+# Whether what this repository publishes is visible to everyone. Declared rather
+# than looked up, for the same two reasons `owner` is: a lookup makes every
+# commit wait on a forge, and the answer is a decision rather than a reading --
+# and a rule arriving from `private-names` cannot be handed a parameter, so the
+# policy is where it reads this from.
+#
+# It is a settled fact rather than a placeholder: this repository was published,
+# so the guards that fire only on a public tree are in scope on every commit
+# written here. It said `private` for a day after the flip, and that is how the
+# finding below was written. This line is the WHOLE scope test -- a rule that
+# believes its repository is private refuses nothing, silently, and reports a
+# clean tree while doing it -- so a value left behind by a visibility change is
+# not a stale comment, it is the guard switched off. Flipping a repository means
+# editing this line in the same change, and the check to run before doing so is
+# `uphold audit --for-publication`, which asks what a flip would republish under
+# the visibility it is flipping TO. Every guard here asks "is the target public
+# NOW", so nothing else re-examines a name that was correctly allowed at write
+# time.
+#
+# What the flip published, and what no rewrite reaches: commit 188970b2, on the
+# retained head ref of the pull request that merged it, names a private
+# organisation in its message. The squashed commit on the default branch does
+# not. The remaining copy is the forge's to remove, not a rewrite's.
+visibility = "public"
+
+# `private_owners_from` is deliberately ABSENT here, and its absence is the one
+# place this repository's own policy differs from what it recommends.
+#
+# It stood here, reading a file outside the tree:
+#
+#   private_owners_from = "cat ${XDG_CONFIG_HOME:-$HOME/.config}/principles/private-owners"
+#
+# A missing source is an error rather than an empty list -- a rule with no
+# owners refuses nothing and would report a clean tree -- so that line made
+# every clone of this repository exit 2 on its first commit, over a file that
+# exists on one machine. This is a public repository and the policy in it is
+# also the worked example somebody reads before writing their own; a worked
+# example that cannot run anywhere but the author's laptop is a gate whose
+# first act is to be switched off. That is `psychological-acceptability` and
+# `least-astonishment` in one line, and no rule here catches it.
+#
+# What is given up by dropping it: an owner nothing declares is resolved by
+# asking the forge, which needs a token and a network and answers `unknown`
+# without either. `private_owners` and `private_owners_from` are the offline
+# authority that cannot be contradicted by a network answer, and they are still
+# how a workspace should declare its own -- in a WORKSPACE's policy, which this
+# one is not. See `policy/base/private-names.toml` for where the field goes and
+# why the set does not ship one.
+
 [inherit]
 # The shared process-residue set -- conflict markers, home paths, dated and
 # status metadata, tracker and thread references, private data paths --
@@ -29,6 +78,11 @@ sets = [
     "host-identity",
     "broken-links",
     "doc-claims",
+    # Not residue in what is committed but how CI is configured, which is why it
+    # is a name of its own. Promoted out of this file: the declaration that
+    # stood here was byte-identical to nine others across the fleet, which is
+    # the whole argument for a set.
+    "default-token-grant",
     # The guard sets. Each installs git hooks, and each is named separately
     # because taking one is a separate decision -- `stale-pins` reaches the
     # network, `invisible-characters` reads the whole tree at four stages, and
@@ -38,6 +92,13 @@ sets = [
     "invisible-characters",
     "stale-pins",
     "unowned-push",
+    # The three private-name guards, at the three seams that publish text and
+    # have a git hook in their path. It refuses to run until `visibility` above
+    # says whether this tree is published, which is the same shape
+    # `unowned-push` uses for `owner`. The fourth seam -- `gh` and `git push`,
+    # where text reaches a forge API with no hook at all -- is the `[[shim]]`
+    # further down, because no set may put a program in front of a real command.
+    "private-names",
 ]
 
 # The engine's own tests write Japanese, because the two rules they exercise --
@@ -51,27 +112,13 @@ sets = [
 allowed_scripts = ["Latin", "Han", "Hiragana", "Katakana"]
 files.include = ["tests", "src/guard/unicode.rs"]
 
-# The one kind that ships fully implemented, documented, and exercised by
-# nothing. A rule kind with no instance anywhere is indistinguishable from a
-# rule kind that does not work, which is the same argument the link kind was
-# dogfooded under.
-#
-# What it requires is real and nothing else here checks it. A workflow with no
-# top-level `permissions:` block runs with whatever the repository's default
-# grant is, and the default for a repository that has never been changed is
-# write access to contents. `least-privilege` is a record in this very catalog;
-# leaving the token's scope to a repository-wide setting is the failure it
-# describes, and neither actionlint nor any hygiene rule looks for it.
-[rule.workflow-declares-permissions]
-message = """
-A GitHub Actions workflow declares no `permissions:` block, so its GITHUB_TOKEN
-gets the repository's default grant rather than the scopes the workflow needs.
-Add a top-level `permissions:` block naming the minimum -- `contents: read` for
-a workflow that only checks out and tests.
-"""
-require_regexp = '^permissions:'
-files.include = [".github/workflows"]
-files.glob = ["*.yml", "*.yaml"]
+# `workflow-declares-permissions` used to stand here, as the one instance of the
+# `require_regexp` kind anywhere -- a rule kind with no instance is
+# indistinguishable from a rule kind that does not work. It is in
+# `default-token-grant` now, inherited above, and the kind is still exercised
+# because a bundled rule runs here exactly as a local one did. What promoted it
+# was not this repository: nine siblings had written the same rule out, word for
+# word, each without knowing the others had.
 
 # A tracked doc states what holds; the story of how it came to hold lives in
 # git history and the tracker. Prose that says a name became another name goes
@@ -177,62 +224,13 @@ files.exclude = ["**/tests/**", "**/test/**"]
 # because a rule arriving from a set cannot be handed a parameter, and who this
 # repository belongs to was never a property of one rule anyway.
 
-[rule.no-private-repo-names]
-builtin = "no-private-repo-names"
-# `visibility` is declared rather than looked up, and it is a settled fact
-# rather than a placeholder: this repository was published, so the guard is in
-# scope on every commit written here.
-#
-# It said `private` for a day after the flip, and that is how the one finding
-# below was written. The declaration is the whole scope test -- a rule that
-# believes its repository is private refuses nothing, silently, and reports a
-# clean tree while doing it -- so a declaration left behind by a visibility
-# change is not a stale comment, it is the guard switched off. Flipping a
-# repository means editing this line in the same change.
-#
-# Declared rather than looked up because a lookup makes every commit wait on a
-# forge, and because the answer is a decision rather than a reading. The check
-# to run before changing it is `uphold audit --for-publication`, which asks what
-# a flip would republish under the visibility it is flipping TO. Every guard
-# here asks "is the target public NOW", so nothing else re-examines a name that
-# was correctly allowed at write time.
-#
-# What the flip published, and what no rewrite reaches: commit 188970b2, on the
-# retained head ref of the pull request that merged it, names a private
-# organisation in its message. The squashed commit on the default branch does
-# not. The remaining copy is the forge's to remove, not a rewrite's.
-visibility = "public"
-# Declared, not looked up. A forge lookup answers for `owner/repo`; these are
-# organisations, and the form that got past a hand audit of this repository was
-# an organisation named on its own, in a sentence about what it carries. A
-# declaration is also the only thing that can answer for an owner whose
-# existence is itself the thing not to disclose.
-#
-# Read from OUTSIDE the repository, which is the whole point: a list of names
-# that must not be published cannot live in a file that is about to be
-# published, and neither can a command string with a name written into it. The
-# rule stays committed and reviewable; the names do not travel with it. A
-# missing file is an error rather than an empty list, because a rule with no
-# owners refuses nothing and would report a clean tree.
-private_owners_from = "cat ${XDG_CONFIG_HOME:-$HOME/.config}/principles/private-owners"
-git.hooks = ["commit-msg"]
-
-[rule.no-private-repo-names-staged]
-builtin = "no-private-repo-names-staged"
-# The same settled fact as the variant above, and it has to be written again
-# here: each variant carries its own scope, so one left at `private` is one seam
-# standing down while its siblings refuse.
-visibility = "public"
-git.hooks = ["pre-commit"]
-
-[rule.no-private-repo-names-in-files]
-builtin = "no-private-repo-names-in-files"
-visibility = "public"
-# Not pre-commit: this asks the forge about every distinct name anywhere in the
-# tree, not the few a commit touches, and a check that adds twenty seconds to
-# every commit is one somebody deletes. That trade-off is a line in this file
-# now rather than a `match` arm in the binary.
-git.hooks = ["pre-merge-commit", "pre-push", "manual"]
+# The three private-name guards stood here, one `visibility = "public"` each --
+# three copies of one fact, and a sweep found the same three declared in 10 of
+# 77 repositories while 67 published text through no seam at all. They arrive
+# from `private-names` now, and the fact they each carried is one line at the
+# top of this file. What is left here is what belongs to THIS repository: the
+# `[[shim]]` seam below, which no set may install, because a program standing in
+# front of `gh` is not something to acquire by inheriting a name.
 
 # ---------------------------------------------------------------------------
 # Checkers -- the contract any executable can satisfy.

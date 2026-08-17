@@ -14,7 +14,7 @@
 //! whole class of drift unrepresentable, and [`Kind::ALL`] is the only list.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +58,15 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
         include_str!("../policy/base/captured-fixtures.toml"),
     ),
     ("doc-claims", include_str!("../policy/base/doc-claims.toml")),
+    // Not residue in what a repository commits, but how its CI is configured.
+    // A separate name because declining it is a real decision -- a repository
+    // with no workflows, or whose workflows are generated somewhere else, has
+    // nothing here to enforce -- and a set nobody can decline is a default
+    // wearing a set's clothes.
+    (
+        "default-token-grant",
+        include_str!("../policy/base/default-token-grant.toml"),
+    ),
     // The guard sets. They install git hooks, which the seven above do not, and
     // each is a separate name because taking one is a separate decision: what
     // it costs, when it runs, and what it will refuse are different arguments
@@ -81,6 +90,16 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
     (
         "unowned-push",
         include_str!("../policy/base/unowned-push.toml"),
+    ),
+    // The widest ceiling of any set here -- five stages -- and the reason is
+    // the finding it was promoted on: a family covering three of the four
+    // seams that publish text is the shape the sweep found, in ten
+    // repositories out of seventy-seven. Like `unowned-push` it refuses to run
+    // until the repository has answered one question, and `visibility` is that
+    // question.
+    (
+        "private-names",
+        include_str!("../policy/base/private-names.toml"),
     ),
 ];
 
@@ -304,7 +323,7 @@ impl CommandWhere {
 pub(crate) struct Inherit {
     /// Bundled rule sets, by what they refuse: `process-residue`,
     /// `credentials`, `unmanaged-pins`, `host-identity`, `broken-links`,
-    /// `captured-fixtures`, `doc-claims`. [`BUNDLED`] is the list; this is a
+    /// `captured-fixtures`, `doc-claims`, `default-token-grant`. [`BUNDLED`] is the list; this is a
     /// reader's copy of it, and the error a wrong name gets is built from the
     /// array.
     #[serde(default)]
@@ -565,6 +584,22 @@ pub(crate) struct Rule {
     pub allowed_owners: Option<Vec<String>>,
     #[serde(default)]
     pub allowed_repos: Option<Vec<String>>,
+    /// Refuse to run until this repository has said whether it is published.
+    ///
+    /// The `owner_required` argument, transposed to the other fact a set cannot
+    /// be handed. The private-name guards fire only on a PUBLIC tree, so a
+    /// repository that has declared nothing has the whole family fall back to
+    /// asking the forge -- which answers `unknown` with no token, on no
+    /// network, and for the repository whose visibility is the thing about to
+    /// change. Without this, a set carrying these rules would be deciding on
+    /// every inheriting repository's behalf that a network answer is good
+    /// enough for the one condition the guard fires under.
+    ///
+    /// Exit 2 and not a refusal, for the reason `owner_required` is: "this text
+    /// is wrong" and "nothing here can tell whether it is" are different
+    /// answers, and only one of them is fixed by editing the text.
+    #[serde(default)]
+    pub visibility_required: Option<bool>,
     /// Codepoints admitted, optionally under one path glob:
     /// `"U+00A0:tests/fixtures/**"`, or `"U+3000"` for the whole tree.
     ///
@@ -612,6 +647,7 @@ impl Rule {
             public_repos: None,
             refuse_unknown: None,
             visibility: None,
+            visibility_required: None,
             owner: None,
             owner_required: None,
             allowed_owners: None,
@@ -743,6 +779,9 @@ impl Rule {
             self.public_repos.is_some().then_some("public_repos"),
             self.refuse_unknown.is_some().then_some("refuse_unknown"),
             self.visibility.is_some().then_some("visibility"),
+            self.visibility_required
+                .is_some()
+                .then_some("visibility_required"),
             self.allow.is_some().then_some("allow"),
         ]
         .into_iter()
@@ -1216,6 +1255,33 @@ pub(crate) struct PolicyFile {
     /// behalf.
     #[serde(default)]
     pub owner: Option<String>,
+    /// Whether what this repository publishes is visible to everyone, declared
+    /// once for the whole policy.
+    ///
+    /// Here for the reason [`PolicyFile::owner`] is here, and it is the same
+    /// kind of fact: a property of the repository rather than of any one rule
+    /// in it, and the only form in which a rule arriving from a bundled set can
+    /// be told. `public`, `private` or `internal`; anything else is refused at
+    /// load rather than at the moment a guard needs it.
+    ///
+    /// The value that is NOT accepted is silence. A guard whose whole scope
+    /// condition is "is this repository public" cannot answer from a policy
+    /// that never says, and the fallback -- asking the forge -- is a network
+    /// call that answers `unknown` on a train, in CI without a token, and for
+    /// a repository whose visibility is about to change. See
+    /// `guard::names::target_is_public`.
+    #[serde(default)]
+    pub visibility: Option<String>,
+    /// A command whose output lists the owners this workspace treats as
+    /// private, declared once for the whole policy.
+    ///
+    /// The same argument again, and the measurement behind it: across the fleet
+    /// this was promoted from, ten repositories declared
+    /// `private_owners_from` and every one of them declared the SAME command.
+    /// That is one workspace-level fact written out ten times, and a rule
+    /// arriving from a set has no other way to reach it.
+    #[serde(default)]
+    pub private_owners_from: Option<String>,
     #[serde(default)]
     pub inherit: Option<Inherit>,
     #[serde(default)]
@@ -1270,9 +1336,22 @@ pub(crate) struct SetHeader {
 /// checked unique across the whole set.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Policy {
+    /// The file this policy was loaded from, as the caller named it.
+    ///
+    /// Carried because [`Origin::Own`] means "written in THIS file" and one
+    /// guard has to ask git what that file said before the change being
+    /// checked. Deriving it from `root` would hardcode `policy/principles.toml`
+    /// in a binary whose `--policy` flag exists to say otherwise.
+    pub path: PathBuf,
     /// Who this repository belongs to, from the policy file's own `owner`.
     /// See [`PolicyFile::owner`].
     pub owner: Option<String>,
+    /// What this repository's publications are visible to, from the policy
+    /// file's own `visibility`. See [`PolicyFile::visibility`].
+    pub visibility: Option<String>,
+    /// Where the private-owner list comes from, from the policy file's own
+    /// `private_owners_from`. See [`PolicyFile::private_owners_from`].
+    pub private_owners_from: Option<String>,
     pub redact_matches: bool,
     pub allowed_scripts: Vec<String>,
     pub rules: Vec<Rule>,
@@ -1410,11 +1489,41 @@ fn parse_bundled(name: &str, text: &str) -> Result<PolicyFile> {
     Ok(file)
 }
 
+/// Is a declared visibility one that means "everyone can read this"?
+///
+/// `None` where the word is not a visibility at all. One function because the
+/// spelling is checked at LOAD, where a typo is a diff somebody can fix, and
+/// read again by the guard that fires on the answer -- and two readings of one
+/// word are two chances for `Public` and `public` to disagree.
+pub(crate) fn visibility_is_public(value: &str) -> Option<bool> {
+    match value.to_lowercase().as_str() {
+        "public" => Some(true),
+        "private" | "internal" => Some(false),
+        _ => None,
+    }
+}
+
 /// Load a policy file, resolving `[inherit]` and validating the result.
 pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     let text = read_to_string(policy_path)?;
     let file = parse(policy_path, &text)?;
     refuse_set_header(policy_path, &file)?;
+    // Checked here rather than where a guard reads it. A misspelt visibility is
+    // a fact about the file, and hearing about it when a hook fires means
+    // hearing about it from whichever seam happened to run first, months after
+    // the line was written.
+    if let Some(declared) = file.visibility.as_deref() {
+        if visibility_is_public(declared).is_none() {
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "`visibility` is {declared:?}, which is not a visibility. Write \
+                     \"public\", \"private\" or \"internal\" -- the word decides whether the \
+                     guards that fire only on a published tree fire here at all"
+                ),
+            ));
+        }
+    }
     let inherit = file.inherit.clone().unwrap_or_default();
 
     let mut inherited: Vec<Rule> = Vec::new();
@@ -1524,7 +1633,10 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     validate_shims(policy_path, &rules, &file.shims)?;
 
     Ok(Policy {
+        path: policy_path.to_path_buf(),
         owner: file.owner.clone(),
+        visibility: file.visibility.clone(),
+        private_owners_from: file.private_owners_from.clone(),
         redact_matches: file.redact_matches,
         allowed_scripts: file.allowed_scripts,
         rules,

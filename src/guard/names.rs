@@ -316,16 +316,25 @@ fn lookup(cache: &mut BTreeMap<String, Resolved>, owner: &str, repo: &str) -> Re
 /// whether the target is public NOW. Content written into a private repository
 /// is correctly allowed at write time, and nothing re-examines that decision
 /// when the repository later goes public.
-fn target_is_public(root: &Path, rule: &Rule) -> Result<Option<bool>> {
+fn target_is_public(root: &Path, policy: &Policy, rule: &Rule) -> Result<Option<bool>> {
     if let Some(declared) = rule.visibility.as_deref() {
-        return match declared.to_lowercase().as_str() {
-            "public" => Ok(Some(true)),
-            "private" | "internal" => Ok(Some(false)),
-            other => Err(Fatal::new(format!(
-                "rule {:?}: visibility {other:?} is not a visibility",
-                rule.id
-            ))),
-        };
+        return crate::config::visibility_is_public(declared)
+            .map(Some)
+            .ok_or_else(|| {
+                Fatal::new(format!(
+                    "rule {:?}: visibility {declared:?} is not a visibility",
+                    rule.id
+                ))
+            });
+    }
+    // The policy's own `visibility`, which is the declaration a rule arriving
+    // from a bundled set can still reach: a set cannot be handed a parameter
+    // without writing the rule out again, and whether this repository is
+    // published was never a property of one rule in it. Already held to the
+    // three spellings at load, so a word that is not a visibility never gets
+    // this far.
+    if let Some(declared) = policy.visibility.as_deref() {
+        return Ok(crate::config::visibility_is_public(declared));
     }
     let Some(url) = git::remote_url(root, "origin") else {
         return Ok(None);
@@ -369,9 +378,17 @@ fn own_name(root: &Path) -> Option<String> {
 
 /// Every declared private owner: the literal list, plus whatever the command
 /// produced.
-pub(crate) fn declared_owners(root: &Path, rule: &Rule) -> Result<Vec<String>> {
+pub(crate) fn declared_owners(root: &Path, policy: &Policy, rule: &Rule) -> Result<Vec<String>> {
     let mut owners = rule.private_owners().to_vec();
-    if let Some(command) = rule.private_owners_from.as_deref() {
+    // The rule's own source first, then the policy's. Same precedence as
+    // `visibility` and for the same reason: the policy-level declaration is
+    // what a rule arriving from a set can reach, and a rule that names its own
+    // source is saying something narrower on purpose.
+    if let Some(command) = rule
+        .private_owners_from
+        .as_deref()
+        .or(policy.private_owners_from.as_deref())
+    {
         let output = Command::new("sh")
             .arg("-c")
             .arg(command)
@@ -500,12 +517,32 @@ fn judge(root: &Path, rule: &Rule, owners: &[String], sources: &[(String, String
 }
 
 fn decide(request: &Request<'_>, sources: &[(String, String)]) -> Result<Option<Refusal>> {
-    let Some(public) = target_is_public(request.root, request.rule)? else {
+    // A rule that says it will not guess, in a repository that has not said
+    // whether it is published. Asked BEFORE the lookup rather than after it
+    // fails, because the lookup succeeding is the worse case: it answers from
+    // the forge's view of a visibility that is about to change, and the answer
+    // it gives on the day of the change is the one that decides whether the
+    // whole family runs at all.
+    if request.rule.visibility_required.unwrap_or(false)
+        && request.rule.visibility.is_none()
+        && request.policy.visibility.is_none()
+    {
+        return Err(Fatal::new(format!(
+            "rule {:?}: `visibility_required` is set and nothing here says whether this \
+             repository is published, so the only answer available is the forge's -- which \
+             is unknown with no token, unknown with no network, and stale on the one day it \
+             matters. Declare it once, at the top of the policy file:\n\n  visibility = \
+             \"private\"    # or \"public\", or \"internal\"\n\nThe guards in this family \
+             fire only on a public tree, so the word decides whether they run here at all.",
+            request.rule.id
+        )));
+    }
+    let Some(public) = target_is_public(request.root, request.policy, request.rule)? else {
         // Not a pass. The guard could not establish the one condition it fires
         // under, and saying nothing would look exactly like saying clean.
         return Err(Fatal::new(format!(
-            "{}: could not determine this repository's visibility. Set `visibility` on \
-             the rule to say what it is.",
+            "{}: could not determine this repository's visibility. Set `visibility` at the \
+             top of the policy file, or on the rule, to say what it is.",
             request.rule.id
         )));
     };
@@ -513,7 +550,7 @@ fn decide(request: &Request<'_>, sources: &[(String, String)]) -> Result<Option<
         return Ok(None);
     }
 
-    let owners = declared_owners(request.root, request.rule)?;
+    let owners = declared_owners(request.root, request.policy, request.rule)?;
     let verdict = judge(request.root, request.rule, &owners, sources);
     let mut report = String::new();
     if !verdict.refused.is_empty() {

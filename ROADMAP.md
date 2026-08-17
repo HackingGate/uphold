@@ -84,7 +84,9 @@ carries a guard, not alongside:
 
 1. `no-hand-copied-base-rule`, at `manual`, in `process-residue`. A
    transcription is invisible to every other check here: the id resolves and
-   the claim reconciles. This makes it a report.
+   the claim reconciles. This made it a report -- and **a gate at `pre-commit`
+   as well now**, over the ids a change adds. See *What the report measured*
+   below for what the manual-only release bought.
 2. The derived-owner note on `prevent-public-push`'s **allow** path. Fifty of
    sixty-five repositories pin no `owner`, and the guard used to say so only
    when refusing -- which is never, for as long as nothing has gone wrong.
@@ -100,9 +102,10 @@ another way of saying nothing enforced them:
 
 5. **`[set] stages`** — each bundled set declares the hook stages it may
    install, and a rule reaching past that ceiling is refused at load. The
-   content sets declare none; `process-residue` declares `manual` and nothing
-   else. A guard cannot join a set without editing a line that says the set is
-   allowed to carry one.
+   content sets declare none; `process-residue` declares `pre-commit` and
+   `manual` and nothing else. A guard cannot join a set without editing a line
+   that says the set is allowed to carry one, and widening the line is the diff
+   that says so -- which is exactly how `pre-commit` was added to it.
 6. **`policy/base/sets.lock.json`** — every bundled set, field for field,
    committed, with a test that refuses a tree where it has drifted. A set
    changing shape is a diff in this repository, where it can be reviewed,
@@ -119,12 +122,64 @@ Then the sets, once the two above made them safe to ship:
    is declared once at the top of a policy file rather than on the rule --
    inheriting a set never decides who you are, and a rule arriving from a set
    cannot be handed a parameter.
+8. **`default-token-grant`** and **`private-names`**, both promoted by the same
+   sweep that measured item 1. `default-token-grant` carries
+   `workflow-declares-permissions`, which nine repositories had written out
+   byte-identically without knowing about each other; it is a name of its own
+   rather than a rule in `process-residue` because it is about how CI is
+   configured rather than about what a repository commits, and declining it is
+   a real decision for a repository with no workflows. `private-names` carries
+   the three private-name guards behind `visibility_required = true`, in the
+   shape `unowned-push` uses for `owner`: `visibility` joins `owner` and
+   `private_owners_from` as a top-level policy field, so the fact a set cannot
+   be handed is declared once. The sweep is the argument -- the family was
+   declared in 10 of 77 repositories and **67 publish text through no seam at
+   all**, after a public repository pushed a commit message and a pull-request
+   body that each named a private organisation and a private repository with
+   nothing in their path.
 
-This repository inherits all five. The seven guard declarations that stood in
+This repository inherits all seven. The seven guard declarations that stood in
 its own policy were byte-identical to the sets', which is the argument the sets
 were promoted on.
+
+One thing it does NOT inherit back is its own `private_owners_from`. That line
+read a file outside the tree, and a missing source is an error rather than an
+empty list -- so it made every clone of this repository exit 2 on its first
+commit, over a file that exists on one machine. This policy is also the worked
+example somebody reads before writing their own, and a worked example that runs
+nowhere but the author's laptop is a gate whose first act is to be switched off.
+The field stays in the schema, as a top-level policy field, for the workspaces
+that can actually resolve it.
 
 Adopting `host-identity` is the standing evidence that a set is not a no-op:
 the bundled rule scans `["."]` while all twenty-nine hand-copies scan a strict
 subset, quietly avoiding vendored trees, `target/`, and test corpora. Per
 repository, not a fleet sweep.
+
+#### What the report measured
+
+`no-hand-copied-base-rule` shipped at `manual` on purpose: a check that reports
+on the SHAPE of a policy should not stand between anyone and a commit before
+its false-positive behaviour has been seen in the open. A sweep of every
+`policy/principles.toml` in one workspace -- **77 repositories** -- then read
+what the report had been reporting, and the answer was nothing at all.
+
+- **76 of the 77 inherit `process-residue`**, so the check was *loaded* in all
+  but one of them.
+- Roughly **forty carried at least one transcription**, and not one had ever
+  been reported. Nothing runs a manual stage on its own: not a git hook, and
+  not any CI workflow in the fleet.
+- Among those findings, **no false positives**. Every id named was a genuine
+  copy of a bundled rule from a set the repository did not inherit.
+
+The sharpest single case: `captured-fixtures` ships exactly one rule,
+`no-non-ascii-in-fixtures`; **no repository inherits the set** and **seventeen
+transcribe its contents**.
+
+So the manual-only release did buy the evidence it was for, and the evidence
+was that being loaded is not being run. The gate that follows refuses the
+ADDITION rather than the STATE -- ids absent from the policy file at `HEAD` --
+because a version bump that refused the existing forty would be paid for by
+being switched off, which returns coverage to the zero it started at. Deleting
+the existing copies is per-repository work, and it is worth doing now that the
+sweep cannot refill.
