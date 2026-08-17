@@ -109,6 +109,16 @@
 #   that an unresolved name is still PRINTED: this is a reported unknown rather
 #   than a silent pass, which is the distinction `explicit-unknown` is about.
 #
+# WHAT TAKING THIS SET REQUIRES, beyond the `visibility` line: an authenticated
+# `gh` wherever these rules run, CI included. A forge that cannot be asked is
+# exit 2 -- not a refusal, and not a pass -- so a job with no token stops rather
+# than reporting on nothing. In GitHub Actions that is one line,
+# `GH_TOKEN: ${{ github.token }}`; the job token reads public repositories and
+# the one it is running in, and answers 404 for everything else, which is the
+# right answer for a name in a document. This repository's own CI was running
+# the family with no token, over a tree full of `acme/widget`, and reaching a
+# verdict on none of it.
+#
 # COST, stated because a set nobody can keep green gets switched off. The
 # tracked-tree rule reads every tracked file and asks the forge once per
 # distinct name it does not already know. That is too slow for a commit, which

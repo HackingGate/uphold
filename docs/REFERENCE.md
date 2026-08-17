@@ -188,6 +188,13 @@ line per name and then permitted the commit. They are separate now:
 | forge answers `404` | reported; refused only under `refuse_unknown` |
 | forge could not be asked | **exit `2`** — always, whatever `refuse_unknown` says |
 
+So **`gh` must be authenticated wherever these rules run**, CI included. In a
+GitHub Actions job that means `GH_TOKEN: ${{ github.token }}`; the job token
+reads this repository and public ones and answers `404` for everything else,
+which is the right answer for an invented name. This is a real behaviour change:
+a run with no token used to report every name as unresolved and pass, so a job
+without one was running the family and reaching a verdict on nothing.
+
 `private-names` does not turn `refuse_unknown` on. What is left fail-open under
 that default is the `404` alone, and a `404` is what every invented name in
 every document produces — measured on the tree that ships the set, fifteen names

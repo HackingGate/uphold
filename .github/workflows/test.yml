@@ -186,6 +186,20 @@ jobs:
     # left in it answer that.
     env:
       SKIP: coverage
+      # The private-name guards ask the forge whether a name is a private
+      # repository, and they ask through `gh`. With no token `gh` answers
+      # nothing -- and until an unaskable forge became its own state, that was
+      # reported as an inconclusive finding and passed. So this job has been
+      # running the private-name family over a tree full of `acme/widget` and
+      # reaching a verdict on none of it: the check was vacuous here, and
+      # nothing said so.
+      #
+      # The job token is enough, and is deliberately the weakest thing that
+      # works: it reads this repository and public ones, and answers 404 for
+      # everything else -- which is the right answer for an invented name in a
+      # document, and the same answer a contributor's own `gh` gives for a
+      # private organisation they are not a member of.
+      GH_TOKEN: ${{ github.token }}
     strategy:
       fail-fast: false
       matrix:
