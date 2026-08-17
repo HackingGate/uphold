@@ -120,48 +120,86 @@ files.glob = ["*.yml", "*.yaml"]
 
 `inherit.sets` names bundled sets to inherit; it does not add settings. There
 is no `true` shorthand — naming the sets is cheap, and what a repository
-inherits should be written in the repository. Twelve are compiled into the
+inherits should be written in the repository. Fourteen are compiled into the
 binary and mirrored in [`policy/base/`](../policy/base), each **named by what
 it refuses** so the name predicts the rule list:
 
 | set | refuses |
 |---|---|
-| `process-residue` | authoring and process residue in committed content — conflict markers, home paths, dated and status metadata, tracker and thread references, private data paths — and, at `manual`, the residue a process leaves in the policy file itself: a rule transcribed out of a set |
+| `process-residue` | authoring and process residue in committed content — conflict markers, home paths, dated and status metadata, tracker and thread references, private data paths — and the residue a process leaves in the policy file itself: a rule transcribed out of a set. **Installs `pre-commit` and `manual`**, and the two report different things |
 | `credentials` | credential material — private keys and service tokens, literal credential values, populated environment files, browser profile and session stores |
 | `unmanaged-pins` | a version pinned where no manifest holds it — a shell install line, a `releases/download/vX.Y.Z` URL, a versioned `curl` or `wget` |
 | `host-identity` | the machine the author is standing on — its username, home path, hostname and default route, read at scan time and searched for in content |
 | `broken-links` | a markdown link naming a path that does not exist or leaving the repository, and a selection that yields no links at all |
 | `captured-fixtures` | a test fixture holding non-ASCII content, as the one signal that a capture from a live upstream survives redaction |
 | `doc-claims` | a document whose anchored fact disagrees with the record it names — a value the record does not hold, a key that is not there, a source or captured artifact that is absent |
+| `default-token-grant` | a GitHub Actions workflow with no top-level `permissions:` block, whose `GITHUB_TOKEN` is therefore scoped by a repository setting rather than by the workflow |
 | `commit-message-residue` | authorship markers and unusual characters in the message a commit records — **installs `commit-msg`** |
 | `unreviewed-history` | a merge made locally rather than through a pull request — **installs `pre-commit` and `pre-merge-commit`** |
 | `invisible-characters` | characters that draw nothing, in committed content and in the paths that carry it — **installs four stages**, and reads the whole tree at each |
 | `stale-pins` | a hook pinned at a revision its upstream has left, or at none — **installs `pre-push` and `manual`**, and reaches the network |
 | `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |
+| `private-names` | a private organisation or repository named in a commit message, a staged diff, or the tracked tree of a **public** repository — **installs five stages**, and refuses to run until the repository says whether it is published |
 
-The last five install git hooks. Taking one is a decision about what will be
+The last six install git hooks. Taking one is a decision about what will be
 refused and when, so each is named and argued separately: `stale-pins` reaches
 the network and cannot answer on a train, `invisible-characters` reads the tree
 at four stages and is the slowest thing in a hook, `unreviewed-history` stands
-in front of every commit, and `unowned-push` demands one line before it will run
+in front of every commit, and two of them demand one line before they will run
 at all:
 
 ```toml
 owner = "your-org"          # at the top of the policy file
+visibility = "public"       # ditto
 
 [inherit]
-sets = ["unowned-push"]
+sets = ["unowned-push", "private-names"]
 ```
 
-`owner` is a top-level field rather than a rule parameter because a rule
-arriving from a set cannot be handed one — the only way would be to write the
-rule out again, which is the transcription `no-hand-copied-base-rule` refuses —
-and because who a repository belongs to was never a property of one rule in it.
+Both are top-level fields rather than rule parameters because a rule arriving
+from a set cannot be handed one — the only way would be to write the rule out
+again, which is the transcription `no-hand-copied-base-rule` refuses — and
+because neither fact was ever a property of one rule.
+
 `owner_required = true` on the rule is what makes the omission an exit `2`
 rather than a guard that quietly reads the answer off `origin`, which is the
 remote most likely to be the thing that went wrong. `allowed_owners` or
 `allowed_repos` satisfy it too: naming the destinations is a way of saying who
 you are.
+
+`visibility_required = true` is the same argument for the other fact. The
+private-name guards fire on one condition — is this tree public — and left to
+themselves they ask the forge, which answers `unknown` with no token, `unknown`
+with no network, and answers about the visibility a repository has *today*,
+which is the thing that changes on the day it matters. `visibility = "private"`
+is a real answer, not an opt-out: it says the condition does not hold here.
+
+**Two different "unknowns", and only one of them is `refuse_unknown`'s.** A
+forge that *answers* `404` has told you something about the name: no repository
+it will show you is called that. A forge that could not be asked — no `gh`, no
+credentials, a rate limit, no network — has told you nothing, and the guard did
+not run. These were one state, which meant an unauthenticated `gh` printed a
+line per name and then permitted the commit. They are separate now:
+
+| what happened | outcome |
+|---|---|
+| forge answers `public` | passes |
+| forge answers `private` / `internal` | refused |
+| forge answers `404` | reported; refused only under `refuse_unknown` |
+| forge could not be asked | **exit `2`** — always, whatever `refuse_unknown` says |
+
+So **`gh` must be authenticated wherever these rules run**, CI included. In a
+GitHub Actions job that means `GH_TOKEN: ${{ github.token }}`; the job token
+reads this repository and public ones and answers `404` for everything else,
+which is the right answer for an invented name. This is a real behaviour change:
+a run with no token used to report every name as unresolved and pass, so a job
+without one was running the family and reaching a verdict on nothing.
+
+`private-names` does not turn `refuse_unknown` on. What is left fail-open under
+that default is the `404` alone, and a `404` is what every invented name in
+every document produces — measured on the tree that ships the set, fifteen names
+answer `404` and every one is a documentation or test fixture. Turn it on per
+repository after naming those in `public_repos`.
 
 `doc-claims` is the one set whose rule needs the author to write something
 beside the prose, so its grammar is here rather than only in the set. A
@@ -221,7 +259,7 @@ than a description:
 
 ```toml
 [set]
-stages = ["manual"]   # empty (the default) means: no git hook at all
+stages = ["pre-commit", "manual"]   # empty (the default) means: no git hook at all
 ```
 
 A rule in a bundled set declaring a hook outside that list is refused at load.
@@ -251,11 +289,27 @@ from without appearing in any file in the repository it runs in:
   here — the id resolves, so every claim naming it reconciles green.
 
 The same argument in the other direction is a check: `no-hand-copied-base-rule`
-(shipped in `process-residue`, at `manual`) refuses a rule written out by hand
-under an id a set already ships, from a set the repository does not inherit. It
-names the id, the owning set, and what else inheriting that set would bring.
-A rule of the same id from a set the repository **does** inherit is the
-documented override and stays silent.
+(shipped in `process-residue`) refuses a rule written out by hand under an id a
+set already ships, from a set the repository does not inherit. It names the id,
+the owning set, and what else inheriting that set would bring. A rule of the
+same id from a set the repository **does** inherit is the documented override
+and stays silent.
+
+It runs at two stages and they answer different questions:
+
+| stage | what it reports |
+|---|---|
+| `pre-commit` | only the ids **this change adds**, against the policy file at `HEAD` |
+| `manual` | **every** transcription in the policy — the sweep |
+
+The split is why it can sit at a hook at all. It shipped at `manual` alone, and
+a sweep of 77 repositories then measured what that bought: 76 of them inherited
+the set, so the check was *loaded* almost everywhere, and roughly forty carried
+a transcription it had never once reported — nothing runs a manual stage on its
+own. A report nobody asks for is coverage of zero. Refusing the *addition*
+rather than the *state* costs nothing in a repository that adds none, so the
+hook arrives with no commit to be surprised by, while a transcription written
+after it cannot be committed silently.
 
 Those five fields interact, so "which rules does this repository run" is not a
 question anyone can answer by reading the `[rule.*]` tables. The loader answers
@@ -544,7 +598,7 @@ stamped on it, the range about to be pushed.
 | `no-local-merge` | a merge that would make a merge commit |
 | `no-merge-commit` | a commit finishing a merge or a squash merge |
 | `no-stale-hook-pins` | a pin left behind its upstream, or naming no ref — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree; a pin it **could not check** is exit `2` |
-| `no-hand-copied-base-rule` | a rule this policy writes out by hand under an id a bundled set already ships, from a set it does not inherit. Reads the **policy**, not the tree |
+| `no-hand-copied-base-rule` | a rule this policy writes out by hand under an id a bundled set already ships, from a set it does not inherit. Reads the **policy**, not the tree. At `pre-commit` only what the change adds; at `manual` the whole sweep |
 
 Declared like any other rule, in the same file and the same id namespace.
 **`git.hooks` is the whole registration.**
@@ -591,6 +645,7 @@ enforced and is not.
 | `allowed_owners` | `prevent-public-push` | owners a push may go to; defaults to the pinned owner |
 | `allowed_repos` | `prevent-public-push` | single repositories allowed through, `"owner/repo"` |
 | `visibility` | the `no-private-repo-names` family | this repository's visibility, declared instead of looked up |
+| `visibility_required` | the `no-private-repo-names` family | exit `2` rather than fall back to the forge when nothing has declared a visibility |
 | `private_owners` | the `no-private-repo-names` family | owners whose repositories are private regardless of what a forge says |
 | `private_owners_from` | the `no-private-repo-names` family | a command whose stdout is one private owner per line |
 | `public_repos` | the `no-private-repo-names` family | names treated as public without asking a forge |
@@ -598,7 +653,50 @@ enforced and is not.
 | `allow` | `prevent-unusual-unicode-in-files` | codepoints admitted, optionally under one glob — `"U+00A0:docs/captured/**"` |
 
 The "family" is `no-private-repo-names`, `-staged` and `-in-files`. No other
-built-in reads any parameter. The same mechanism holds beside the checks:
+built-in reads any parameter.
+
+**Three of these are also top-level policy fields**, and that is not a
+convenience. A rule arriving from a bundled set cannot be handed a parameter —
+the only way to give it one is to write the rule out again, which is the
+transcription `no-hand-copied-base-rule` refuses — so the facts that belong to
+the repository rather than to any one rule are declared once, at the top of the
+file, and every rule that needs one reads it from there:
+
+```toml
+owner = "your-org"          # read by prevent-public-push
+visibility = "public"       # read by the no-private-repo-names family
+private_owners_from = "cat ~/.config/private-owners"
+private_owners_optional = true    # only where this policy is cloned; see below
+```
+
+A rule's own field wins where both are written.
+
+**Why the owner list is worth declaring**, measured rather than asserted. A
+forge lookup only *adjudicates* names something already extracted, and a bare
+`owner/repo` is extracted only for declared owners and for this repository's
+own — anything else is indistinguishable from a relative path, and treating
+every path in every document as a name would be one lookup per path:
+
+| form in the text | with a declared owner list | without |
+|---|---|---|
+| `https://github.com/owner/repo` | refused | refused |
+| `<your own owner>/repo` | refused | refused |
+| `otherowner/repo`, bare | refused | **not seen** |
+| an organisation named on its own | refused | **not seen** |
+
+An unreadable source is exit `2`, because a rule with no owners refuses nothing
+and would report a clean tree over a list it could not read.
+`private_owners_optional = true` is the one exemption and it is for one shape: a
+policy in a repository other people **clone**, naming a source that is one
+operator's. There the default refuses every clone's first commit, and the usual
+workaround — a command that swallows its own failure — loses the bottom two rows
+silently and permanently. With the field, the failure is reported on stderr,
+naming those two rows, and the run proceeds. Setting it with no
+`private_owners_from` anywhere is refused at load: it would permit a failure
+that cannot happen. `visibility` is held to
+`public`, `private` or `internal` **at load**, not when a hook fires: a misspelt
+visibility is a fact about the file, and a guard that hears about it months
+later has been reporting a clean tree the whole way. The same mechanism holds beside the checks:
 `exclude_cfg_test` is read only by the content searches (`regexp`, `values` —
 its job is dropping a matched *line* inside a `#[cfg(test)]` block, and no
 other check has one), `require_any_link` / `allow_outside_repo` are read only

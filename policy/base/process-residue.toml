@@ -32,15 +32,27 @@
 # can keep green is a gate that gets ignored wholesale rather than per-rule.
 
 # WHAT THIS SET MAY INSTALL. `stages` is the ceiling, and this is the one
-# bundled set that carries anything at a hook: `no-hand-copied-base-rule`, at
-# `manual`. `manual` is the whole of the permission on purpose -- nothing runs
-# a manual stage on its own, so the rule is a report a reader asks for rather
-# than a gate that arrives with a version bump. Any rule here declaring
-# `pre-commit`, `commit-msg`, `pre-merge-commit` or `pre-push` is refused at
-# load: a guard gets a new set named for what it refuses, and widening this
-# line is the diff that says otherwise.
+# bundled set that carries anything at a hook: `no-hand-copied-base-rule`.
+#
+# It was `manual` alone, on the reasoning that a report a reader asks for is
+# safer than a gate that arrives with a version bump. That reasoning held and
+# its consequence was then measured. A sweep of 77 repositories found 76
+# inheriting this set -- so the check was LOADED in all but one of them -- and
+# roughly forty carrying transcriptions it had never once reported, because
+# nothing runs a manual stage on its own. A report nobody asks for is coverage
+# of zero, and this is the diff that says otherwise.
+#
+# `pre-commit` is what the widening buys, and it is deliberately not the same
+# check: at `manual` the rule reports every transcription in the policy, at
+# `pre-commit` it refuses only the ids a change ADDS, measured against the
+# policy file at HEAD. So the version bump refuses nothing that already exists
+# in any of those forty repositories -- there is no commit to be surprised by --
+# and a transcription written after it cannot be committed silently. `commit-msg`,
+# `pre-merge-commit` and `pre-push` remain refused at load: none of them is a
+# moment at which a policy file changes, and a rule here declaring one would be
+# reaching for a seam it has nothing to say at.
 [set]
-stages = ["manual"]
+stages = ["pre-commit", "manual"]
 
 [rule.no-merge-conflict-markers]
 message = """
@@ -136,6 +148,14 @@ files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go"]
 # repository that inherits the set -- 48 of them at the time it shipped -- over
 # a shape none of them reviewed and some of them may have chosen. A report
 # first, and a gate only once what it reports has been seen.
+#
+# It has now been seen: 77 repositories swept, 76 of them inheriting this set,
+# roughly forty carrying a transcription, and no false positive among them. The
+# release the report bought is over, and what it bought was the evidence that
+# `manual` alone reports to nobody. So the rule fires where the residue is
+# written, like the six above it -- `pre-commit` -- and it is the ADDITION that
+# is refused there, not the state. See the `[set] stages` note at the top for
+# why that distinction is what makes the hook safe to install at all.
 [rule.no-hand-copied-base-rule]
 message = """
 A rule a bundled set already ships is written out here by hand, from a set this
@@ -143,8 +163,10 @@ policy does not inherit. The bundled copy is re-read from the binary on every
 run; a transcription is frozen at the moment it was typed, and nothing compares
 the two.
 
-Run `uphold guard --stage manual` to see which ids, which set owns them, and
-what else that set would bring.
+At pre-commit only the ids this change adds are refused, measured against the
+policy file at HEAD. Run `uphold guard --stage manual` for every transcription
+already here: which ids, which set owns them, and what else that set would
+bring.
 """
 builtin = "no-hand-copied-base-rule"
-git.hooks = ["manual"]
+git.hooks = ["pre-commit", "manual"]

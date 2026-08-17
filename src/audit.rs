@@ -595,7 +595,7 @@ pub(crate) fn for_publication(root: &Path, policy: &Policy) -> Result<Exit> {
     // zero with the same two rules swapped.
     let mut owners: Vec<String> = Vec::new();
     for candidate in &rules {
-        owners.extend(names::declared_owners(root, candidate)?);
+        owners.extend(names::declared_owners(root, policy, candidate)?);
     }
     owners.sort();
     owners.dedup();

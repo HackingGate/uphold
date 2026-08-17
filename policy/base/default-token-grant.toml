@@ -1,0 +1,85 @@
+# Base rule set: default-token-grant (a workflow token scoped by a repository
+# setting instead of by the workflow)
+#
+# A GitHub Actions workflow with no top-level `permissions:` block runs with
+# whatever default grant applies to it, and that grant is settled OUTSIDE the
+# workflow -- by the repository's setting, by the organisation's, or by the
+# enterprise's, whichever is most restrictive. It may be read-only and it may be
+# read and write; which one it is today is not visible in the file, is not in
+# git history, and changes when somebody edits a settings page. Pull in with:
+#
+#   [inherit]
+#   sets = ["default-token-grant"]
+#
+# WHAT IT REFUSES, and why that is a decidable question at all. `least-privilege`
+# is a record in this catalog and this is the cheapest complete instance of it:
+# whether a `permissions:` key is present is a fact about the file, so it needs
+# no judgement about which scopes the workflow ought to hold. What the rule
+# cannot say is whether a declared block is MINIMAL -- that remainder stays with
+# the review tier, and the rule is deliberately not stretched to reach it. It
+# also cannot say what the default actually IS in this repository, which is the
+# other half of the same limit: the fact lives on a settings page, and a rule
+# that reads files cannot see it. Declaring the block is what makes the
+# question moot.
+#
+# WHY THE PATTERN IS ANCHORED, and why it admits quotes. `^` is column zero, so
+# a `permissions:` nested under a job -- which scopes THAT job and leaves the
+# workflow's own default untouched -- does not satisfy it; an unanchored pattern
+# would read a per-job grant as the top-level declaration and pass exactly the
+# file this rule exists to find. The optional quotes are the other direction:
+# `"permissions":` and `'permissions':` are legal YAML and mean the same key, so
+# refusing them would be this rule telling a workflow that declared its
+# permissions that it did not.
+#
+# WHY THIS IS ITS OWN SET rather than a rule added to `process-residue`. The
+# seven content sets are about residue in what a repository COMMITS -- authoring
+# artefacts, captured data, credentials, stale pins. This is about how CI is
+# configured, which is a different subject with a different audience and a
+# different reason to decline: a repository with no `.github/workflows`
+# directory has nothing here to enforce, and a repository whose workflows are
+# generated elsewhere may not own the file the rule would refuse. Naming it
+# separately is what lets those repositories not take it, and a set nobody can
+# decline is a default in all but name.
+#
+# WHY NOT LEAVE IT TO A LINTER. actionlint validates workflow SYNTAX and
+# expressions; it has no opinion about a missing `permissions:` key, because an
+# absent key is valid YAML and a valid workflow. No hygiene rule in the usual
+# ecosystem looks for it either. The gap is real and this is what stands in it.
+#
+# PROVENANCE. Promoted here after a sweep of 77 policy files found NINE
+# repositories declaring this rule independently, byte-identical in every one --
+# message, pattern, include and glob -- plus this repository's own. It reached
+# the ninth by code review on a repository that lacked it, while eight siblings
+# already enforced it and none of them knew about the others. Nine independent
+# implementations of one decision is the whole argument for a set, and it is the
+# same argument the content rules were promoted on. The id is the one those
+# copies already carry, so a repository still holding its own copy shadows this
+# rule rather than colliding with it.
+
+# WHAT THIS SET MAY INSTALL. `stages` is the ceiling, and an empty list means no
+# git hook at all: the one rule here is a content rule the scan owns. A set ships
+# compiled into the binary, so a rule added to one starts running in every
+# repository that inherits it with nothing in any tree to review -- for a content
+# rule that is a finding somebody argues about, and for a guard it is a commit
+# refused on the strength of a version bump. A rule here declaring a hook is
+# refused at load, so the set cannot grow one without editing this line, which is
+# a diff a reader sees.
+[set]
+stages = []
+
+[rule.workflow-declares-permissions]
+message = """
+A GitHub Actions workflow declares no top-level `permissions:` block, so its
+GITHUB_TOKEN gets whatever default the repository, organisation or enterprise
+settings grant -- a scope decided outside this file and invisible in it. Add a
+top-level `permissions:` block naming the minimum: `contents: read` for a
+workflow that only checks out and tests.
+
+A `permissions:` under a job scopes that job and does not answer this.
+"""
+# A TOML literal string cannot hold a single quote, and the pattern needs both
+# quote characters, so this one is a basic string with `\"` escaped. The regex
+# the engine compiles is: ^["']?permissions["']?:
+require_regexp = "^[\"']?permissions[\"']?:"
+files.include = [".github/workflows"]
+files.glob = ["*.yml", "*.yaml"]

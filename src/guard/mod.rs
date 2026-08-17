@@ -317,6 +317,7 @@ pub(crate) fn parameters(builtin: &str) -> &'static [&'static str] {
         | "no-private-repo-names-staged"
         | "no-private-repo-names-in-files" => &[
             "visibility",
+            "visibility_required",
             "private_owners",
             "private_owners_from",
             "public_repos",

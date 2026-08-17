@@ -62,7 +62,21 @@ fn clean_repo(name: &str) -> String {
 enum Visibility {
     Public,
     Private,
+    /// The forge ANSWERED, and no repository it will show us has this name.
+    ///
+    /// A real finding, and an ambiguous one: an invented name in a document
+    /// reads exactly like a private repository the token cannot see. Which of
+    /// those it is, is what `refuse_unknown` decides.
     Unknown,
+    /// The forge was not asked, or could not answer: no `gh` on PATH, no
+    /// credentials, a rate limit, a network that is not there.
+    ///
+    /// Separate from `Unknown` because it is not a fact about the NAME at all,
+    /// it is the absence of a check. Folding the two together made an
+    /// unauthenticated `gh` report every name as unresolved and then permit the
+    /// commit -- a guard that did not run, wearing the output of one that ran
+    /// and found something inconclusive.
+    Unavailable,
 }
 
 /// What the forge said about one name: how visible, and what it is really called.
@@ -301,8 +315,25 @@ fn lookup(cache: &mut BTreeMap<String, Resolved>, owner: &str, repo: &str) -> Re
                 canonical,
             }
         }
-        _ => Resolved {
-            visibility: Visibility::Unknown,
+        // The forge said no. WHICH no it said is the whole question, and it is
+        // in stderr: `gh` writes `gh: Not Found (HTTP 404)` for a name it will
+        // not show us, and `gh: Bad credentials (HTTP 401)` for a client it
+        // will not talk to. Only the first is a fact about the name.
+        //
+        // Anything else -- 401, 403 and a rate limit, 5xx, a status line that
+        // is not there, or no `gh` at all -- is the check not happening, and
+        // reporting that as an inconclusive finding is how an unauthenticated
+        // run passed every name in the tree.
+        Ok(output) => Resolved {
+            visibility: if String::from_utf8_lossy(&output.stderr).contains("(HTTP 404)") {
+                Visibility::Unknown
+            } else {
+                Visibility::Unavailable
+            },
+            canonical: None,
+        },
+        Err(_) => Resolved {
+            visibility: Visibility::Unavailable,
             canonical: None,
         },
     };
@@ -316,16 +347,25 @@ fn lookup(cache: &mut BTreeMap<String, Resolved>, owner: &str, repo: &str) -> Re
 /// whether the target is public NOW. Content written into a private repository
 /// is correctly allowed at write time, and nothing re-examines that decision
 /// when the repository later goes public.
-fn target_is_public(root: &Path, rule: &Rule) -> Result<Option<bool>> {
+fn target_is_public(root: &Path, policy: &Policy, rule: &Rule) -> Result<Option<bool>> {
     if let Some(declared) = rule.visibility.as_deref() {
-        return match declared.to_lowercase().as_str() {
-            "public" => Ok(Some(true)),
-            "private" | "internal" => Ok(Some(false)),
-            other => Err(Fatal::new(format!(
-                "rule {:?}: visibility {other:?} is not a visibility",
-                rule.id
-            ))),
-        };
+        return crate::config::visibility_is_public(declared)
+            .map(Some)
+            .ok_or_else(|| {
+                Fatal::new(format!(
+                    "rule {:?}: visibility {declared:?} is not a visibility",
+                    rule.id
+                ))
+            });
+    }
+    // The policy's own `visibility`, which is the declaration a rule arriving
+    // from a bundled set can still reach: a set cannot be handed a parameter
+    // without writing the rule out again, and whether this repository is
+    // published was never a property of one rule in it. Already held to the
+    // three spellings at load, so a word that is not a visibility never gets
+    // this far.
+    if let Some(declared) = policy.visibility.as_deref() {
+        return Ok(crate::config::visibility_is_public(declared));
     }
     let Some(url) = git::remote_url(root, "origin") else {
         return Ok(None);
@@ -337,13 +377,20 @@ fn target_is_public(root: &Path, rule: &Rule) -> Result<Option<bool>> {
     Ok(match lookup(&mut cache, &owner, &repo).visibility {
         Visibility::Public => Some(true),
         Visibility::Private => Some(false),
-        Visibility::Unknown => None,
+        // Both are "no answer" to the caller, which turns into the refusal that
+        // names `visibility`. The caller cannot act on the difference here --
+        // either way this repository has not said what it is, and that is the
+        // thing to fix.
+        Visibility::Unknown | Visibility::Unavailable => None,
     })
 }
 
 struct Verdict {
     refused: Vec<String>,
     unresolved: Vec<String>,
+    /// Names the forge was never able to answer for. Not findings: evidence
+    /// that the check did not run.
+    unavailable: Vec<String>,
 }
 
 /// The owner half of the repository doing the judging.
@@ -369,9 +416,17 @@ fn own_name(root: &Path) -> Option<String> {
 
 /// Every declared private owner: the literal list, plus whatever the command
 /// produced.
-pub(crate) fn declared_owners(root: &Path, rule: &Rule) -> Result<Vec<String>> {
+pub(crate) fn declared_owners(root: &Path, policy: &Policy, rule: &Rule) -> Result<Vec<String>> {
     let mut owners = rule.private_owners().to_vec();
-    if let Some(command) = rule.private_owners_from.as_deref() {
+    // The rule's own source first, then the policy's. Same precedence as
+    // `visibility` and for the same reason: the policy-level declaration is
+    // what a rule arriving from a set can reach, and a rule that names its own
+    // source is saying something narrower on purpose.
+    if let Some(command) = rule
+        .private_owners_from
+        .as_deref()
+        .or(policy.private_owners_from.as_deref())
+    {
         let output = Command::new("sh")
             .arg("-c")
             .arg(command)
@@ -382,12 +437,40 @@ pub(crate) fn declared_owners(root: &Path, rule: &Rule) -> Result<Vec<String>> {
             // Not silently empty. A source that failed produced no owners, and
             // a rule with no owners refuses nothing -- reporting a clean tree
             // because the list could not be read.
-            return Err(Fatal::new(format!(
-                "{}: private_owners_from exited {}: {}",
+            //
+            // `private_owners_optional` is the one way out, and it is a
+            // DECLARATION rather than a fallback: it exists because a policy in
+            // a repository other people clone names a source that resolves on
+            // one machine, and the choice there is between refusing every
+            // clone's first commit and losing the check silently. Neither is
+            // acceptable, so the third answer is losing it OUT LOUD.
+            if !policy.private_owners_optional {
+                return Err(Fatal::new(format!(
+                    "{}: private_owners_from exited {}: {}\n\nA source that failed produced \
+                     no owners, and a rule with no owners refuses nothing. If this source is \
+                     expected to be absent on some machines -- because this policy is \
+                     cloned -- say so with `private_owners_optional = true` at the top of \
+                     the policy file, and the failure becomes a reported gap instead of \
+                     this.",
+                    rule.id,
+                    output.status.code().unwrap_or(-1),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )));
+            }
+            // Exactly what stopped being checked, because "degraded" without a
+            // list of what degraded is a sentence a reader skips. The two forms
+            // named here are the ones that need a DECLARED owner: every other
+            // form reaches the forge on its own.
+            eprintln!(
+                "uphold: {}: the private-owner source produced nothing ({} exited {}), and \
+                 `private_owners_optional` allows that. Names in URL form, and names under \
+                 this repository's own owner, are still checked. NOT checked here: a bare \
+                 `owner/repo` under an owner nothing declared, and a private organisation \
+                 named on its own.",
                 rule.id,
-                output.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
+                command,
+                output.status.code().unwrap_or(-1)
+            );
         }
         owners.extend(
             String::from_utf8_lossy(&output.stdout)
@@ -435,6 +518,7 @@ fn judge(root: &Path, rule: &Rule, owners: &[String], sources: &[(String, String
     let mut cache: BTreeMap<String, Resolved> = BTreeMap::new();
     let mut refused = Vec::new();
     let mut unresolved = Vec::new();
+    let mut unavailable = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let matchers = OwnerMatchers::new(owners, our_owner.as_deref());
 
@@ -475,6 +559,9 @@ fn judge(root: &Path, rule: &Rule, owners: &[String], sources: &[(String, String
                 Visibility::Unknown => {
                     unresolved.push(format!("{where_found}: {name} could not be resolved"));
                 }
+                Visibility::Unavailable => {
+                    unavailable.push(format!("{where_found}: {name}"));
+                }
                 Visibility::Public => {}
             }
         }
@@ -496,16 +583,37 @@ fn judge(root: &Path, rule: &Rule, owners: &[String], sources: &[(String, String
     Verdict {
         refused,
         unresolved,
+        unavailable,
     }
 }
 
 fn decide(request: &Request<'_>, sources: &[(String, String)]) -> Result<Option<Refusal>> {
-    let Some(public) = target_is_public(request.root, request.rule)? else {
+    // A rule that says it will not guess, in a repository that has not said
+    // whether it is published. Asked BEFORE the lookup rather than after it
+    // fails, because the lookup succeeding is the worse case: it answers from
+    // the forge's view of a visibility that is about to change, and the answer
+    // it gives on the day of the change is the one that decides whether the
+    // whole family runs at all.
+    if request.rule.visibility_required.unwrap_or(false)
+        && request.rule.visibility.is_none()
+        && request.policy.visibility.is_none()
+    {
+        return Err(Fatal::new(format!(
+            "rule {:?}: `visibility_required` is set and nothing here says whether this \
+             repository is published, so the only answer available is the forge's -- which \
+             is unknown with no token, unknown with no network, and stale on the one day it \
+             matters. Declare it once, at the top of the policy file:\n\n  visibility = \
+             \"private\"    # or \"public\", or \"internal\"\n\nThe guards in this family \
+             fire only on a public tree, so the word decides whether they run here at all.",
+            request.rule.id
+        )));
+    }
+    let Some(public) = target_is_public(request.root, request.policy, request.rule)? else {
         // Not a pass. The guard could not establish the one condition it fires
         // under, and saying nothing would look exactly like saying clean.
         return Err(Fatal::new(format!(
-            "{}: could not determine this repository's visibility. Set `visibility` on \
-             the rule to say what it is.",
+            "{}: could not determine this repository's visibility. Set `visibility` at the \
+             top of the policy file, or on the rule, to say what it is.",
             request.rule.id
         )));
     };
@@ -513,8 +621,38 @@ fn decide(request: &Request<'_>, sources: &[(String, String)]) -> Result<Option<
         return Ok(None);
     }
 
-    let owners = declared_owners(request.root, request.rule)?;
+    let owners = declared_owners(request.root, request.policy, request.rule)?;
     let verdict = judge(request.root, request.rule, &owners, sources);
+
+    // The forge could not be asked about some names, so for THOSE this guard
+    // did not run. Exit 2 and not a refusal, and NOT governed by
+    // `refuse_unknown`: that field decides what an ANSWER of "no repository by
+    // that name" means, and there was no answer. Folding this into the
+    // inconclusive pile is how an unauthenticated `gh` used to pass every name
+    // in a tree while printing a line about each.
+    //
+    // Built here and DECIDED at the bottom, because a finding outranks it. The
+    // exit-state ranking this repository documents and proves is: 1 when
+    // something was found, 2 when nothing was found and something could not be
+    // read, 0 only when the whole selection was read and was clean. Returning
+    // early here inverted that -- a private name the guard had already caught
+    // was discarded, unprinted, because some unrelated name in the same text
+    // had no answer. The name the guard exists to catch is the one that must
+    // survive.
+    let unavailable = (!verdict.unavailable.is_empty()).then(|| {
+        Fatal::new(format!(
+            "{}: the forge could not be asked about {} name(s), so their visibility is \
+             unestablished and this guard did not run over them:\n{}\n\n`gh` must be \
+             installed and authenticated for this rule -- `gh auth status` says which. A \
+             rate limit, a missing token and no network all land here. Names it ANSWERED \
+             for are judged normally; this is the absence of an answer, which is exit 2 \
+             rather than a refusal because nothing here is known to be wrong.",
+            request.rule.id,
+            verdict.unavailable.len(),
+            verdict.unavailable.join("\n")
+        ))
+    });
+
     let mut report = String::new();
     if !verdict.refused.is_empty() {
         report.push_str(&verdict.refused.join("\n"));
@@ -538,7 +676,15 @@ fn decide(request: &Request<'_>, sources: &[(String, String)]) -> Result<Option<
         }
     }
     if report.is_empty() {
-        return Ok(None);
+        // Nothing was found, and something could not be read. Exit 2.
+        return unavailable.map_or(Ok(None), Err);
+    }
+    // Something WAS found, so the refusal is the answer and the unread part is
+    // said alongside it rather than instead of it. A reader who is shown only
+    // the exit code still sees the name; a reader who is shown only the names
+    // still learns that the list is incomplete.
+    if let Some(unread) = unavailable {
+        eprintln!("{unread}");
     }
     Ok(Some(Refusal {
         id: request.rule.id.clone(),

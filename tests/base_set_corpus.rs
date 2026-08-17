@@ -179,6 +179,28 @@ const CORPUS: &[Case] = &[
         refuses: &["{\"city\": \"Ka\u{0308}ln\"}\n"],
         allows: &["{\"city\": \"Cologne\"}\n"],
     },
+    // The one `require_regexp` rule in any set, so what must be REFUSED is the
+    // sample carrying no match. The second refusal is why the pattern is
+    // anchored: a `permissions:` key nested under a job scopes that job and
+    // leaves the workflow's own token grant untouched, so an unanchored pattern
+    // would read a per-job block as the top-level declaration and pass exactly
+    // the file this rule exists to find.
+    Case {
+        set: "default-token-grant",
+        rule: "workflow-declares-permissions",
+        path: ".github/workflows/ci.yml",
+        refuses: &[
+            "name: ci\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make test\n",
+            "name: ci\non: [push]\njobs:\n  test:\n    permissions:\n      contents: read\n    runs-on: ubuntu-latest\n",
+        ],
+        allows: &[
+            "name: ci\non: [push]\npermissions:\n  contents: read\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
+            // Legal YAML for the same key. Refusing it would be this rule
+            // telling a workflow that declared its permissions that it did not.
+            "name: ci\non: [push]\n\"permissions\":\n  contents: read\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
+            "name: ci\non: [push]\n'permissions':\n  contents: read\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
+        ],
+    },
 ];
 
 /// The rules this corpus does not cover, and why each is somewhere else.

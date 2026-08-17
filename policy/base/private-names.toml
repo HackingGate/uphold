@@ -1,0 +1,157 @@
+# Base rule set: private-names (a private organisation or repository named in
+# something this repository publishes)
+#
+# The three guards that read text this repository is about to publish -- a
+# commit message, the staged diff, the tracked tree -- and refuse a name that
+# belongs to a private organisation or a private repository. Pull in with:
+#
+#   [inherit]
+#   sets = ["private-names"]
+#
+#   visibility = "public"     # at the top of policy/principles.toml
+#
+# THE SECOND LINE IS NOT OPTIONAL, and it is the whole reason this is a set
+# rather than a default.
+#
+# WHAT THE SWEEP FOUND. Across 77 repositories, `no-private-repo-names` was
+# declared in 10, `no-private-repo-names-staged` in 1, and
+# `no-private-repo-names-in-files` in 1. **Sixty-seven publish text through no
+# seam at all.** The trigger was a public repository whose pushed commit message
+# and pull-request body both named a private organisation and a private
+# repository, with nothing in its path to refuse either -- on the reasoning that
+# a public repository has nothing to keep in. That reasoning is backwards. A
+# public repository is not the place with nothing to protect; it is the place
+# where a leak is permanent.
+#
+# WHY `visibility_required = true`. These guards fire on ONE condition: is the
+# tree being written into public. Left to itself the answer comes from the
+# forge, and the forge answers `unknown` with no token and no network -- and
+# answers about the visibility a repository has TODAY, which is exactly the
+# thing that changes on the day the answer matters. A set that shipped these
+# rules without demanding a declaration would be deciding, for every inheriting
+# repository, that a network guess is good enough for the condition the whole
+# family fires under. So a repository that has not said gets exit 2 and the line
+# to write, not a green tick.
+#
+# WHERE THE VISIBILITY GOES. `visibility` at the TOP of the policy file, not on
+# the rule. A rule arriving from a set cannot be handed a parameter -- the only
+# way would be to write the rule out again, and a transcribed rule is what
+# `no-hand-copied-base-rule` refuses. Whether this repository is published is a
+# property of the repository rather than of one rule in it, so the policy holds
+# it and all three rules read it from there. `visibility = "private"` is a
+# perfectly good answer: it says the condition does not hold here, which is a
+# decision somebody made rather than a question nobody asked.
+#
+# WHAT THIS SET DELIBERATELY DOES NOT SHIP.
+#
+# * `private_owners_from`. Ten of the ten repositories that declared it declared
+#   the SAME command -- a `cat` of a file outside the tree -- and it is a
+#   workspace fact rather than a repository one. But a bundled set that shipped
+#   a shell command would run that command in every inheriting repository on the
+#   strength of a version bump, with nothing in any of those trees to review.
+#   So it is a top-level policy field instead, beside `visibility`, and each
+#   workspace writes its own line. Write one: without a declared owner list the
+#   guards do LESS than they look like they do, and this was measured rather
+#   than assumed --
+#
+#     form in the text                      declared list   no list
+#     https://github.com/<owner>/<repo>     refused         refused
+#     <this repository's owner>/<repo>      refused         refused
+#     <other owner>/<repo>, bare            refused         NOT SEEN
+#     an organisation named on its own      refused         NOT SEEN
+#
+#   The bottom two need a declared owner because a bare `owner/repo` is
+#   otherwise indistinguishable from a relative path, and treating every path in
+#   every document as a name would be one forge lookup per path. Everything else
+#   reaches the forge on its own. A repository whose policy is CLONED -- where
+#   the source will be absent on somebody else's machine -- writes
+#   `private_owners_optional = true` as well, which turns an unreadable source
+#   from exit 2 into a report naming those two rows.
+# * `command.before`. The `gh` and `git push` seam is where the triggering leak
+#   actually happened -- text reaching a forge API with no git hook in its path.
+#   It is not here because a `command.before` entry names a `[[shim]]`, and a
+#   shim is a program standing in front of a real command; acquiring one by
+#   inheriting a set is not a thing to do quietly. Declare the shim and the
+#   `command.before` in the repository, where the decision is visible.
+#
+# * `refuse_unknown`. This is the sharpest choice in the file and it is made
+#   deliberately, so read it before assuming the default is an oversight. With
+#   it OFF -- as it is here -- a name whose visibility could not be determined
+#   is REPORTED and not refused, which is fail-open on a guard about disclosure.
+#   With it ON, every name a forge answers 404 for -- which is every invented
+#   name in every document -- becomes a refusal.
+#
+#   Read that carefully, because the obvious objection has already been fixed
+#   somewhere else. "Unresolved" used to mean two unrelated things: the forge
+#   ANSWERED and knows no such repository, and the forge could not be asked at
+#   all. The second is not a fact about the name, it is the check not running,
+#   and with the two folded together an unauthenticated `gh` printed a line per
+#   name and then let the commit through. That is now `Visibility::Unavailable`
+#   and it is exit 2 -- always, whatever `refuse_unknown` says, because a field
+#   about what an ANSWER means cannot speak for a run that got none. So the
+#   fail-open this default leaves is narrow: it is the 404, and nothing else.
+#
+#   Measured, in this repository, on the tree that ships this set: fifteen names
+#   do not resolve. Every one is documentation or a test fixture --
+#   `acme/widget`, `owner/repo`, `someone-else/thing` -- and with
+#   `refuse_unknown = true` in the set, the commit adding this file would have
+#   been refused fifteen times over its own examples. A set that refuses the
+#   repository that publishes it is a set nobody keeps.
+#
+#   So it is a repository's decision and not the set's, and it is one line:
+#
+#     [rule.no-private-repo-names-in-files]
+#     refuse_unknown = true
+#     public_repos = ["acme/widget"]    # the fixtures that cost nothing
+#
+#   Turn it on where the tree holds no invented names, or name them in
+#   `public_repos` first. What makes fail-open defensible in the meantime is
+#   that an unresolved name is still PRINTED: this is a reported unknown rather
+#   than a silent pass, which is the distinction `explicit-unknown` is about.
+#
+# WHAT TAKING THIS SET REQUIRES, beyond the `visibility` line: an authenticated
+# `gh` wherever these rules run, CI included. A forge that cannot be asked is
+# exit 2 -- not a refusal, and not a pass -- so a job with no token stops rather
+# than reporting on nothing. In GitHub Actions that is one line,
+# `GH_TOKEN: ${{ github.token }}`; the job token reads public repositories and
+# the one it is running in, and answers 404 for everything else, which is the
+# right answer for a name in a document. This repository's own CI was running
+# the family with no token, over a tree full of `acme/widget`, and reaching a
+# verdict on none of it.
+#
+# COST, stated because a set nobody can keep green gets switched off. The
+# tracked-tree rule reads every tracked file and asks the forge once per
+# distinct name it does not already know. That is too slow for a commit, which
+# is why it is at `pre-merge-commit`, `pre-push` and `manual` rather than at
+# `pre-commit`; the staged rule reads only the diff.
+
+# WHAT THIS SET MAY INSTALL. `stages` is the ceiling and it is wide here,
+# because the point of the set is that every seam publishing text has one of
+# these behind it -- a family covering three of four seams is the shape the
+# sweep found and the shape this replaces. A rule declaring a hook outside this
+# list is refused at load.
+[set]
+stages = ["commit-msg", "pre-commit", "pre-merge-commit", "pre-push", "manual"]
+
+# The message a commit is about to record. First seam, and the one the leak that
+# triggered this went through.
+[rule.no-private-repo-names]
+builtin = "no-private-repo-names"
+visibility_required = true
+git.hooks = ["commit-msg"]
+
+# The diff about to be committed. Reads what is staged rather than the tree, so
+# it is cheap enough to stand in front of every commit.
+[rule.no-private-repo-names-staged]
+builtin = "no-private-repo-names-staged"
+visibility_required = true
+git.hooks = ["pre-commit"]
+
+# The tracked tree, at the seams where a whole-tree read is affordable. A file
+# added in one pushed commit and deleted in the next is on the remote
+# permanently and is in no tip tree, which is why `pre-push` is here as well as
+# `pre-merge-commit`; `manual` is the sweep a schedule can run.
+[rule.no-private-repo-names-in-files]
+builtin = "no-private-repo-names-in-files"
+visibility_required = true
+git.hooks = ["pre-merge-commit", "pre-push", "manual"]

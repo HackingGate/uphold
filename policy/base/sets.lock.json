@@ -29,11 +29,12 @@
         "builtin": "no-hand-copied-base-rule",
         "git": {
           "hooks": [
+            "pre-commit",
             "manual"
           ]
         },
         "id": "no-hand-copied-base-rule",
-        "message": "A rule a bundled set already ships is written out here by hand, from a set this\npolicy does not inherit. The bundled copy is re-read from the binary on every\nrun; a transcription is frozen at the moment it was typed, and nothing compares\nthe two.\n\nRun `uphold guard --stage manual` to see which ids, which set owns them, and\nwhat else that set would bring.\n"
+        "message": "A rule a bundled set already ships is written out here by hand, from a set this\npolicy does not inherit. The bundled copy is re-read from the binary on every\nrun; a transcription is frozen at the moment it was typed, and nothing compares\nthe two.\n\nAt pre-commit only the ids this change adds are refused, measured against the\npolicy file at HEAD. Run `uphold guard --stage manual` for every transcription\nalready here: which ids, which set owns them, and what else that set would\nbring.\n"
       },
       {
         "files": {
@@ -166,6 +167,7 @@
     ],
     "set": "process-residue",
     "stages": [
+      "pre-commit",
       "manual"
     ]
   },
@@ -422,6 +424,29 @@
   {
     "rules": [
       {
+        "files": {
+          "exclude_cfg_test": false,
+          "glob": [
+            "*.yml",
+            "*.yaml"
+          ],
+          "include": [
+            ".github/workflows"
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "workflow-declares-permissions",
+        "message": "A GitHub Actions workflow declares no top-level `permissions:` block, so its\nGITHUB_TOKEN gets whatever default the repository, organisation or enterprise\nsettings grant -- a scope decided outside this file and invisible in it. Add a\ntop-level `permissions:` block naming the minimum: `contents: read` for a\nworkflow that only checks out and tests.\n\nA `permissions:` under a job scopes that job and does not answer this.\n",
+        "require_regexp": "^[\"']?permissions[\"']?:"
+      }
+    ],
+    "set": "default-token-grant",
+    "stages": []
+  },
+  {
+    "rules": [
+      {
         "builtin": "prevent-ai-author",
         "git": {
           "hooks": [
@@ -530,6 +555,50 @@
     "set": "unowned-push",
     "stages": [
       "pre-push"
+    ]
+  },
+  {
+    "rules": [
+      {
+        "builtin": "no-private-repo-names",
+        "git": {
+          "hooks": [
+            "commit-msg"
+          ]
+        },
+        "id": "no-private-repo-names",
+        "visibility_required": true
+      },
+      {
+        "builtin": "no-private-repo-names-in-files",
+        "git": {
+          "hooks": [
+            "pre-merge-commit",
+            "pre-push",
+            "manual"
+          ]
+        },
+        "id": "no-private-repo-names-in-files",
+        "visibility_required": true
+      },
+      {
+        "builtin": "no-private-repo-names-staged",
+        "git": {
+          "hooks": [
+            "pre-commit"
+          ]
+        },
+        "id": "no-private-repo-names-staged",
+        "visibility_required": true
+      }
+    ],
+    "set": "private-names",
+    "stages": [
+      "commit-msg",
+      "pre-commit",
+      "pre-merge-commit",
+      "pre-push",
+      "manual"
     ]
   }
 ]

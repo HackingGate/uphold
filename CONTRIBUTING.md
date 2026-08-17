@@ -23,6 +23,35 @@ python3 scripts/build_reference.py
 prek run --all-files --hook-stage manual    # or: pre-commit run ...
 ```
 
+## Two lines in a fork that are not yours
+
+`policy/principles.toml` is this repository's own policy, and it is also the
+worked example — so it declares facts about *this* checkout that a fork has to
+change. Both are at the top of the file:
+
+```toml
+owner = "HackingGate"     # where this repository's pushes may go
+visibility = "public"     # whether what it publishes is readable by everyone
+```
+
+`owner` is not a claim on the project. `unowned-push` refuses to run without it
+because the alternative — reading the owner off `origin` — is tautological for
+the one remote most likely to be wrong: repointing `origin` at somebody else's
+remote also repoints the allow-list. So a fork changes that line to its own
+owner, and `prevent-public-push` refuses the first push until it does. That is
+the guard working, not a misconfiguration.
+
+`visibility` decides whether the private-name guards fire here at all. A private
+fork sets `private` and they stand down; a public one leaves `public`.
+
+A third line is about *your machine* rather than your fork.
+`private_owners_from` reads a file that is one operator's and will not exist in
+your clone, so the policy also sets `private_owners_optional = true`: the
+missing source is reported on stderr, naming what is not being checked, and your
+commit proceeds. You do not have to create anything. If you keep a list of
+organisations whose names must not be published, point the command at it and the
+two forms the note names start being checked as well.
+
 ## Working on the engine
 
 The Rust side has two checks CI runs that the commit stage does not, because

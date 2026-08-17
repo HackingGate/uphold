@@ -61,6 +61,42 @@ fn code(output: &Output) -> i32 {
     output.status.code().unwrap()
 }
 
+/// Run a guard with a stub `gh` ahead of the real one on PATH.
+///
+/// The two failure modes this distinguishes are only distinguishable by what
+/// `gh` writes to stderr, so the only honest test drives a `gh` that writes
+/// each. A test that called the classifier directly would be asserting on the
+/// function rather than on the behaviour a repository gets.
+fn guard_with_gh(root: &Path, stderr_line: &str, args: &[&str]) -> Output {
+    let bin = root.join("stub-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let gh = bin.join("gh");
+    std::fs::write(
+        &gh,
+        format!("#!/bin/sh\necho '{stderr_line}' >&2\nexit 1\n"),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .arg("guard")
+        .args(args)
+        .current_dir(root)
+        .env("PATH", path)
+        .env_remove("UPHOLD_ALLOW")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
@@ -76,6 +112,17 @@ builtin = "no-hand-copied-base-rule"
 hooks = ["manual"]
 "#;
 
+/// The check at both stages the bundled set now registers it at: `pre-commit`,
+/// where a policy file changes, and `manual`, where the whole sweep is asked
+/// for. The two answer different questions and the tests below ask both.
+const AUDIT_SHIPPED: &str = r#"
+[rule.local-set-audit]
+builtin = "no-hand-copied-base-rule"
+
+[rule.local-set-audit.git]
+hooks = ["pre-commit", "manual"]
+"#;
+
 /// A transcription of a rule `process-residue` already ships.
 const COPIED: &str = r#"
 [rule.no-merge-conflict-markers]
@@ -83,6 +130,21 @@ message = "conflict markers"
 regexp = '^(<<<<<<<|>>>>>>>) '
 files.include = ["."]
 "#;
+
+/// A second one, from a different set, so a test can add one transcription to a
+/// policy that already has another and see which of the two is reported.
+const COPIED_TOO: &str = r#"
+[rule.no-hardcoded-home-paths]
+message = "home paths"
+regexp = '/home/[a-z]+'
+files.include = ["."]
+"#;
+
+fn commit_policy(root: &Path, policy: &str) {
+    std::fs::write(root.join("policy/principles.toml"), policy).unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "policy", "--no-verify"]);
+}
 
 #[test]
 fn a_hand_copied_rule_is_named_with_its_set_and_what_that_set_would_add() {
@@ -97,6 +159,97 @@ fn a_hand_copied_rule_is_named_with_its_set_and_what_that_set_would_add() {
     // to carry it: a reader deciding whether to inherit cannot weigh the
     // decision from the one id they already wrote out.
     assert!(text.contains("no-hardcoded-home-paths"), "{text}");
+}
+
+#[test]
+fn a_transcription_this_change_adds_is_refused_at_pre_commit() {
+    // The whole point of the hook. `manual` reported this and nobody ran it:
+    // 76 of 77 repositories inherited the set carrying the check and roughly
+    // forty carried a transcription it had never once reported.
+    let root = repository("");
+    commit_policy(&root, &format!("{AUDIT_SHIPPED}{COPIED}"));
+    // Committed above, so the copy that is NEW is the second one.
+    std::fs::write(
+        root.join("policy/principles.toml"),
+        format!("{AUDIT_SHIPPED}{COPIED}{COPIED_TOO}"),
+    )
+    .unwrap();
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("no-hardcoded-home-paths"), "{text}");
+    // And it says nothing about the one that was already there. A refusal that
+    // listed both would send the reader looking for a change they did not make.
+    assert!(!text.contains("no-merge-conflict-markers"), "{text}");
+    assert!(text.contains("this change adds"), "{text}");
+}
+
+#[test]
+fn a_transcription_already_committed_is_not_refused_at_pre_commit() {
+    // The ratchet, and it is what makes the hook installable at all. Arriving
+    // as a gate over declarations that already exist would refuse the next
+    // commit in roughly forty repositories on the strength of a version bump,
+    // with nothing in any of those trees to review.
+    let root = repository("");
+    commit_policy(&root, &format!("{AUDIT_SHIPPED}{COPIED}"));
+    std::fs::write(root.join("a.txt"), "one\n").unwrap();
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    // Still the sweep, though: the copy has not become invisible, it has become
+    // something a reader asks about rather than something a commit trips over.
+    let swept = guard(&root, &["--stage", "manual"]);
+    assert_eq!(code(&swept), 1, "{}", stderr(&swept));
+    assert!(
+        stderr(&swept).contains("no-merge-conflict-markers"),
+        "{}",
+        stderr(&swept)
+    );
+}
+
+#[test]
+fn a_policy_file_git_has_never_seen_has_no_baseline_to_be_old_against() {
+    // A repository adopting uphold writes its whole policy in one commit, and
+    // every id in it is an id being written now. Answering "no baseline, so
+    // nothing is new" would let the first commit carry any number of
+    // transcriptions past the check that exists to see them.
+    let root = repository(&format!("{AUDIT_SHIPPED}{COPIED}"));
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no-merge-conflict-markers"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_baseline_that_would_not_parse_is_reported_as_one_rather_than_as_an_empty_one() {
+    // The commit that REPAIRS a broken policy file. Folding "HEAD would not
+    // parse" into "HEAD declared nothing" would report every transcription
+    // already in the file as one this change introduced -- a measurement
+    // printed over a comparison that never happened, in the one commit whose
+    // author is fixing the thing that broke it.
+    let root = repository("");
+    commit_policy(&root, "this is not toml at all\n[[[\n");
+    std::fs::write(
+        root.join("policy/principles.toml"),
+        format!("{AUDIT_SHIPPED}{COPIED}"),
+    )
+    .unwrap();
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    // Still refused: a comparison that could not be made is not one that
+    // passed.
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("no-merge-conflict-markers"), "{text}");
+    // And it says the comparison did not happen, so "this change adds" is not
+    // read as a measurement.
+    assert!(text.contains("could not be parsed"), "{text}");
 }
 
 #[test]
@@ -372,6 +525,264 @@ fn an_owner_declared_once_for_the_policy_answers_for_an_inherited_rule() {
         stderr(&refused).contains("pinned to acme"),
         "{}",
         stderr(&refused)
+    );
+}
+
+#[test]
+fn private_names_refuses_to_guess_whether_this_repository_is_published() {
+    // The `unowned-push` shape, transposed to the other fact a set cannot be
+    // handed. These guards fire on ONE condition -- is this tree public -- and
+    // left to itself the answer comes from the forge, which is unknown with no
+    // token, unknown with no network, and stale on the day a repository is
+    // flipped. Exit 2: not "this text is wrong", but "nothing here can tell".
+    let root = repository("[inherit]\nsets = [\"private-names\"]\n");
+    commit_one(&root);
+    write(&root, "msg.txt", "a message\n");
+
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("visibility_required"), "{text}");
+    // And it prints the line to write, because a refusal that names a field
+    // without saying where it goes sends the reader to the documentation.
+    assert!(text.contains("visibility = \"private\""), "{text}");
+}
+
+#[test]
+fn a_visibility_declared_once_for_the_policy_answers_for_an_inherited_rule() {
+    // Where the answer goes when the rule is not in this file. `private` is a
+    // real answer and not an opt-out: it says the condition these guards fire
+    // under does not hold here, which is a decision somebody made rather than a
+    // question nobody asked.
+    let root = repository("visibility = \"private\"\n\n[inherit]\nsets = [\"private-names\"]\n");
+    commit_one(&root);
+    write(&root, "msg.txt", "a message\n");
+
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn an_unreadable_owner_source_is_exit_two_unless_the_policy_said_it_may_be_absent() {
+    // The default, first: a rule with no owners refuses nothing, so a source
+    // that could not be read must not be folded into "there were none".
+    let source = "private_owners_from = \"cat no-such-file-anywhere\"\n";
+    let root = repository(&format!(
+        "visibility = \"public\"\n{source}\n[inherit]\nsets = [\"private-names\"]\n"
+    ));
+    commit_one(&root);
+    write(&root, "msg.txt", "a message\n");
+
+    let refused = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("private_owners_optional"),
+        "{}",
+        stderr(&refused)
+    );
+
+    // And the declared exemption, for a policy that is cloned onto machines
+    // that will not have the source. It proceeds -- and says what it stopped
+    // checking, which is the whole difference from a command that swallows its
+    // own failure.
+    std::fs::write(
+        root.join("policy/principles.toml"),
+        format!(
+            "visibility = \"public\"\n{source}private_owners_optional = true\n\n\
+             [inherit]\nsets = [\"private-names\"]\n"
+        ),
+    )
+    .unwrap();
+
+    let allowed = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&allowed), 0, "{}", stderr(&allowed));
+    let text = stderr(&allowed);
+    assert!(text.contains("NOT checked here"), "{text}");
+    assert!(text.contains("named on its own"), "{text}");
+}
+
+#[test]
+fn permitting_an_absent_owner_source_that_no_rule_reads_is_refused_at_load() {
+    // A permission over a source that does not exist reads as though somebody
+    // thought about it, and there is nothing for it to permit.
+    let root = repository(
+        "visibility = \"public\"\nprivate_owners_optional = true\n\n\
+         [inherit]\nsets = [\"private-names\"]\n",
+    );
+    commit_one(&root);
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("permits a failure that cannot happen"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A policy whose private-name guard reads a commit message, with a name the
+/// stub `gh` will be asked about. The URL form, because a bare `owner/repo` is
+/// only extracted for a declared owner.
+const NAMES_AT_COMMIT: &str = "visibility = \"public\"\n\n\
+     [rule.no-private-repo-names]\nbuiltin = \"no-private-repo-names\"\n\n\
+     [rule.no-private-repo-names.git]\nhooks = [\"commit-msg\"]\n";
+
+#[test]
+fn a_forge_that_could_not_be_asked_is_exit_two_and_not_an_inconclusive_finding() {
+    // The distinction the whole split exists for. `gh` unauthenticated,
+    // rate-limited, or absent means this guard DID NOT RUN -- and folding that
+    // into "could not be resolved" made an unauthenticated run print a line per
+    // name and then permit the commit, which is a check that did not happen
+    // wearing the output of one that did.
+    let root = repository(NAMES_AT_COMMIT);
+    commit_one(&root);
+    write(&root, "msg.txt", "see https://github.com/acme/widget\n");
+
+    let output = guard_with_gh(
+        &root,
+        "gh: Bad credentials (HTTP 401)",
+        &["--stage", "commit-msg", "--message", "msg.txt"],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("could not be asked"), "{text}");
+    assert!(text.contains("did not run"), "{text}");
+}
+
+#[test]
+fn a_forge_that_answered_no_such_repository_is_a_finding_and_not_exit_two() {
+    // The other side, and it is why the split is not just "fail closed". An
+    // authenticated `gh` answers 404 for every invented name in a document --
+    // `acme/widget` in this repository's own tests and README. Treating that as
+    // "the check did not happen" would make a tree full of examples unusable,
+    // which is the state `refuse_unknown` exists to let a repository choose.
+    let root = repository(NAMES_AT_COMMIT);
+    commit_one(&root);
+    write(&root, "msg.txt", "see https://github.com/acme/widget\n");
+
+    let output = guard_with_gh(
+        &root,
+        "gh: Not Found (HTTP 404)",
+        &["--stage", "commit-msg", "--message", "msg.txt"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("could not be resolved"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn refuse_unknown_governs_the_answer_and_not_the_absence_of_one() {
+    // `refuse_unknown` turns the 404 case into a refusal. It must NOT be what
+    // decides the unavailable case: that one is exit 2 either way, because a
+    // field about what an answer means cannot speak for a run that got none.
+    let strict = NAMES_AT_COMMIT.replace(
+        "builtin = \"no-private-repo-names\"",
+        "builtin = \"no-private-repo-names\"\nrefuse_unknown = true",
+    );
+    let root = repository(&strict);
+    commit_one(&root);
+    write(&root, "msg.txt", "see https://github.com/acme/widget\n");
+
+    let answered = guard_with_gh(
+        &root,
+        "gh: Not Found (HTTP 404)",
+        &["--stage", "commit-msg", "--message", "msg.txt"],
+    );
+    assert_eq!(code(&answered), 1, "{}", stderr(&answered));
+    assert!(
+        stderr(&answered).contains("refuse_unknown"),
+        "{}",
+        stderr(&answered)
+    );
+
+    let unasked = guard_with_gh(
+        &root,
+        "gh: Bad credentials (HTTP 401)",
+        &["--stage", "commit-msg", "--message", "msg.txt"],
+    );
+    assert_eq!(code(&unasked), 2, "{}", stderr(&unasked));
+}
+
+#[test]
+fn a_name_known_to_be_private_survives_a_name_nothing_could_answer_for() {
+    // The exit-state ranking this repository documents and proves: 1 when
+    // something was found, 2 when nothing was found and something could not be
+    // read, 0 only when everything was read and was clean.
+    //
+    // The unavailable check used to return before the report was built, so a
+    // private name the guard had ALREADY caught was discarded -- unprinted,
+    // exit 2 -- because some unrelated name in the same text had no answer.
+    // The name the guard exists to catch is the one that has to survive.
+    let root = repository(
+        "visibility = \"public\"\n\n\
+         [rule.no-private-repo-names]\nbuiltin = \"no-private-repo-names\"\n\
+         private_owners = [\"secretcorp\"]\n\n\
+         [rule.no-private-repo-names.git]\nhooks = [\"commit-msg\"]\n",
+    );
+    commit_one(&root);
+    // One name a declared owner settles with no network at all, and one the
+    // stub `gh` cannot answer for.
+    write(
+        &root,
+        "msg.txt",
+        "see secretcorp/thing and https://github.com/acme/widget\n",
+    );
+
+    let output = guard_with_gh(
+        &root,
+        "gh: Bad credentials (HTTP 401)",
+        &["--stage", "commit-msg", "--message", "msg.txt"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    // The finding, which is the whole point.
+    assert!(text.contains("secretcorp/thing"), "{text}");
+    // And the unread part, said alongside rather than instead of it.
+    assert!(text.contains("could not be asked"), "{text}");
+}
+
+#[test]
+fn a_source_declared_in_an_inherited_file_satisfies_the_optional_permission() {
+    // The check reads the RESOLVED policy. Asked of `file.rules` alone it
+    // refused a policy whose source is declared in an `inherit.paths` file,
+    // with a sentence saying no source is declared anywhere -- false of exactly
+    // the shape it was refusing.
+    let root = repository(
+        "visibility = \"public\"\nprivate_owners_optional = true\n\n\
+         [inherit]\npaths = [\"policy/shared.toml\"]\n",
+    );
+    std::fs::write(
+        root.join("policy/shared.toml"),
+        "[rule.no-private-repo-names]\nbuiltin = \"no-private-repo-names\"\n\
+         private_owners_from = \"printf 'secretcorp\\n'\"\n\n\
+         [rule.no-private-repo-names.git]\nhooks = [\"commit-msg\"]\n",
+    )
+    .unwrap();
+    commit_one(&root);
+    write(&root, "msg.txt", "a message\n");
+
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn a_word_that_is_not_a_visibility_is_refused_at_load() {
+    // At LOAD, not when a hook fires. A misspelt visibility is a fact about the
+    // file, and hearing about it from whichever seam happened to run first is
+    // hearing about it months after the line was written -- by which time the
+    // guard has been reporting a clean tree the whole way.
+    let root = repository("visibility = \"pubic\"\n\n[inherit]\nsets = [\"private-names\"]\n");
+    commit_one(&root);
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("not a visibility"),
+        "{}",
+        stderr(&output)
     );
 }
 
