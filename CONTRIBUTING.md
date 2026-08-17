@@ -44,9 +44,13 @@ the guard working, not a misconfiguration.
 `visibility` decides whether the private-name guards fire here at all. A private
 fork sets `private` and they stand down; a public one leaves `public`.
 
-What this file deliberately does **not** carry is `private_owners_from`. The
-reasoning is written in the policy itself, at the top: a source that resolves on
-only one machine makes every clone exit `2` on its first commit.
+A third line is about *your machine* rather than your fork.
+`private_owners_from` reads a file that is one operator's and will not exist in
+your clone, so the policy also sets `private_owners_optional = true`: the
+missing source is reported on stderr, naming what is not being checked, and your
+commit proceeds. You do not have to create anything. If you keep a list of
+organisations whose names must not be published, point the command at it and the
+two forms the note names start being checked as well.
 
 ## Working on the engine
 

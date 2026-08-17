@@ -142,14 +142,21 @@ This repository inherits all seven. The seven guard declarations that stood in
 its own policy were byte-identical to the sets', which is the argument the sets
 were promoted on.
 
-One thing it does NOT inherit back is its own `private_owners_from`. That line
-read a file outside the tree, and a missing source is an error rather than an
-empty list -- so it made every clone of this repository exit 2 on its first
-commit, over a file that exists on one machine. This policy is also the worked
-example somebody reads before writing their own, and a worked example that runs
-nowhere but the author's laptop is a gate whose first act is to be switched off.
-The field stays in the schema, as a top-level policy field, for the workspaces
-that can actually resolve it.
+Its own `private_owners_from` needed a third answer rather than a choice between
+two bad ones. The line reads a file outside the tree, and a missing source is an
+error rather than an empty list -- so it made every clone of this repository exit
+2 on its first commit, over a file that exists on one machine. Dropping it was
+tried and measured, and it costs more than it looks: a forge lookup only
+adjudicates names something already extracted, and a bare `owner/repo` is
+extracted only for DECLARED owners and for this repository's own. Without the
+list, a bare `otherowner/repo` and an organisation named on its own are not seen
+at all -- and an organisation named on its own is precisely the form that got
+past a hand audit here.
+
+So the source stays, with `private_owners_optional = true` beside it: the
+failure is reported on stderr, naming those two forms, and the run proceeds. A
+command that swallowed its own failure would have bought the same green while
+losing them in silence, in every clone, permanently.
 
 Adopting `host-identity` is the standing evidence that a set is not a no-op:
 the bundled rule scans `["."]` while all twenty-nine hand-copies scan a strict

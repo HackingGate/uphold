@@ -399,12 +399,40 @@ pub(crate) fn declared_owners(root: &Path, policy: &Policy, rule: &Rule) -> Resu
             // Not silently empty. A source that failed produced no owners, and
             // a rule with no owners refuses nothing -- reporting a clean tree
             // because the list could not be read.
-            return Err(Fatal::new(format!(
-                "{}: private_owners_from exited {}: {}",
+            //
+            // `private_owners_optional` is the one way out, and it is a
+            // DECLARATION rather than a fallback: it exists because a policy in
+            // a repository other people clone names a source that resolves on
+            // one machine, and the choice there is between refusing every
+            // clone's first commit and losing the check silently. Neither is
+            // acceptable, so the third answer is losing it OUT LOUD.
+            if !policy.private_owners_optional {
+                return Err(Fatal::new(format!(
+                    "{}: private_owners_from exited {}: {}\n\nA source that failed produced \
+                     no owners, and a rule with no owners refuses nothing. If this source is \
+                     expected to be absent on some machines -- because this policy is \
+                     cloned -- say so with `private_owners_optional = true` at the top of \
+                     the policy file, and the failure becomes a reported gap instead of \
+                     this.",
+                    rule.id,
+                    output.status.code().unwrap_or(-1),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )));
+            }
+            // Exactly what stopped being checked, because "degraded" without a
+            // list of what degraded is a sentence a reader skips. The two forms
+            // named here are the ones that need a DECLARED owner: every other
+            // form reaches the forge on its own.
+            eprintln!(
+                "uphold: {}: the private-owner source produced nothing ({} exited {}), and \
+                 `private_owners_optional` allows that. Names in URL form, and names under \
+                 this repository's own owner, are still checked. NOT checked here: a bare \
+                 `owner/repo` under an owner nothing declared, and a private organisation \
+                 named on its own.",
                 rule.id,
-                output.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
+                command,
+                output.status.code().unwrap_or(-1)
+            );
         }
         owners.extend(
             String::from_utf8_lossy(&output.stdout)

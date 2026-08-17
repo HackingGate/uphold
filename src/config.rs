@@ -1282,6 +1282,22 @@ pub(crate) struct PolicyFile {
     /// arriving from a set has no other way to reach it.
     #[serde(default)]
     pub private_owners_from: Option<String>,
+    /// Whether the machine running this policy may legitimately not have the
+    /// source `private_owners_from` names.
+    ///
+    /// `false` -- the default -- makes an unreadable source exit 2, because a
+    /// rule with no owners refuses nothing and would report a clean tree over a
+    /// list it could not read.
+    ///
+    /// `true` exists for one shape and should be written for no other: a policy
+    /// in a repository other people CLONE, naming a source that is one
+    /// operator's. There the default refuses every clone's first commit, and
+    /// the usual workaround -- a command that swallows its own failure -- loses
+    /// the check silently and permanently. This is the third answer: the source
+    /// failing is reported, on stderr, naming the two forms that stop being
+    /// checked without it.
+    #[serde(default)]
+    pub private_owners_optional: bool,
     #[serde(default)]
     pub inherit: Option<Inherit>,
     #[serde(default)]
@@ -1352,6 +1368,9 @@ pub(crate) struct Policy {
     /// Where the private-owner list comes from, from the policy file's own
     /// `private_owners_from`. See [`PolicyFile::private_owners_from`].
     pub private_owners_from: Option<String>,
+    /// Whether an unreadable private-owner source is a reported gap rather than
+    /// exit 2. See [`PolicyFile::private_owners_optional`].
+    pub private_owners_optional: bool,
     pub redact_matches: bool,
     pub allowed_scripts: Vec<String>,
     pub rules: Vec<Rule>,
@@ -1512,6 +1531,24 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     // a fact about the file, and hearing about it when a hook fires means
     // hearing about it from whichever seam happened to run first, months after
     // the line was written.
+    // A permission over a source that does not exist. It reads as though the
+    // policy has thought about an absent private-owner list, and there is no
+    // list to be absent -- the same failure a parameter on a rule that cannot
+    // read it is refused for.
+    if file.private_owners_optional
+        && file.private_owners_from.is_none()
+        && !file
+            .rules
+            .values()
+            .any(|rule| rule.private_owners_from.is_some())
+    {
+        return Err(Fatal::at(
+            policy_path,
+            "`private_owners_optional` is set and no `private_owners_from` is declared \
+             anywhere in this policy, so it permits a failure that cannot happen. Declare \
+             the source, or drop the line",
+        ));
+    }
     if let Some(declared) = file.visibility.as_deref() {
         if visibility_is_public(declared).is_none() {
             return Err(Fatal::at(
@@ -1637,6 +1674,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         owner: file.owner.clone(),
         visibility: file.visibility.clone(),
         private_owners_from: file.private_owners_from.clone(),
+        private_owners_optional: file.private_owners_optional,
         redact_matches: file.redact_matches,
         allowed_scripts: file.allowed_scripts,
         rules,

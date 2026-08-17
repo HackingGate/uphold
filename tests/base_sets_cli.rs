@@ -527,6 +527,64 @@ fn a_visibility_declared_once_for_the_policy_answers_for_an_inherited_rule() {
 }
 
 #[test]
+fn an_unreadable_owner_source_is_exit_two_unless_the_policy_said_it_may_be_absent() {
+    // The default, first: a rule with no owners refuses nothing, so a source
+    // that could not be read must not be folded into "there were none".
+    let source = "private_owners_from = \"cat no-such-file-anywhere\"\n";
+    let root = repository(&format!(
+        "visibility = \"public\"\n{source}\n[inherit]\nsets = [\"private-names\"]\n"
+    ));
+    commit_one(&root);
+    write(&root, "msg.txt", "a message\n");
+
+    let refused = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("private_owners_optional"),
+        "{}",
+        stderr(&refused)
+    );
+
+    // And the declared exemption, for a policy that is cloned onto machines
+    // that will not have the source. It proceeds -- and says what it stopped
+    // checking, which is the whole difference from a command that swallows its
+    // own failure.
+    std::fs::write(
+        root.join("policy/principles.toml"),
+        format!(
+            "visibility = \"public\"\n{source}private_owners_optional = true\n\n\
+             [inherit]\nsets = [\"private-names\"]\n"
+        ),
+    )
+    .unwrap();
+
+    let allowed = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&allowed), 0, "{}", stderr(&allowed));
+    let text = stderr(&allowed);
+    assert!(text.contains("NOT checked here"), "{text}");
+    assert!(text.contains("named on its own"), "{text}");
+}
+
+#[test]
+fn permitting_an_absent_owner_source_that_no_rule_reads_is_refused_at_load() {
+    // A permission over a source that does not exist reads as though somebody
+    // thought about it, and there is nothing for it to permit.
+    let root = repository(
+        "visibility = \"public\"\nprivate_owners_optional = true\n\n\
+         [inherit]\nsets = [\"private-names\"]\n",
+    );
+    commit_one(&root);
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("permits a failure that cannot happen"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn a_word_that_is_not_a_visibility_is_refused_at_load() {
     // At LOAD, not when a hook fires. A misspelt visibility is a fact about the
     // file, and hearing about it from whichever seam happened to run first is

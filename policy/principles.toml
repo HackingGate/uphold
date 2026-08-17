@@ -43,29 +43,40 @@ owner = "HackingGate"
 # not. The remaining copy is the forge's to remove, not a rewrite's.
 visibility = "public"
 
-# `private_owners_from` is deliberately ABSENT here, and its absence is the one
-# place this repository's own policy differs from what it recommends.
+# Where the private-owner list comes from. Declared, not looked up: a forge
+# lookup answers for `owner/repo`, and these are organisations -- the form that
+# got past a hand audit of this repository was an organisation named on its own,
+# in a sentence about what it carries. A declaration is also the only thing that
+# can answer for an owner whose existence is itself the thing not to disclose.
 #
-# It stood here, reading a file outside the tree:
+# Read from OUTSIDE the repository, which is the whole point: a list of names
+# that must not be published cannot live in a file that is about to be
+# published, and neither can a command string with a name written into it. The
+# policy stays committed and reviewable; the names do not travel with it.
+private_owners_from = "cat ${XDG_CONFIG_HOME:-$HOME/.config}/principles/private-owners"
+
+# ...and the line that makes the line above safe to commit in a repository other
+# people clone. This is measured rather than assumed:
 #
-#   private_owners_from = "cat ${XDG_CONFIG_HOME:-$HOME/.config}/principles/private-owners"
+#   form in the text                        with the source   without it
+#   https://github.com/<owner>/<repo>       refused           refused
+#   <this repository's owner>/<repo>        refused           refused
+#   <other owner>/<repo>, bare              refused           NOT SEEN
+#   an organisation named on its own        refused           NOT SEEN
 #
-# A missing source is an error rather than an empty list -- a rule with no
-# owners refuses nothing and would report a clean tree -- so that line made
-# every clone of this repository exit 2 on its first commit, over a file that
-# exists on one machine. This is a public repository and the policy in it is
-# also the worked example somebody reads before writing their own; a worked
-# example that cannot run anywhere but the author's laptop is a gate whose
-# first act is to be switched off. That is `psychological-acceptability` and
-# `least-astonishment` in one line, and no rule here catches it.
+# The bottom two need a DECLARED owner: a bare `owner/repo` is otherwise
+# indistinguishable from a relative path, so it is extracted only for declared
+# owners and for this repository's own. Everything else reaches the forge on its
+# own and is judged there.
 #
-# What is given up by dropping it: an owner nothing declares is resolved by
-# asking the forge, which needs a token and a network and answers `unknown`
-# without either. `private_owners` and `private_owners_from` are the offline
-# authority that cannot be contradicted by a network answer, and they are still
-# how a workspace should declare its own -- in a WORKSPACE's policy, which this
-# one is not. See `policy/base/private-names.toml` for where the field goes and
-# why the set does not ship one.
+# So the source is worth having, and the file it reads is one operator's and
+# will not exist in a clone. Without this line a missing source is exit 2 --
+# every clone refused on its first commit, over a worked example that runs
+# nowhere but the author's laptop. With a command that swallowed its own failure
+# it would be exit 0 and the bottom two rows would be lost in silence, in every
+# clone, permanently. This is the third answer: the failure is REPORTED, on
+# stderr, naming those two rows, and the commit proceeds.
+private_owners_optional = true
 
 [inherit]
 # The shared process-residue set -- conflict markers, home paths, dated and

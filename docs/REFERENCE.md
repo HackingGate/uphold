@@ -647,9 +647,34 @@ file, and every rule that needs one reads it from there:
 owner = "your-org"          # read by prevent-public-push
 visibility = "public"       # read by the no-private-repo-names family
 private_owners_from = "cat ~/.config/private-owners"
+private_owners_optional = true    # only where this policy is cloned; see below
 ```
 
-A rule's own field wins where both are written. `visibility` is held to
+A rule's own field wins where both are written.
+
+**Why the owner list is worth declaring**, measured rather than asserted. A
+forge lookup only *adjudicates* names something already extracted, and a bare
+`owner/repo` is extracted only for declared owners and for this repository's
+own — anything else is indistinguishable from a relative path, and treating
+every path in every document as a name would be one lookup per path:
+
+| form in the text | with a declared owner list | without |
+|---|---|---|
+| `https://github.com/owner/repo` | refused | refused |
+| `<your own owner>/repo` | refused | refused |
+| `otherowner/repo`, bare | refused | **not seen** |
+| an organisation named on its own | refused | **not seen** |
+
+An unreadable source is exit `2`, because a rule with no owners refuses nothing
+and would report a clean tree over a list it could not read.
+`private_owners_optional = true` is the one exemption and it is for one shape: a
+policy in a repository other people **clone**, naming a source that is one
+operator's. There the default refuses every clone's first commit, and the usual
+workaround — a command that swallows its own failure — loses the bottom two rows
+silently and permanently. With the field, the failure is reported on stderr,
+naming those two rows, and the run proceeds. Setting it with no
+`private_owners_from` anywhere is refused at load: it would permit a failure
+that cannot happen. `visibility` is held to
 `public`, `private` or `internal` **at load**, not when a hook fires: a misspelt
 visibility is a fact about the file, and a guard that hears about it months
 later has been reporting a clean tree the whole way. The same mechanism holds beside the checks:

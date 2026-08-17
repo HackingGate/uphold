@@ -50,10 +50,23 @@
 #   a shell command would run that command in every inheriting repository on the
 #   strength of a version bump, with nothing in any of those trees to review.
 #   So it is a top-level policy field instead, beside `visibility`, and each
-#   workspace writes its own line. Without one the guards still work: an
-#   undeclared owner is resolved by asking the forge, which is slower and needs
-#   a token, and `private_owners` is the offline authority that cannot be
-#   contradicted by a network answer.
+#   workspace writes its own line. Write one: without a declared owner list the
+#   guards do LESS than they look like they do, and this was measured rather
+#   than assumed --
+#
+#     form in the text                      declared list   no list
+#     https://github.com/<owner>/<repo>     refused         refused
+#     <this repository's owner>/<repo>      refused         refused
+#     <other owner>/<repo>, bare            refused         NOT SEEN
+#     an organisation named on its own      refused         NOT SEEN
+#
+#   The bottom two need a declared owner because a bare `owner/repo` is
+#   otherwise indistinguishable from a relative path, and treating every path in
+#   every document as a name would be one forge lookup per path. Everything else
+#   reaches the forge on its own. A repository whose policy is CLONED -- where
+#   the source will be absent on somebody else's machine -- writes
+#   `private_owners_optional = true` as well, which turns an unreadable source
+#   from exit 2 into a report naming those two rows.
 # * `command.before`. The `gh` and `git push` seam is where the triggering leak
 #   actually happened -- text reaching a forge API with no git hook in its path.
 #   It is not here because a `command.before` entry names a `[[shim]]`, and a
