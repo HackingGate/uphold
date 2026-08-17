@@ -2,9 +2,11 @@
 # setting instead of by the workflow)
 #
 # A GitHub Actions workflow with no top-level `permissions:` block runs with
-# whatever the repository's default grant is, and the default for a repository
-# whose setting has never been touched is write access to contents. Pull in
-# with:
+# whatever default grant applies to it, and that grant is settled OUTSIDE the
+# workflow -- by the repository's setting, by the organisation's, or by the
+# enterprise's, whichever is most restrictive. It may be read-only and it may be
+# read and write; which one it is today is not visible in the file, is not in
+# git history, and changes when somebody edits a settings page. Pull in with:
 #
 #   [inherit]
 #   sets = ["default-token-grant"]
@@ -14,7 +16,20 @@
 # whether a `permissions:` key is present is a fact about the file, so it needs
 # no judgement about which scopes the workflow ought to hold. What the rule
 # cannot say is whether a declared block is MINIMAL -- that remainder stays with
-# the review tier, and the rule is deliberately not stretched to reach it.
+# the review tier, and the rule is deliberately not stretched to reach it. It
+# also cannot say what the default actually IS in this repository, which is the
+# other half of the same limit: the fact lives on a settings page, and a rule
+# that reads files cannot see it. Declaring the block is what makes the
+# question moot.
+#
+# WHY THE PATTERN IS ANCHORED, and why it admits quotes. `^` is column zero, so
+# a `permissions:` nested under a job -- which scopes THAT job and leaves the
+# workflow's own default untouched -- does not satisfy it; an unanchored pattern
+# would read a per-job grant as the top-level declaration and pass exactly the
+# file this rule exists to find. The optional quotes are the other direction:
+# `"permissions":` and `'permissions':` are legal YAML and mean the same key, so
+# refusing them would be this rule telling a workflow that declared its
+# permissions that it did not.
 #
 # WHY THIS IS ITS OWN SET rather than a rule added to `process-residue`. The
 # seven content sets are about residue in what a repository COMMITS -- authoring
@@ -54,11 +69,17 @@ stages = []
 
 [rule.workflow-declares-permissions]
 message = """
-A GitHub Actions workflow declares no `permissions:` block, so its GITHUB_TOKEN
-gets the repository's default grant rather than the scopes the workflow needs.
-Add a top-level `permissions:` block naming the minimum -- `contents: read` for
-a workflow that only checks out and tests.
+A GitHub Actions workflow declares no top-level `permissions:` block, so its
+GITHUB_TOKEN gets whatever default the repository, organisation or enterprise
+settings grant -- a scope decided outside this file and invisible in it. Add a
+top-level `permissions:` block naming the minimum: `contents: read` for a
+workflow that only checks out and tests.
+
+A `permissions:` under a job scopes that job and does not answer this.
 """
-require_regexp = '^permissions:'
+# A TOML literal string cannot hold a single quote, and the pattern needs both
+# quote characters, so this one is a basic string with `\"` escaped. The regex
+# the engine compiles is: ^["']?permissions["']?:
+require_regexp = "^[\"']?permissions[\"']?:"
 files.include = [".github/workflows"]
 files.glob = ["*.yml", "*.yaml"]

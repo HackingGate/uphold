@@ -437,8 +437,8 @@
           "word": false
         },
         "id": "workflow-declares-permissions",
-        "message": "A GitHub Actions workflow declares no `permissions:` block, so its GITHUB_TOKEN\ngets the repository's default grant rather than the scopes the workflow needs.\nAdd a top-level `permissions:` block naming the minimum -- `contents: read` for\na workflow that only checks out and tests.\n",
-        "require_regexp": "^permissions:"
+        "message": "A GitHub Actions workflow declares no top-level `permissions:` block, so its\nGITHUB_TOKEN gets whatever default the repository, organisation or enterprise\nsettings grant -- a scope decided outside this file and invisible in it. Add a\ntop-level `permissions:` block naming the minimum: `contents: read` for a\nworkflow that only checks out and tests.\n\nA `permissions:` under a job scopes that job and does not answer this.\n",
+        "require_regexp": "^[\"']?permissions[\"']?:"
       }
     ],
     "set": "default-token-grant",

@@ -191,6 +191,32 @@ fn a_policy_file_git_has_never_seen_has_no_baseline_to_be_old_against() {
 }
 
 #[test]
+fn a_baseline_that_would_not_parse_is_reported_as_one_rather_than_as_an_empty_one() {
+    // The commit that REPAIRS a broken policy file. Folding "HEAD would not
+    // parse" into "HEAD declared nothing" would report every transcription
+    // already in the file as one this change introduced -- a measurement
+    // printed over a comparison that never happened, in the one commit whose
+    // author is fixing the thing that broke it.
+    let root = repository("");
+    commit_policy(&root, "this is not toml at all\n[[[\n");
+    std::fs::write(
+        root.join("policy/principles.toml"),
+        format!("{AUDIT_SHIPPED}{COPIED}"),
+    )
+    .unwrap();
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    // Still refused: a comparison that could not be made is not one that
+    // passed.
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("no-merge-conflict-markers"), "{text}");
+    // And it says the comparison did not happen, so "this change adds" is not
+    // read as a measurement.
+    assert!(text.contains("could not be parsed"), "{text}");
+}
+
+#[test]
 fn an_override_of_a_set_this_policy_inherits_stays_silent() {
     // The documented override, and it is a decision written in the same file
     // as the `[inherit]` line that shows it. Firing here would make the

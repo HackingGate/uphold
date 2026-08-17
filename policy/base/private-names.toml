@@ -61,6 +61,31 @@
 #   inheriting a set is not a thing to do quietly. Declare the shim and the
 #   `command.before` in the repository, where the decision is visible.
 #
+# * `refuse_unknown`. This is the sharpest choice in the file and it is made
+#   deliberately, so read it before assuming the default is an oversight. With
+#   it OFF -- as it is here -- a name whose visibility could not be determined
+#   is REPORTED and not refused, which is fail-open on a guard about disclosure.
+#   With it ON, a `gh` that is unauthenticated, rate-limited or offline makes
+#   every name unresolvable and every commit refused.
+#
+#   Measured, in this repository, on the tree that ships this set: fifteen names
+#   do not resolve. Every one is documentation or a test fixture --
+#   `acme/widget`, `owner/repo`, `someone-else/thing` -- and with
+#   `refuse_unknown = true` in the set, the commit adding this file would have
+#   been refused fifteen times over its own examples. A set that refuses the
+#   repository that publishes it is a set nobody keeps.
+#
+#   So it is a repository's decision and not the set's, and it is one line:
+#
+#     [rule.no-private-repo-names-in-files]
+#     refuse_unknown = true
+#     public_repos = ["acme/widget"]    # the fixtures that cost nothing
+#
+#   Turn it on where the tree holds no invented names, or name them in
+#   `public_repos` first. What makes fail-open defensible in the meantime is
+#   that an unresolved name is still PRINTED: this is a reported unknown rather
+#   than a silent pass, which is the distinction `explicit-unknown` is about.
+#
 # COST, stated because a set nobody can keep green gets switched off. The
 # tracked-tree rule reads every tracked file and asks the forge once per
 # distinct name it does not already know. That is too slow for a commit, which

@@ -174,6 +174,14 @@ with no network, and answers about the visibility a repository has *today*,
 which is the thing that changes on the day it matters. `visibility = "private"`
 is a real answer, not an opt-out: it says the condition does not hold here.
 
+What `private-names` does **not** turn on is `refuse_unknown`. A name whose
+visibility could not be determined is reported and not refused, which is
+fail-open — and the alternative is worse as a *set* default: an unauthenticated
+or offline `gh` makes every name unresolvable and every commit refused. Measured
+on the tree that ships the set, fifteen names do not resolve and every one is a
+documentation or test fixture. Turn it on per repository, after naming those in
+`public_repos`.
+
 `doc-claims` is the one set whose rule needs the author to write something
 beside the prose, so its grammar is here rather than only in the set. A
 document that leans on a value carries a marker naming where the value lives:

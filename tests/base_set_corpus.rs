@@ -195,6 +195,10 @@ const CORPUS: &[Case] = &[
         ],
         allows: &[
             "name: ci\non: [push]\npermissions:\n  contents: read\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
+            // Legal YAML for the same key. Refusing it would be this rule
+            // telling a workflow that declared its permissions that it did not.
+            "name: ci\non: [push]\n\"permissions\":\n  contents: read\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
+            "name: ci\non: [push]\n'permissions':\n  contents: read\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
         ],
     },
 ];
