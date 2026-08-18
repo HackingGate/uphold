@@ -75,6 +75,13 @@ jobs:
           shared-key: stable-debug
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # Before the preflight, because the preflight now asks for it. This job is
+      # where the comment below stopped being hypothetical: `uv` was added to
+      # toolchain.toml and this runner did not have it, so `deps.sh check`
+      # failed here first and named the tool. That is the manifest working.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.0
+
       # The same preflight a contributor runs, on the runner that is supposed to
       # satisfy it. A manifest nothing reads goes stale the first time a tool is
       # added and declared nowhere.
