@@ -9,13 +9,13 @@ pre-commit:
   parallel: true
   commands:
     catalog-validate:
-      run: python3 scripts/validate.py
+      run: uv run --no-project scripts/validate.py
     catalog-reference-current:
-      run: python3 scripts/build_reference.py --check
+      run: uv run --no-project scripts/build_reference.py --check
     review-current:
-      run: python3 uphold_check.py --review --check
+      run: uv run --no-project uphold_check.py --review --check
     catalog-tests:
-      run: python3 -m unittest discover -s tests
+      run: uv run --no-project python -m unittest discover -s tests
     uphold-check:
       run: cargo run --quiet -- check
     content-policy:

@@ -261,9 +261,9 @@ prek run --all-files --hook-stage manual      # everything CI runs
 Individual steps:
 
 ```sh
-python3 scripts/validate.py           # schema and relationship validation
-python3 scripts/build_reference.py    # rebuild the generated files after edits
-python3 -m unittest discover -s tests
+uv run --no-project scripts/validate.py        # schema and relationship validation
+uv run --no-project scripts/build_reference.py # rebuild the generated files after edits
+uv run --no-project python -m unittest discover -s tests
 ./uphold_check.py                 # this repo's own declaration
 cargo run --quiet -- guard --stage manual   # every pin still names a ref
 ```

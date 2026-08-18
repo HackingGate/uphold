@@ -218,6 +218,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Four hooks in .pre-commit-config.yaml are `language: system` and spelt
+      # `uv run --no-project ...`, so uv has to be on PATH for the runner that
+      # drives them. prek fetches a uv of its own into its cache for
+      # `language: python` hooks, and that copy is not on PATH -- which is what
+      # this job failed on when the hooks moved off bare `python3`.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.0
+
       # The `rg` executable is no longer a dependency: the search stack is
       # linked into `uphold`, so there is nothing left to shell out to. A
       # Rust toolchain is, because this repository runs its own gate from the

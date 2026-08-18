@@ -19,7 +19,7 @@ A proposed entry should answer four questions:
 6. Rebuild the generated index and run everything CI runs:
 
 ```sh
-python3 scripts/build_reference.py
+uv run --no-project scripts/build_reference.py
 prek run --all-files --hook-stage manual    # or: pre-commit run ...
 ```
 
