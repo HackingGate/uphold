@@ -253,6 +253,15 @@ struct Words {
     verb: String,
     noun: String,
     unclear: Option<String>,
+    /// How many options this table could not classify.
+    ///
+    /// Kept beside `unclear`, which names only the first, because the two
+    /// answer different questions. The name is for the reader of a refusal; the
+    /// count is what says whether the two readings `reading()` tries are the
+    /// WHOLE space. `words()` applies `unknown_takes_value` uniformly, so one
+    /// unclassified option has exactly two readings and both are tried, while N
+    /// of them have 2^N and two are.
+    unclear_count: usize,
 }
 
 /// What a shim can say about an invocation from argv alone.
@@ -315,6 +324,7 @@ impl Shim {
     fn words(&self, argv: &[String], unknown_takes_value: bool) -> Words {
         let mut found: Vec<&str> = Vec::new();
         let mut unclear: Option<String> = None;
+        let mut unclear_count = 0usize;
         let mut index = 0;
         while let Some(argument) = argv.get(index) {
             index += 1;
@@ -350,6 +360,7 @@ impl Shim {
                             // says, and `gh --version` is not an invocation
                             // whose subcommand went missing.
                             if argv.get(index).is_some() {
+                                unclear_count += 1;
                                 if unclear.is_none() {
                                     unclear = Some(flag.to_owned());
                                 }
@@ -372,6 +383,7 @@ impl Shim {
             verb: found.next().unwrap_or_default().to_owned(),
             noun: found.next().unwrap_or_default().to_owned(),
             unclear,
+            unclear_count,
         }
     }
 
@@ -403,13 +415,20 @@ impl Shim {
         let Some(flag) = bare.unclear else {
             return Reading::Absent;
         };
-        // An option neither reading can classify leaves the SUBCOMMAND in doubt
-        // only where the two readings disagree about which word it is. `git log
-        // -1 --oneline` is `log` whether `-1` swallows the word after it or not,
-        // and `-1` sits after the subcommand besides. Reporting that as a
-        // could-not-look prints the refusal line over every ordinary command
-        // this shim exists to stay out of the way of -- which trains the reader
-        // to ignore the one invocation where the doubt is real.
+        // EXACTLY ONE unclassified option and the two readings above were the
+        // whole space, so "no checker ran" is a conclusion rather than a doubt.
+        // `words` applies `unknown_takes_value` uniformly: with one such option
+        // the only readings are "it took the next word" and "it did not", both
+        // were asked, and both said no. With two or more there are 2^N and only
+        // two were tried, which is where the doubt is real.
+        if bare.unclear_count <= 1 {
+            return Reading::Absent;
+        }
+        // Past one, the readings are a sample rather than the space, so the
+        // older test stands: they leave the SUBCOMMAND in doubt only where they
+        // disagree about which word it is. `git log -1 --oneline` is `log`
+        // whether `-1` swallows the word after it or not, and `-1` sits after
+        // the subcommand besides.
         if bare.verb == valued.verb && bare.noun == valued.noun {
             return Reading::Absent;
         }
@@ -1705,9 +1724,30 @@ mod tests {
         // not established that this is none of its business. Both readings are
         // tried first -- one of them matching IS an answer -- and only a line
         // no reading names lands here.
+        //
+        // TWO unclassified options, because that is what makes the two readings
+        // a sample rather than the space. `words` applies `unknown_takes_value`
+        // uniformly, so N of them have 2^N readings and exactly two are tried.
+        // Here `--fic-a --fic-b` reads `x`/`y` bare and `status` valued, and
+        // neither is named, but the two readings not tried were never asked.
+        assert!(matches!(
+            git_push().reading(&argv("--fic-a x --fic-b y status")),
+            Reading::Unclear(flag) if flag == "--fic-a"
+        ));
+        // And ONE is the whole space, so both readings missing is a conclusion
+        // rather than a doubt. This line asserted `Unclear` until #56, and what
+        // that cost was measured: on a git shim declaring `push:*`, 9 of 16
+        // ordinary invocations printed the could-not-look refusal -- `git show
+        // --stat HEAD`, `git commit -F -`, `git checkout -b <name>`, `git reset
+        // --hard HEAD` among them -- while `git push` itself was quiet. A
+        // warning printed over every command this shim exists to stay out of
+        // the way of trains the reader to ignore the one invocation where the
+        // doubt is real, which is the failure the whole arm was written to
+        // avoid. Nothing about safety moved: `Unclear` runs no checker and
+        // collects nothing, so it and `Absent` differ in the message alone.
         assert!(matches!(
             git_push().reading(&argv("--fictional-option value status")),
-            Reading::Unclear(flag) if flag == "--fictional-option"
+            Reading::Absent
         ));
         // A word that follows nothing took nothing, whatever its grammar says:
         // `gh --version` is not an invocation whose subcommand went missing.

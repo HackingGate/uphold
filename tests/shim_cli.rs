@@ -629,18 +629,37 @@ fn a_git_global_option_before_the_subcommand_does_not_switch_the_shim_off() {
 
 #[test]
 fn an_option_nothing_can_classify_is_said_out_loud_rather_than_passed_in_silence() {
-    // Neither reading of `--fictional value` names an invocation this shim
-    // checks, so which subcommand this even is was never established. Running
-    // it anyway is deliberate -- the link is on PATH for the whole machine, and
-    // refusing every command that grows an option would make the guard the
-    // reason work stops -- but running it in silence is the shape of failure
-    // this tool refuses.
+    // TWO options nothing can classify, which is what leaves the subcommand
+    // genuinely undetermined: `words` applies `unknown_takes_value` uniformly,
+    // so two of them have four readings and exactly two are tried. Running the
+    // command anyway is deliberate -- the link is on PATH for the whole
+    // machine, and refusing every command that grows an option would make the
+    // guard the reason work stops -- but running it in silence is the shape of
+    // failure this tool refuses.
     let root = workspace(POLICY);
-    let output = shim(&root, &["faux", "--fictional", "value", "repo", "clone"]);
+    let output = shim(
+        &root,
+        &["faux", "--fic-a", "x", "--fic-b", "y", "repo", "clone"],
+    );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(stdout(&output).contains("faux ran:"), "{}", stdout(&output));
     assert!(
         stderr(&output).contains("This is not a pass."),
+        "{}",
+        stderr(&output)
+    );
+
+    // And ONE is not a doubt, because the two readings are then the whole
+    // space and both were asked. Said at this level as well as in the unit
+    // test, because this line is the one a person actually sees: before #56 a
+    // git shim declaring `push:*` printed the refusal over `git show --stat
+    // HEAD`, `git commit -F -` and seven more of sixteen ordinary invocations,
+    // and stayed quiet on `git push`.
+    let output = shim(&root, &["faux", "--fictional", "value", "repo", "clone"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran:"), "{}", stdout(&output));
+    assert!(
+        !stderr(&output).contains("This is not a pass."),
         "{}",
         stderr(&output)
     );
