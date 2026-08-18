@@ -53,7 +53,7 @@ fn workspace(policy: &str) -> PathBuf {
     // `discover` walks up until a repository root, so the fixture has to be
     // one; otherwise it climbs out of the temporary directory and finds
     // whatever policy the machine running the suite happens to carry.
-    Command::new("git")
+    Command::new(support::real_git())
         .args(["init", "-q", "-b", "main"])
         .current_dir(&root)
         .stdout(Stdio::null())

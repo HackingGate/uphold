@@ -39,7 +39,7 @@ fn repository(policy: &str) -> PathBuf {
 }
 
 fn git(root: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = Command::new(support::real_git())
         .args(args)
         .current_dir(root)
         .stdout(Stdio::null())
@@ -486,7 +486,7 @@ hooks = ["pre-commit", "pre-merge-commit", "pre-push", "manual"]
 const ZERO: &str = "0000000000000000000000000000000000000000";
 
 fn head(root: &Path) -> String {
-    let output = Command::new("git")
+    let output = Command::new(support::real_git())
         .args(["rev-parse", "HEAD"])
         .current_dir(root)
         .output()

@@ -57,7 +57,7 @@ hooks = ["commit-msg"]
 }
 
 fn git(root: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = Command::new(support::real_git())
         .args(args)
         .current_dir(root)
         .stdout(Stdio::null())
@@ -279,7 +279,7 @@ fn a_pull_ref_the_forge_no_longer_serves_is_not_audited() {
             "--no-verify",
         ],
     );
-    let stale = Command::new("git")
+    let stale = Command::new(support::real_git())
         .args(["rev-parse", "HEAD"])
         .current_dir(&root)
         .output()
