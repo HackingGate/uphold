@@ -33,14 +33,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The Python below is stdlib-only, so what this pins is the INTERPRETER
+      # and nothing else. `ubuntu-slim` ships whatever python3 it ships, and
+      # `scripts/` reads Cargo.toml with `tomllib`, which is 3.11 or newer --
+      # a runner image refresh is the whole distance between that working and
+      # not. `uv run --no-project` chooses instead of inheriting.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.0
+
       - name: Validate the catalog
-        run: python3 scripts/validate.py
+        run: uv run --no-project scripts/validate.py
 
       - name: Generated reference and name index are current
-        run: python3 scripts/build_reference.py --check
+        run: uv run --no-project scripts/build_reference.py --check
 
       - name: Behaviour tests
-        run: python3 -m unittest discover -s tests
+        run: uv run --no-project python -m unittest discover -s tests
 
   engine:
     name: scan engine
@@ -66,6 +74,13 @@ jobs:
         with:
           shared-key: stable-debug
           save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # Before the preflight, because the preflight now asks for it. This job is
+      # where the comment below stopped being hypothetical: `uv` was added to
+      # toolchain.toml and this runner did not have it, so `deps.sh check`
+      # failed here first and named the tool. That is the manifest working.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.0
 
       # The same preflight a contributor runs, on the runner that is supposed to
       # satisfy it. A manifest nothing reads goes stale the first time a tool is
@@ -99,11 +114,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.0
+
       - name: Read the MSRV from Cargo.toml
         id: msrv
         run: |
           set -euo pipefail
-          version="$(python3 -c '
+          version="$(uv run --no-project python -c '
           import sys, tomllib
           with open("Cargo.toml", "rb") as fh:
               v = tomllib.load(fh)["package"].get("rust-version")
@@ -206,6 +224,14 @@ jobs:
         tool: [pre-commit, prek, lefthook]
     steps:
       - uses: actions/checkout@v7
+
+      # Four hooks in .pre-commit-config.yaml are `language: system` and spelt
+      # `uv run --no-project ...`, so uv has to be on PATH for the runner that
+      # drives them. prek fetches a uv of its own into its cache for
+      # `language: python` hooks, and that copy is not on PATH -- which is what
+      # this job failed on when the hooks moved off bare `python3`.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.0
 
       # The `rg` executable is no longer a dependency: the search stack is
       # linked into `uphold`, so there is nothing left to shell out to. A

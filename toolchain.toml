@@ -51,9 +51,27 @@ name = "clippy"
 check = "cargo clippy --version"
 hint = "component; run: scripts/deps.sh install (rustup component add clippy)"
 
-# scripts/validate.py, scripts/build_reference.py, uphold_check.py and this
-# preflight itself. 3.11 is the floor because deps.sh reads this file with
-# tomllib, which is what 3.11 added.
+# uv is how every Python line in this repository is spelt: the four hook entries
+# in .pre-commit-config.yaml and lefthook.yml, the unit-tests and MSRV steps in
+# .github/workflows/test.yml, and the commands the README gives. All of them are
+# `uv run --no-project`, which resolves nothing and reads no lockfile -- what it
+# pins is the interpreter, and the scripts are stdlib-only.
+#
+# No version floor: nothing here asks uv for a resolution, so there is no
+# lockfile revision for a floor to be about. Debian carries no uv package on
+# every suite this runs on, so the hint names the standalone installer.
+[[tool]]
+name = "uv"
+check = "uv --version"
+version = "uv --version"
+packages.arch = "uv"
+hint = "install uv: curl -LsSf https://astral.sh/uv/install.sh | sh  (docs.astral.sh/uv)"
+
+# Still declared, and NOT because a script is invoked with it. scripts/deps.sh
+# -- this preflight itself -- reads this manifest with tomllib before it can
+# report on anything, and it cannot bootstrap through uv without first checking
+# for the tool it is being asked to report on. 3.11 is the floor because that is
+# what added tomllib.
 [[tool]]
 name = "python3"
 check = "python3 --version"
@@ -61,7 +79,7 @@ version = "python3 --version"
 want = ">=3.11"
 packages.arch = "python"
 packages.debian = "python3"
-hint = "runs the catalog checks and parses this manifest (tomllib, 3.11+)"
+hint = "parses this manifest for scripts/deps.sh (tomllib, 3.11+)"
 
 # The coverage hook is a manual-stage check, so these are optional: a plain
 # build, the pre-commit stage and every guard work without them. They are
