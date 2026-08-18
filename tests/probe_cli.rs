@@ -49,7 +49,7 @@ fn repository(probes: &str) -> PathBuf {
 }
 
 fn git(root: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = Command::new(support::real_git())
         .args(args)
         .current_dir(root)
         .stdout(Stdio::null())
@@ -266,7 +266,7 @@ fn the_operators_own_tree_is_never_planted_in() {
         !root.join("sample.txt").exists(),
         "the probe left its fixture in the working tree"
     );
-    let status = Command::new("git")
+    let status = Command::new(support::real_git())
         .args(["status", "--porcelain"])
         .current_dir(&root)
         .output()

@@ -52,7 +52,7 @@ fn workspace(name: &str) -> PathBuf {
     // be on PATH under its own name.
     std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_uphold"), root.join("bin/uphold")).unwrap();
     executable(&root.join("bin/faux"), "#!/bin/sh\necho \"faux ran: $*\"\n");
-    Command::new("git")
+    Command::new(support::real_git())
         .args(["init", "-q", "-b", "main"])
         .current_dir(&root)
         .stdout(Stdio::null())

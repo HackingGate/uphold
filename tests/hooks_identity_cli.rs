@@ -28,7 +28,7 @@ fn workspace() -> PathBuf {
 fn repository(workspace: &Path, name: &str, config: &str) -> PathBuf {
     let root = workspace.join(name);
     std::fs::create_dir_all(&root).unwrap();
-    let status = Command::new("git")
+    let status = Command::new(support::real_git())
         .args(["init", "-q", "-b", "main"])
         .current_dir(&root)
         .stdout(Stdio::null())
@@ -163,7 +163,7 @@ fn waivers(root: &Path, text: &str) {
     )
     .unwrap();
     std::fs::write(root.join("policy/hooks.toml"), text).unwrap();
-    let status = Command::new("git")
+    let status = Command::new(support::real_git())
         .args(["init", "-q", "-b", "main"])
         .current_dir(root)
         .stdout(Stdio::null())
@@ -296,7 +296,7 @@ fn a_lefthook_command_under_two_hooks_is_two_declarations_not_a_fork() {
     let workspace = workspace();
     let one = workspace.join("one");
     std::fs::create_dir_all(&one).unwrap();
-    let status = Command::new("git")
+    let status = Command::new(support::real_git())
         .args(["init", "-q", "-b", "main"])
         .current_dir(&one)
         .stdout(Stdio::null())

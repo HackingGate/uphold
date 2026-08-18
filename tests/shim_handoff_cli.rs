@@ -57,7 +57,7 @@ fn workspace(policy: &str, stubs: &[(&str, &str)]) -> PathBuf {
         std::fs::set_permissions(&path, permissions).unwrap();
     }
 
-    Command::new("git")
+    Command::new(support::real_git())
         .args(["init", "-q", "-b", "main"])
         .current_dir(&root)
         .stdout(Stdio::null())

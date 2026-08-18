@@ -86,3 +86,60 @@ fn sweep(all: &std::path::Path) {
         let _ = std::fs::remove_dir_all(entry.path());
     }
 }
+
+/// The real `git`, not the shim standing in front of it.
+///
+/// `Command::new("git")` resolves through `PATH`, and on a machine where
+/// `uphold shim --install` has been run the first `git` on `PATH` is a symlink
+/// to this very binary. Every fixture-setup call in this suite then runs the
+/// shim, which loads the repository's policy before running anything and
+/// refuses when it cannot.
+///
+/// That is the shim being RIGHT, and it is why the failure is confusing: the
+/// tests it breaks are the ones whose fixture is a policy that deliberately
+/// does not load, so `git add -A` inside such a tree is precisely the
+/// invocation `uphold` exists to refuse. Measured at v1.4.0 and every version
+/// before it: three tests in `base_sets_cli.rs` fail on a developer machine and
+/// pass in CI, because the runner has no shims installed. Green where a
+/// regression would be caught and red only for whoever is developing the tool
+/// is the shape that gets a test deleted.
+///
+/// So the fixtures say which `git` they mean. A candidate is skipped when it
+/// resolves to a file named `uphold`, which is what `--install` creates: links
+/// named after each command, all pointing at this binary.
+///
+/// The limit, stated rather than discovered: a shim installed under a binary
+/// with some other file name is not recognised, and neither is a wrapper script
+/// that is not a link. `--install` makes links to this binary and nothing else,
+/// so what is covered is what the tool does; what is not covered is somebody
+/// having built their own front-end, and that person is not surprised by this.
+///
+/// Falling back to the bare name when nothing else is found is deliberate: an
+/// absent `git` should fail the way it always did, naming git, rather than
+/// naming a helper the reader has to go and understand first.
+pub fn real_git() -> PathBuf {
+    static RESOLVED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    RESOLVED.get_or_init(resolve_git).clone()
+}
+
+fn resolve_git() -> PathBuf {
+    let Some(path) = std::env::var_os("PATH") else {
+        return PathBuf::from("git");
+    };
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join("git");
+        if !candidate.is_file() {
+            continue;
+        }
+        // The canonical target, not the link. A shim is a symlink whose target
+        // is this binary, and its own file name is `git` like any other.
+        let Ok(target) = std::fs::canonicalize(&candidate) else {
+            continue;
+        };
+        if target.file_stem().is_some_and(|stem| stem == "uphold") {
+            continue;
+        }
+        return candidate;
+    }
+    PathBuf::from("git")
+}

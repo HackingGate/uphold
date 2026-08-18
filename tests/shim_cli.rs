@@ -69,7 +69,7 @@ fn workspace(policy: &str) -> PathBuf {
     std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
     std::fs::set_permissions(&stub, permissions).unwrap();
 
-    Command::new("git")
+    Command::new(support::real_git())
         .args(["init", "-q", "-b", "main"])
         .current_dir(&root)
         .stdout(Stdio::null())

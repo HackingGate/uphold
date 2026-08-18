@@ -226,7 +226,7 @@ fn repository(policy: &str) -> PathBuf {
 }
 
 fn git(root: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = Command::new(support::real_git())
         .args(args)
         .current_dir(root)
         .stdout(Stdio::null())

@@ -995,7 +995,7 @@ fn repository(root: &Path) {
         &["config", "user.name", "Test"][..],
         &["config", "user.email", "test@example.test"][..],
     ] {
-        let status = Command::new("git")
+        let status = Command::new(support::real_git())
             .args(arguments)
             .current_dir(root)
             .status()
@@ -1005,7 +1005,7 @@ fn repository(root: &Path) {
 }
 
 fn add(root: &Path) {
-    let status = Command::new("git")
+    let status = Command::new(support::real_git())
         .args(["add", "-A", "."])
         .current_dir(root)
         .status()
