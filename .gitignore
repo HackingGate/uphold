@@ -10,3 +10,15 @@ lcov.info
 # the first's directory rather than deleting it, so both names are here.
 mutants.out/
 mutants.out.old/
+
+# `uv run --no-project` is how every Python line in this repository is spelt --
+# in .pre-commit-config.yaml and in .github/workflows/test.yml -- and
+# `--no-project` means uv resolves nothing and reads no lockfile. Running uv
+# here anyway writes a uv.lock holding this package and no dependencies, which
+# is a resolution of nothing that nobody consults.
+#
+# Committing it would put a file in the tree that reads as the pinned set the
+# builds use and is not. The scripts under scripts/ are stdlib-only and the
+# wheel is built by maturin from Cargo.toml, so there is no dependency here for
+# a lock to be about. If one is ever added, this line is what to delete.
+uv.lock

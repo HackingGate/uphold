@@ -107,14 +107,14 @@ repos:
         stages: [manual]
       - id: catalog-validate
         name: validate principle records
-        entry: python3 scripts/validate.py
+        entry: uv run --no-project scripts/validate.py
         language: system
         pass_filenames: false
         always_run: true
         stages: [pre-commit, manual]
       - id: catalog-reference-current
         name: generated reference and name index are current
-        entry: python3 scripts/build_reference.py --check
+        entry: uv run --no-project scripts/build_reference.py --check
         language: system
         pass_filenames: false
         always_run: true
@@ -125,14 +125,14 @@ repos:
       # refuses -- neither shows up in a diff of the file that caused it.
       - id: review-current
         name: compiled review is current and within its ceiling
-        entry: python3 uphold_check.py --review --check
+        entry: uv run --no-project uphold_check.py --review --check
         language: system
         pass_filenames: false
         always_run: true
         stages: [pre-commit, manual]
       - id: catalog-tests
         name: catalog and checker tests
-        entry: python3 -m unittest discover -s tests
+        entry: uv run --no-project python -m unittest discover -s tests
         language: system
         pass_filenames: false
         always_run: true
