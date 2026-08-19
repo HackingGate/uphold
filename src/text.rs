@@ -82,7 +82,26 @@ fn read(source: &str) -> Result<String> {
 
 pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<Exit> {
     let text = read(source)?;
+    let refusals = failures(found, &text)?;
 
+    for failure in &refusals {
+        failure.print();
+    }
+    if refusals.is_empty() {
+        println!("policy checks passed (text)");
+        return Ok(Exit::Clean);
+    }
+    Ok(Exit::Violations)
+}
+
+/// The same rules over text that is already in hand rather than behind a source
+/// to open.
+///
+/// Split out so the hook seam consults exactly the same rules this does, for
+/// the reason `guard::text_refusal` gives about its own split: a literal a
+/// commit message is refused for and a tool call is allowed for would be two
+/// rules wearing one id.
+pub(crate) fn failures(found: Option<&(PathBuf, PathBuf)>, text: &str) -> Result<Vec<Failure>> {
     let (root, policy) = match found {
         Some((root, policy_path)) => (root.clone(), config::load(root, policy_path)?),
         None => (std::env::current_dir()?, Policy::default()),
@@ -123,7 +142,7 @@ pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<
         for needle in needles {
             let label = format!("{} ({})", rule.id, needle.label);
             let hits =
-                engine::search_text(&text, &Query::literal(&needle.value, needle.word), &label)?;
+                engine::search_text(text, &Query::literal(&needle.value, needle.word), &label)?;
             if hits.is_empty() {
                 continue;
             }
@@ -143,12 +162,5 @@ pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<
         }
     }
 
-    for failure in &failures {
-        failure.print();
-    }
-    if failures.is_empty() {
-        println!("policy checks passed (text)");
-        return Ok(Exit::Clean);
-    }
-    Ok(Exit::Violations)
+    Ok(failures)
 }

@@ -909,6 +909,94 @@ unexamined by the one path the editor re-entry exists to close. This is the only
 place the shim refuses without having read anything, and `explicit-unknown` is
 why: an unobserved property must not resolve to success.
 
+## `uphold hook` — the caller that spawns no process
+
+```sh
+uphold hook claude-code   # the pending call arrives as JSON on stdin
+```
+
+The shim decides by `argv[0]`, which works for exactly as long as publishing
+means running a command. An agent reaching a forge through an MCP server sends
+the body over HTTPS from inside its own process. There is no command to link a
+name in front of, so `prevent-ai-author`, the `private-names` guards and the
+`credentials` rules read nothing — not because any was disabled, but because all
+of them are reached from a seam that needs a process to have been spawned.
+
+`hook` is that seam without the process. The harness hands over the pending call
+and reads a verdict back, and the rules it consults are the ones `scan --text`
+and `guard --text` consult, through the same functions.
+
+### Configuring it
+
+```jsonc
+// ~/.claude/settings.json
+{"hooks": {"PreToolUse": [
+  {"matcher": "mcp__github__.*",
+   "hooks": [{"type": "command", "command": "uphold hook claude-code"}]}
+]}}
+```
+
+The `.*` is required. A matcher of `mcp__github` holds only exact-match
+characters, so it is compared as a string and matches no tool.
+
+**Which calls arrive is the harness's decision, not this binary's.** Re-deciding
+it here would be a second matcher free to disagree with the first, and an
+operator would have to hold both. What arrives is checked.
+
+### What runs where there is no policy
+
+Every other seam requires a policy and exits `2` without one, because a git hook
+runs in the repository whose policy applies by construction. A tool call does
+not: it is made from wherever the session was started, which is frequently a
+workspace superproject whose policy is deliberately not borrowed, a scratch
+directory, or a checkout with no `policy/` at all. **Could-not-look is the
+ordinary case at this seam rather than the edge**, and the choice of what it
+means is load-bearing:
+
+- refusing on it blocks routine work from every non-policy directory, and
+  `psychological-acceptability` says what happens next — the cheapest response is
+  deleting the matcher, and the seam's real coverage goes to zero
+- passing silently reports an unknown as a pass, which `explicit-unknown` refuses
+
+So the halves are split by what each needs. The **host-identity rules run
+anyway**, carrying the fallback `scan --text` documents for this case, because a
+seam that stood down here would be absent in exactly the places nobody thought
+to configure it. The **guards do not run**, and their absence is printed to
+stderr: partial coverage, said out loud, rather than a pass.
+
+### The exit code is the harness's, not uphold's
+
+Everywhere else in this binary `1` is refused and `2` is could-not-look. Here the
+harness owns the protocol. Claude Code reads a refusal out of a JSON document on
+stdout and treats a non-zero status as a failure *of the hook* rather than a
+verdict *on the call* — so exiting `1` to mean refused would let the body through
+with a complaint attached. The refusal travels in the document:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
+ "permissionDecisionReason":"uphold refused what mcp__github__create_pull_request ..."}}
+```
+
+It is printed to stderr as well, so a person running `uphold hook` by hand reads
+the report rather than a line of JSON. `2` keeps its meaning for the two things
+that are uphold's own: a harness name the binary does not describe, and an event
+that is not JSON. Neither was examined, and neither is reported as allowed.
+
+### What it reads out of the call
+
+Every string anywhere under the harness's input pointer, at any depth. Not a
+list of field names per tool: a server decides what to call the field holding a
+body, a release note or a branch name, and a table of those names is a table
+missing the one a new server just added — silently, and in the green direction.
+
+### Adding a harness
+
+The shapes are data, one row per harness: a pointer to what the call is called,
+a pointer to what it is about to send, the refusal document, where in it the
+report goes, and which exit code that harness reads as blocked. A name the table
+does not carry is refused and the known ones are listed, because none of those
+five values is derivable from a name.
+
 ## `uphold audit --for-publication`
 
 Every guard across every seam conditions on *is the target public **now***. So
