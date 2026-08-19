@@ -83,6 +83,7 @@ mod error;
 mod fixture;
 mod git;
 mod guard;
+mod hook;
 mod hooks;
 mod install;
 mod out;
@@ -117,6 +118,7 @@ usage:
                                      versions of this binary can be diffed
   uphold rules --effective [--json]  every rule this repository resolves to, and
                                      the git hooks each one fires at
+  uphold hook claude-code            judge a pending agent tool call, read on stdin
   uphold shim <command> [args...]     check what a command would publish, then run it
   uphold shim --install [COMMAND...]  link this binary under each command's name
   uphold shim --status                what is linked, and whether PATH reaches it
@@ -352,6 +354,25 @@ fn run() -> Result<Exit> {
             _ => Err(Fatal::new(format!(
                 "usage: uphold rules --set NAME [--json] | uphold rules --sets --json | \
                  uphold rules --effective [--json]\n\n{USAGE}"
+            ))),
+        },
+        "hook" => match rest {
+            [harness] => {
+                let working = std::env::current_dir()?;
+                // Not `ok_or_else(no_policy_here)`, which is what every other
+                // seam here does. A tool call is made from wherever the session
+                // was started, and that is frequently a workspace superproject,
+                // a scratch directory, or a checkout with no policy of its own
+                // -- so could-not-look is the ORDINARY case at this seam rather
+                // than the edge, and refusing on it would block routine work
+                // everywhere and get the hook switched off within a day. What
+                // still runs without a policy, and what does not, is
+                // `hook::run`'s to do and to report.
+                hook::run(text_of(harness)?, discover(&working).as_ref())
+            }
+            _ => Err(Fatal::new(format!(
+                "usage: uphold hook {}\n\n{USAGE}",
+                hook::known()
             ))),
         },
         "shim" => shim_or_links(rest),

@@ -144,6 +144,7 @@ uphold guard --stage pre-push   # the guards for that git hook
 uphold shim gh pr create ...    # stand in front of a command, then exec
 uphold shim --install           # link this binary under each command's name
 uphold shim --status            # what is linked, and whether PATH reaches it
+uphold hook claude-code         # judge a pending agent tool call, read on stdin
 uphold audit --for-publication  # before flipping private -> public
 
 uphold hooks --identity ../a ../b   # do these repositories declare the same hooks
@@ -156,7 +157,7 @@ uphold_check.py --oscal         # OSCAL component-definition JSON
 uphold_check.py --review        # what routes to the review tier
 ```
 
-## The three seams
+## The four seams
 
 One config file, `policy/principles.toml`, one flat id namespace. A rule says
 **what it checks** in the field it writes, and **where it runs** in up to three
@@ -196,6 +197,33 @@ in the shape `direnv` uses. What the shim *does* is per repository either way â€
 no policy where the command was typed and it execs the real one and says nothing.
 The reasoning, and what was deliberately not built:
 [ADR 0002](docs/adr/0002-the-reach-of-a-command-shim.md).
+
+**`uphold hook <harness>`** is the shim's answer for a caller that spawns no
+process. An agent reaching a forge through an MCP server posts a pull-request
+body over HTTPS from inside its own process: no command, no `argv[0]`, no link
+to install, and every rule that reads a published string sees nothing. What
+replaces `argv[0]` is the harness's own pre-call decision point, which hands a
+hook the pending call as JSON on stdin and reads a verdict back â€” so the same
+rules the shim runs are reached from a seam that needs no process at all.
+
+This does not replace the shim, and installing it is not a reason to stop
+installing one. The shim reaches a human at a terminal, a CI step and a script,
+whatever launched them; the hook reaches every transport a harness can make and
+none of it when the harness is a different one. Neither contains the other. It
+also arrives *earlier* than the other three, which refuse at commit or at exec,
+after the work is staged.
+
+Which calls are sent here is the harness's own matcher, not a second one in this
+binary. The harness a name does not describe is refused rather than guessed at,
+because the pointers into its event are not derivable from its name.
+
+```jsonc
+// ~/.claude/settings.json
+{"hooks": {"PreToolUse": [
+  {"matcher": "mcp__github__.*",
+   "hooks": [{"type": "command", "command": "uphold hook claude-code"}]}
+]}}
+```
 
 **`uphold hooks --identity DIR...`** and **`uphold probe`** ask the two
 questions a single repository cannot answer about itself. A forked hook
