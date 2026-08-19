@@ -10,7 +10,7 @@
 #   # lefthook.yml, in the consuming repository
 #   remotes:
 #     - git_url: https://github.com/HackingGate/uphold
-#       ref: v1.5.0
+#       ref: v1.6.0
 #       configs:
 #         - hooks/lefthook.yml
 #
@@ -21,7 +21,7 @@
 # their manifest contract; lefthook runs commands and has no such contract, so
 # `uphold` must be on PATH:
 #
-#   cargo install --git https://github.com/HackingGate/uphold --tag v1.5.0
+#   cargo install --git https://github.com/HackingGate/uphold --tag v1.6.0
 #
 # The names below are prefixed `uphold-` on purpose. A remote config is
 # merged into the consumer's own, and two commands sharing a name under one hook
