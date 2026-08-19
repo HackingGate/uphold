@@ -1,0 +1,135 @@
+# Base rule set: hand-rolled-toolchain (a tool installed by hand, not by a
+# version manager)
+#
+# Download-and-unpack installers, and the symlinks that put their output on
+# PATH. Pull in with:
+#
+#   [inherit]
+#   sets = ["process-residue", "credentials", "hand-rolled-toolchain"]
+#
+# WHAT THIS GROUP IS ABOUT, and it is not "do not install tools".
+#
+# A repository needs host tools its language manifest cannot install: a Zig
+# toolchain, a linter, a secrets binary. There are two ways to get one, and
+# they fail differently.
+#
+# The first is to declare it -- `mise.toml`, `.tool-versions`, an `asdf` file --
+# and let a version manager resolve it for the architecture and OS in front of
+# it. One declaration, one resolver, and the resolver already knows that this
+# release has no aarch64 asset and that one needs a different backend.
+#
+# The second is to write the installer. It is always about fifteen lines and it
+# is always the same fifteen: detect `uname -m`, map it to the vendor's
+# spelling, build a URL, `curl | tar`, move the directory somewhere under
+# `$HOME`, symlink the binary onto PATH. Every one of those lines is a decision
+# the version manager had already made, re-made by hand, per repository.
+#
+# WHAT WAS MEASURED. The sweep that promoted this set found the same Zig
+# tarball installer written out in TEN repositories -- same `uname -m` case,
+# same two architectures, same `~/.local/zig`, same `ln -sf` -- alongside four
+# further bespoke answers to the same question in one workspace: a symlink for
+# one tool, an upstream shell installer for a second, a source build for a
+# third, a `cargo install` for a fourth. Four answers, ten transcriptions, and
+# one question: get me this tool, on this arch, on this distro.
+#
+# The cost is not the duplication. It is that a hand-written installer is
+# UNTESTED ON THE PLATFORM IT WILL FAIL ON. The measured failures are all of
+# that shape: a `mv` into a `~/.local` that does not exist yet on a fresh
+# runner; a vendor release carrying darwin and windows assets and no Linux one
+# at all, which resolves cleanly, reports a version, and fails at install time
+# on the architecture nobody developed on. A version manager meets those on
+# behalf of every consumer at once. Fifteen lines of shell meet them one
+# repository at a time, in CI, months apart.
+#
+# WHAT THIS SET DELIBERATELY DOES NOT REFUSE, said here rather than discovered
+# in a review.
+#
+#   `curl ... | sh`. That is how a version manager ITSELF arrives, and a rule
+#   that refused it would refuse the one installer that has nowhere else to go:
+#   the bootstrap cannot be declared in the file the thing being bootstrapped
+#   reads. The shape this set names is the tarball being unpacked by hand --
+#   `| tar`, `| unzip` -- which is a TOOL arriving, not a resolver.
+#
+#   A `[[tool]]` row, a `want`, a per-distro package name. A repository that
+#   keeps a host-prerequisite manifest beside its version manager is doing the
+#   right thing, not the wrong one: a resolver PROVISIONS and a doctor
+#   VERIFIES, and the two must be different programs -- an installer that
+#   grades its own work reports the package manager's exit code and calls a
+#   broken host ready. There is also no way to tell, from one file, whether a
+#   `want` restates a version declared elsewhere or asserts a floor the
+#   repository refuses to run below. Both rules here fire on a COMMAND, which
+#   is a thing a file can be sure about.
+#
+#   A distro package. `pacman -S`, `apt-get install` and their manifests are
+#   how the things a version manager cannot own arrive -- a daemon, a native
+#   link dependency, a kernel header. Refusing those would push a repository
+#   toward vendoring them by hand, which is the failure this set exists to
+#   prevent, arriving from the other side.
+#
+# MIGRATING INTO IT. A repository that still carries a hand-written installer
+# inherits the set and lists the rule in `disabled_rules` until it has moved,
+# rather than declining the set whole. That way the rule is armed against the
+# NEXT installer while the existing one is still being replaced, and the
+# disabled entry is a line in the policy a reader can ask about -- which an
+# uninherited set is not.
+
+# WHAT THIS SET MAY INSTALL. `stages` is the ceiling, and an empty list means
+# no git hook at all: both rules here are content rules the scan owns. A set
+# ships compiled into the binary, so a rule added to one starts running in
+# every repository that inherits it with nothing in any tree to review, and a
+# guard doing that is a commit refused on the strength of a version bump.
+[set]
+stages = []
+
+[rule.no-hand-rolled-tool-install]
+message = """
+Do not download and unpack a tool by hand. A `curl | tar` installer re-decides,
+per repository, everything a version manager already knows: which asset exists
+for this architecture, which for this OS, and what to do when the release
+carries neither.
+
+Declare the tool instead -- a `mise.toml` `[tools]` row, a `.tool-versions`
+line -- and let the resolver fetch it. The version then lives somewhere a
+dependency bot can see it move, which a URL built out of shell variables does
+not.
+
+The measured failures of the hand-written form are not stale versions. They are
+a `mv` into a directory that does not exist on a fresh runner, and a vendor
+release with no Linux asset on the architecture nobody developed on -- each one
+found once per repository, in CI, long after it was written.
+"""
+# The pipeline, not the URL. `no-pinned-versioned-fetch` in `unmanaged-pins`
+# already refuses a version typed into a fetched URL, and it is deliberately
+# blind to exactly the installers this rule exists for: every one of them builds
+# its URL from shell variables (`${ver}`, `${arch}`), so there is no version in
+# the line to match. What IS in the line, in all ten copies, is a fetch piped
+# into an unpacker.
+#
+# `sh` and `bash` are NOT alternatives here, for the reason the header gives:
+# that is a version manager's own bootstrap, and it has nowhere else to live.
+regexp = '(?i)\b(curl|wget)\b[^\n]*\|[^\n]*\b(tar|unzip|bsdtar|cpio)\b'
+files.include = ["."]
+files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "CONTRIBUTING.md", "third_party/**", "vendor/**"]
+
+[rule.no-hand-rolled-tool-symlink]
+message = """
+Do not symlink a hand-installed tool onto PATH out of `$HOME/.local`. That link
+is the second half of a download-and-unpack installer, and it carries the half
+of the problem the download does not: the binary is now on PATH at a version no
+manifest records, so every later check reports the tool as present and none of
+them can say which one.
+
+Let the version manager own the binary, and link the version IT resolved --
+`ln -sfn "$(mise which zig)" /usr/local/bin/zig` -- when a link is genuinely
+needed because the caller reads no shell profile (compose, a systemd unit, a
+non-interactive ssh). The link then makes the tool findable without also
+deciding which one it is.
+"""
+# Scoped to a link into `$HOME/.local`, which is where a hand-rolled installer
+# puts its output and where a resolver-owned link does not go. That scoping is
+# what lets the sanctioned form through unmatched: it links from
+# `$(mise which <tool>)` into a system prefix, and neither half touches
+# `~/.local`.
+regexp = '(?i)\bln\s+-[a-z]*s[a-z]*\b[^\n]*(\$HOME|\$\{HOME\}|~)/\.local/'
+files.include = ["."]
+files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "CONTRIBUTING.md", "third_party/**", "vendor/**"]

@@ -67,6 +67,16 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
         "default-token-grant",
         include_str!("../policy/base/default-token-grant.toml"),
     ),
+    // Named for the shape it refuses rather than for `toolchain`, which would
+    // have predicted a rule about which toolchain a repository uses. What it
+    // refuses is an installer written by hand where a version manager was
+    // available -- and declining it is a real decision, because a repository
+    // that deliberately vendors its own bootstrap has an argument for exactly
+    // these lines.
+    (
+        "hand-rolled-toolchain",
+        include_str!("../policy/base/hand-rolled-toolchain.toml"),
+    ),
     // The guard sets. They install git hooks, which the seven above do not, and
     // each is a separate name because taking one is a separate decision: what
     // it costs, when it runs, and what it will refuse are different arguments
