@@ -172,6 +172,56 @@ const CORPUS: &[Case] = &[
         refuses: &["curl -fsSL https://example.com/dist/1.2.3/x.tar.gz\n"],
         allows: &["curl -fsSL https://example.com/dist/latest/x.tar.gz\n"],
     },
+    // The `allows` here are the two forms the header of the set argues for and
+    // the one it argues against, so a narrowing edit fails rather than quietly
+    // stops covering them: a version manager's own bootstrap (`| sh`), which
+    // has nowhere else to live, and a fetch that is not feeding an unpacker.
+    Case {
+        set: "hand-rolled-toolchain",
+        rule: "no-hand-rolled-tool-install",
+        path: "scripts/install-zig.sh",
+        refuses: &[
+            "curl -fsSL \"$url\" | tar -xJ -C \"$tmp\"\n",
+            "wget -qO- \"$url\" | bsdtar -xf -\n",
+            // The same two commands carrying the newline a formatter inserts
+            // once the line gets long. Without the continuation alternative
+            // these pass, which would make the rule switchable off by pressing
+            // Enter.
+            "curl -fsSL \"$url\" \\\n  | tar -xJ -C \"$tmp\"\n",
+            "wget -qO- \\\n  \"$url\" | unzip -\n",
+        ],
+        allows: &[
+            "curl -fsSL https://example.com/install | sh\n",
+            "curl -fsSL \"$url\" -o \"$tmp/x.tar.xz\"\n",
+            // A fetch and an unpack that are two separate commands rather than
+            // one pipeline. This newline is NOT continued, so the multi-line
+            // alternative must not reach across it -- otherwise the rule runs
+            // away down the file and matches any curl above any tar.
+            "curl -fsSL \"$url\" -o x.tar.xz\necho done\ntar -xf x.tar.xz\n",
+        ],
+    },
+    // `allows` carries the sanctioned link, and it is the whole reason this
+    // rule names a bin directory rather than `~/.local` alone: a link whose
+    // SOURCE is the version the resolver picked is the remedy this set
+    // recommends, and a rule that refused it would leave the caller that reads
+    // no shell profile with no correct move at all. The `.local/share` and
+    // `.local/state` samples are the other half of the same scoping -- an XDG
+    // destination is not PATH.
+    Case {
+        set: "hand-rolled-toolchain",
+        rule: "no-hand-rolled-tool-symlink",
+        path: "scripts/install-zig.sh",
+        refuses: &[
+            "ln -sf \"$dest/zig\" \"$HOME/.local/bin/zig\"\n",
+            "ln -s ~/.local/zig/zig /usr/local/bin/zig\n",
+        ],
+        allows: &[
+            "ln -sfn \"$(mise which zig)\" /usr/local/bin/zig\n",
+            "ln -sfn \"$repo/config\" \"$HOME/.config/zig\"\n",
+            "ln -sfn \"$repo/x.desktop\" \"$HOME/.local/share/applications/x.desktop\"\n",
+            "ln -sfn \"$repo/unit\" \"$HOME/.local/state/unit\"\n",
+        ],
+    },
     Case {
         set: "captured-fixtures",
         rule: "no-non-ascii-in-fixtures",

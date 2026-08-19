@@ -447,6 +447,58 @@
   {
     "rules": [
       {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go",
+            "policy/**",
+            "README.md",
+            "CONTRIBUTING.md",
+            "third_party/**",
+            "vendor/**"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": true,
+          "word": false
+        },
+        "id": "no-hand-rolled-tool-install",
+        "message": "Do not download and unpack a tool by hand. A `curl | tar` installer re-decides,\nper repository, everything a version manager already knows: which asset exists\nfor this architecture, which for this OS, and what to do when the release\ncarries neither.\n\nDeclare the tool instead -- a `mise.toml` `[tools]` row, a `.tool-versions`\nline -- and let the resolver fetch it. The version then lives somewhere a\ndependency bot can see it move, which a URL built out of shell variables does\nnot.\n\nThe measured failures of the hand-written form are not stale versions. They are\na `mv` into a directory that does not exist on a fresh runner, and a vendor\nrelease with no Linux asset on the architecture nobody developed on -- each one\nfound once per repository, in CI, long after it was written.\n",
+        "regexp": "(?i)\\b(curl|wget)\\b([^\\n]|\\\\\\n)*\\|([^\\n]|\\\\\\n)*\\b(tar|unzip|bsdtar|cpio)\\b"
+      },
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go",
+            "policy/**",
+            "README.md",
+            "CONTRIBUTING.md",
+            "third_party/**",
+            "vendor/**"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-hand-rolled-tool-symlink",
+        "message": "Do not symlink a hand-installed tool onto PATH out of `$HOME/.local`. That link\nis the second half of a download-and-unpack installer, and it carries the half\nof the problem the download does not: the binary is now on PATH at a version no\nmanifest records, so every later check reports the tool as present and none of\nthem can say which one.\n\nLet the version manager own the binary, and link the version IT resolved --\n`ln -sfn \"$(mise which zig)\" /usr/local/bin/zig` -- when a link is genuinely\nneeded because the caller reads no shell profile (compose, a systemd unit, a\nnon-interactive ssh). The link then makes the tool findable without also\ndeciding which one it is.\n",
+        "regexp": "(?i)\\bln\\s+-[a-z]*s[a-z]*\\b[^\\n]*(\\$HOME|\\$\\{HOME\\}|~)/\\.local/(bin/|[^\\n]*\\s/usr(/local)?/bin/)"
+      }
+    ],
+    "set": "hand-rolled-toolchain",
+    "stages": []
+  },
+  {
+    "rules": [
+      {
         "builtin": "prevent-ai-author",
         "git": {
           "hooks": [
