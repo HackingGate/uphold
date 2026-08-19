@@ -228,6 +228,80 @@ fn a_malformed_event_is_could_not_look_and_not_a_pass() {
     );
 }
 
+/// An event with no subject at all is could-not-look, not a clean call.
+///
+/// The malformed case one level down, and the one that does not announce
+/// itself: the JSON parses, the run exits, and nothing was read. It is what a
+/// harness renaming its field looks like from here, and reporting it as a pass
+/// would leave the seam silently switched off at the version it changed.
+#[test]
+fn an_event_with_no_subject_is_could_not_look_and_not_a_pass() {
+    let root = workspace("hook-no-subject", Some(POLICY));
+    let output = hook(
+        &root,
+        "claude-code",
+        r#"{"tool_name":"mcp__github__create_pull_request","toolInput":{"body":"renamed"}}"#,
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("/tool_input"),
+        "the report names the pointer that found nothing: {}",
+        stderr(&output)
+    );
+    assert_eq!(stdout(&output), "");
+}
+
+/// A subject that is present and is not an object is still read.
+///
+/// The distinction the case above turns on is found-versus-not, never the shape
+/// the harness chose. A bare string where an object was expected is text, and
+/// text is what every rule at this seam judges.
+#[test]
+fn a_subject_that_is_a_bare_string_is_read_as_text() {
+    let root = workspace("hook-string-subject", Some(POLICY));
+    let output = hook(
+        &root,
+        "claude-code",
+        r#"{"tool_name":"mcp__forge__publish","tool_input":"Generated with Claude Code"}"#,
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let document: Value = serde_json::from_str(stdout(&output).trim()).unwrap();
+    assert_eq!(
+        document
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+/// A call with no label is checked exactly as thoroughly.
+///
+/// The label decides a word in the report and nothing else, so an event missing
+/// it is a report that reads slightly worse rather than a call that goes
+/// unread. Refusing here would be a gate firing on work it had no finding
+/// about.
+#[test]
+fn an_event_with_no_label_is_still_checked() {
+    let root = workspace("hook-no-label", Some(POLICY));
+    let output = hook(
+        &root,
+        "claude-code",
+        r#"{"tool_input":{"body":"Generated with Claude Code"}}"#,
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let document: Value = serde_json::from_str(stdout(&output).trim()).unwrap();
+    assert_eq!(
+        document
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny"),
+        "{}",
+        stdout(&output)
+    );
+}
+
 // -- the field names are not a list ----------------------------------------
 
 /// The offending string is found wherever the server chose to put it.

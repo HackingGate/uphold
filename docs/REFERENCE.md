@@ -979,8 +979,17 @@ with a complaint attached. The refusal travels in the document:
 
 It is printed to stderr as well, so a person running `uphold hook` by hand reads
 the report rather than a line of JSON. `2` keeps its meaning for the two things
-that are uphold's own: a harness name the binary does not describe, and an event
-that is not JSON. Neither was examined, and neither is reported as allowed.
+that are uphold's own: a harness name the binary does not describe, an event that
+is not JSON, and an event carrying nothing at all where the subject pointer says
+it should be. None was examined, and none is reported as allowed.
+
+That third one is the case that does not announce itself. The JSON parses, the
+run exits, and what the call was about to send was never read -- which is what a
+harness renaming its field looks like from here. **Absent is not empty.** A
+subject that is present and holds no strings is a call carrying only numbers and
+flags: read, and clean. A subject that is a bare string rather than an object is
+text, and text is what every rule at this seam judges. The question is whether
+the subject was found, never what shape the harness chose for it.
 
 ### What it reads out of the call
 

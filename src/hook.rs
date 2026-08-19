@@ -185,16 +185,42 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
         ))
     })?;
 
+    // The label is what the report calls this call, and nothing else conditions
+    // on it. An event that does not carry one is checked exactly as thoroughly
+    // with the harness name in its place: refusing over a field that only
+    // decides a word in a message would be a gate firing on work it had no
+    // finding about, which is how a gate on a hot path gets deleted.
     let label = event
         .pointer(shape.label)
         .and_then(Value::as_str)
         .unwrap_or(harness);
 
+    // Absent is not empty, and the difference is the whole of `explicit-unknown`
+    // at this seam. An event carrying nothing at all where the subject belongs
+    // is a harness whose schema moved, or a name pointed at the wrong shape --
+    // and what the call was about to send was not read. Reporting that as a
+    // clean call is the failure this module refuses one level up, where an
+    // event that is not JSON exits 2 rather than passing.
+    //
+    // What is NOT this case: a subject that is present and holds no strings. A
+    // call carrying only numbers and flags publishes no text there is a rule
+    // about, it was read, and it passed. Nor is a subject that is a bare string
+    // rather than an object -- that is text, and it is checked as text. The
+    // question here is whether the subject was found, never what shape the
+    // harness chose for it.
+    let Some(subject) = event.pointer(shape.subject) else {
+        return Err(Fatal::new(format!(
+            "the {harness} event carries nothing at {:?}, so what this call was about to \
+             send could not be read and \"allowed\" would mean \"unexamined\". That pointer \
+             is the shape this harness's events have; an event without it is a harness that \
+             changed rather than a call that published nothing",
+            shape.subject
+        )));
+    };
+
     let mut collected = Vec::new();
-    if let Some(subject) = event.pointer(shape.subject) {
-        strings(subject, &mut collected);
-    }
-    // A call that sends no text publishes nothing this binary has a rule about.
+    strings(subject, &mut collected);
+    // Read, and carrying no text this binary has a rule about.
     if collected.is_empty() {
         return Ok(Exit::Clean);
     }
