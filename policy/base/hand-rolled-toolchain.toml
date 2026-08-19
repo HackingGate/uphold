@@ -107,8 +107,22 @@ found once per repository, in CI, long after it was written.
 #
 # `sh` and `bash` are NOT alternatives here, for the reason the header gives:
 # that is a version manager's own bootstrap, and it has nowhere else to live.
-regexp = '(?i)\b(curl|wget)\b[^\n]*\|[^\n]*\b(tar|unzip|bsdtar|cpio)\b'
+#
+# MULTI-LINE, and only across a BACKSLASH. `([^\n]|\\\n)*` is "any run of
+# non-newlines, optionally crossing a newline that a backslash continued" -- so
+# the rule follows a shell line continuation and nothing else. Without it the
+# pattern is defeated by pressing Enter:
+#
+#     curl -fsSL "$url" \
+#       | tar -xJ -C "$tmp"
+#
+# which is the SAME command, formatted the way a linter asks for once the line
+# gets long. A guard a formatter can switch off is not a guard. It cannot run
+# away with the file either: every newline it crosses has to have been
+# continued, so the match is bounded by the command, not by the tree.
+regexp = '(?i)\b(curl|wget)\b([^\n]|\\\n)*\|([^\n]|\\\n)*\b(tar|unzip|bsdtar|cpio)\b'
 files.include = ["."]
+files.multiline = true
 files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "CONTRIBUTING.md", "third_party/**", "vendor/**"]
 
 [rule.no-hand-rolled-tool-symlink]
@@ -130,6 +144,17 @@ deciding which one it is.
 # what lets the sanctioned form through unmatched: it links from
 # `$(mise which <tool>)` into a system prefix, and neither half touches
 # `~/.local`.
-regexp = '(?i)\bln\s+-[a-z]*s[a-z]*\b[^\n]*(\$HOME|\$\{HOME\}|~)/\.local/'
+#
+# A `.local` path is not enough on its own: `~/.local/share`, `~/.local/state`
+# and `~/.local/lib` are ordinary XDG destinations, and a link into one of them
+# is not a tool being put on PATH. What this rule is about is the PATH half, so
+# both alternatives name a bin directory --
+#
+#   ...~/.local/bin/x     the hand-rolled installer's own destination
+#   ~/.local/... /usr/local/bin/x   its output, linked into a system prefix
+#
+# -- and a link between two non-PATH locations is left alone. All ten of the
+# installers this set was promoted on match the first alternative.
+regexp = '(?i)\bln\s+-[a-z]*s[a-z]*\b[^\n]*(\$HOME|\$\{HOME\}|~)/\.local/(bin/|[^\n]*\s/usr(/local)?/bin/)'
 files.include = ["."]
 files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "CONTRIBUTING.md", "third_party/**", "vendor/**"]
