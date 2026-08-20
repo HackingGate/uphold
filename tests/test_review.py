@@ -225,6 +225,11 @@ class ClaimsThatEnforceNothing(unittest.TestCase):
             message = "no TODO"
             regexp = 'TODO'
             files.include = ["."]
+            # An unanchored literal contains its own text on the `regexp` line,
+            # so a rule selecting the whole tree reports its own policy file and
+            # the engine refuses it at load. This test is about a claim naming a
+            # rule that does not exist, not about selection.
+            files.exclude = ["policy/**"]
             """,
         )
         self.assertEqual(result.returncode, 1, result.stdout)
