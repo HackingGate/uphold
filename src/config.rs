@@ -2264,8 +2264,17 @@ fn validate_no_self_match(root: &Path, policy_path: &Path, rules: &[Rule]) -> Re
         if rule.origin != Origin::Own {
             continue;
         }
-        let Some(pattern) = rule.regexp.as_deref() else {
-            continue;
+        // Both content searches, and the same accident reaches them in opposite
+        // directions. `regexp` must find nothing, so matching its own
+        // declaration is a finding that is always there. `require_regexp` must
+        // find something, so matching its own declaration is a pass that is
+        // always there. The second is the quieter of the two and the worse: a
+        // loud finding about the wrong file gets read, and a file that has
+        // exempted itself from a requirement is never mentioned again.
+        let subject = match (rule.regexp.as_deref(), rule.require_regexp.as_deref()) {
+            (Some(pattern), _) => SelfMatch::Refuses(pattern),
+            (None, Some(pattern)) => SelfMatch::Requires(pattern),
+            (None, None) => continue,
         };
         if !crate::selection::selects(root, rule, relative)? {
             continue;
@@ -2273,25 +2282,55 @@ fn validate_no_self_match(root: &Path, policy_path: &Path, rules: &[Rule]) -> Re
         let Some(section) = declaration_of(&text, &rule.id) else {
             continue;
         };
-        let query = crate::engine::Query::from_files(pattern, rule.files());
+        let query = crate::engine::Query::from_files(subject.pattern(), rule.files());
         let hits = crate::engine::search_text(&section, &query, &rule.id)?;
         if let Some(hit) = hits.first() {
             return Err(Fatal::at(
                 policy_path,
-                format!(
-                    "rule {:?} matches its own declaration ({:?}), and it selects the file that \
-                     declaration is in. Every run will report this file as violating this rule, \
-                     naming a line that is the rule rather than anything in the tree. Exclude \
-                     the policy file from this rule with `files.exclude`, narrow `files.include` \
-                     to what the rule is about, or anchor the pattern so it cannot match the key \
-                     it is written under.",
-                    rule.id,
-                    hit.text.trim()
-                ),
+                subject.message(&rule.id, hit.text.trim()),
             ));
         }
     }
     Ok(())
+}
+
+/// Which way a rule's own declaration reaches its pattern.
+enum SelfMatch<'a> {
+    /// `regexp`: the match is a finding, so a self-match is a standing false one.
+    Refuses(&'a str),
+    /// `require_regexp`: the match is the pass, so a self-match is a standing
+    /// exemption for the one file that granted it.
+    Requires(&'a str),
+}
+
+impl SelfMatch<'_> {
+    const fn pattern(&self) -> &str {
+        match self {
+            Self::Refuses(pattern) | Self::Requires(pattern) => pattern,
+        }
+    }
+
+    /// The cures are the same three in both directions, and the sentence before
+    /// them is not: a reader who is told the wrong thing about what goes wrong
+    /// fixes the wrong rule.
+    fn message(&self, id: &str, matched: &str) -> String {
+        let cures = "Exclude the policy file from this rule with `files.exclude`, narrow \
+                     `files.include` to what the rule is about, or anchor the pattern so it \
+                     cannot match the key it is written under.";
+        match self {
+            Self::Refuses(_) => format!(
+                "rule {id:?} matches its own declaration ({matched:?}), and it selects the file \
+                 that declaration is in. Every run will report this file as violating this rule, \
+                 naming a line that is the rule rather than anything in the tree. {cures}"
+            ),
+            Self::Requires(_) => format!(
+                "rule {id:?} has a `require_regexp` that matches its own declaration \
+                 ({matched:?}), and it selects the file that declaration is in. That file \
+                 satisfies the requirement by naming it, so it is exempt from this rule forever \
+                 -- whatever else it does or stops doing. {cures}"
+            ),
+        }
+    }
 }
 
 /// The lines of one rule's own `[rule.<id>]` table.
@@ -3412,6 +3451,39 @@ mod tests {
         assert!(text.contains("files.exclude"), "{text}");
         assert!(text.contains("files.include"), "{text}");
         assert!(text.contains("anchor"), "{text}");
+    }
+
+    #[test]
+    fn a_require_regexp_that_satisfies_itself_is_refused() {
+        // The inverted case, and the quieter one. `regexp` matching its own
+        // declaration is a finding that is always there and gets read.
+        // `require_regexp` matching it is a PASS that is always there: the
+        // policy file meets the requirement by naming it, so it is the one file
+        // in the corpus that can never fail the rule, and nothing ever says so.
+        let error = policy_from(
+            "[rule.every-file]\nrequire_regexp = 'Copyright'\nmessage = \"m\"\n[rule.every-file.files]\ninclude = [\".\"]\n",
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("every-file"), "{text}");
+        assert!(text.contains("require_regexp"), "{text}");
+        // The message says what goes wrong HERE, which is the opposite of what
+        // goes wrong for `regexp`: a reader told the wrong one fixes nothing.
+        assert!(text.contains("exempt"), "{text}");
+        assert!(!text.contains("violating this rule"), "{text}");
+        // And the same three cures.
+        assert!(text.contains("files.exclude"), "{text}");
+    }
+
+    #[test]
+    fn a_requirement_the_policy_file_does_not_declare_still_loads() {
+        // The narrowing that fixes it, and the case that must keep working: a
+        // requirement whose pattern is nowhere in its own section has nothing
+        // to exempt.
+        policy_from(
+            "[rule.every-file]\nrequire_regexp = 'Copyright'\nmessage = \"m\"\n[rule.every-file.files]\ninclude = [\".\"]\nexclude = [\"**/rg-policy.toml\"]\n",
+        )
+        .unwrap();
     }
 
     #[test]
