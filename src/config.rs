@@ -2065,6 +2065,13 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         rule.validate()?;
     }
     validate_shims(policy_path, &rules, &file.shims)?;
+    // Last, and after `rule.validate`, because this one reads a rule as the
+    // author meant it. A rule naming two checks or carrying a parameter its
+    // check cannot read is not yet a rule whose pattern means anything, and
+    // reporting a self-match on one would answer a question nobody had reached
+    // -- the structural refusal is the finding there, and it has to arrive
+    // first.
+    validate_no_self_match(root, policy_path, &rules)?;
 
     Ok(Policy {
         path: policy_path.to_path_buf(),
@@ -2210,6 +2217,108 @@ pub(crate) fn bundled_ids() -> Result<Vec<(&'static str, Vec<String>)>> {
 /// ACROSS files -- two `[inherit] paths` entries defining the same id -- and
 /// this is the only thing that detects it. (A repository rule sharing an
 /// inherited id is not a collision; it shadows, and was filtered above.)
+/// A rule whose pattern matches its own declaration.
+///
+/// A policy file is a tracked file, so a rule's own `regexp` is inside the
+/// corpus that rule scans. An unanchored literal therefore matches the line it
+/// is written on, and the run reports the policy file as violating the rule the
+/// policy file defines. The report names a real path and a real line and is
+/// about nothing in the tree, which is the most expensive kind of finding to
+/// read: a reader has to work out that the rule is describing itself.
+///
+/// It is refused here rather than reported at scan time for the reason
+/// [`validate_shims`] gives about its own pair -- at run time this is a
+/// violation like any other, and load is the only place it can be named as what
+/// it is.
+///
+/// **What is NOT refused, and why the scope test comes first.** Most rules
+/// never select the policy file at all: an `include` of `["cmd", "internal"]`
+/// with a `glob` of `["*.go"]` cannot reach it, and a pattern that matches its
+/// own text under such a rule is harmless. Measured over 82 policy files and
+/// 178 `regexp` rules in one workspace, 54 matched their own declaration
+/// textually and none of them selected the file it was written in. Refusing on
+/// the text alone would have failed 54 rules that work.
+///
+/// Anchored patterns are the other quiet half: `^Status:` cannot match
+/// `regexp = '^Status:...'`, because that line begins with `regexp`. Nothing
+/// special is done for them -- they simply do not match, and the point of
+/// saying so is that a `Sta[t]us` written to dodge a self-match it never had is
+/// a defensive edit this check would have told the author to delete.
+///
+/// Own rules only. A rule from a bundled set is declared inside this binary,
+/// and a rule from `inherit.paths` in a file this rule may not select; neither
+/// has a declaration in `policy_path` to match.
+fn validate_no_self_match(root: &Path, policy_path: &Path, rules: &[Rule]) -> Result<()> {
+    let Ok(relative) = policy_path.strip_prefix(root) else {
+        // A policy outside the tree is not part of the corpus, so no rule can
+        // reach it. `--policy` is free to name one.
+        return Ok(());
+    };
+    let Ok(text) = std::fs::read_to_string(policy_path) else {
+        // Unreadable here means unreadable a moment ago too, and load has
+        // already failed on it with a better message than this one could give.
+        return Ok(());
+    };
+
+    for rule in rules {
+        if rule.origin != Origin::Own {
+            continue;
+        }
+        let Some(pattern) = rule.regexp.as_deref() else {
+            continue;
+        };
+        if !crate::selection::selects(root, rule, relative)? {
+            continue;
+        }
+        let Some(section) = declaration_of(&text, &rule.id) else {
+            continue;
+        };
+        let query = crate::engine::Query::from_files(pattern, rule.files());
+        let hits = crate::engine::search_text(&section, &query, &rule.id)?;
+        if let Some(hit) = hits.first() {
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "rule {:?} matches its own declaration ({:?}), and it selects the file that \
+                     declaration is in. Every run will report this file as violating this rule, \
+                     naming a line that is the rule rather than anything in the tree. Exclude \
+                     the policy file from this rule with `files.exclude`, narrow `files.include` \
+                     to what the rule is about, or anchor the pattern so it cannot match the key \
+                     it is written under.",
+                    rule.id,
+                    hit.text.trim()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The lines of one rule's own `[rule.<id>]` table.
+///
+/// Its sub-tables belong to it -- `[rule.<id>.files]` is where `exclude` is
+/// written, and an author dodging a self-match often puts the pattern's own
+/// text there -- so the section runs to the next table that is not one of them.
+fn declaration_of(text: &str, id: &str) -> Option<String> {
+    let header = format!("[rule.{id}]");
+    let sub = format!("[rule.{id}.");
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.iter().position(|line| line.trim() == header)?;
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find(|(_, line)| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with('[') && !trimmed.starts_with(&sub)
+        })
+        .map_or(lines.len(), |(index, _)| index);
+    // `get` rather than an index: `end` comes from a search that starts past
+    // `start`, so the range holds -- but a slice that can panic is a slice that
+    // will, and this one runs over author-written text.
+    Some(lines.get(start..end)?.join("\n"))
+}
+
 fn validate_unique(policy_path: &Path, rules: &[Rule]) -> Result<()> {
     let mut seen: BTreeMap<&str, Option<Check>> = BTreeMap::new();
     for rule in rules {
@@ -3138,8 +3247,13 @@ mod tests {
 
             [rule.mine]
             message = "local"
+            # Narrowed so `regexp` cannot match its own declaration. Any
+            # unanchored literal written as `regexp = "X"` contains X on that
+            # line, so a whole-repo fixture pattern is refused by
+            # `validate_no_self_match`; what this test is about is provenance,
+            # not selection.
             regexp = "local"
-            files.include = ["."]
+            files.include = ["src"]
             "#,
         )
         .unwrap();
@@ -3168,6 +3282,10 @@ mod tests {
             regexp = "local"
 
             [rule.no-hardcoded-home-paths.files]
+            # See `provenance_answers_about_the_id_it_was_asked_about`: an
+            # unanchored literal fixture pattern matches its own declaration,
+            # and this test is about shadowing rather than selection.
+            include = ["src"]
             "#,
         )
         .unwrap();
@@ -3275,6 +3393,74 @@ mod tests {
             checked > 100,
             "the corpus produced too few cases to mean anything: {checked}"
         );
+    }
+
+    #[test]
+    fn a_rule_that_matches_its_own_declaration_and_selects_it_is_refused() {
+        // The report this replaces named the policy file and a line number and
+        // was about nothing in the tree: the rule describing itself. There is
+        // no version of that finding a reader can act on, so it is refused
+        // where it can still be called what it is.
+        let error = policy_from(
+            "[rule.unanchored]\nregexp = 'YubiKey'\nmessage = \"m\"\n[rule.unanchored.files]\ninclude = [\".\"]\n",
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("unanchored"), "{text}");
+        assert!(text.contains("matches its own declaration"), "{text}");
+        // The three cures, because a refusal that does not name one is a wall.
+        assert!(text.contains("files.exclude"), "{text}");
+        assert!(text.contains("files.include"), "{text}");
+        assert!(text.contains("anchor"), "{text}");
+    }
+
+    #[test]
+    fn an_anchored_pattern_cannot_match_the_key_it_is_written_under() {
+        // `^Status:` does not match `regexp = '^Status:...'` -- that line begins
+        // with `regexp`. Worth a test rather than a remark, because a dodge
+        // written to avoid a self-match that never existed has been transcribed
+        // across three repositories, and this is the fact that makes it
+        // deletable.
+        policy_from(
+            "[rule.anchored]\nregexp = '^Status:'\nmessage = \"m\"\n[rule.anchored.files]\ninclude = [\".\"]\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_self_matching_pattern_that_cannot_reach_the_policy_file_still_loads() {
+        // The case that decides whether this check is usable at all. Measured
+        // over 82 policy files, 54 `regexp` rules matched their own text and
+        // NONE of them selected the file it was written in -- an `include` of
+        // source directories does not reach `policy/`. Refusing on the text
+        // alone would have failed 54 rules that work.
+        for narrowing in [
+            "[rule.narrow.files]\ninclude = [\"src\"]\n",
+            "[rule.narrow.files]\ninclude = [\".\"]\nglob = [\"*.go\"]\n",
+            "[rule.narrow.files]\ninclude = [\".\"]\nexclude = [\"**/rg-policy.toml\"]\n",
+        ] {
+            let text = format!("[rule.narrow]\nregexp = 'YubiKey'\nmessage = \"m\"\n{narrowing}");
+            let outcome = policy_from(&text);
+            assert!(
+                outcome.is_ok(),
+                "{narrowing:?} should still load: {:?}",
+                outcome.err()
+            );
+        }
+    }
+
+    #[test]
+    fn a_declaration_runs_to_the_next_table_that_is_not_its_own_sub_table() {
+        // `[rule.x.files]` belongs to `rule.x`; `[rule.y]` does not. Getting
+        // this wrong in the widening direction would read a sibling's pattern
+        // as this rule's own text and refuse a rule that is fine.
+        let text =
+            "[rule.x]\nregexp = 'a'\n[rule.x.files]\ninclude = [\".\"]\n[rule.y]\nregexp = 'b'\n";
+        let section = declaration_of(text, "x").unwrap();
+        assert!(section.contains("regexp = 'a'"), "{section}");
+        assert!(section.contains("include"), "{section}");
+        assert!(!section.contains("regexp = 'b'"), "{section}");
+        assert!(declaration_of(text, "absent").is_none());
     }
 
     #[test]

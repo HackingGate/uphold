@@ -268,6 +268,54 @@ fn overrides_for(root: &Path, rule: &Rule, not_text: &[String]) -> Result<Overri
         .map_err(|error| Fatal::new(format!("rule {:?}: {error}", rule.id)))
 }
 
+/// Whether one repository-relative path is a file this rule selects.
+///
+/// The same two tests [`from_index`] applies to every tracked path -- under an
+/// include prefix, and not matched by an exclusion -- asked about one path
+/// instead of all of them. It exists so a caller that already knows the path it
+/// cares about does not have to walk the tree to find out, and so that answer
+/// comes from this module rather than from a second reader of `files.*` that
+/// would be free to disagree with it.
+///
+/// The not-text list is deliberately empty. Its entries come from
+/// `git check-attr` and describe files declared binary; a caller asking about a
+/// path it is about to read as text has already answered that question.
+pub(crate) fn selects(root: &Path, rule: &Rule, relative: &Path) -> Result<bool> {
+    let prefixes = include_prefixes(rule);
+    if !prefixes
+        .iter()
+        .any(|prefix| prefix.as_os_str().is_empty() || relative.starts_with(prefix))
+    {
+        return Ok(false);
+    }
+    let overrides = overrides_for(root, rule, &[])?;
+    Ok(!overrides.matched(relative, false).is_ignore())
+}
+
+/// The repository-relative roots one rule searches under, as written.
+///
+/// Split out of [`search_roots`] so [`selects`] can ask the same question
+/// without the side effects that belong to a real search: the warning about an
+/// include that is not there, and the refusal of one that leaves the tree. Both
+/// are reports about a scan that is happening, and neither is true of a caller
+/// that only wants to know whether a path is in scope.
+fn include_prefixes(rule: &Rule) -> Vec<PathBuf> {
+    let include = rule.include();
+    if include.is_empty() {
+        return vec![PathBuf::new()];
+    }
+    include
+        .iter()
+        .map(|spec| {
+            if spec == "." {
+                PathBuf::new()
+            } else {
+                PathBuf::from(spec)
+            }
+        })
+        .collect()
+}
+
 /// The roots one rule searches under, refusing any that leaves the repository.
 fn search_roots(root: &Path, rule: &Rule) -> Result<Vec<PathBuf>> {
     let include = rule.include();

@@ -664,6 +664,11 @@ fn redaction_withholds_the_match_and_keeps_the_location() {
         regexp = 'hunter2'
 
         [rule.no-secret.files]
+        # Excluded for the reason the bundled sets carry the same line: an
+        # unanchored literal written as `regexp = '...'` contains its own text
+        # on that line, so a rule selecting the whole tree reports its own
+        # policy file. Refused at load by `validate_no_self_match`.
+        exclude = ["policy/**"]
 "#,
     );
     write(&root, "a.txt", "password is hunter2\n");
@@ -1123,6 +1128,7 @@ fn the_effective_rules_are_what_inheritance_resolved_to() {
         message = "declared here"
         regexp = 'nothing-matches-this-either'
         files.include = ["."]
+        files.exclude = ["policy/**"]
 
         [rule.no-local-merge]
         builtin = "no-local-merge"
@@ -1268,6 +1274,7 @@ fn a_rule_that_only_stands_in_front_of_a_command_names_the_shim_seam() {
         message = "no TODO"
         regexp = 'TODO'
         files.include = ["."]
+        files.exclude = ["policy/**"]
 "#,
     );
 
