@@ -75,6 +75,7 @@ mod anchors;
 mod audit;
 mod catalog;
 mod check;
+mod commands;
 mod comments;
 mod config;
 mod engine;

@@ -549,6 +549,24 @@ pub(crate) struct Rule {
     #[serde(default)]
     pub require_any_anchor: Option<bool>,
 
+    /// commands-resolve: where a command's own sources live, as globs in which
+    /// `{}` stands for the command's name.
+    ///
+    /// A PATTERN and not a table of names, and the difference is the whole
+    /// design. `["*/cmd/{}/**/*.go"]` says what a command looks like in this
+    /// tree; a list of command names would be a second copy of the tree, free to
+    /// go stale, which is the class of defect this rule exists to refuse. The
+    /// convention stays in the repository that has one, and nothing about one
+    /// workspace's layout is compiled into the binary.
+    ///
+    /// The capture also BOUNDS the union. A command's verbs are read from the
+    /// files its own pattern selects and no others, so a sibling binary in the
+    /// same repository cannot lend it verbs -- a widening that read the whole
+    /// repository resolved a flag-only command to its neighbour's verbs, and a
+    /// document naming one of them would have passed.
+    #[serde(default)]
+    pub command_sources: Option<Vec<String>>,
+
     // -- settings the built-ins read ----------------------------------------
     //
     // These were environment variables, every one of them, because git-guards
@@ -663,6 +681,7 @@ impl Rule {
             require_any_link: None,
             allow_outside_repo: None,
             require_any_anchor: None,
+            command_sources: None,
             private_owners: None,
             private_owners_from: None,
             public_repos: None,
@@ -781,6 +800,11 @@ impl Rule {
 
     pub(crate) fn allow_outside_repo(&self) -> bool {
         self.allow_outside_repo.unwrap_or(false)
+    }
+
+    /// The `command_sources` patterns, empty where none were written.
+    pub(crate) fn command_sources(&self) -> &[String] {
+        self.command_sources.as_deref().unwrap_or_default()
     }
 
     pub(crate) fn require_any_anchor(&self) -> bool {
@@ -921,6 +945,50 @@ impl Rule {
     /// be renamed: while `kind` decided, `max_lines` beside `kind = "pattern"`
     /// was a limit that looked enforced and was not. And a rule that names no
     /// place runs nowhere, which reads exactly like a rule that passes.
+    /// Hold `commands-resolve` to the one field it cannot work without.
+    ///
+    /// Split out of `validate` rather than written inline, because it is the
+    /// only one of the three resolver knobs that is REQUIRED: the link and
+    /// anchor floors are refused where they are written beside a check that
+    /// cannot read them, and this is refused where it is MISSING as well.
+    fn validate_command_sources(&self) -> Result<()> {
+        // The command resolver's own knob, and unlike the two above it is
+        // REQUIRED rather than merely exclusive. A `commands-resolve` with no
+        // pattern discovers no command, judges nothing, and reports a clean
+        // tree -- which is the shape every check here is written to refuse.
+        if self.builtin() == Some("commands-resolve") {
+            let patterns = self.command_sources.as_deref().unwrap_or_default();
+            if patterns.is_empty() {
+                return Err(Fatal::new(format!(
+                    "rule {:?}: `commands-resolve` needs `command_sources`, one or more \
+                 globs in which `{{}}` stands for a command's name -- \
+                 `command_sources = [\"*/cmd/{{}}/**/*.go\"]`. Without one it \
+                 discovers no command, judges nothing, and reports a clean tree.",
+                    self.id
+                )));
+            }
+            for pattern in patterns {
+                if pattern.matches("{}").count() != 1 {
+                    return Err(Fatal::new(format!(
+                        "rule {:?}: `command_sources` entry {pattern:?} does not contain \
+                     exactly one `{{}}`. The placeholder is what names the command, and \
+                     a pattern without one selects files belonging to no command while \
+                     a pattern with two names two.",
+                        self.id
+                    )));
+                }
+            }
+        } else if self.command_sources.is_some() {
+            return Err(Fatal::new(format!(
+                "rule {:?}: `command_sources` is read by the `commands-resolve` built-in \
+             and nothing else -- on this rule the field would be read by nothing and \
+             would look like configuration that works",
+                self.id
+            )));
+        }
+        Ok(())
+    }
+
     fn validate(&self) -> Result<()> {
         let set: Vec<&str> = [
             self.regexp.is_some().then_some("regexp"),
@@ -1098,19 +1166,24 @@ impl Rule {
             )));
         }
 
+        self.validate_command_sources()?;
+
         // A built-in that reads files and names a hook belongs to the guard:
         // `seams()` routes it there, and `guard::evaluate` has no arm for this
         // one. It would be installed, collected by `at_hook`, counted inside
         // "N guard(s) passed", and never run -- the same defect the refusals
         // below name, arriving through the one door they leave open.
-        if self.builtin() == Some("anchors-resolve") && !self.hooks().is_empty() {
+        if matches!(self.builtin(), Some("anchors-resolve" | "commands-resolve"))
+            && !self.hooks().is_empty()
+        {
             return Err(Fatal::new(format!(
-                "rule {:?}: `anchors-resolve` reads the tree rather than what git is about \
+                "rule {:?}: `{}` reads the tree rather than what git is about \
                  to do, so it runs in `uphold scan` and at no git hook. `git.hooks` here \
                  would install a seam that never dispatches it, and the rule would be \
                  counted as having passed.\n\
                  Drop `git.hooks`; the `uphold-scan` hook is what runs it at a hook.",
-                self.id
+                self.id,
+                self.builtin().unwrap_or_default()
             )));
         }
 

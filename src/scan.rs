@@ -8,11 +8,39 @@ use std::sync::OnceLock;
 use regex::Regex;
 use unicode_script::{Script, UnicodeScript};
 
-use crate::config::{Check, Policy, Rule};
+use crate::config::{Check, Files, Policy, Rule};
 use crate::engine::{self, Hit, Query};
 use crate::error::{Fatal, Result};
 use crate::report::{body_for, Failure};
 use crate::selection::{normalize_rel, not_text_paths, Selection};
+
+/// The command name a `command_sources` pattern captures out of a path.
+///
+/// Built from the two halves the placeholder splits the pattern into, so the
+/// name is read from the same string that selected the file. `*` and `**` become
+/// what they mean to a glob rather than what they mean to a regex, and the
+/// placeholder becomes one path segment -- a command's name is a directory or a
+/// file stem, never a path.
+fn command_name_pattern(before: &str, after: &str) -> Option<Regex> {
+    fn as_regex(part: &str) -> String {
+        let mut out = String::new();
+        let mut rest = part;
+        while let Some(index) = rest.find('*') {
+            if let Some(literal) = rest.get(..index) {
+                out.push_str(&regex::escape(literal));
+            }
+            let doubled = rest.get(index..index + 2) == Some("**");
+            out.push_str(if doubled { ".*" } else { "[^/]*" });
+            let Some(remainder) = rest.get(index + if doubled { 2 } else { 1 }..) else {
+                return out;
+            };
+            rest = remainder;
+        }
+        out.push_str(&regex::escape(rest));
+        out
+    }
+    Regex::new(&format!("^{}([^/]+){}$", as_regex(before), as_regex(after))).ok()
+}
 
 /// Explains a baseline entry that no longer matches.
 ///
@@ -111,6 +139,7 @@ impl<'a> Scan<'a> {
                     failures.extend(match rule.builtin().unwrap_or_default() {
                         "links-resolve" => self.link_failures(rule)?,
                         "anchors-resolve" => self.anchor_failures(rule)?,
+                        "commands-resolve" => self.command_failures(rule)?,
                         // A guard built-in's `[rule.files]` is not read by
                         // nothing: `guard::scope::in_file_scope` reads it, to
                         // scope the guard to part of the tree. So the question
@@ -608,6 +637,164 @@ impl<'a> Scan<'a> {
                     files.len()
                 ),
             )]);
+        }
+
+        if hits.is_empty() {
+            return Ok(Vec::new());
+        }
+        let body = if self.redact() {
+            crate::report::redacted_body(&hits)
+        } else {
+            detailed.join("\n")
+        };
+        Ok(vec![Failure::new(&rule.id, rule.message(), body)])
+    }
+
+    // -- documented commands ------------------------------------------------
+
+    /// The sources of every command one `command_sources` pattern discovers.
+    ///
+    /// The pattern selects the files and the `{}` names the command, so the two
+    /// halves cannot disagree: a file is a command's source exactly when the
+    /// pattern that named the command selected it. A table of names beside a
+    /// glob would be two statements of one fact, which is the shape this rule
+    /// exists to refuse in documents.
+    fn command_sources(&self, rule: &Rule) -> Result<BTreeMap<String, Vec<(String, String)>>> {
+        let mut discovered: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+        for pattern in rule.command_sources() {
+            let Some((before, after)) = pattern.split_once("{}") else {
+                continue;
+            };
+            // The concrete glob the selection machinery is asked for, with the
+            // placeholder widened to one path segment. Selection is reused
+            // rather than reimplemented so a source file is found under the
+            // same ignore rules, the same symlink policy and the same
+            // unreadable-path accounting as every other file this scan reads.
+            let mut probe = Rule::synthetic(&rule.id, Check::Builtin);
+            probe.files = Some(Files {
+                glob: vec![format!("{before}*{after}")],
+                ..Files::default()
+            });
+            let name_of = command_name_pattern(before, after);
+            for relative in self.select(&probe)? {
+                let Some(name) = name_of
+                    .as_ref()
+                    .and_then(|matcher| matcher.captures(&relative))
+                    .and_then(|captured| captured.get(1))
+                    .map(|found| found.as_str().to_owned())
+                else {
+                    continue;
+                };
+                let text = match std::fs::read_to_string(self.root.join(&relative)) {
+                    Ok(text) => text,
+                    // A source that is not text declares no dispatch. An I/O
+                    // failure is a file NOBODY READ, which `link_failures`
+                    // separates here for the same reason.
+                    Err(error) if error.kind() == std::io::ErrorKind::InvalidData => continue,
+                    Err(error) => return Err(Fatal::at(&self.root.join(&relative), error)),
+                };
+                discovered.entry(name).or_default().push((relative, text));
+            }
+        }
+        Ok(discovered)
+    }
+
+    /// Fail every document that tells a reader to run a verb no command offers.
+    ///
+    /// The agreement gate is the half that decides whether this is usable at
+    /// all. A command judges documents only when its dispatch and its own usage
+    /// block tell the same story; when they disagree the parse is not trusted
+    /// and the command is counted, named and skipped. That count is printed
+    /// every run, because a check that read four commands out of a hundred and
+    /// says nothing about the other ninety-six reads exactly like one that read
+    /// them all.
+    fn command_failures(&self, rule: &Rule) -> Result<Vec<Failure>> {
+        let discovered = self.command_sources(rule)?;
+        let mut trusted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut skipped: Vec<String> = Vec::new();
+
+        for (name, sources) in &discovered {
+            let dispatched = crate::commands::dispatched(sources);
+            if dispatched.is_empty() {
+                skipped.push(format!("{name} (no dispatch this parse can read)"));
+                continue;
+            }
+            let disagreed: Vec<String> = crate::commands::documented(name, sources)
+                .into_iter()
+                .filter(|verb| !dispatched.contains(verb))
+                .collect();
+            if !disagreed.is_empty() {
+                skipped.push(format!(
+                    "{name} (its own usage names {}, which its parsed dispatch does not offer)",
+                    disagreed.join(", ")
+                ));
+                continue;
+            }
+            trusted.insert(name.clone(), dispatched);
+        }
+
+        // Said on every run, clean or not. The denominator is the difference
+        // between "every documented verb resolves" and "every documented verb
+        // this could read resolves", and only one of those is what happened.
+        println!(
+            "{}: {} command(s) discovered, {} judged, {} skipped",
+            rule.id,
+            discovered.len(),
+            trusted.len(),
+            skipped.len()
+        );
+        for note in &skipped {
+            println!("{}: not judged: {note}", rule.id);
+        }
+
+        if trusted.is_empty() {
+            // Not a pass. Zero commands judged is the state a broken pattern, a
+            // renamed directory and a grammar that stopped matching all arrive
+            // in, and it is indistinguishable from a clean tree without this.
+            return Ok(vec![Failure::new(
+                &rule.id,
+                rule.message(),
+                format!(
+                    "discovered {} command(s) and could read the verbs of none, so no \
+                     document was judged. Either `command_sources` no longer describes \
+                     this tree, or every dispatch it found is in a form this parse cannot \
+                     read -- both of which report a clean tree while checking nothing.",
+                    discovered.len()
+                ),
+            )]);
+        }
+
+        let files = self.select(rule)?;
+        let mut hits: Vec<Hit> = Vec::new();
+        let mut detailed: Vec<String> = Vec::new();
+        for relative in &files {
+            let text = match std::fs::read_to_string(self.root.join(relative)) {
+                Ok(text) => text,
+                Err(error) if error.kind() == std::io::ErrorKind::InvalidData => continue,
+                Err(error) => return Err(Fatal::at(&self.root.join(relative), error)),
+            };
+            for mention in crate::commands::mentions(&text, &trusted) {
+                let Some(offered) = trusted.get(&mention.command) else {
+                    continue;
+                };
+                if offered.contains(&mention.verb) {
+                    continue;
+                }
+                let listed: Vec<&str> = offered.iter().map(String::as_str).collect();
+                hits.push(Hit {
+                    path: relative.clone(),
+                    line: Some(mention.line),
+                    text: format!("{} {}", mention.command, mention.verb),
+                });
+                detailed.push(format!(
+                    "{relative}:{}: tells a reader to run `{} {}`, and {} dispatches on: {}",
+                    mention.line,
+                    mention.command,
+                    mention.verb,
+                    mention.command,
+                    listed.join(", ")
+                ));
+            }
         }
 
         if hits.is_empty() {

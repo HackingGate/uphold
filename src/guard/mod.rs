@@ -70,6 +70,12 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     // against a parsed YAML/TOML/JSON document, which is by definition a check
     // a content search cannot make.
     "anchors-resolve",
+    // The third resolver, for the last of the three things a document asserts
+    // about a tree: `links-resolve` a path a reader would CLICK,
+    // `anchors-resolve` a value a reader would BELIEVE, this a command a reader
+    // would RUN. Scan-dispatched like both, and the comparison is against a
+    // parsed dispatch, which no content search reaches.
+    "commands-resolve",
 ];
 
 /// The moment a guard is being asked about.
@@ -427,7 +433,10 @@ mod tests {
         // config can declare, validate, install, and never run.
         let source = include_str!("mod.rs");
         for id in EVERY_BUILTIN {
-            if matches!(*id, "links-resolve" | "anchors-resolve") {
+            if matches!(
+                *id,
+                "links-resolve" | "anchors-resolve" | "commands-resolve"
+            ) {
                 // Read the tree rather than git, so `scan` dispatches them and
                 // this match never sees them.
                 continue;
@@ -437,7 +446,7 @@ mod tests {
                 "{id} is in EVERY_BUILTIN with no dispatch arm"
             );
         }
-        assert_eq!(EVERY_BUILTIN.len(), 15);
+        assert_eq!(EVERY_BUILTIN.len(), 16);
     }
 
     #[test]

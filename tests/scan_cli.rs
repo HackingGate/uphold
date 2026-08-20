@@ -1588,3 +1588,277 @@ fn an_anchor_rule_wired_to_a_git_hook_is_refused() {
         stderr(&output)
     );
 }
+
+// --- commands-resolve ------------------------------------------------------
+//
+// The third resolver. `links-resolve` resolves a path a reader would click,
+// `anchors-resolve` a value a reader would believe, this a command a reader
+// would run. Every case here is about the half that decides whether the rule is
+// usable at all: a verb list read wrong produces confident findings against
+// documents that were right, so a command judges nothing until two readings of
+// its own sources agree.
+
+/// A Go command with a real dispatch and a usage block that agrees with it.
+const FG_REGISTRY: &str = r#"package main
+
+// fg-registry sync [options]
+// fg-registry services
+
+func main() {
+	args := os.Args[1:]
+	switch args[0] {
+	case "sync":
+		sync()
+	case "services":
+		services()
+	default:
+		usage()
+	}
+}
+"#;
+
+const COMMANDS_POLICY: &str = r#"
+[rule.doc-commands-resolve]
+builtin = "commands-resolve"
+message = "Name a verb the command dispatches on."
+command_sources = ["cmd/{}/*.go"]
+
+[rule.doc-commands-resolve.files]
+glob = ["*.md"]
+"#;
+
+#[test]
+fn a_document_naming_a_verb_the_command_does_not_dispatch_on_is_refused() {
+    // The defect this was built from, reproduced: a README opened with a verb
+    // the binary had never had, and every gate in every repository stayed green
+    // for as long as the file existed.
+    let root = workspace();
+    write(&root, "policy/principles.toml", COMMANDS_POLICY);
+    write(&root, "cmd/fg-registry/main.go", FG_REGISTRY);
+    write(
+        &root,
+        "README.md",
+        "Read the metadata with:\n\n```\nfg-registry credentials\n```\n",
+    );
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("README.md:4"), "{text}");
+    assert!(text.contains("fg-registry credentials"), "{text}");
+    // The verbs it DOES have, because a refusal that names the wrong verb and
+    // not the right ones sends the reader to the source anyway.
+    assert!(text.contains("services, sync"), "{text}");
+}
+
+#[test]
+fn a_verb_the_command_really_dispatches_on_passes() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", COMMANDS_POLICY);
+    write(&root, "cmd/fg-registry/main.go", FG_REGISTRY);
+    write(
+        &root,
+        "README.md",
+        "Fast-forward with `fg-registry sync`.\n",
+    );
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    // The denominator, printed on every run. "Every documented verb resolves"
+    // and "every documented verb this could read resolves" are different
+    // sentences, and only one of them is what happened.
+    assert!(
+        stdout(&output).contains("1 command(s) discovered, 1 judged, 0 skipped"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_command_whose_two_readings_disagree_judges_nothing_and_says_so() {
+    // The agreement gate. This command's usage block names a verb its dispatch
+    // does not offer, so one of the two readings is wrong and there is no way to
+    // tell which -- the rule refuses to guess, and refuses to condemn a document
+    // on the strength of a parse it cannot trust.
+    let root = workspace();
+    write(&root, "policy/principles.toml", COMMANDS_POLICY);
+    write(
+        &root,
+        "cmd/fg-registry/main.go",
+        r#"package main
+
+// fg-registry credentials
+
+func main() {
+	switch os.Args[1] {
+	case "sync":
+		sync()
+	case "services":
+		services()
+	default:
+		usage()
+	}
+}
+"#,
+    );
+    write(
+        &root,
+        "README.md",
+        "Read the metadata with:\n\n```\nfg-registry credentials\n```\n",
+    );
+
+    let output = scan(&root);
+    // Exit 1, and NOT because the document was judged: nothing could be judged,
+    // and zero commands judged is the state a broken pattern and a grammar that
+    // stopped matching both arrive in.
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("0 judged, 1 skipped"), "{out}");
+    assert!(out.contains("its own usage names credentials"), "{out}");
+}
+
+#[test]
+fn a_tagless_switch_is_skipped_rather_than_read_as_a_verb_list() {
+    // The form that supplied 22 of one run's 38 false findings in the
+    // implementation this ports. Its arms are booleans, not verbs, and the
+    // grammar is what tells them apart.
+    let root = workspace();
+    write(&root, "policy/principles.toml", COMMANDS_POLICY);
+    write(
+        &root,
+        "cmd/session/main.go",
+        r"package main
+
+func main() {
+	switch {
+	case ready():
+		run()
+	default:
+		stop()
+	}
+}
+",
+    );
+    write(&root, "README.md", "Try `session claim`.\n");
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("no dispatch this parse can read"), "{out}");
+    // And the document was not condemned on the strength of it.
+    assert!(
+        !stderr(&output).contains("session claim"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_command_name_in_prose_is_not_an_instruction() {
+    // Only a code span, and only at its first token. An invocation begins with
+    // the binary; a sentence that happens to contain the same two words in a row
+    // does not, and matching one is how this rule would earn a blanket waiver.
+    let root = workspace();
+    write(&root, "policy/principles.toml", COMMANDS_POLICY);
+    write(&root, "cmd/fg-registry/main.go", FG_REGISTRY);
+    write(
+        &root,
+        "README.md",
+        "The very fg-registry credentials it captures with are held elsewhere.\n\
+         See `the fg-registry credentials note` for where.\n",
+    );
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn a_pattern_that_discovers_nothing_is_refused_rather_than_reported_clean() {
+    // Zero commands is the state a renamed directory, a typo in the glob and a
+    // grammar that stopped matching all arrive in, and without this it is
+    // indistinguishable from a tree whose every documented verb resolves.
+    let root = workspace();
+    write(&root, "policy/principles.toml", COMMANDS_POLICY);
+    write(&root, "README.md", "Nothing here.\n");
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no document was judged"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn the_resolver_refuses_to_load_without_a_pattern_to_discover_with() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+[rule.doc-commands-resolve]
+builtin = "commands-resolve"
+message = "Name a real verb."
+
+[rule.doc-commands-resolve.files]
+glob = ["*.md"]
+"#,
+    );
+    write(&root, "README.md", "x\n");
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("needs `command_sources`"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_pattern_with_no_placeholder_names_no_command_and_is_refused() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        &COMMANDS_POLICY.replace("cmd/{}/*.go", "cmd/fg-registry/*.go"),
+    );
+    write(&root, "cmd/fg-registry/main.go", FG_REGISTRY);
+    write(&root, "README.md", "x\n");
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("exactly one"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn the_pattern_is_read_by_this_built_in_and_no_other() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+[rule.no-shouting]
+regexp = "SHOUTING"
+message = "do not shout"
+command_sources = ["cmd/{}/*.go"]
+
+[rule.no-shouting.files]
+glob = ["*.md"]
+"#,
+    );
+    write(&root, "README.md", "x\n");
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("read by nothing"),
+        "{}",
+        stderr(&output)
+    );
+}
