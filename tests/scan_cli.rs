@@ -1862,3 +1862,30 @@ glob = ["*.md"]
         stderr(&output)
     );
 }
+
+#[test]
+fn glob_syntax_the_name_capture_cannot_read_is_refused_at_load() {
+    // The pattern is read twice -- as a glob to select the files, as a regex to
+    // name the command in each path -- and only `*`, `**`, `/` and literal text
+    // mean the same thing to both. A construct only the glob understands selects
+    // a source whose command cannot be named, and that source then vanishes out
+    // of the discovered count with nothing said, which is the failure this rule
+    // exists to refuse arriving through its own configuration.
+    for pattern in ["cmd/{}/main?.go", "cmd/{}/[ab].go", "cmd/{}/{a,b}.go"] {
+        let root = workspace();
+        write(
+            &root,
+            "policy/principles.toml",
+            &COMMANDS_POLICY.replace("cmd/{}/*.go", pattern),
+        );
+        write(&root, "README.md", "x\n");
+
+        let output = scan(&root);
+        assert_eq!(code(&output), 2, "{pattern}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("does not accept"),
+            "{pattern}: {}",
+            stderr(&output)
+        );
+    }
+}

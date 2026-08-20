@@ -688,11 +688,28 @@ spellings:
 
 | condition | what it rejects |
 |---|---|
-| it dispatches on something | a Go tagless `switch {`, whose arms are booleans and not verbs |
-| at least two branches match string literals | a match over an enum, whose variants are not things a reader types |
+| at least two branches name string literals | a match over an enum, whose variants are not things a reader types |
 | a catch-all branch exists | a lookup that never has to answer for a word it does not know |
+| where it dispatches on nothing, **every** branch names a literal | a Go tagless `switch { case ready(): }`, whose arms are booleans and not verbs |
+
+"Dispatches on something" is deliberately **not** one of the conditions, and
+that was measured rather than reasoned. Go spells a dispatch that also guards its
+own argument count as `switch { case len(args) > 0 && args[0] == "serve": }`, and
+refusing to read it left a real command judged against a *sub*-dispatch found in
+another file of the same package — which produced three confident findings
+against a README that was right. "Every branch names a literal" is the property
+that separates the two.
 
 Go and Rust. A third language is a grammar dependency and one row.
+
+`command_sources` accepts `*`, `**`, `/` and literal text, and **refuses the
+rest of the glob syntax at load** — `?`, bracket classes and brace alternation.
+The pattern is used twice, once as a glob to select the files and once as a
+regex to read the command's name out of the path, and a construct only the first
+of those understands would select a file the second cannot name. That file would
+then vanish from the discovered count with nothing said, which is the failure
+this rule exists to refuse. A path selected and not nameable is reported and
+counted anyway, in case one ever gets past the refusal.
 
 What it deliberately does not do:
 

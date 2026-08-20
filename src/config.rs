@@ -977,6 +977,38 @@ impl Rule {
                         self.id
                     )));
                 }
+                // The pattern is read TWICE -- once as a glob, to select the
+                // files, and once as a regex, to read the command's name out of
+                // the path each one has. Only `*`, `**`, `/` and literal text
+                // mean the same thing to both. A `?`, a bracket class or a brace
+                // alternation would select a file the second reading cannot
+                // name, and that file would then vanish out of the discovered
+                // count with nothing said -- which is the failure this rule
+                // exists to refuse, arriving through its own configuration.
+                //
+                // Refused rather than translated. Teaching the regex the rest of
+                // globset's syntax is a second implementation of somebody else's
+                // grammar, free to disagree with it on the next version.
+                let outside_placeholder = pattern.replacen("{}", "", 1);
+                if let Some(unsupported) = ['?', '[', ']']
+                    .into_iter()
+                    .find(|character| pattern.contains(*character))
+                    .or_else(|| {
+                        ['{', '}']
+                            .into_iter()
+                            .find(|brace| outside_placeholder.contains(*brace))
+                    })
+                {
+                    return Err(Fatal::new(format!(
+                        "rule {:?}: `command_sources` entry {pattern:?} uses {unsupported:?}, \
+                         which this field does not accept. The pattern selects the files as \
+                         a glob AND names the command as a regex, and only `*`, `**`, `/` \
+                         and literal text mean the same thing to both -- anything else \
+                         would select a source whose command could not be named, and drop \
+                         it out of the count in silence.",
+                        self.id
+                    )));
+                }
             }
         } else if self.command_sources.is_some() {
             return Err(Fatal::new(format!(
