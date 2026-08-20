@@ -289,8 +289,14 @@ fn an_override_of_a_set_this_policy_inherits_stays_silent() {
 
 #[test]
 fn a_rule_no_set_owns_is_nobody_elses_business() {
+    // `files.exclude` here, and in the two fixtures below, for the reason the
+    // bundled `credentials` set carries the same line: an unanchored literal
+    // written as `regexp = 'SHOUT'` contains SHOUT on its own declaration line,
+    // so a rule selecting the whole tree reports its own policy file.
+    // `validate_no_self_match` refuses that at load; what these tests are about
+    // is provenance and shadowing, which the exclusion leaves untouched.
     let root = repository(&format!(
-        "{AUDIT}\n[rule.no-shouting]\nmessage = \"quiet\"\nregexp = 'SHOUT'\nfiles.include = [\".\"]\n"
+        "{AUDIT}\n[rule.no-shouting]\nmessage = \"quiet\"\nregexp = 'SHOUT'\nfiles.include = [\".\"]\nfiles.exclude = [\"policy/**\"]\n"
     ));
 
     let output = guard(&root, &["--stage", "manual"]);
@@ -305,7 +311,7 @@ fn a_refusal_from_an_inherited_set_names_the_set_it_arrived_from() {
     // file for something that was never in it.
     let root = repository(
         "[inherit]\nsets = [\"process-residue\"]\n\n\
-         [rule.no-committed-secret-material]\nmessage = \"copied\"\nregexp = 'BEGIN PRIVATE KEY'\nfiles.include = [\".\"]\n",
+         [rule.no-committed-secret-material]\nmessage = \"copied\"\nregexp = 'BEGIN PRIVATE KEY'\nfiles.include = [\".\"]\nfiles.exclude = [\"policy/**\"]\n",
     );
 
     let output = guard(&root, &["--stage", "manual"]);
@@ -329,7 +335,7 @@ fn an_override_that_changes_the_check_is_reported_at_load() {
     // after.
     let root = repository(
         "[inherit]\nsets = [\"process-residue\"]\n\n\
-         [rule.no-tracked-private-data-paths]\nmessage = \"mine\"\nregexp = 'private'\nfiles.include = [\".\"]\n",
+         [rule.no-tracked-private-data-paths]\nmessage = \"mine\"\nregexp = 'private'\nfiles.include = [\".\"]\nfiles.exclude = [\"policy/**\"]\n",
     );
 
     let output = guard(&root, &["--stage", "manual"]);
