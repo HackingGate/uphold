@@ -44,6 +44,15 @@ the guard working, not a misconfiguration.
 `visibility` decides whether the private-name guards fire here at all. A private
 fork sets `private` and they stand down; a public one leaves `public`.
 
+A workspace holding many repositories writes both lines many times — measured
+across one fleet, 78 `owner` lines for seven distinct values. `owner_from` and
+`visibility_from` take a command whose stdout is the value instead, so the fact
+lives once outside the tree. They move the declaration and never look it up:
+every way the command can fail to answer is exit `2`, because what a missing
+declaration falls back to is the owner read off `origin` and the forge's view of
+a visibility that is about to change. See
+[REFERENCE.md](docs/REFERENCE.md#reading-a-repository-fact-from-a-command).
+
 A third line is about *your machine* rather than your fork.
 `private_owners_from` reads a file that is one operator's and will not exist in
 your clone, so the policy also sets `private_owners_optional = true`: the

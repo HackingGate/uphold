@@ -672,6 +672,64 @@ private_owners_optional = true    # only where this policy is cloned; see below
 
 A rule's own field wins where both are written.
 
+### Reading a repository fact from a command
+
+`owner` and `visibility` are each written once per repository, and across one
+fleet that is 78 `owner` lines carrying seven distinct values — 41 copies of one
+string inside a single organisation. `owner_from` and `visibility_from` are the
+same move `private_owners_from` already makes: a command whose stdout is the
+value, run in the repository root, so a workspace fact is written once outside
+the tree instead of once per tree.
+
+```toml
+owner_from = "cat ${XDG_CONFIG_HOME:-$HOME/.config}/uphold/owner"
+visibility_from = "cat .workspace/visibility-cache"
+```
+
+**They move a declaration; they do not look one up.** Deriving the owner from
+`origin` is the defect rather than the fix — repointing `origin` at somebody
+else's remote is the exact accident `prevent-public-push` exists to catch, and a
+derived allow-list is repointed by the same command. The same applies to
+visibility: a command that asks a forge what a repository is *today* hands three
+guards' one scope condition to a network call, which answers nothing on a train,
+nothing in CI without a token, and answers about the visibility a repository is
+in the middle of changing. What the command reads must be a value somebody
+decided, not the state being guarded.
+
+So every way the command can fail to answer is exit `2`:
+
+| what the command does | what happens |
+|---|---|
+| prints one value | that is the declaration, cached for the rest of the process |
+| exits non-zero | exit `2`, naming the fallback it refused to take |
+| exits `0` printing nothing | exit `2` — the file reads as a declaration and there is none |
+| prints more than one line | exit `2` — one repository, one fact, and no first-line guess |
+| prints a word that is not a visibility | exit `2`, naming the command rather than the file |
+
+There is deliberately **no `..._optional`** beside these, and the asymmetry with
+`private_owners_from` is the point. An unreadable owner list degrades to a
+narrower check, which can be reported and lived with. An unreadable owner
+degrades to the tautology above, and an unreadable visibility degrades to
+standing a disclosure guard down — neither is a degradation anybody should be
+able to opt into.
+
+Two further refusals, both at load:
+
+- **`owner` beside `owner_from`** (or `visibility` beside `visibility_from`) is
+  refused. They are two statements of one fact, free to disagree, with nothing
+  anywhere to notice when they do — which is the defect the field exists to
+  remove, arriving through the field.
+- **Neither may arrive by inheritance.** A bundled set or an `inherit.paths`
+  file carrying one is refused, for the reason `private-names` gives for not
+  shipping `private_owners_from`: a command arriving that way runs in every
+  inheriting repository on the strength of a version bump, with nothing in any
+  of those trees to review.
+
+The command runs at most once per process, on the first ask — the private-name
+family asks about visibility three times, once per variant — and the answer is
+never cached to disk. A declaration exists to avoid a stale answer, and a cache
+outliving the run is a stale answer with a longer life.
+
 **Why the owner list is worth declaring**, measured rather than asserted. A
 forge lookup only *adjudicates* names something already extracted, and a bare
 `owner/repo` is extracted only for declared owners and for this repository's

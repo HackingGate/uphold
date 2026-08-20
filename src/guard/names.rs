@@ -361,11 +361,12 @@ fn target_is_public(root: &Path, policy: &Policy, rule: &Rule) -> Result<Option<
     // The policy's own `visibility`, which is the declaration a rule arriving
     // from a bundled set can still reach: a set cannot be handed a parameter
     // without writing the rule out again, and whether this repository is
-    // published was never a property of one rule in it. Already held to the
-    // three spellings at load, so a word that is not a visibility never gets
-    // this far.
-    if let Some(declared) = policy.visibility.as_deref() {
-        return Ok(crate::config::visibility_is_public(declared));
+    // published was never a property of one rule in it. Held to the three
+    // spellings before it reaches this line -- a written one at load, a
+    // `visibility_from` answer as it is read -- so a word that is not a
+    // visibility never gets this far.
+    if let Some(declared) = policy.declared_visibility(root)? {
+        return Ok(crate::config::visibility_is_public(&declared));
     }
     let Some(url) = git::remote_url(root, "origin") else {
         return Ok(None);
@@ -596,15 +597,16 @@ fn decide(request: &Request<'_>, sources: &[(String, String)]) -> Result<Option<
     // whole family runs at all.
     if request.rule.visibility_required.unwrap_or(false)
         && request.rule.visibility.is_none()
-        && request.policy.visibility.is_none()
+        && request.policy.declared_visibility(request.root)?.is_none()
     {
         return Err(Fatal::new(format!(
             "rule {:?}: `visibility_required` is set and nothing here says whether this \
              repository is published, so the only answer available is the forge's -- which \
              is unknown with no token, unknown with no network, and stale on the one day it \
              matters. Declare it once, at the top of the policy file:\n\n  visibility = \
-             \"private\"    # or \"public\", or \"internal\"\n\nThe guards in this family \
-             fire only on a public tree, so the word decides whether they run here at all.",
+             \"private\"    # or \"public\", or \"internal\"\n\nor point `visibility_from` \
+             at a command that prints one word. The guards in this family fire only on a \
+             public tree, so the word decides whether they run here at all.",
             request.rule.id
         )));
     }
@@ -613,7 +615,8 @@ fn decide(request: &Request<'_>, sources: &[(String, String)]) -> Result<Option<
         // under, and saying nothing would look exactly like saying clean.
         return Err(Fatal::new(format!(
             "{}: could not determine this repository's visibility. Set `visibility` at the \
-             top of the policy file, or on the rule, to say what it is.",
+             top of the policy file, on the rule, or as a `visibility_from` command, to say \
+             what it is.",
             request.rule.id
         )));
     };

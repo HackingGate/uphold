@@ -837,3 +837,245 @@ fn every_guard_set_declares_the_stages_its_rules_install() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// A repository fact declared somewhere other than the policy file.
+//
+// `owner` and `visibility` are declared once per repository, which across one
+// fleet means 78 copies of an `owner` line for seven distinct values. Reading
+// the value from a command is the shape `private_owners_from` already uses, and
+// the cases below are about the thing that makes it safe: it is a DECLARATION
+// moved out of the tree, never a lookup of the fact being guarded, so every way
+// it can fail to answer is exit 2 rather than the fallback it replaced.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_owner_read_from_a_command_pins_a_push_the_way_a_written_one_does() {
+    // The pin, and the half that proves it is a pin: `unowned-push` sets
+    // `owner_required`, so a repository the guard considers unpinned exits 2
+    // with the line to write. Exit 0 here means the command answered and the
+    // answer was treated as the declaration, not as a guess off `origin`.
+    let root =
+        repository("owner_from = \"printf 'acme\\n'\"\n\n[inherit]\nsets = [\"unowned-push\"]\n");
+    commit_one(&root);
+
+    let allowed = guard(
+        &root,
+        &[
+            "--stage",
+            "pre-push",
+            "--remote-url",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    assert_eq!(code(&allowed), 0, "{}", stderr(&allowed));
+    // And it is the pinned mode, not the derived one. The guard says so on the
+    // allow path precisely because a derived owner allows everything it should
+    // have refused, and never mentions it.
+    assert!(
+        !stderr(&allowed).contains("DERIVED FROM ORIGIN"),
+        "{}",
+        stderr(&allowed)
+    );
+
+    let refused = guard(
+        &root,
+        &[
+            "--stage",
+            "pre-push",
+            "--remote-url",
+            "https://github.com/someone-else/widget.git",
+        ],
+    );
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+}
+
+#[test]
+fn an_owner_source_that_failed_is_exit_two_and_not_the_owner_read_off_origin() {
+    // The whole reason there is no `owner_optional` beside this. An unreadable
+    // private-owner list degrades to a NARROWER check, which can be reported and
+    // lived with; an unreadable owner degrades to the owner read off `origin`,
+    // which is the tautology `prevent-public-push` exists to refuse. So the
+    // failure has to be louder than the fallback, not quieter.
+    let root = repository(
+        "owner_from = \"cat no-such-file-anywhere\"\n\n[inherit]\nsets = [\"unowned-push\"]\n",
+    );
+    commit_one(&root);
+
+    let output = guard(
+        &root,
+        &[
+            "--stage",
+            "pre-push",
+            "--remote-url",
+            "https://github.com/someone-else/widget.git",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("owner_from"), "{text}");
+    // Naming what it would otherwise have fallen back to, because a reader who
+    // cannot see the difference between exit 1 and exit 2 here will assume the
+    // guard did its job.
+    assert!(text.contains("read off `origin`"), "{text}");
+}
+
+#[test]
+fn a_source_that_answers_more_than_once_is_refused_rather_than_read_partly() {
+    // This is one fact about one repository. Taking the first line would pin the
+    // repository to whatever the command happened to print first -- which is a
+    // decision nobody made, arriving as a silent success.
+    let root = repository(
+        "owner_from = \"printf 'acme\\nother\\n'\"\n\n[inherit]\nsets = [\"unowned-push\"]\n",
+    );
+    commit_one(&root);
+
+    let output = guard(
+        &root,
+        &[
+            "--stage",
+            "pre-push",
+            "--remote-url",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("more than one line"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_source_that_answers_nothing_at_all_is_refused_rather_than_read_as_absent() {
+    // Exit 0 and no output is the most dangerous shape a source has: the policy
+    // file reads as though the repository declared something, and it declared
+    // nothing.
+    let root = repository("owner_from = \"true\"\n\n[inherit]\nsets = [\"unowned-push\"]\n");
+    commit_one(&root);
+
+    let output = guard(
+        &root,
+        &[
+            "--stage",
+            "pre-push",
+            "--remote-url",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("printed nothing"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_visibility_read_from_a_command_decides_whether_the_family_runs() {
+    // The scope condition of three guards, arriving from outside the tree. Both
+    // directions are asserted in one test on purpose: a `private` that stood the
+    // family down for the wrong reason -- because the command failed, say --
+    // would be indistinguishable from this one without the `public` half beside
+    // it, and standing a disclosure guard down quietly is the failure mode.
+    let rule = "[rule.no-private-repo-names]\nbuiltin = \"no-private-repo-names\"\n\
+                private_owners = [\"secretcorp\"]\n\n\
+                [rule.no-private-repo-names.git]\nhooks = [\"commit-msg\"]\n";
+    let root = repository(&format!(
+        "visibility_from = \"printf 'private\\n'\"\n\n{rule}"
+    ));
+    commit_one(&root);
+    write(&root, "msg.txt", "see secretcorp/thing\n");
+
+    let stood_down = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&stood_down), 0, "{}", stderr(&stood_down));
+
+    std::fs::write(
+        root.join("policy/principles.toml"),
+        format!("visibility_from = \"printf 'public\\n'\"\n\n{rule}"),
+    )
+    .unwrap();
+
+    let fired = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&fired), 1, "{}", stderr(&fired));
+    assert!(
+        stderr(&fired).contains("secretcorp/thing"),
+        "{}",
+        stderr(&fired)
+    );
+}
+
+#[test]
+fn a_visibility_source_answering_a_word_that_is_not_a_visibility_is_exit_two() {
+    // A written `visibility` is held to the three spellings at load. A command's
+    // answer cannot be -- there is no answer until it runs -- so it is held to
+    // them as it is read, and the refusal names the command rather than the
+    // file, because the file is right and the thing it points at is not.
+    let root = repository(
+        "visibility_from = \"printf 'pubic\\n'\"\n\n[inherit]\nsets = [\"private-names\"]\n",
+    );
+    commit_one(&root);
+    write(&root, "msg.txt", "a message\n");
+
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("visibility_from"), "{text}");
+    assert!(text.contains("not a visibility"), "{text}");
+}
+
+#[test]
+fn one_fact_written_down_and_also_read_from_a_command_is_refused_at_load() {
+    // Two statements of one fact, free to disagree, with nothing here to notice
+    // when they do -- which is the defect the field exists to remove, arriving
+    // through the field.
+    for (written, source) in [
+        ("owner = \"acme\"", "owner_from = \"printf 'acme\\n'\""),
+        (
+            "visibility = \"public\"",
+            "visibility_from = \"printf 'public\\n'\"",
+        ),
+    ] {
+        let root = repository(&format!(
+            "{written}\n{source}\n\n[inherit]\nsets = [\"process-residue\"]\n"
+        ));
+        commit_one(&root);
+
+        let output = guard(&root, &["--stage", "pre-commit"]);
+        assert_eq!(code(&output), 2, "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("two statements of one fact"),
+            "{}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn a_file_this_repository_did_not_write_may_not_carry_a_command_that_speaks_for_it() {
+    // The reason `private-names` gives for not shipping `private_owners_from`,
+    // and it is not weakened by the command being one line shorter: a command
+    // arriving by inheritance runs in every repository that inherits it on the
+    // strength of a version bump, with nothing in any of those trees to review.
+    //
+    // Refused rather than dropped. An inherited `owner` is read by nothing and
+    // says nothing about it, which is the "looks declared, enforced by nobody"
+    // shape refused everywhere else here; these two are new and start correct.
+    let root = repository("[inherit]\npaths = [\"policy/shared.toml\"]\n");
+    std::fs::write(
+        root.join("policy/shared.toml"),
+        "owner_from = \"printf 'acme\\n'\"\n\n\
+         [rule.no-shouting]\nregexp = \"SHOUTING\"\nmessage = \"do not shout\"\n",
+    )
+    .unwrap();
+    commit_one(&root);
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("owner_from"),
+        "{}",
+        stderr(&output)
+    );
+}

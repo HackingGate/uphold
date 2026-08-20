@@ -15,6 +15,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -801,7 +803,7 @@ impl Rule {
 
     /// The search scoping, or ripgrep's defaults where the table is absent.
     pub(crate) fn files(&self) -> &Files {
-        static DEFAULTS: std::sync::OnceLock<Files> = std::sync::OnceLock::new();
+        static DEFAULTS: OnceLock<Files> = OnceLock::new();
         self.files
             .as_ref()
             .map_or_else(|| DEFAULTS.get_or_init(Files::default), |files| files)
@@ -1282,6 +1284,45 @@ pub(crate) struct PolicyFile {
     /// `guard::names::target_is_public`.
     #[serde(default)]
     pub visibility: Option<String>,
+    /// A command whose stdout is this repository's owner.
+    ///
+    /// The duplication is measured rather than asserted: across one fleet, 78
+    /// policy files declare an `owner` for seven distinct values -- 41 copies of
+    /// one string inside a single organisation. That is a workspace fact
+    /// transcribed once per repository, and it is the same shape
+    /// [`PolicyFile::private_owners_from`] already answered by reading from
+    /// outside the tree.
+    ///
+    /// It is NOT permission to derive the owner from `origin`. Deriving it is
+    /// the defect rather than the fix -- repointing `origin` at somebody else's
+    /// remote is the exact accident `prevent-public-push` exists to catch, and a
+    /// derived allow-list is repointed by the same command. This field moves a
+    /// DECLARATION out of the tree; it never reads one off the thing being
+    /// guarded.
+    ///
+    /// Refused beside a literal `owner`, and refused in a bundled set or an
+    /// inherited file. See [`refuse_two_statements_of_one_fact`] and
+    /// [`refuse_inherited_declaration`].
+    #[serde(default)]
+    pub owner_from: Option<String>,
+    /// A command whose stdout is this repository's visibility.
+    ///
+    /// Same mechanism as [`PolicyFile::owner_from`], for a host the built-in
+    /// lookup does not speak to or a workspace that would rather answer from a
+    /// cached organisation index than a request per repository. The word it
+    /// prints is held to `public`, `private` or `internal` exactly as a written
+    /// one is.
+    ///
+    /// What it must not become is a probe. This is a declaration read from
+    /// somewhere else, and a command that asks a forge what a repository is
+    /// TODAY hands the private-name family's one scope condition to a network
+    /// call -- which answers nothing on a train, nothing in CI without a token,
+    /// and answers about the visibility a repository is in the middle of
+    /// changing. So a command that cannot answer must fail, and failing is exit
+    /// 2: a quiet `private` would stand the whole family down, which is
+    /// fail-open on the one rule family where fail-open is unacceptable.
+    #[serde(default)]
+    pub visibility_from: Option<String>,
     /// A command whose output lists the owners this workspace treats as
     /// private, declared once for the whole policy.
     ///
@@ -1375,6 +1416,27 @@ pub(crate) struct Policy {
     /// What this repository's publications are visible to, from the policy
     /// file's own `visibility`. See [`PolicyFile::visibility`].
     pub visibility: Option<String>,
+    /// Where the owner is declared when it is not written down, from the policy
+    /// file's own `owner_from`. See [`PolicyFile::owner_from`].
+    pub owner_from: Option<String>,
+    /// Where the visibility is declared when it is not written down, from the
+    /// policy file's own `visibility_from`. See [`PolicyFile::visibility_from`].
+    pub visibility_from: Option<String>,
+    /// What `owner_from` answered, so it is asked at most once per process.
+    ///
+    /// Two slots and not one map keyed by field name, deliberately: these are
+    /// two facts behind two commands, and a single cache filled in one pass
+    /// would run the visibility command for a caller that only asked who this
+    /// repository belongs to. The resolution itself IS parameterised -- one
+    /// [`declared`] reads either -- so what is duplicated here is storage, not a
+    /// unit of behaviour.
+    ///
+    /// Per process rather than on disk. A declaration exists to avoid a stale
+    /// answer, and a cache that outlives the run is a stale answer with a
+    /// longer life.
+    pub resolved_owner: OnceLock<String>,
+    /// What `visibility_from` answered. See [`Policy::resolved_owner`].
+    pub resolved_visibility: OnceLock<String>,
     /// Where the private-owner list comes from, from the policy file's own
     /// `private_owners_from`. See [`PolicyFile::private_owners_from`].
     pub private_owners_from: Option<String>,
@@ -1395,6 +1457,55 @@ pub(crate) struct Policy {
 }
 
 impl Policy {
+    /// Who this repository belongs to, as this policy declares it.
+    ///
+    /// The written `owner` if there is one, else whatever `owner_from` answers,
+    /// else nothing -- and "nothing" is what makes a caller fall back to the
+    /// remote, which every caller of this is careful to say out loud.
+    ///
+    /// A rule's own `owner` is NOT consulted here. It is narrower than the
+    /// policy's on purpose, so the rule reads it first and reaches this only
+    /// when it has none.
+    pub(crate) fn declared_owner(&self, root: &Path) -> Result<Option<String>> {
+        declared(
+            root,
+            "owner",
+            self.owner.as_deref(),
+            self.owner_from.as_deref(),
+            &self.resolved_owner,
+        )
+    }
+
+    /// What this repository's publications are visible to, as this policy
+    /// declares it, held to the three spellings whichever way it arrived.
+    ///
+    /// A written `visibility` was already held to them at load, where a typo is
+    /// a diff somebody can fix. A command's answer cannot be checked then --
+    /// there is no answer until it runs -- so it is checked here, and the
+    /// refusal names the command rather than the file, because the file is
+    /// right and the thing it points at is not.
+    pub(crate) fn declared_visibility(&self, root: &Path) -> Result<Option<String>> {
+        let value = declared(
+            root,
+            "visibility",
+            self.visibility.as_deref(),
+            self.visibility_from.as_deref(),
+            &self.resolved_visibility,
+        )?;
+        if let Some(word) = value.as_deref() {
+            if visibility_is_public(word).is_none() {
+                return Err(Fatal::new(format!(
+                    "`visibility_from` answered {word:?}, which is not a visibility. The \
+                     command must print \"public\", \"private\" or \"internal\" -- the word \
+                     decides whether the guards that fire only on a published tree fire here \
+                     at all, so there is no reading of an unrecognised one that is safe to \
+                     guess at."
+                )));
+            }
+        }
+        Ok(value)
+    }
+
     /// The bundled set a rule id arrived from, for the one line a reader sees.
     ///
     /// By id, because a refusal carries the id and ids are one namespace --
@@ -1471,6 +1582,76 @@ fn parse(path: &Path, text: &str) -> Result<PolicyFile> {
 /// be a permission granted to the author by the author, which is not a
 /// permission. Refused rather than ignored: a field read by nothing is the
 /// shape this schema exists to make unrepresentable.
+/// Refuse a file that states one repository fact twice.
+///
+/// The whole argument for reading a declaration from outside the tree is that
+/// the fact has ONE place it is written. A file carrying `owner` and
+/// `owner_from` has kept the copy the field exists to remove, and nothing
+/// anywhere reconciles the two -- so the day they disagree is a day one of them
+/// is silently wrong and the guard reading it cannot tell.
+///
+/// At load, like the visibility spelling above it, because it is a fact about
+/// the file rather than about any run of any hook.
+fn refuse_two_statements_of_one_fact(path: &Path, file: &PolicyFile) -> Result<()> {
+    for (field, literal, from) in [
+        ("owner", file.owner.is_some(), file.owner_from.is_some()),
+        (
+            "visibility",
+            file.visibility.is_some(),
+            file.visibility_from.is_some(),
+        ),
+    ] {
+        if literal && from {
+            return Err(Fatal::at(
+                path,
+                format!(
+                    "`{field}` and `{field}_from` are both declared, and they are two \
+                     statements of one fact -- free to disagree, with nothing here to notice \
+                     when they do. Keep the one that is true of every checkout of this \
+                     repository: `{field}_from` where the value belongs to the workspace, \
+                     `{field}` where it belongs to the repository. Delete the other"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a command that speaks for a repository from a file that repository
+/// did not write.
+///
+/// `owner_from` and `visibility_from` run a shell command. A bundled set
+/// carrying one would run it in every inheriting repository on the strength of a
+/// version bump, with nothing in any of those trees to review -- which is the
+/// reason `private-names` already gives for not shipping `private_owners_from`,
+/// and it is not weakened by the command being one line shorter.
+///
+/// Refused rather than dropped. `owner` and `visibility` in an inherited file
+/// are read by nothing and say nothing about it, which is the shape this
+/// repository refuses everywhere else; those two are load-bearing in trees that
+/// already exist, and these two are new and can start correct.
+fn refuse_inherited_declaration(path: &Path, file: &PolicyFile, kind: &str) -> Result<()> {
+    for field in ["owner_from", "visibility_from"] {
+        let declared = match field {
+            "owner_from" => file.owner_from.is_some(),
+            _ => file.visibility_from.is_some(),
+        };
+        if declared {
+            return Err(Fatal::at(
+                path,
+                format!(
+                    "`{field}` runs a shell command and this file is {kind}. A command \
+                     arriving that way runs in every repository that inherits it on the \
+                     strength of a version bump, with nothing in any of those trees to \
+                     review -- which is why a set does not ship `private_owners_from` \
+                     either. Write the line in the repository's own policy file"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn refuse_set_header(path: &Path, file: &PolicyFile) -> Result<()> {
     if file.set.is_some() {
         return Err(Fatal::at(
@@ -1491,6 +1672,7 @@ fn refuse_set_header(path: &Path, file: &PolicyFile) -> Result<()> {
 fn parse_bundled(name: &str, text: &str) -> Result<PolicyFile> {
     let path = Path::new("<bundled>").join(format!("{name}.toml"));
     let file = parse(&path, text)?;
+    refuse_inherited_declaration(&path, &file, "a bundled set")?;
     let allowed = file.set.clone().unwrap_or_default().stages;
     for rule in file.rules.values() {
         for hook in rule.hooks() {
@@ -1518,6 +1700,85 @@ fn parse_bundled(name: &str, text: &str) -> Result<PolicyFile> {
     Ok(file)
 }
 
+/// One repository-level fact, read from a command instead of written down.
+///
+/// Shared by `owner_from` and `visibility_from` because those differ only in
+/// which fact they carry. One function, so the trimming, the refusal of a second
+/// line and the words a failure prints are stated once and cannot drift into two
+/// slightly different contracts.
+///
+/// There is deliberately no `..._optional` escape hatch here, and the asymmetry
+/// with `private_owners_from` is the point. An unreadable private-owner list
+/// degrades to a NARROWER check, which can be reported and lived with. An
+/// unreadable owner degrades to the owner read off `origin` -- the tautology
+/// `prevent-public-push` exists to refuse -- and an unreadable visibility
+/// degrades to the forge's answer about a visibility that is about to change.
+/// Neither of those is a degradation anybody should be able to opt into.
+fn read_declaration(root: &Path, field: &str, command: &str) -> Result<String> {
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(root)
+        .output()
+        .map_err(|error| Fatal::new(format!("`{field}`: could not run {command:?}: {error}")))?;
+    if !output.status.success() {
+        return Err(Fatal::new(format!(
+            "`{field}` ran {command:?}, which exited {}: {}\n\nA source that failed declared \
+             nothing, and what a missing declaration falls back to is the thing this field \
+             exists to replace: the owner read off `origin`, or the forge's view of a \
+             visibility that is about to change. Fix the source, or write the value down.",
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut values = text.lines().map(str::trim).filter(|line| !line.is_empty());
+    let Some(value) = values.next() else {
+        return Err(Fatal::new(format!(
+            "`{field}` ran {command:?}, which exited 0 and printed nothing. Silence is not an \
+             answer here: it would leave this repository having declared nothing while the \
+             policy file reads as though it had declared something."
+        )));
+    };
+    if values.next().is_some() {
+        return Err(Fatal::new(format!(
+            "`{field}` ran {command:?}, which printed more than one line. This is one fact \
+             about one repository, and taking the first line would pin the repository to \
+             whatever the command happened to print first. Narrow it to the single value."
+        )));
+    }
+    Ok(value.to_owned())
+}
+
+/// A declared fact: the written value, else the command's answer, else nothing.
+///
+/// The command runs on the first ask and never again, because the guards ask
+/// more than once -- the private-name family asks about visibility three times,
+/// once per variant -- and a workspace that answers with an organisation index
+/// is paying for a forge round trip each time.
+fn declared(
+    root: &Path,
+    field: &str,
+    literal: Option<&str>,
+    from: Option<&str>,
+    cache: &OnceLock<String>,
+) -> Result<Option<String>> {
+    if let Some(value) = literal {
+        return Ok(Some(value.to_owned()));
+    }
+    let Some(command) = from else {
+        return Ok(None);
+    };
+    if let Some(cached) = cache.get() {
+        return Ok(Some(cached.clone()));
+    }
+    let value = read_declaration(root, &format!("{field}_from"), command)?;
+    // `set` can only lose to a caller that filled the slot first, and that
+    // caller ran the same command against the same tree, so the loser's answer
+    // is the winner's answer.
+    Ok(Some(cache.get_or_init(|| value).clone()))
+}
+
 /// Is a declared visibility one that means "everyone can read this"?
 ///
 /// `None` where the word is not a visibility at all. One function because the
@@ -1537,6 +1798,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     let text = read_to_string(policy_path)?;
     let file = parse(policy_path, &text)?;
     refuse_set_header(policy_path, &file)?;
+    refuse_two_statements_of_one_fact(policy_path, &file)?;
     // Checked here rather than where a guard reads it. A misspelt visibility is
     // a fact about the file, and hearing about it when a hook fires means
     // hearing about it from whichever seam happened to run first, months after
@@ -1587,6 +1849,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         let extended = read_to_string(&path)?;
         let parsed = parse(&path, &extended)?;
         refuse_set_header(&path, &parsed)?;
+        refuse_inherited_declaration(&path, &parsed, "an inherited file")?;
         // Refused rather than merged, and refused rather than ignored. Only
         // `.rules` is merged below, so an inherited `[[shim]]` used to vanish --
         // and vanish in the worst possible way, because the `exec` rule that
@@ -1688,6 +1951,10 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         path: policy_path.to_path_buf(),
         owner: file.owner.clone(),
         visibility: file.visibility.clone(),
+        owner_from: file.owner_from.clone(),
+        visibility_from: file.visibility_from.clone(),
+        resolved_owner: OnceLock::new(),
+        resolved_visibility: OnceLock::new(),
         private_owners_from: file.private_owners_from.clone(),
         private_owners_optional: file.private_owners_optional,
         redact_matches: file.redact_matches,
