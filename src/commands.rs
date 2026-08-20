@@ -174,14 +174,22 @@ fn labels_of(arm: Node<'_>, shape: Shape, source: &str) -> Vec<String> {
 /// Three structural conditions, and each one is a false finding the line matcher
 /// this replaces produced:
 ///
-/// * it dispatches on SOMETHING. A Go tagless `switch {` is a chain of boolean
-///   arms, not a lookup, and reading its arms as verbs is where 22 of one run's
-///   38 findings came from.
-/// * at least two branches match STRING literals. A match over an enum is a
+/// * at least two branches carry STRING literals. A match over an enum is a
 ///   state machine, and its variants are not things a reader types.
 /// * a catch-all branch exists. A command dispatching on a word the user chose
 ///   has to answer for a word it does not know, and a lookup with no default is
 ///   almost never one.
+/// * where it dispatches on NOTHING -- a Go tagless `switch {` -- every branch
+///   must carry a literal. This is the condition that took the longest to get
+///   right, and it was measured rather than reasoned. A tagless switch whose
+///   arms are `ready()` and `waiting()` is a chain of booleans and reading it as
+///   a verb list is where 22 of one run's 38 findings came from. But a tagless
+///   switch whose every arm is `len(args) > 0 && args[0] == "serve"` IS the
+///   dispatch, spelled the way Go spells one that also guards its own argument
+///   count -- and refusing to read it left a real command judged against a
+///   SUB-dispatch found elsewhere in the same binary, which produced three
+///   confident findings against a README that was right. "Has a subject" was
+///   never the property worth testing; "every branch names a literal" is.
 ///
 /// The conditions are deliberately structural rather than a list of subject
 /// spellings. An allow-list of subjects read off one workspace's dispatches is a
@@ -189,10 +197,11 @@ fn labels_of(arm: Node<'_>, shape: Shape, source: &str) -> Vec<String> {
 /// disciplines a generous reading -- not a narrow one that silently misses a
 /// dispatch spelled a way nobody had seen yet.
 fn dispatch_labels(node: Node<'_>, shape: Shape, source: &str) -> Option<BTreeSet<String>> {
-    node.child_by_field_name(shape.subject)?;
+    let on_something = node.child_by_field_name(shape.subject).is_some();
     let mut cursor = node.walk();
     let mut verbs: BTreeSet<String> = BTreeSet::new();
-    let mut arms = 0usize;
+    let mut labelled = 0usize;
+    let mut unlabelled = 0usize;
     let mut catch_all = false;
     let mut stack = vec![node];
     while let Some(current) = stack.pop() {
@@ -204,9 +213,10 @@ fn dispatch_labels(node: Node<'_>, shape: Shape, source: &str) -> Option<BTreeSe
             if child.kind() == shape.arm {
                 let labels = labels_of(child, shape, source);
                 if labels.is_empty() {
+                    unlabelled += 1;
                     catch_all = true;
                 } else {
-                    arms += 1;
+                    labelled += 1;
                     verbs.extend(labels);
                 }
                 continue;
@@ -219,7 +229,8 @@ fn dispatch_labels(node: Node<'_>, shape: Shape, source: &str) -> Option<BTreeSe
             }
         }
     }
-    (arms >= 2 && catch_all).then_some(verbs)
+    let readable = labelled >= 2 && catch_all && (on_something || unlabelled == 0);
+    readable.then_some(verbs)
 }
 
 /// Every verb the sources of one command dispatch on.
@@ -297,25 +308,58 @@ pub(crate) fn documented(command: &str, sources: &[(String, String)]) -> BTreeSe
     let mut verbs = BTreeSet::new();
     for (_, text) in sources {
         for line in text.lines() {
-            if let Some(verb) = first_verb(line, &pattern) {
-                verbs.insert(verb);
+            if let Some((verb, rest)) = invoked(line, &pattern) {
+                if usage_shaped(&rest) {
+                    verbs.insert(verb);
+                }
             }
         }
     }
     verbs
 }
 
-/// The verb this text invokes, if it invokes one at all.
+/// Whether what follows the verb still reads as an invocation rather than a
+/// sentence.
+///
+/// Asked of the USAGE reading and deliberately not of the documents. The two
+/// readings fail in opposite directions: a false document finding accuses a file
+/// that was right, while a false USAGE verb costs coverage silently -- the two
+/// readings disagree, and the command then judges nothing at all.
+///
+/// Measured on a real tree rather than supposed. A command named `session`
+/// collected `for` and `in` out of three ordinary comments -- "session in an
+/// already-running browser", "session for the ref" -- disagreed with its own
+/// dispatch over words that are not verbs, and skipped itself out of every
+/// document in its repository. Any command whose name is also an English word
+/// has that failure waiting for it.
+///
+/// A usage line names arguments. What may follow a verb is a flag, a
+/// placeholder, an alternation, or nothing; a run of ordinary lowercase words is
+/// prose, and prose was never a usage claim to disagree with.
+fn usage_shaped(rest: &str) -> bool {
+    rest.split_whitespace().all(|token| {
+        token.starts_with(['-', '<', '[', '{', '('])
+            || token == "|"
+            || token == "..."
+            || token
+                .chars()
+                .all(|character| !character.is_ascii_lowercase())
+    })
+}
+
+/// The verb this text invokes and what follows it, if it invokes one at all.
 ///
 /// Anchored after the lead, because an invocation BEGINS with the binary.
 /// Searching anywhere in the text is what matched a command name inside an
 /// ordinary sentence and inside a column of an ASCII diagram, and both were false
 /// findings on the first run of the implementation this ports.
-fn first_verb(text: &str, pattern: &Regex) -> Option<String> {
+fn invoked(text: &str, pattern: &Regex) -> Option<(String, String)> {
     let start = lead().find(text).map_or(0, |found| found.end());
-    let rest = text.get(start..)?;
-    let captured = pattern.captures(rest)?;
-    captured.get(1).map(|verb| verb.as_str().to_owned())
+    let line = text.get(start..)?;
+    let captured = pattern.captures(line)?;
+    let verb = captured.get(1)?;
+    let after = line.get(verb.end()..).unwrap_or_default().to_owned();
+    Some((verb.as_str().to_owned(), after))
 }
 
 /// One place a document tells a reader to run something.
@@ -390,7 +434,7 @@ pub(crate) fn mentions(text: &str, commands: &BTreeMap<String, BTreeSet<String>>
             continue;
         };
         for (line, code) in code_spans(text) {
-            if let Some(verb) = first_verb(&code, &pattern) {
+            if let Some((verb, _)) = invoked(&code, &pattern) {
                 found.push(Mention {
                     line,
                     command: command.clone(),
@@ -447,11 +491,41 @@ func main() {
         assert_eq!(found, verbs(&["services", "sync"]));
     }
 
+    /// A tagless switch whose every arm names a literal IS the dispatch.
+    ///
+    /// Go spells a dispatch that also guards its own argument count this way,
+    /// and it is not rare. Measured on a real binary: refusing to read it left
+    /// the command judged against a SUB-dispatch found in another file of the
+    /// same package -- `record|last`, belonging to one of its verbs -- and the
+    /// rule reported three confident findings against a README that was right.
+    #[test]
+    fn a_tagless_switch_whose_arms_all_name_a_literal_is_still_a_dispatch() {
+        let guarded = r#"
+package main
+
+func main() {
+	args := os.Args[1:]
+	switch {
+	case len(args) > 0 && args[0] == "serve":
+		serve(args[1:])
+	case len(args) > 0 && args[0] == "login-audit":
+		loginAudit(args[1:])
+	default:
+		run(args)
+	}
+}
+"#;
+        assert_eq!(
+            dispatched(&sources("cmd/session/main.go", guarded)),
+            verbs(&["login-audit", "serve"])
+        );
+    }
+
     /// The form that supplied 22 of one run's 38 false findings.
     ///
-    /// A tagless `switch {` is a chain of boolean arms and not a lookup, so its
-    /// arms are not verbs. The line matcher this replaces could not see the
-    /// difference; the grammar reports the missing subject.
+    /// A tagless `switch {` whose arms carry no literal at all is a chain of
+    /// booleans and not a lookup, so its arms are not verbs. The line matcher
+    /// this replaces could not see the difference.
     #[test]
     fn a_tagless_switch_offers_no_verbs_rather_than_wrong_ones() {
         let tagless = r"
@@ -542,6 +616,29 @@ func main() {}
         // the two readings would disagree, and the command would skip itself
         // out over a sentence that was perfectly correct.
         assert!(!named.contains("operates"), "{named:?}");
+    }
+
+    /// The usage reading takes usage lines and not sentences that start with
+    /// the command's name.
+    ///
+    /// Measured on a real tree: a command called `session` collected `for` and
+    /// `in` out of ordinary comments, disagreed with its own dispatch over words
+    /// that are not verbs, and skipped itself out of every document in its
+    /// repository. Any command whose name is also an English word has that
+    /// waiting for it.
+    #[test]
+    fn a_sentence_beginning_with_the_command_name_is_not_a_usage_claim() {
+        let prose = r"package main
+
+// session in an already-running browser, using the vaulted passkey and
+// session for the ref. The real implementation drives the pool.
+//
+// session serve <port>
+// session login-audit
+func main() {}
+";
+        let named = documented("session", &sources("cmd/session/main.go", prose));
+        assert_eq!(named, verbs(&["login-audit", "serve"]));
     }
 
     #[test]
