@@ -68,14 +68,27 @@ fn code(output: &Output) -> i32 {
 /// each. A test that called the classifier directly would be asserting on the
 /// function rather than on the behaviour a repository gets.
 fn guard_with_gh(root: &Path, stderr_line: &str, args: &[&str]) -> Output {
+    guard_with_stub_gh(root, &format!("echo '{stderr_line}' >&2\nexit 1\n"), args)
+}
+
+/// The same, for a stub that ANSWERS rather than fails.
+///
+/// The falsifier's whole subject is the difference between a forge saying
+/// `public`, a forge saying `private`, and a forge that said neither, so a
+/// helper that can only produce the third would leave two of the three states
+/// untested. `guard_with_gh` above is this one with its body written for it.
+fn guard_with_stub_gh(root: &Path, body: &str, args: &[&str]) -> Output {
     let bin = root.join("stub-bin");
     std::fs::create_dir_all(&bin).unwrap();
     let gh = bin.join("gh");
-    std::fs::write(
-        &gh,
-        format!("#!/bin/sh\necho '{stderr_line}' >&2\nexit 1\n"),
-    )
-    .unwrap();
+    std::fs::write(&gh, format!("#!/bin/sh\n{body}")).unwrap();
+    // The real git, ahead of whatever the developer's PATH puts there. A `git`
+    // shim loads the policy of the tree it is invoked in and fails closed when
+    // that policy will not load -- so on a machine with one installed, the shim
+    // rather than the guard would decide what `git remote get-url` answers in
+    // this fixture, and a guard that reads `origin` would be testing the
+    // installed binary instead of this one.
+    let _ = std::os::unix::fs::symlink(support::real_git(), bin.join("git"));
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -1078,4 +1091,165 @@ fn a_file_this_repository_did_not_write_may_not_carry_a_command_that_speaks_for_
         "{}",
         stderr(&output)
     );
+}
+
+// ---------------------------------------------------------------------------
+// The declared visibility, checked against the forge that owns the fact.
+//
+// `stale-visibility` refuses exactly one state -- a policy claiming privacy over
+// a repository the forge serves as public -- because that is the only direction
+// a probe can establish and it is the direction that leaks. Every other answer
+// is either clean or "could not look", and the cases below are mostly about
+// keeping those two apart: a rule that read silence as agreement would disarm
+// three disclosure guards on any machine with no credentials.
+// ---------------------------------------------------------------------------
+
+/// A repository with an `origin` for the falsifier to ask about.
+fn repository_with_origin(policy: &str) -> PathBuf {
+    let root = repository(policy);
+    git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    root
+}
+
+/// A stub `gh api` answering the way the real one does: the `--jq` template the
+/// lookup passes asks for visibility and full name as one tab-separated line.
+fn gh_answers(visibility: &str) -> String {
+    format!("printf '{visibility}\\tacme/widget\\n'\nexit 0\n")
+}
+
+#[test]
+fn a_policy_declaring_public_has_no_claim_of_privacy_and_makes_no_request() {
+    // The state most repositories are in, and it must cost them nothing. The
+    // stub `gh` fails if it is called at all, so exit 0 here is evidence that
+    // no request was made rather than evidence that one succeeded.
+    let root = repository_with_origin(
+        "visibility = \"public\"\n\n[inherit]\nsets = [\"stale-visibility\"]\n",
+    );
+    commit_one(&root);
+
+    let output = guard_with_gh(
+        &root,
+        "gh: Bad credentials (HTTP 401)",
+        &["--stage", "pre-push"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("no request was made"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn a_declared_privacy_the_forge_serves_as_public_is_refused() {
+    // The one refusable state, and the whole reason the rule exists: while the
+    // policy says `private` the three private-name guards stand down, over a
+    // repository everybody can read.
+    let root = repository_with_origin(
+        "visibility = \"private\"\n\n[inherit]\nsets = [\"stale-visibility\"]\n",
+    );
+    commit_one(&root);
+
+    let output = guard_with_stub_gh(&root, &gh_answers("public"), &["--stage", "pre-push"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("acme/widget"), "{text}");
+    assert!(text.contains("PUBLIC"), "{text}");
+    // And it says where the rule came from, which is the only thing a reader
+    // grepping the tree for the id would otherwise not find.
+    assert!(text.contains("[set: stale-visibility]"), "{text}");
+}
+
+#[test]
+fn a_forge_that_agrees_the_repository_is_private_is_clean() {
+    let root = repository_with_origin(
+        "visibility = \"private\"\n\n[inherit]\nsets = [\"stale-visibility\"]\n",
+    );
+    commit_one(&root);
+
+    let output = guard_with_stub_gh(&root, &gh_answers("private"), &["--stage", "pre-push"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("the forge agrees"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn a_name_the_forge_will_not_show_us_is_never_read_as_agreement() {
+    // The case the whole design turns on. A 404 is the ORDINARY answer for a
+    // genuinely private repository asked about without credentials -- and it is
+    // also the answer for one that was deleted, renamed, or never existed. A
+    // rule that read it as "confirmed private" would let an unauthenticated
+    // runner confirm any claim at all, which is fail-open on the one family
+    // where fail-open is unacceptable.
+    for stderr_line in ["gh: Not Found (HTTP 404)", "gh: Bad credentials (HTTP 401)"] {
+        let root = repository_with_origin(
+            "visibility = \"private\"\n\n[inherit]\nsets = [\"stale-visibility\"]\n",
+        );
+        commit_one(&root);
+
+        let output = guard_with_gh(&root, stderr_line, &["--stage", "pre-push"]);
+        assert_eq!(code(&output), 2, "{stderr_line}: {}", stderr(&output));
+        let text = stderr(&output);
+        assert!(text.contains("Could not look is not a pass"), "{text}");
+        // Named, because a guard that fails on a machine with no credentials
+        // and offers no way past it is a guard somebody deletes.
+        assert!(text.contains("UPHOLD_ALLOW=no-stale-visibility"), "{text}");
+    }
+}
+
+#[test]
+fn a_repository_that_declares_no_visibility_has_no_claim_for_this_rule_to_check() {
+    // Not a pass. The subject of this rule is a declaration, and with none there
+    // is nothing to falsify -- which is a different answer from having checked
+    // and found nothing wrong.
+    let root = repository_with_origin("[inherit]\nsets = [\"stale-visibility\"]\n");
+    commit_one(&root);
+
+    let output = guard_with_stub_gh(&root, &gh_answers("public"), &["--stage", "pre-push"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no \nclaim") || stderr(&output).contains("no claim"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn the_visibility_read_from_a_command_is_the_claim_this_rule_checks() {
+    // The two halves of #54 meeting: the declaration comes from outside the
+    // tree, and it is still a declaration -- checked against the forge exactly
+    // as a written one is, and never replaced by what the forge said.
+    let root = repository_with_origin(
+        "visibility_from = \"printf 'private\\n'\"\n\n[inherit]\nsets = [\"stale-visibility\"]\n",
+    );
+    commit_one(&root);
+
+    let output = guard_with_stub_gh(&root, &gh_answers("public"), &["--stage", "pre-push"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("PUBLIC"), "{}", stderr(&output));
+}
+
+#[test]
+fn the_falsifier_never_runs_at_a_commit() {
+    // The stage decision, asserted rather than trusted to the set file. A guard
+    // that adds a network round trip to every commit is one somebody comments
+    // out, which is the reason `stale-pins` is off `pre-commit` too.
+    let root = repository_with_origin(
+        "visibility = \"private\"\n\n[inherit]\nsets = [\"stale-visibility\"]\n",
+    );
+    commit_one(&root);
+
+    let output = guard_with_stub_gh(&root, &gh_answers("public"), &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
 }

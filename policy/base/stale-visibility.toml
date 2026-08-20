@@ -1,0 +1,62 @@
+# Base rule set: stale-visibility (a policy still claiming a privacy the forge
+# has stopped serving)
+#
+# The guard that asks the forge whether this repository is public, and refuses
+# when the policy says it is not. Pull in with:
+#
+#   [inherit]
+#   sets = ["private-names", "stale-visibility"]
+#
+# WHY IT EXISTS. `visibility` is declared in the policy file and read by the
+# three `private-names` guards as the condition they fire under. The forge owns
+# that fact; the file holds a copy; nothing reconciles the two. A repository
+# flipped from private to public goes on being judged by a file that says
+# `private`, and the guards that would have caught a leak stand down over a
+# repository everybody can read. Measured across one fleet: 78 policies declare
+# a visibility, and nothing anywhere would notice if one of them stopped being
+# true.
+#
+# IT DISPROVES AND NEVER CONFIRMS, AND THAT IS THE DESIGN. No probe can
+# establish that a repository is PRIVATE -- a 404 is a private repository, a
+# deleted one, a renamed one, and a request that carried no credentials, and a
+# public index by construction lists only public repositories. Every probe can
+# disprove privacy, and that is the direction that leaks. So this rule refuses
+# exactly one state, declared private against a forge serving public, and reads
+# nothing at all back into the declaration.
+#
+# The declaration therefore stays the input. A rule that let a failed lookup
+# decide would let an offline laptop flip the guards to `private` and disarm a
+# disclosure check in silence, which is fail-open on the one family where
+# fail-open is unacceptable. Could not look is exit 2, never "confirmed
+# private".
+#
+# A POLICY DECLARING `public` IS CLEAN WITHOUT A REQUEST. There is no claim of
+# privacy to disprove and the private-name family is already at its strictest,
+# so the rule says so and makes no network call. That is most repositories, and
+# it is why the set costs them nothing.
+#
+# SEPARATE FROM `private-names`, AND THE REASON IS THE NETWORK -- the same
+# reason `stale-pins` is a name of its own. This is the only other bundled rule
+# that talks to a forge, so its verdict depends on where the machine running it
+# is standing: on a train, in a runner with no credentials, behind a proxy, the
+# question cannot be answered at all, and it answers exit 2 there rather than 0.
+# A repository that cannot live with a network-dependent gate should inherit
+# `private-names` and not this.
+#
+# THE STAGES ARE `stale-pins`'s, for the reason written there. `pre-push` is the
+# last local moment before work is shared, and `manual` is the sweep. It is off
+# `pre-commit` on purpose: a guard that adds a network round trip to every
+# commit is one somebody comments out, and a check that gets switched off
+# protects nothing.
+#
+# WHAT IT CANNOT SEE. It asks about `origin`, so a repository pushed somewhere
+# `origin` does not name is not the repository being checked -- which is the
+# same limit `prevent-public-push` has and refuses to derive its way around.
+# It asks through `gh`, so a forge `gh` does not speak to answers Unavailable
+# and the run exits 2 rather than passing.
+[set]
+stages = ["pre-push", "manual"]
+
+[rule.no-stale-visibility]
+builtin = "no-stale-visibility"
+git.hooks = ["pre-push", "manual"]

@@ -99,6 +99,15 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
         include_str!("../policy/base/invisible-characters.toml"),
     ),
     ("stale-pins", include_str!("../policy/base/stale-pins.toml")),
+    // The second network set, and separate from `private-names` for the reason
+    // `stale-pins` is separate from everything: a verdict that depends on
+    // where the machine running it is standing is a decision a repository
+    // takes on its own, not one it acquires by inheriting the family whose
+    // scope condition this checks.
+    (
+        "stale-visibility",
+        include_str!("../policy/base/stale-visibility.toml"),
+    ),
     (
         "unowned-push",
         include_str!("../policy/base/unowned-push.toml"),

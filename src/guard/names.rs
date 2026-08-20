@@ -58,8 +58,13 @@ fn clean_repo(name: &str) -> String {
         .to_owned()
 }
 
+/// Shared with `guard::visibility`, which asks the same forge the same question
+/// about this repository's own name. One mechanism rather than two: two ways of
+/// asking whether a repository is public are two answers free to disagree, and
+/// the falsifier's exit-state ranking rests on the distinction drawn below
+/// between an answer and no answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Visibility {
+pub(crate) enum Visibility {
     Public,
     Private,
     /// The forge ANSWERED, and no repository it will show us has this name.
@@ -88,9 +93,9 @@ enum Visibility {
 /// canonical name is how that is told apart from a genuine sibling: same
 /// repository, not a leak. `None` when there was no answer to be canonical.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Resolved {
-    visibility: Visibility,
-    canonical: Option<String>,
+pub(crate) struct Resolved {
+    pub visibility: Visibility,
+    pub canonical: Option<String>,
 }
 
 /// Any `host.tld/owner/repo` or its scp-like `host.tld:owner/repo`, with the
@@ -281,7 +286,7 @@ impl OwnerMatchers {
 /// Both fields come back from one request. `full_name` is what the forge
 /// redirected to, which is the only way to notice that the name asked about and
 /// the repository doing the asking are the same repository under two names.
-fn lookup(cache: &mut BTreeMap<String, Resolved>, owner: &str, repo: &str) -> Resolved {
+pub(crate) fn lookup(cache: &mut BTreeMap<String, Resolved>, owner: &str, repo: &str) -> Resolved {
     let key = format!("{owner}/{repo}");
     if let Some(known) = cache.get(&key) {
         return known.clone();

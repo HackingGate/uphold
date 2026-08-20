@@ -594,6 +594,25 @@
   {
     "rules": [
       {
+        "builtin": "no-stale-visibility",
+        "git": {
+          "hooks": [
+            "pre-push",
+            "manual"
+          ]
+        },
+        "id": "no-stale-visibility"
+      }
+    ],
+    "set": "stale-visibility",
+    "stages": [
+      "pre-push",
+      "manual"
+    ]
+  },
+  {
+    "rules": [
+      {
         "builtin": "prevent-public-push",
         "git": {
           "hooks": [

@@ -21,6 +21,7 @@ pub(crate) mod push;
 pub(crate) mod scope;
 pub(crate) mod sets;
 pub(crate) mod unicode;
+pub(crate) mod visibility;
 
 use std::path::Path;
 
@@ -50,6 +51,11 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     "no-local-merge",
     "no-merge-commit",
     "no-stale-hook-pins",
+    // The only other built-in that reaches a network, and the only one whose
+    // subject is a claim the POLICY makes about the repository rather than
+    // about a file in it. It refuses one direction -- declared private, served
+    // public -- because that is the only direction a probe can establish.
+    "no-stale-visibility",
     // Reads the POLICY rather than the tree or what git is about to do: the
     // only check here whose subject is the repository's own declarations. See
     // `sets` for why that is a check at all.
@@ -298,6 +304,7 @@ pub(crate) fn evaluate(request: &Request<'_>) -> Result<Option<Refusal>> {
         "no-private-repo-names-in-files" => names::in_tracked(request),
         "prevent-public-push" => push::prevent_public_push(request),
         "no-stale-hook-pins" => crate::pins::stale(request),
+        "no-stale-visibility" => visibility::no_stale_visibility(request),
         "no-hand-copied-base-rule" => sets::no_hand_copied_base_rule(request),
         other => Err(Fatal::new(format!("no built-in called {other:?}"))),
     }
@@ -323,6 +330,10 @@ pub(crate) fn parameters(builtin: &str) -> &'static [&'static str] {
             "public_repos",
             "refuse_unknown",
         ],
+        // `visibility` and nothing else: the rule reads the declaration and
+        // compares it to the forge, and every other field in the family is
+        // about judging names in text, which this one never does.
+        "no-stale-visibility" => &["visibility"],
         "prevent-unusual-unicode-in-files" => &["allow"],
         _ => &[],
     }
@@ -426,7 +437,7 @@ mod tests {
                 "{id} is in EVERY_BUILTIN with no dispatch arm"
             );
         }
-        assert_eq!(EVERY_BUILTIN.len(), 14);
+        assert_eq!(EVERY_BUILTIN.len(), 15);
     }
 
     #[test]
