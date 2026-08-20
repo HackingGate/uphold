@@ -610,6 +610,131 @@ of its letters. It is not a check on which language the prose is written in —
 it never was: `en` and `de` would both admit exactly Latin, which is why the
 field names scripts and not languages.
 
+### `commands-resolve` — a command a reader would run
+
+The third resolver, and the last of the three things a document asserts about a
+tree. `links-resolve` resolves a path a reader would **click**;
+`anchors-resolve` a value a reader would **believe**; this one a command a
+reader would **run**. All three are prose that happens to be checkable, and
+before they existed all three failed the same way: silently, forever, with every
+gate in every repository still green.
+
+The defect it was built from, measured rather than imagined. A `README.md`
+opened with
+
+```text
+fg-registry credentials
+```
+
+for as long as the file existed. That command has two verbs and `credentials`
+was never one of them — the binary's own error names the alternatives — so the
+answer was one invocation away, and nobody invoked it: a reader who trusts the
+README has no reason to, and a reader who does not is not reading the README.
+
+```toml
+[rule.doc-commands-resolve]
+builtin = "commands-resolve"
+message = "Name a verb the command dispatches on."
+command_sources = ["cmd/{}/*.go", "scripts/{}.rs"]
+
+[rule.doc-commands-resolve.files]
+glob = ["*.md"]
+```
+
+**`command_sources` is a pattern, not a table of names**, and that is the whole
+design. `{}` stands for the command's name and is captured out of the path, so
+the convention stays in the repository that has one and nothing about any
+workspace's layout is compiled into the binary. A list of command names would be
+a second copy of the tree, free to go stale, which is the class of defect this
+rule exists to refuse in documents. The capture also **bounds** the union: a
+command's verbs are read from the files its own pattern selected and no others,
+so a sibling binary in the same repository cannot lend it verbs.
+
+**It parses the dispatch. It does not run `--help`.** Running the binary needs a
+build — warm locally, cold in CI, and a gate that needs the network is one that
+gets skipped — and it invites the far worse mistake of resolving a verb by
+*running* it: `fg-registry sync` in a document would be "verified" by
+fast-forwarding thirty-nine submodules. Only the help text is safe to execute
+for, and help text is prose too; a doc comment drifts from the switch below it
+exactly as the README drifted. The switch **is** the verb list: `case "sync":`
+is not a description of what the command accepts, it is the mechanism by which
+it accepts it, and it cannot be stale without also being broken.
+
+**A command must agree with itself before it judges anyone.** A verb list read
+wrong is worse than no verb list: it produces confident findings against
+documents that were right. Measured — the first run of the implementation this
+ports reported 38 findings, one binary supplied 22 of them by dispatching in a
+form the parser could not read, and every one of those was false and read as
+real. So a command judges documents only when two independent readings of its
+own sources agree: the string labels of its dispatch, and the verbs its own
+usage block names about itself. When they disagree the command is **counted,
+named and skipped**, never guessed at — and the count is printed every run,
+because a check that read four commands out of a hundred otherwise reads exactly
+like one that read them all.
+
+```text
+doc-commands-resolve: 3 command(s) discovered, 2 judged, 1 skipped
+doc-commands-resolve: not judged: session (no dispatch this parse can read)
+```
+
+**Zero judged is exit `1`, not a pass.** A renamed directory, a typo in the
+glob, and a grammar that stopped matching all arrive in the same state, and
+without this they are indistinguishable from a tree whose every documented verb
+resolves.
+
+A dispatch is read with tree-sitter — already in this binary for the comment
+checks — and is recognised structurally rather than by a list of subject
+spellings:
+
+| condition | what it rejects |
+|---|---|
+| at least two branches name string literals | a match over an enum, whose variants are not things a reader types |
+| a catch-all branch exists | a lookup that never has to answer for a word it does not know |
+| where it dispatches on nothing, **every** branch names a literal | a Go tagless `switch { case ready(): }`, whose arms are booleans and not verbs |
+
+"Dispatches on something" is deliberately **not** one of the conditions, and
+that was measured rather than reasoned. Go spells a dispatch that also guards its
+own argument count as `switch { case len(args) > 0 && args[0] == "serve": }`, and
+refusing to read it left a real command judged against a *sub*-dispatch found in
+another file of the same package — which produced three confident findings
+against a README that was right. "Every branch names a literal" is the property
+that separates the two.
+
+Go and Rust. A third language is a grammar dependency and one row.
+
+`command_sources` accepts `*`, `**`, `/` and literal text, and **refuses the
+rest of the glob syntax at load** — `?`, bracket classes and brace alternation.
+The pattern is used twice, once as a glob to select the files and once as a
+regex to read the command's name out of the path, and a construct only the first
+of those understands would select a file the second cannot name. That file would
+then vanish from the discovered count with nothing said, which is the failure
+this rule exists to refuse. A path selected and not nameable is reported and
+counted anyway, in case one ever gets past the refusal.
+
+What it deliberately does not do:
+
+- **Only code spans**, fenced or inline, and only where the command is the
+  **first token** of the span. An invocation begins with the binary; a sentence
+  that happens to contain the same two words in a row does not, and neither does
+  a column of an ASCII diagram. Both were false findings on the first run, and
+  narrowing to the shape of an actual instruction is what keeps a gate from
+  crying wrong — a gate that cries wrong gets waived.
+- **No bundled set ships it.** The rule needs a `command_sources` pattern that
+  describes one tree's layout, and a rule arriving from a set cannot be handed a
+  parameter. A set carrying a layout would either impose one workspace's
+  convention on every inheriting repository or ship a rule that refuses to run.
+
+Two limits worth knowing before adopting it:
+
+- A flag that takes a **separate** value hides the verb behind it:
+  `fg-registry --workspace here sync` reads `here`. Nothing in the text
+  distinguishes a flag's value from a verb — only the command's own flag table
+  does, and reading that is a second parse with a second way to be wrong.
+  `--flag=value` is unambiguous and passes through.
+- A binary whose name lives in a manifest rather than in its path is not
+  discoverable by a path pattern. `src/bin/{}.rs` works; a single-binary crate
+  whose name is set in `Cargo.toml` over `src/main.rs` does not.
+
 ## `uphold guard` — the guards
 
 `uphold guard --stage STAGE` runs the guards that have something to say at
@@ -793,7 +918,8 @@ later has been reporting a clean tree the whole way. The same mechanism holds be
 `exclude_cfg_test` is read only by the content searches (`regexp`, `values` —
 its job is dropping a matched *line* inside a `#[cfg(test)]` block, and no
 other check has one), `require_any_link` / `allow_outside_repo` are read only
-by `links-resolve`, and `require_any_anchor` only by `anchors-resolve`.
+by `links-resolve`, `require_any_anchor` only by `anchors-resolve`, and
+`command_sources` only by `commands-resolve`.
 
 **Which bytes a guard reads: the index, unless a push says otherwise.** At a
 push there is no index at all — the artifact is the pushed commit's whole tree
