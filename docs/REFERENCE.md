@@ -72,6 +72,46 @@ every git hook, and a repository whose own prose cites its issues would have
 every one of those citations refused — so the seam it belongs at is the command
 that publishes text to a forge, and only that one.
 
+### A rule may not be about its own declaration
+
+A policy file is a tracked file, so a rule's `regexp` and `require_regexp` are
+inside the corpus that rule scans. An unanchored literal therefore matches the
+line it is written on, and both fields reach the same accident from opposite
+directions:
+
+| field | must find | a self-match is |
+|---|---|---|
+| `regexp` | nothing | a finding that is always there, naming the rule instead of the tree |
+| `require_regexp` | something | a pass that is always there, exempting the policy file forever |
+
+**A rule that matches its own declaration *and* selects the file that
+declaration is in is refused at load.** Both halves are required. Most rules
+never select the policy file — an `include` of `["cmd", "internal"]` with a
+`glob` of `["*.go"]` cannot reach `policy/` — and a pattern matching its own
+text under such a rule is harmless, so the scope test comes first.
+
+Three cures, and the refusal names all of them:
+
+```toml
+[rule.no-yubikey-mentions]
+regexp = '\bYubiKey\b'
+[rule.no-yubikey-mentions.files]
+include = ["."]
+exclude = ["policy/**"]     # 1. exclude the policy file
+```
+
+2. narrow `files.include` to what the rule is actually about;
+3. anchor the pattern, so it cannot match the key it is written under.
+
+The third is worth knowing before reaching for the first. `^Status:` does not
+match `regexp = '^Status:...'`, because that line begins with `regexp` — so an
+anchored pattern needs nothing, and a one-character class written to dodge a
+self-match it never had (`^Sta[t]us:`) is a defensive edit that can be deleted.
+
+Own rules only. A bundled set's rule is declared inside the binary and an
+`inherit.paths` rule in a file the rule may not select; neither has a
+declaration in this policy file to match.
+
 Exit codes: `0` clean, `1` violations, `2` the check could not be made.
 
 There is no fourth. A reader that closes a pipe — `uphold scan | head` — is a
