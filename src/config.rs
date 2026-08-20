@@ -1741,6 +1741,11 @@ fn read_declaration(root: &Path, field: &str, command: &str) -> Result<String> {
         )));
     }
     let text = String::from_utf8_lossy(&output.stdout);
+    // Blank lines are dropped before the count, and that is the contract rather
+    // than an oversight in it: the rule is one VALUE, not one line of output. A
+    // trailing blank line is what `cat` gives back for a file that ends with
+    // one, and counting it would make this field refuse the exact shape it
+    // exists for. Two non-empty lines are still two answers and still refused.
     let mut values = text.lines().map(str::trim).filter(|line| !line.is_empty());
     let Some(value) = values.next() else {
         return Err(Fatal::new(format!(
@@ -1751,9 +1756,9 @@ fn read_declaration(root: &Path, field: &str, command: &str) -> Result<String> {
     };
     if values.next().is_some() {
         return Err(Fatal::new(format!(
-            "`{field}` ran {command:?}, which printed more than one line. This is one fact \
-             about one repository, and taking the first line would pin the repository to \
-             whatever the command happened to print first. Narrow it to the single value."
+            "`{field}` ran {command:?}, which printed more than one value. This is one fact \
+             about one repository, and taking the first would pin the repository to whatever \
+             the command happened to print first. Narrow it to the single value."
         )));
     }
     Ok(value.to_owned())

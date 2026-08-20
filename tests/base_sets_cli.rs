@@ -88,7 +88,15 @@ fn guard_with_stub_gh(root: &Path, body: &str, args: &[&str]) -> Output {
     // rather than the guard would decide what `git remote get-url` answers in
     // this fixture, and a guard that reads `origin` would be testing the
     // installed binary instead of this one.
-    let _ = std::os::unix::fs::symlink(support::real_git(), bin.join("git"));
+    //
+    // Guarded like the mode bits below it: this file writes `#!/bin/sh` stubs
+    // and is Unix-shaped throughout, and an unguarded `std::os::unix` call in
+    // the middle of it would be the one line that stops the suite COMPILING
+    // elsewhere rather than merely failing.
+    #[cfg(unix)]
+    {
+        let _ = std::os::unix::fs::symlink(support::real_git(), bin.join("git"));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -954,10 +962,36 @@ fn a_source_that_answers_more_than_once_is_refused_rather_than_read_partly() {
     );
     assert_eq!(code(&output), 2, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("more than one line"),
+        stderr(&output).contains("more than one value"),
         "{}",
         stderr(&output)
     );
+}
+
+/// A trailing blank line is not a second answer.
+///
+/// Pinned as a test because it reads as an oversight and is the contract: the
+/// rule is one VALUE, not one line of output. `cat` gives a trailing blank line
+/// back for any file that ends with one, so counting it would make the field
+/// refuse the exact shape it exists for -- and the two-answer case beside it is
+/// what the count is actually for.
+#[test]
+fn a_blank_line_after_the_answer_is_not_a_second_answer() {
+    let root = repository(
+        "owner_from = \"printf 'acme\\n\\n'\"\n\n[inherit]\nsets = [\"unowned-push\"]\n",
+    );
+    commit_one(&root);
+
+    let output = guard(
+        &root,
+        &[
+            "--stage",
+            "pre-push",
+            "--remote-url",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
 #[test]

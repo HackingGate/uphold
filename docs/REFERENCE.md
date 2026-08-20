@@ -737,7 +737,7 @@ So every way the command can fail to answer is exit `2`:
 | prints one value | that is the declaration, cached for the rest of the process |
 | exits non-zero | exit `2`, naming the fallback it refused to take |
 | exits `0` printing nothing | exit `2` — the file reads as a declaration and there is none |
-| prints more than one line | exit `2` — one repository, one fact, and no first-line guess |
+| prints more than one non-empty line | exit `2` — one repository, one fact, and no first-line guess. A trailing blank line is not a second value; `cat` gives one back for any file that ends with one |
 | prints a word that is not a visibility | exit `2`, naming the command rather than the file |
 
 There is deliberately **no `..._optional`** beside these, and the asymmetry with
