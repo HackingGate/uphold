@@ -18,24 +18,29 @@ use crate::git;
 /// variable it replaces for the same reason `.git-guards-owner` was: it is
 /// committed, and changing it is a diff somebody reviews.
 ///
+/// The policy's `owner_from` is the same pin held one level out, for a
+/// workspace that would otherwise write the same line into every policy it
+/// holds. It is still a DECLARATION -- read from a file the mistake this guard
+/// catches does not touch -- and not a second way of asking the remote.
+///
 /// Falling back to origin still guards a repository that has declared nothing.
 /// That fallback is the weaker mode, and it SAYS so at the point of refusal
 /// rather than passing itself off as the pinned one.
-fn workspace_owner(request: &Request<'_>) -> (Option<String>, bool) {
+fn workspace_owner(request: &Request<'_>) -> Result<(Option<String>, bool)> {
     if let Some(owner) = request.rule.owner.as_deref() {
-        return (Some(owner.to_owned()), true);
+        return Ok((Some(owner.to_owned()), true));
     }
     // The policy's own `owner`, which is the pin a rule arriving from a bundled
     // set can still reach: a set cannot be handed a parameter without writing
     // the rule out again, and identity is a property of the repository rather
     // than of any one rule in it.
-    if let Some(owner) = request.policy.owner.as_deref() {
-        return (Some(owner.to_owned()), true);
+    if let Some(owner) = request.policy.declared_owner(request.root)? {
+        return Ok((Some(owner), true));
     }
     let derived = git::remote_url(request.root, "origin")
         .and_then(|url| git::owner_repo(&url))
         .map(|(owner, _)| owner);
-    (derived, false)
+    Ok((derived, false))
 }
 
 /// Where this push is actually going.
@@ -66,7 +71,7 @@ pub(crate) fn prevent_public_push(request: &Request<'_>) -> Result<Option<Refusa
     };
     let name = format!("{owner}/{repo}");
 
-    let (workspace, pinned) = workspace_owner(request);
+    let (workspace, pinned) = workspace_owner(request)?;
 
     // A rule that says it will not guess, in a repository that has not said
     // who it is. Fatal rather than a refusal, because the two are different

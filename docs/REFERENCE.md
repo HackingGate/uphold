@@ -120,7 +120,7 @@ files.glob = ["*.yml", "*.yaml"]
 
 `inherit.sets` names bundled sets to inherit; it does not add settings. There
 is no `true` shorthand — naming the sets is cheap, and what a repository
-inherits should be written in the repository. Fifteen are compiled into the
+inherits should be written in the repository. Sixteen are compiled into the
 binary and mirrored in [`policy/base/`](../policy/base), each **named by what
 it refuses** so the name predicts the rule list:
 
@@ -141,8 +141,9 @@ it refuses** so the name predicts the rule list:
 | `stale-pins` | a hook pinned at a revision its upstream has left, or at none — **installs `pre-push` and `manual`**, and reaches the network |
 | `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |
 | `private-names` | a private organisation or repository named in a commit message, a staged diff, or the tracked tree of a **public** repository — **installs five stages**, and refuses to run until the repository says whether it is published |
+| `stale-visibility` | a policy declaring `private` over a repository the forge serves as **public** — **installs `pre-push` and `manual`**, and reaches the network. Refuses that one direction only; it can never confirm privacy |
 
-The last six install git hooks. Taking one is a decision about what will be
+The last seven install git hooks. Taking one is a decision about what will be
 refused and when, so each is named and argued separately: `stale-pins` reaches
 the network and cannot answer on a train, `invisible-characters` reads the tree
 at four stages and is the slowest thing in a hook, `unreviewed-history` stands
@@ -174,6 +175,36 @@ themselves they ask the forge, which answers `unknown` with no token, `unknown`
 with no network, and answers about the visibility a repository has *today*,
 which is the thing that changes on the day it matters. `visibility = "private"`
 is a real answer, not an opt-out: it says the condition does not hold here.
+
+**What then checks the declaration** is `stale-visibility`, and it is a separate
+set because it reaches the network. Declaring the visibility makes the guards
+offline and deterministic, and it also makes the file a **cache with no
+reconcile**: flip a repository to public and the policy goes on saying `private`
+forever, with the three private-name guards standing down over a tree everybody
+can read.
+
+The rule refuses **one direction and only one**, because that is the only
+direction a probe can establish. No probe can prove a repository is private — a
+`404` is a private repository, a deleted one, a renamed one, and a request that
+carried no credentials — while any probe can disprove it, and disproving it is
+what catches the leak.
+
+| declared | what the forge says | outcome |
+|---|---|---|
+| `public` | not asked | passes, and says no request was made |
+| `private` / `internal` | `public` | **refused**, naming the flip |
+| `private` / `internal` | `private` / `internal` | passes |
+| `private` / `internal` | nothing it could be asked | **exit `2`** — never "confirmed private" |
+| nothing declared | not asked | **exit `2`** — no claim to check |
+
+The last two rows are the design. If a failed lookup could settle the answer,
+an offline laptop would flip the guards to `private` and disarm a disclosure
+check in silence, which is fail-open on the one family where fail-open is
+unacceptable. The declaration stays the input; the probe only ever refuses.
+
+It installs at `pre-push` and `manual` and never at `pre-commit`, for the reason
+`stale-pins` gives: a guard that adds a network round trip to every commit is
+one somebody comments out.
 
 **Two different "unknowns", and only one of them is `refuse_unknown`'s.** A
 forge that *answers* `404` has told you something about the name: no repository
@@ -600,6 +631,7 @@ stamped on it, the range about to be pushed.
 | `no-merge-commit` | a commit finishing a merge or a squash merge |
 | `no-stale-hook-pins` | a pin left behind its upstream, or naming no ref — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree; a pin it **could not check** is exit `2` |
 | `no-hand-copied-base-rule` | a rule this policy writes out by hand under an id a bundled set already ships, from a set it does not inherit. Reads the **policy**, not the tree. At `pre-commit` only what the change adds; at `manual` the whole sweep |
+| `no-stale-visibility` | a declared `private` the forge no longer serves. Reads the **declaration** and the forge, not the tree; a forge that did not answer is exit `2` and never "confirmed private" |
 
 Declared like any other rule, in the same file and the same id namespace.
 **`git.hooks` is the whole registration.**
@@ -645,7 +677,7 @@ enforced and is not.
 | `owner` | `prevent-public-push` | the owner this workspace is pinned to |
 | `allowed_owners` | `prevent-public-push` | owners a push may go to; defaults to the pinned owner |
 | `allowed_repos` | `prevent-public-push` | single repositories allowed through, `"owner/repo"` |
-| `visibility` | the `no-private-repo-names` family | this repository's visibility, declared instead of looked up |
+| `visibility` | the `no-private-repo-names` family, `no-stale-visibility` | this repository's visibility, declared instead of looked up |
 | `visibility_required` | the `no-private-repo-names` family | exit `2` rather than fall back to the forge when nothing has declared a visibility |
 | `private_owners` | the `no-private-repo-names` family | owners whose repositories are private regardless of what a forge says |
 | `private_owners_from` | the `no-private-repo-names` family | a command whose stdout is one private owner per line |
@@ -654,7 +686,9 @@ enforced and is not.
 | `allow` | `prevent-unusual-unicode-in-files` | codepoints admitted, optionally under one glob — `"U+00A0:docs/captured/**"` |
 
 The "family" is `no-private-repo-names`, `-staged` and `-in-files`. No other
-built-in reads any parameter.
+built-in reads any parameter. `no-stale-visibility` reads `visibility` and
+nothing else — everything else in that row is about judging names in text, which
+the falsifier never does.
 
 **Three of these are also top-level policy fields**, and that is not a
 convenience. A rule arriving from a bundled set cannot be handed a parameter —
@@ -671,6 +705,64 @@ private_owners_optional = true    # only where this policy is cloned; see below
 ```
 
 A rule's own field wins where both are written.
+
+### Reading a repository fact from a command
+
+`owner` and `visibility` are each written once per repository, and across one
+fleet that is 78 `owner` lines carrying seven distinct values — 41 copies of one
+string inside a single organisation. `owner_from` and `visibility_from` are the
+same move `private_owners_from` already makes: a command whose stdout is the
+value, run in the repository root, so a workspace fact is written once outside
+the tree instead of once per tree.
+
+```toml
+owner_from = "cat ${XDG_CONFIG_HOME:-$HOME/.config}/uphold/owner"
+visibility_from = "cat .workspace/visibility-cache"
+```
+
+**They move a declaration; they do not look one up.** Deriving the owner from
+`origin` is the defect rather than the fix — repointing `origin` at somebody
+else's remote is the exact accident `prevent-public-push` exists to catch, and a
+derived allow-list is repointed by the same command. The same applies to
+visibility: a command that asks a forge what a repository is *today* hands three
+guards' one scope condition to a network call, which answers nothing on a train,
+nothing in CI without a token, and answers about the visibility a repository is
+in the middle of changing. What the command reads must be a value somebody
+decided, not the state being guarded.
+
+So every way the command can fail to answer is exit `2`:
+
+| what the command does | what happens |
+|---|---|
+| prints one value | that is the declaration, cached for the rest of the process |
+| exits non-zero | exit `2`, naming the fallback it refused to take |
+| exits `0` printing nothing | exit `2` — the file reads as a declaration and there is none |
+| prints more than one non-empty line | exit `2` — one repository, one fact, and no first-line guess. A trailing blank line is not a second value; `cat` gives one back for any file that ends with one |
+| prints a word that is not a visibility | exit `2`, naming the command rather than the file |
+
+There is deliberately **no `..._optional`** beside these, and the asymmetry with
+`private_owners_from` is the point. An unreadable owner list degrades to a
+narrower check, which can be reported and lived with. An unreadable owner
+degrades to the tautology above, and an unreadable visibility degrades to
+standing a disclosure guard down — neither is a degradation anybody should be
+able to opt into.
+
+Two further refusals, both at load:
+
+- **`owner` beside `owner_from`** (or `visibility` beside `visibility_from`) is
+  refused. They are two statements of one fact, free to disagree, with nothing
+  anywhere to notice when they do — which is the defect the field exists to
+  remove, arriving through the field.
+- **Neither may arrive by inheritance.** A bundled set or an `inherit.paths`
+  file carrying one is refused, for the reason `private-names` gives for not
+  shipping `private_owners_from`: a command arriving that way runs in every
+  inheriting repository on the strength of a version bump, with nothing in any
+  of those trees to review.
+
+The command runs at most once per process, on the first ask — the private-name
+family asks about visibility three times, once per variant — and the answer is
+never cached to disk. A declaration exists to avoid a stale answer, and a cache
+outliving the run is a stale answer with a longer life.
 
 **Why the owner list is worth declaring**, measured rather than asserted. A
 forge lookup only *adjudicates* names something already extracted, and a bare
