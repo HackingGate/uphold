@@ -136,6 +136,143 @@ fn a_marker_in_a_title_is_refused_and_the_command_never_runs() {
     );
 }
 
+/// A policy where one verb's grammar differs from the table's, which is the
+/// case `[[shim.verbs]]` exists for. `-c` is bare on `pr:review` and takes a
+/// value on `issue:close`, exactly as it is on the real `gh`.
+const PER_VERB_POLICY: &str = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+exec = "uphold guard --text -"
+
+[rule.no-published-markers.command]
+before = ["faux"]
+
+# The text-capable guard `uphold guard --text -` actually runs. Without it the
+# checker consults an empty list and every subject passes, which would make
+# these tests green over a shim that read nothing.
+[rule.prevent-ai-author]
+builtin = "prevent-ai-author"
+
+[rule.prevent-ai-author.git]
+hooks = ["commit-msg"]
+
+[[shim]]
+command = "faux"
+match = ["pr:review", "issue:close"]
+text_flags = ["-b", "--body"]
+scope = "always"
+
+  [[shim.verbs]]
+  match = ["issue:close"]
+  text_flags = ["-c", "--comment"]
+"#;
+
+#[test]
+fn a_verbs_table_gives_one_verb_its_own_flag_vocabulary() {
+    // The gap this closes: `faux issue close --comment` published text through
+    // a vocabulary that did not name `--comment`, so nothing read it.
+    let root = workspace(PER_VERB_POLICY);
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "issue",
+            "close",
+            "1",
+            "--comment",
+            "Generated with Claude Code",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+
+    // And it is the flag being read rather than the verb being refused
+    // wholesale: an ordinary comment goes through.
+    let clean = shim(
+        &root,
+        &["faux", "issue", "close", "1", "--comment", "ordinary"],
+    );
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert!(stdout(&clean).contains("faux ran:"), "{}", stdout(&clean));
+}
+
+#[test]
+fn a_verb_vocabulary_does_not_leak_onto_the_verbs_that_did_not_ask() {
+    // The reason the lists REPLACE rather than union. On the real `gh`, `-c` is
+    // a boolean on `pr review` -- "Comment on a pull request". If the entry's
+    // `-c` reached this verb too, `-c` would swallow `-b` as its value and the
+    // body it is publishing would go unread: a false negative introduced into
+    // the seam that exists to prevent one.
+    let root = workspace(PER_VERB_POLICY);
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "pr",
+            "review",
+            "1",
+            "-c",
+            "-b",
+            "Generated with Claude Code",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn an_entrys_vocabulary_replaces_the_tables_rather_than_adding_to_it() {
+    // `allowed_scripts` already settled this for the same reason: what is
+    // declared beside the narrower thing is the WHOLE truth for it. A union
+    // would mean a vocabulary nobody wrote -- here, `issue close --body`, which
+    // the real `gh` does not have. Reading a flag the command does not accept
+    // is not harmless: it is the shim claiming to have checked a subject that
+    // was never published.
+    let root = workspace(PER_VERB_POLICY);
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "issue",
+            "close",
+            "1",
+            "--body",
+            "Generated with Claude Code",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_verb_the_entries_do_not_name_keeps_the_tables_own_vocabulary() {
+    // Every shim written before entries existed is this case.
+    let root = workspace(PER_VERB_POLICY);
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "pr",
+            "review",
+            "1",
+            "--body",
+            "Generated with Claude Code",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+
+    let clean = shim(&root, &["faux", "pr", "review", "1", "--body", "ordinary"]);
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+}
+
 #[test]
 fn an_unnamed_subcommand_is_not_this_shims_business() {
     // Named rather than pattern-matched. `pr checkout` publishes nothing.

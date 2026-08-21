@@ -2085,6 +2085,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         rule.validate()?;
     }
     validate_shim_commands(policy_path, &file.shims)?;
+    validate_shim_verbs(policy_path, &file.shims)?;
     validate_shims(policy_path, &rules, &file.shims)?;
     // Last, and after `rule.validate`, because this one reads a rule as the
     // author meant it. A rule naming two checks or carrying a parameter its
@@ -2437,6 +2438,57 @@ fn validate_unique(policy_path: &Path, rules: &[Rule]) -> Result<()> {
 /// `gh issue close`, so a merged `text_flags` misreads one of them whichever way
 /// it is built. One table per command makes that collision visible to whoever
 /// writes the second one instead of resolving it silently.
+/// Every `[[shim.verbs]]` entry names verbs the table stands in front of.
+///
+/// A vocabulary for a verb the shim does not match is read by nothing: the
+/// invocation never reaches collection, so the flags declared beside it never
+/// classify anything. That is the same shape as a `files.*` key on a check that
+/// searches no files, refused for the same reason -- it looks like
+/// configuration that works.
+///
+/// The direction matters. A table may match verbs no entry names; those use the
+/// table's own lists, which is every shim written before entries existed. What
+/// is refused is the reverse: an entry naming a verb the table missed, which is
+/// usually a verb somebody meant to add to `match` and added here instead.
+fn validate_shim_verbs(policy_path: &Path, shims: &[crate::shim::Shim]) -> Result<()> {
+    for shim in shims {
+        for entry in &shim.verbs {
+            if entry.match_.is_empty() {
+                return Err(Fatal::at(
+                    policy_path,
+                    format!(
+                        "a `[[shim.verbs]]` under {:?} names no verb, so the flags it declares \
+                         hold for nothing.",
+                        shim.command
+                    ),
+                ));
+            }
+            for named in &entry.match_ {
+                let covered = shim.match_.iter().any(|m| {
+                    m == named
+                        || m == "*"
+                        || named
+                            .split_once(':')
+                            .is_some_and(|(verb, _)| m == &format!("{verb}:*"))
+                });
+                if !covered {
+                    return Err(Fatal::at(
+                        policy_path,
+                        format!(
+                            "a `[[shim.verbs]]` under {:?} names {named:?}, which the table's own \
+                             `match` does not. The shim never stands in front of that \
+                             invocation, so the flags declared here classify nothing -- add \
+                             {named:?} to `match` if the shim should check it.",
+                            shim.command
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_shim_commands(policy_path: &Path, shims: &[crate::shim::Shim]) -> Result<()> {
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     for shim in shims {
@@ -3492,6 +3544,38 @@ mod tests {
             checked > 100,
             "the corpus produced too few cases to mean anything: {checked}"
         );
+    }
+
+    #[test]
+    fn a_verb_vocabulary_for_a_verb_the_table_does_not_match_is_refused() {
+        // The shim never stands in front of that invocation, so the flags
+        // declared beside it classify nothing -- and it is usually a verb
+        // somebody meant to add to `match` and added here instead, which is the
+        // exact mistake this catches while it is still cheap.
+        let error = policy_from(
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\"]\n\n             [[shim.verbs]]\nmatch = [\"issue:close\"]\ntext_flags = [\"-c\"]\n",
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("issue:close"), "{text}");
+        assert!(text.contains("classify nothing"), "{text}");
+
+        // An entry naming no verb at all is the same defect with less to say.
+        let empty = policy_from(
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\"]\n\n             [[shim.verbs]]\nmatch = []\ntext_flags = [\"-c\"]\n",
+        )
+        .unwrap_err();
+        assert!(empty.to_string().contains("names no verb"), "{empty}");
+    }
+
+    #[test]
+    fn a_verb_vocabulary_the_table_does_match_loads_including_through_a_wildcard() {
+        // A `verb:*` in the table covers a `verb:noun` entry, because that is
+        // what the table's own matcher already means by it.
+        policy_from(
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"issue:*\"]\ntext_flags = [\"-b\"]\n\n             [[shim.verbs]]\nmatch = [\"issue:close\"]\ntext_flags = [\"-c\"]\n",
+        )
+        .unwrap();
     }
 
     #[test]
