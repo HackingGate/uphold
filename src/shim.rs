@@ -97,6 +97,40 @@ pub(crate) enum Collect {
     NpmPackage,
 }
 
+/// A flag vocabulary that holds only for the verbs it names.
+///
+/// One command does not have one grammar. `-c` on `gh pr review` is a boolean
+/// -- "Comment on a pull request" -- and `-c` on `gh issue close` takes a value
+/// -- "Leave a closing comment". A single `text_flags` cannot hold both: name
+/// `-c` there and a review's `-c` swallows the flag after it, so the body that
+/// review is publishing goes unread. Leave it out and a closing comment is
+/// published with nothing in front of it. Both are false negatives in the seam
+/// that exists to prevent exactly that.
+///
+/// The lists here REPLACE the table's for the verbs this entry names rather
+/// than adding to them, which is the rule `allowed_scripts` already follows for
+/// the same reason: what is declared beside the narrower thing is the whole
+/// truth for it, and a union would mean a vocabulary nobody wrote.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct VerbFlags {
+    /// `verb:noun` or `verb:*`, in the spelling the table's own `match` uses.
+    /// Every entry must also be matched by the table, because a vocabulary for
+    /// a verb the shim does not stand in front of is read by nothing.
+    #[serde(default, rename = "match")]
+    pub match_: Vec<String>,
+    #[serde(default)]
+    pub text_flags: Vec<String>,
+    #[serde(default)]
+    pub file_flags: Vec<String>,
+    #[serde(default)]
+    pub path_flags: Vec<String>,
+    #[serde(default)]
+    pub skip_flags: Vec<String>,
+    #[serde(default)]
+    pub web_flags: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Shim {
@@ -138,6 +172,14 @@ pub(crate) struct Shim {
     pub scope: Scope,
     #[serde(default)]
     pub collect: Collect,
+    /// Flag vocabularies for verbs whose grammar differs from the table's.
+    ///
+    /// `target_flags` is deliberately not overridable: `-R`/`--repo` means the
+    /// same thing on every verb of a command, and a per-verb answer to "which
+    /// repository is this going to" would be a way to publish somewhere the
+    /// table did not expect.
+    #[serde(default, rename = "verbs")]
+    pub verbs: Vec<VerbFlags>,
 }
 
 /// One thing about to be published, and what kind of thing it is.
@@ -435,6 +477,40 @@ impl Shim {
         Reading::Unclear(flag)
     }
 
+    /// This table, with the flag lists of whichever `[[shim.verbs]]` entry
+    /// names the verb being invoked.
+    ///
+    /// Resolved AFTER the verb is identified, and that ordering is what makes
+    /// the whole thing possible. `reading` locates the subcommand by trying
+    /// both arities for every option it does not know and matching under
+    /// either -- "matching under either reading errs towards checking" -- so it
+    /// never needed the vocabulary it is about to select. Only collection does.
+    ///
+    /// Borrowed when no entry matches, which is every table written before this
+    /// existed.
+    fn for_verb(&self, argv: &[String]) -> std::borrow::Cow<'_, Self> {
+        if self.verbs.is_empty() {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let words = self.words(argv, false);
+        let exact = format!("{}:{}", words.verb, words.noun);
+        let any = format!("{}:*", words.verb);
+        let Some(entry) = self
+            .verbs
+            .iter()
+            .find(|entry| in_list(&entry.match_, &exact) || in_list(&entry.match_, &any))
+        else {
+            return std::borrow::Cow::Borrowed(self);
+        };
+        let mut effective = self.clone();
+        effective.text_flags.clone_from(&entry.text_flags);
+        effective.file_flags.clone_from(&entry.file_flags);
+        effective.path_flags.clone_from(&entry.path_flags);
+        effective.skip_flags.clone_from(&entry.skip_flags);
+        effective.web_flags.clone_from(&entry.web_flags);
+        std::borrow::Cow::Owned(effective)
+    }
+
     /// Walk argv once, reading the flags this table names.
     fn collect_flags(&self, argv: &[String]) -> Result<Collected> {
         let mut collected = Collected::default();
@@ -617,7 +693,11 @@ impl Shim {
         // shim consumed belong to the invocation rather than to one collector,
         // and a collector that dropped the stdin it had already read would
         // leave the command publishing an empty body.
-        let mut collected = self.collect_flags(argv)?;
+        // The verb's own vocabulary where it has one. `self` still answers
+        // everything that is a property of the command rather than of the verb
+        // -- the editor variable, the target, the scope, the collector.
+        let effective = self.for_verb(argv);
+        let mut collected = effective.collect_flags(argv)?;
         match self.collect {
             Collect::Flags => {}
             Collect::GitRefs => {
@@ -1647,6 +1727,9 @@ mod tests {
             target: Target::ForgeRepo,
             scope: Scope::PublicTarget,
             collect: Collect::Flags,
+            // No verb differs from the table here; every shim written
+            // before `[[shim.verbs]]` existed is this case.
+            verbs: Vec::new(),
         }
     }
 
@@ -1667,6 +1750,9 @@ mod tests {
             target: Target::GitRemote,
             scope: Scope::PublicTarget,
             collect: Collect::GitRefs,
+            // No verb differs from the table here; every shim written
+            // before `[[shim.verbs]]` existed is this case.
+            verbs: Vec::new(),
         }
     }
 
