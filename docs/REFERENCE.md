@@ -72,6 +72,53 @@ every git hook, and a repository whose own prose cites its issues would have
 every one of those citations refused — so the seam it belongs at is the command
 that publishes text to a forge, and only that one.
 
+### One command, more than one flag vocabulary
+
+A `[[shim]]` names one `text_flags` for a whole command, and a command's flags do
+not all mean one thing. On `gh`, `-c` is a **boolean** on `pr review` -- "Comment
+on a pull request" -- and **takes a value** on `issue close` -- "Leave a closing
+comment". Name it once for the table and one of the two is read wrong:
+
+* named -- `gh pr review -c -b "body"` reads `-c` as consuming `-b`, and the body
+  being published goes unread;
+* not named -- `gh issue close --comment "text"` publishes with nothing in front
+  of it.
+
+Both are false negatives in the seam that exists to prevent one. A second
+`[[shim]]` for the same command is not the answer either: it is refused at load,
+because two vocabularies for one command have to be merged and merging is the
+same guess in a different place.
+
+So a table may carry entries for the verbs whose grammar differs:
+
+```toml
+[[shim]]
+command = "gh"
+match = ["pr:review", "issue:close"]
+text_flags = ["-t", "--title", "-b", "--body"]
+
+  [[shim.verbs]]
+  match = ["issue:close"]
+  text_flags = ["-c", "--comment"]
+```
+
+`match` takes the same `verb:noun` and `verb:*` spellings the table's own does,
+and every entry must name a verb the table matches -- a vocabulary for an
+invocation the shim does not stand in front of classifies nothing, and is refused
+at load.
+
+**The entry's lists replace the table's** for the verbs it names, rather than
+adding to them. Same rule as `allowed_scripts`, for the same reason: what is
+declared beside the narrower thing is the whole truth for it. A union would mean
+a vocabulary nobody wrote -- here `issue close --body`, a flag the real command
+does not accept -- and reading a flag a command will not take is the shim
+claiming to have checked a subject that was never published.
+
+`text_flags`, `file_flags`, `path_flags`, `skip_flags` and `web_flags` may be
+overridden. `target_flags` may not: `-R`/`--repo` means the same thing on every
+verb, and a per-verb answer to "which repository is this going to" would be a way
+to publish somewhere the table did not expect.
+
 ### A baseline entry may be asked to say who excused it and why
 
 `files.baseline` names a file of repository-relative paths a rule excuses, and
