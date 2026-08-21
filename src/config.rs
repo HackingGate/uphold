@@ -2084,6 +2084,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     for rule in &rules {
         rule.validate()?;
     }
+    validate_shim_commands(policy_path, &file.shims)?;
     validate_shims(policy_path, &rules, &file.shims)?;
     // Last, and after `rule.validate`, because this one reads a rule as the
     // author meant it. A rule naming two checks or carrying a parameter its
@@ -2416,6 +2417,44 @@ fn validate_unique(policy_path: &Path, rules: &[Rule]) -> Result<()> {
 /// same reason: a name that resolves to nothing is a decision that looks made.
 /// A load-time refusal is also the only place either can be seen at all --
 /// at run time both are silence.
+/// One command, one `[[shim]]`.
+///
+/// The shims are resolved into a map keyed by command name, so a second table
+/// naming a command already declared replaced the first and said nothing. Both
+/// halves of that are bad and the silence is the worse one: the surviving table
+/// is whichever the map happened to keep, and the lost one is a set of verbs the
+/// repository believes are guarded.
+///
+/// Reproduced before this was written. A policy declaring `gh` twice -- once for
+/// `pr:create` with `--body`, once for `issue:close` with `--comment` -- loaded
+/// clean, refused the comment, and exec'd `gh pr create --body ...` unexamined.
+/// Text the author had written a table for reached a forge with nothing in
+/// front of it.
+///
+/// Refused rather than merged, because merging is a guess about which
+/// vocabulary wins where the two disagree -- and they disagree exactly where it
+/// matters. `-c` is a boolean on `gh pr review` and takes a value on
+/// `gh issue close`, so a merged `text_flags` misreads one of them whichever way
+/// it is built. One table per command makes that collision visible to whoever
+/// writes the second one instead of resolving it silently.
+fn validate_shim_commands(policy_path: &Path, shims: &[crate::shim::Shim]) -> Result<()> {
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for shim in shims {
+        if !seen.insert(shim.command.as_str()) {
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "two `[[shim]]` tables name the command {:?}. Only one of them stands in \
+                     front of it -- the other is dropped, and the verbs it names are published \
+                     with nothing checking them. Put every verb for one command in one table.",
+                    shim.command
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_shims(policy_path: &Path, rules: &[Rule], shims: &[crate::shim::Shim]) -> Result<()> {
     let declared: BTreeSet<&str> = shims.iter().map(|shim| shim.command.as_str()).collect();
     // The first word of a `before` entry is the command itself; the rest is as
@@ -3453,6 +3492,40 @@ mod tests {
             checked > 100,
             "the corpus produced too few cases to mean anything: {checked}"
         );
+    }
+
+    #[test]
+    fn two_shim_tables_naming_one_command_are_refused() {
+        // The map they resolve into is keyed by command, so the second table
+        // replaced the first and said nothing. Reproduced before this was
+        // written: a policy declaring `gh` twice -- `pr:create` with `--body`,
+        // `issue:close` with `--comment` -- loaded clean, refused the comment,
+        // and exec'd `gh pr create --body ...` unexamined.
+        let error = policy_from(
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"issue:close\"]\ntext_flags = [\"-c\"]\n",
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("two `[[shim]]` tables"), "{text}");
+        assert!(text.contains("\"gh\""), "{text}");
+        // It says what the silence cost, because "duplicate" alone reads as
+        // tidiness rather than as text published unchecked.
+        assert!(text.contains("nothing checking them"), "{text}");
+    }
+
+    #[test]
+    fn one_shim_table_may_name_every_verb_for_its_command() {
+        // The cure the refusal names, and the shape every policy already uses.
+        policy_from(
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\", \"issue:close\"]\ntext_flags = [\"-b\"]\n",
+        )
+        .unwrap();
+
+        // And two tables for two DIFFERENT commands are not the same thing.
+        policy_from(
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\", \"glab\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\"]\n\n             [[shim]]\ncommand = \"glab\"\nmatch = [\"mr:create\"]\ntext_flags = [\"-d\"]\n",
+        )
+        .unwrap();
     }
 
     #[test]
