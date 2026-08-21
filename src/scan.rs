@@ -240,9 +240,10 @@ impl<'a> Scan<'a> {
                 .filter(|path| baseline.contains(path))
                 .collect();
             hits.retain(|hit| !baseline.contains(normalize_rel(&hit.path)));
+            failures.extend(baseline.unsigned_failure(rule, self.policy.baselines_signed));
             failures.extend(stale_baseline_failure(
                 rule,
-                &baseline,
+                &baseline.paths,
                 &seen,
                 STALE_BASELINE,
             ));
@@ -492,9 +493,10 @@ impl<'a> Scan<'a> {
                 .filter(|path| baseline.contains(path))
                 .collect();
             hits.retain(|hit| !baseline.contains(normalize_rel(&hit.path)));
+            failures.extend(baseline.unsigned_failure(rule, self.policy.baselines_signed));
             failures.extend(stale_baseline_failure(
                 rule,
-                &baseline,
+                &baseline.paths,
                 &seen,
                 STALE_BASELINE,
             ));
@@ -540,9 +542,10 @@ impl<'a> Scan<'a> {
                 .iter()
                 .map(|path| normalize_rel(path).to_owned())
                 .collect();
+            failures.extend(baseline.unsigned_failure(rule, self.policy.baselines_signed));
             failures.extend(stale_baseline_failure(
                 rule,
-                &baseline,
+                &baseline.paths,
                 &still_missing,
                 STALE_REQUIRE_BASELINE,
             ));
@@ -1156,24 +1159,58 @@ impl<'a> Scan<'a> {
             .collect()
     }
 
-    /// A path-only baseline: one repository-relative path per line.
+    /// A path-only baseline: one repository-relative path per line, optionally
+    /// signed.
     ///
     /// Paths rather than counts, deliberately. A count baseline is stricter, but
     /// a reformat moves a match count without anything real changing, and a rule
     /// whose baseline churns on unrelated edits is one people stop reading. A
     /// listed path may get worse internally; what it cannot do is let a NEW path
     /// start.
-    fn load_path_baseline(&self, relative: Option<&str>) -> Result<BTreeSet<String>> {
+    ///
+    /// A line may carry a signature after the path:
+    ///
+    /// ```text
+    /// src/cli/top.py | alice | a two-column key/value list; a table reads worse
+    /// ```
+    ///
+    /// Optional here and required where the policy says so, because the two
+    /// things a baseline holds are not the same. A file listing eight modules
+    /// that have not been migrated yet needs one reason at the top and none per
+    /// line -- every entry is the same debt and the file's header says so. A
+    /// file listing the places a rule is WRONG needs one reason per line, and
+    /// nothing in the format could say it: the whole line was the path, so a
+    /// judgement about why this instance is the exception had nowhere to go
+    /// except a comment nothing associates with an entry.
+    ///
+    /// The separator is `|` rather than whitespace or `#`. Whitespace is the
+    /// size baseline's separator and a path may hold it; `#` at line start
+    /// already means a comment and overloading it would change what an existing
+    /// file means.
+    fn load_path_baseline(&self, relative: Option<&str>) -> Result<Baseline> {
         let Some(relative) = relative else {
-            return Ok(BTreeSet::new());
+            return Ok(Baseline::default());
         };
         let text = crate::error::read_to_string(&self.root.join(relative))?;
-        Ok(text
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .map(|line| normalize_rel(line).to_owned())
-            .collect())
+        let mut baseline = Baseline {
+            file: relative.to_owned(),
+            ..Baseline::default()
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut parts = line.split('|').map(str::trim);
+            let path = normalize_rel(parts.next().unwrap_or_default()).to_owned();
+            let owner = parts.next().unwrap_or_default();
+            let reason = parts.next().unwrap_or_default();
+            if owner.is_empty() || reason.is_empty() {
+                baseline.unsigned.push(path.clone());
+            }
+            baseline.paths.insert(path);
+        }
+        Ok(baseline)
     }
 
     fn load_size_baseline(&self, relative: Option<&str>) -> Result<BTreeMap<String, u64>> {
@@ -1196,6 +1233,59 @@ impl<'a> Scan<'a> {
             baseline.insert(normalize_rel(path).to_owned(), count);
         }
         Ok(baseline)
+    }
+}
+
+/// One rule's baseline: the paths it excuses, and which of them are unsigned.
+///
+/// `file` is carried so a finding can name the file to edit. A report that says
+/// "three entries are unsigned" and not where they are is a report whose reader
+/// has to go looking for the thing it just read.
+#[derive(Debug, Default)]
+struct Baseline {
+    file: String,
+    paths: BTreeSet<String>,
+    unsigned: Vec<String>,
+}
+
+impl Baseline {
+    fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+
+    fn contains(&self, path: &str) -> bool {
+        self.paths.contains(path)
+    }
+
+    /// The entries carrying no owner and reason, when the policy asks for them.
+    ///
+    /// A finding rather than a load refusal, because a baseline is read here
+    /// and not at load: the path comes from the rule and the file from the
+    /// tree, and neither exists as text the loader has seen. It sits at the
+    /// same tier as a stale entry for the same reason -- both are a baseline
+    /// that has stopped describing a decision somebody made.
+    fn unsigned_failure(&self, rule: &Rule, required: bool) -> Vec<Failure> {
+        if !required || self.unsigned.is_empty() {
+            return Vec::new();
+        }
+        let body = self
+            .unsigned
+            .iter()
+            .map(|path| format!("{path}: no owner and reason"))
+            .collect::<Vec<String>>()
+            .join("\n");
+        vec![Failure::new(
+            format!("{} (unsigned baseline)", rule.id),
+            format!(
+                "This policy requires every baseline entry to say who excused it and why, and \
+                 these say neither. Write them as `path | owner | reason` in {}.\n\nA path on \
+                 its own records that a rule was switched off there and nothing about the \
+                 judgement behind it -- which is the difference between debt somebody is \
+                 carrying and a finding somebody silenced.",
+                self.file
+            ),
+            body,
+        )]
     }
 }
 

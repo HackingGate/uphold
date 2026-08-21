@@ -1480,6 +1480,23 @@ pub(crate) struct PolicyFile {
     pub rules: BTreeMap<String, Rule>,
     #[serde(default, rename = "shim")]
     pub shims: Vec<crate::shim::Shim>,
+    /// Whether every path-baseline entry must say who excused it and why.
+    ///
+    /// Off by default, and the default is not neutrality -- it is what every
+    /// existing baseline file already is. A repository turns it on when its
+    /// baselines stop being one homogeneous debt with a header explaining all
+    /// of it, and start holding entries that differ from each other. The
+    /// `.ljust(` case is the shape: one call site should take the dependency
+    /// and another is correct as it stands, and no pattern separates them, so
+    /// the entry that excuses the second has to carry the judgement or the
+    /// judgement is nowhere.
+    ///
+    /// Policy-level rather than per-rule, because "may an exemption be
+    /// anonymous" is one answer a repository gives once. Per-rule it would be a
+    /// setting every new baseline has to remember, which is the same as not
+    /// having it.
+    #[serde(default)]
+    pub baselines_signed: bool,
 }
 
 /// The ceiling on what one bundled set may install, declared in the set.
@@ -1558,6 +1575,9 @@ pub(crate) struct Policy {
     /// exit 2. See [`PolicyFile::private_owners_optional`].
     pub private_owners_optional: bool,
     pub redact_matches: bool,
+    /// Whether every path-baseline entry must be signed. See
+    /// [`PolicyFile::baselines_signed`].
+    pub baselines_signed: bool,
     pub allowed_scripts: Vec<String>,
     pub rules: Vec<Rule>,
     pub shims: Vec<crate::shim::Shim>,
@@ -2084,6 +2104,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         private_owners_from: file.private_owners_from.clone(),
         private_owners_optional: file.private_owners_optional,
         redact_matches: file.redact_matches,
+        baselines_signed: file.baselines_signed,
         allowed_scripts: file.allowed_scripts,
         rules,
         shims: file.shims,

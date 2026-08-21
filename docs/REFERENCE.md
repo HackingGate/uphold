@@ -72,6 +72,44 @@ every git hook, and a repository whose own prose cites its issues would have
 every one of those citations refused — so the seam it belongs at is the command
 that publishes text to a forge, and only that one.
 
+### A baseline entry may be asked to say who excused it and why
+
+`files.baseline` names a file of repository-relative paths a rule excuses, and
+an entry that no longer matches is reported as stale -- an exemption that has
+stopped describing the tree is the rule switched off for that path.
+
+A baseline holds two different things and the format could only express one:
+
+* **debt** -- eight modules awaiting the same migration. One reason at the top
+  of the file covers every entry, and the file's header is the right place for
+  it.
+* **exceptions** -- the places a rule is simply wrong. `.ljust(` building a
+  five-column table should take the dependency; `.ljust(` building a two-column
+  key/value list is correct and a table would read worse. No pattern separates
+  those, so the entry excusing the second has to carry the judgement, and the
+  whole line was the path.
+
+So an entry may be signed:
+
+```text
+# the places this rule is wrong
+src/cli/top.py | alice | a two-column key/value list; a table reads worse
+```
+
+`path | owner | reason`, with `|` as the separator -- whitespace already
+separates the size baseline's count and a path may hold it, and `#` at line
+start already means a comment.
+
+Set `baselines_signed = true` at the top of the policy to require it. Off by
+default, which is what every existing baseline file already is; a repository
+turns it on when its baselines stop being one homogeneous debt. Unsigned
+entries are then reported at the same tier as stale ones, and for the same
+reason: both are a baseline that has stopped recording a decision somebody made.
+
+A signature is an addition to the record and not a way out of it. A reason says
+why an entry is there; it says nothing about whether it still needs to be, so a
+signed entry still goes stale.
+
 ### A rule may not be about its own declaration
 
 A policy file is a tracked file, so a rule's `regexp` and `require_regexp` are

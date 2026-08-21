@@ -483,6 +483,113 @@ fn a_baselined_path_is_allowed_and_a_new_one_is_not() {
 }
 
 #[test]
+fn an_unsigned_baseline_entry_is_reported_where_the_policy_asks_for_signatures() {
+    // A baseline holds two different things and the format could only express
+    // one. Eight modules awaiting the same migration need one reason at the top
+    // of the file. A list of the places a rule is WRONG needs one reason per
+    // line -- and until now the whole line was the path, so the judgement had
+    // nowhere to go but a comment nothing associates with an entry.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        baselines_signed = true
+
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TODO'
+
+        [rule.no-todo.files]
+        exclude = ["policy/**"]
+        baseline = "policy/todo-baseline.txt"
+"#,
+    );
+    write(
+        &root,
+        "policy/todo-baseline.txt",
+        "# grandfathered\nold.txt\n",
+    );
+    write(&root, "old.txt", "TODO: ancient\n");
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("no-todo (unsigned baseline)"), "{text}");
+    assert!(text.contains("old.txt: no owner and reason"), "{text}");
+    // It names the file to edit: a report that says three entries are unsigned
+    // and not where they are sends its reader looking.
+    assert!(text.contains("policy/todo-baseline.txt"), "{text}");
+
+    // Signed, it passes -- and the entry still suppresses what it excused.
+    write(
+        &root,
+        "policy/todo-baseline.txt",
+        "# grandfathered\nold.txt | alice | the tracker this cites was closed; text stays\n",
+    );
+    assert_eq!(code(&scan(&root)), 0);
+}
+
+#[test]
+fn an_unsigned_baseline_is_fine_where_the_policy_does_not_ask() {
+    // The default is not neutrality, it is what every existing baseline file
+    // already is. Turning this on is a repository saying its baselines have
+    // stopped being one homogeneous debt.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TODO'
+
+        [rule.no-todo.files]
+        exclude = ["policy/**"]
+        baseline = "policy/todo-baseline.txt"
+"#,
+    );
+    write(&root, "policy/todo-baseline.txt", "old.txt\n");
+    write(&root, "old.txt", "TODO: ancient\n");
+    assert_eq!(code(&scan(&root)), 0);
+}
+
+#[test]
+fn a_signed_entry_still_goes_stale_when_it_stops_describing_the_tree() {
+    // The signature is an addition to the record, not a way out of it. A
+    // reason explains why an entry is there; it says nothing about whether it
+    // still needs to be.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        baselines_signed = true
+
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TODO'
+
+        [rule.no-todo.files]
+        exclude = ["policy/**"]
+        baseline = "policy/todo-baseline.txt"
+"#,
+    );
+    write(
+        &root,
+        "policy/todo-baseline.txt",
+        "paid.txt | alice | pre-existing, being migrated\n",
+    );
+    write(&root, "paid.txt", "clean now\n");
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("no-todo (stale baseline)"), "{text}");
+    assert!(!text.contains("unsigned baseline"), "{text}");
+}
+
+#[test]
 fn a_baseline_entry_that_no_longer_matches_is_reported_as_stale() {
     let root = workspace();
     write(
