@@ -483,6 +483,100 @@ fn a_baselined_path_is_allowed_and_a_new_one_is_not() {
 }
 
 #[test]
+fn a_size_baseline_line_that_does_not_parse_is_refused_rather_than_skipped() {
+    // The failure is silent in the direction that matters. A size baseline is a
+    // ratchet -- a file held at 8 lines under a limit of 10 may not grow to 9 --
+    // and dropping the entry checks the file against the LIMIT instead, so it
+    // may now grow to 10 with nothing reported.
+    //
+    // The staleness check cannot cover this: a dropped entry is never in the
+    // map, so it is not "listed", and the mechanism for noticing a baseline
+    // that stopped describing the tree is blind to one that never loaded.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.file-size]
+        max_lines = 10
+        message = "files must be short"
+
+        [rule.file-size.files]
+        include = ["src"]
+        baseline = "policy/size-baseline.txt"
+"#,
+    );
+    write(&root, "src/big.py", &"x\n".repeat(9));
+
+    // Held at 8, grown to 9: the ratchet fires.
+    write(
+        &root,
+        "policy/size-baseline.txt",
+        "# ratchet\nsrc/big.py 8\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("must not grow"),
+        "{}",
+        stderr(&output)
+    );
+
+    // One character wrong in the count. This used to pass the same tree.
+    write(
+        &root,
+        "policy/size-baseline.txt",
+        "# ratchet\nsrc/big.py 8x\n",
+    );
+    let typo = scan(&root);
+    assert_eq!(code(&typo), 2, "{}", stderr(&typo));
+    let text = stderr(&typo);
+    assert!(text.contains("line 2"), "{text}");
+    assert!(text.contains("not a number"), "{text}");
+    assert!(text.contains("src/big.py 8x"), "{text}");
+
+    // A path with no count at all is the other half.
+    write(&root, "policy/size-baseline.txt", "src/big.py\n");
+    let countless = scan(&root);
+    assert_eq!(code(&countless), 2, "{}", stderr(&countless));
+    assert!(
+        stderr(&countless).contains("no line count after the path"),
+        "{}",
+        stderr(&countless)
+    );
+}
+
+#[test]
+fn a_path_baseline_line_with_a_signature_and_no_path_is_refused() {
+    // A signature with nothing to sign. It reads as an entry and excuses no
+    // path, which is the malformed size entry one file over.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TODO'
+
+        [rule.no-todo.files]
+        exclude = ["policy/**"]
+        baseline = "policy/todo-baseline.txt"
+"#,
+    );
+    write(&root, "old.txt", "TODO: ancient\n");
+    write(&root, "policy/todo-baseline.txt", " | alice | a reason\n");
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no path before the signature"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn an_unsigned_baseline_entry_is_reported_where_the_policy_asks_for_signatures() {
     // A baseline holds two different things and the format could only express
     // one. Eight modules awaiting the same migration need one reason at the top

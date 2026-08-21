@@ -1196,13 +1196,26 @@ impl<'a> Scan<'a> {
             file: relative.to_owned(),
             ..Baseline::default()
         };
-        for line in text.lines() {
+        for (index, line) in text.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
             let mut parts = line.split('|').map(str::trim);
-            let path = normalize_rel(parts.next().unwrap_or_default()).to_owned();
+            let raw = parts.next().unwrap_or_default();
+            if raw.is_empty() {
+                // A signature with nothing to sign. Same class as a malformed
+                // size entry: it reads as an entry and excuses no path.
+                return Err(Fatal::at(
+                    &self.root.join(relative),
+                    format!(
+                        "line {}: no path before the signature\n  {line}\n\nA baseline entry \
+                         is `<path>` or `<path> | <owner> | <reason>`.",
+                        index + 1
+                    ),
+                ));
+            }
+            let path = normalize_rel(raw).to_owned();
             let owner = parts.next().unwrap_or_default();
             let reason = parts.next().unwrap_or_default();
             if owner.is_empty() || reason.is_empty() {
@@ -1219,17 +1232,47 @@ impl<'a> Scan<'a> {
         };
         let text = crate::error::read_to_string(&self.root.join(relative))?;
         let mut baseline = BTreeMap::new();
-        for line in text.lines() {
+        for (index, line) in text.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
+            // Refused rather than skipped, and this is the sibling of the
+            // refusal a few lines down in `size_failures`: "an unreadable file
+            // is not a short file". An unreadable ENTRY is not an absent one
+            // either, and skipping it is worse than skipping a file, because
+            // the failure is silent in the direction that matters.
+            //
+            // A size baseline is a ratchet: a file held at 8 lines under a limit
+            // of 10 may not grow to 9. Drop the entry and the file is checked
+            // against the limit instead, so it may now grow to 10 -- the ratchet
+            // is gone and nothing reports it. The staleness check cannot see it
+            // either: a dropped entry is not in the map, so it is not "listed",
+            // and the mechanism that exists to notice a baseline which stopped
+            // describing the tree is blind to one that never loaded.
+            //
+            // Reproduced before this was written: `src/big.py 8` holds the file
+            // at 8 and growing it fails; `src/big.py 8x` passes the same tree.
+            let malformed = |what: &str| {
+                Fatal::at(
+                    &self.root.join(relative),
+                    format!(
+                        "line {}: {what}\n  {line}\n\nA size baseline entry is \
+                         `<path> <lines>`. This line was skipped silently until now, which \
+                         removes the ratchet it was written to hold and reports nothing.",
+                        index + 1
+                    ),
+                )
+            };
             let Some((path, count)) = line.rsplit_once(' ') else {
-                continue;
+                return Err(malformed("no line count after the path"));
             };
             let Ok(count) = count.trim().parse::<u64>() else {
-                continue;
+                return Err(malformed("the line count is not a number"));
             };
+            if path.trim().is_empty() {
+                return Err(malformed("no path before the line count"));
+            }
             baseline.insert(normalize_rel(path).to_owned(), count);
         }
         Ok(baseline)
