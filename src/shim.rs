@@ -306,6 +306,16 @@ struct Words {
     unclear_count: usize,
 }
 
+/// One walk of argv: the positional words it found, and what it could not
+/// classify on the way. `Words` is the first two of them named; a positional
+/// collector is all of them.
+#[derive(Debug)]
+struct Scanned<'a> {
+    positional: Vec<&'a str>,
+    unclear: Option<String>,
+    unclear_count: usize,
+}
+
 /// What a shim can say about an invocation from argv alone.
 #[derive(Debug)]
 enum Reading {
@@ -364,6 +374,49 @@ impl Shim {
     /// create` loses `pr`. Both readings are tried, and where they disagree the
     /// caller hears that rather than a verdict.
     fn words(&self, argv: &[String], unknown_takes_value: bool) -> Words {
+        let scanned = self.scan(argv, unknown_takes_value, 2);
+        let mut found = scanned.positional.into_iter();
+        Words {
+            verb: found.next().unwrap_or_default().to_owned(),
+            noun: found.next().unwrap_or_default().to_owned(),
+            unclear: scanned.unclear,
+            unclear_count: scanned.unclear_count,
+        }
+    }
+
+    /// Every positional word of an invocation, in order: the subcommand, and
+    /// what follows it that is neither an option nor an option's value.
+    ///
+    /// `words` asks the same question and stops at two, because naming the
+    /// invocation is all a `match` list needs. A collector that reads its
+    /// subjects out of the POSITIONS -- `git push <remote> <refspec>...` --
+    /// needs the rest of them, and needs them read with the grammar the matcher
+    /// used. Reading them by skipping every word that begins with `-` is the
+    /// same mistake [`VALUE_OPTIONS`] exists to refuse one question earlier:
+    /// `git -c user.name=x push` then yields remote `user.name=x` and refspec
+    /// `push`, so the branch actually being published is collected nowhere --
+    /// and the fallback that reads it off `HEAD` does not run either, because a
+    /// name was collected.
+    ///
+    /// The bare reading, which is the one `reading` tries first. An option this
+    /// grammar cannot classify shifts the positions by one; the words after it
+    /// are still read, and a shift that leaves no refspec at all falls back to
+    /// `HEAD` rather than to nothing.
+    fn positional(&self, argv: &[String]) -> Vec<String> {
+        self.scan(argv, false, usize::MAX)
+            .positional
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// One walk of argv, stopping once `stop_after` positional words are found.
+    fn scan<'a>(
+        &self,
+        argv: &'a [String],
+        unknown_takes_value: bool,
+        stop_after: usize,
+    ) -> Scanned<'a> {
         let mut found: Vec<&str> = Vec::new();
         let mut unclear: Option<String> = None;
         let mut unclear_count = 0usize;
@@ -416,14 +469,12 @@ impl Shim {
                 continue;
             }
             found.push(argument);
-            if found.len() == 2 {
+            if found.len() >= stop_after {
                 break;
             }
         }
-        let mut found = found.into_iter();
-        Words {
-            verb: found.next().unwrap_or_default().to_owned(),
-            noun: found.next().unwrap_or_default().to_owned(),
+        Scanned {
+            positional: found,
             unclear,
             unclear_count,
         }
@@ -612,21 +663,22 @@ impl Shim {
     }
 
     /// Branch and tag names, which appear nowhere as a flag value.
-    #[expect(
-        clippy::unused_self,
-        reason = "one signature for every `collect` arm; the flags collector needs the table"
-    )]
+    ///
+    /// Read off the POSITIONS, and off the ones `positional` finds rather than
+    /// off argv's own indices: the subcommand is not always the first word --
+    /// `git -c user.name=x push` and `git -C elsewhere push` both put two
+    /// before it -- and a collector that assumed it was read the option's value
+    /// as the remote and `push` itself as the branch being published. That is
+    /// the same reading [`VALUE_OPTIONS`] was written to end, arriving one
+    /// question later: the shim MATCHED those invocations and then checked a
+    /// name nobody was publishing, while the branch that was went out unread.
     fn collect_git_refs(&self, root: &Path, argv: &[String]) -> Result<Vec<Subject>> {
         let mut names = Vec::new();
-        let mut seen_remote = false;
-        for argument in argv.iter().skip(1) {
-            if argument.starts_with('-') {
-                continue;
-            }
-            if !seen_remote {
-                seen_remote = true;
-                continue;
-            }
+        // The subcommand, then the remote, then the refspecs. Both leading
+        // words are positions rather than names here: `push` is the verb this
+        // shim matched on, and a remote is a local nickname that is not itself
+        // published.
+        for argument in self.positional(argv).iter().skip(2) {
             // A refspec is `src:dst`; both halves are published, and
             // `refs/heads/` is noise rather than name.
             for half in argument.split(':') {
@@ -1972,6 +2024,34 @@ mod tests {
                 &argv("publish --dry-run")
             )
             .unwrap());
+    }
+
+    #[test]
+    fn a_global_option_does_not_shift_which_word_the_branch_is() {
+        // One grammar, read once. `reading` learned that `-c` takes the word
+        // after it -- which is what made `git -c user.name=x push` match at all
+        // -- and the collector was still counting argv positions, so it read
+        // `user.name=x` as the remote and `push` as the branch. The name being
+        // published was checked nowhere, and the fallback that reads it off
+        // HEAD was skipped by the word the misreading had collected.
+        let push = git_push();
+        let names = |line: &str| -> Vec<String> {
+            push.collect(Path::new("."), &argv(line))
+                .unwrap()
+                .subjects
+                .into_iter()
+                .map(|subject| subject.value)
+                .collect()
+        };
+        for line in [
+            "push origin topic",
+            "-c user.name=x push origin topic",
+            "-C elsewhere push origin topic",
+            "--git-dir /elsewhere/.git push origin topic",
+            "--no-pager push origin topic",
+        ] {
+            assert_eq!(names(line), vec![String::from("topic")], "{line}");
+        }
     }
 
     #[test]

@@ -764,6 +764,97 @@ fn a_git_global_option_before_the_subcommand_does_not_switch_the_shim_off() {
     );
 }
 
+/// A `git` shim that reads its subjects out of the positions, as the shipped
+/// policy declares it.
+const GIT_REFS_POLICY: &str = r#"
+[rule.no-published-branch-name]
+message = "that name goes onto a public forge in the ref list"
+exec = 'if grep -q acme; then echo "the name names a private owner" >&2; exit 1; fi'
+
+[rule.no-published-branch-name.command]
+before = ["git"]
+
+[[shim]]
+command = "git"
+match = ["push:*"]
+scope = "always"
+collect = "git-refs"
+"#;
+
+/// A `git` that reports a push instead of making one, and is the real git for
+/// everything else -- the shim reads `HEAD` through it.
+fn forwarding_git(root: &Path) {
+    stub(
+        root,
+        "git",
+        &format!(
+            "#!/bin/sh\nfor word in \"$@\"; do\n  [ \"$word\" = push ] && {{ echo \"git ran: $*\"; exit 0; }}\ndone\nexec {} \"$@\"\n",
+            support::real_git().display()
+        ),
+    );
+}
+
+#[test]
+fn a_global_option_does_not_shift_which_word_the_branch_is() {
+    // The matcher learned git's global grammar and the collector did not.
+    // `git -c user.name=x push origin topic` was MATCHED -- that is what
+    // `VALUE_OPTIONS` bought -- and then collected by argv index: `user.name=x`
+    // read as the remote, `push` as the name being published, and the branch
+    // that actually goes out checked nowhere. The bare form is worse: a word
+    // WAS collected, so the fallback that reads the branch off `HEAD` did not
+    // run, and `git -c ... push` published a branch name through nothing.
+    let root = workspace(GIT_REFS_POLICY);
+    forwarding_git(&root);
+    Command::new(support::real_git())
+        .args(["symbolic-ref", "HEAD", "refs/heads/fix/acme-outage"])
+        .current_dir(&root)
+        .status()
+        .unwrap();
+
+    for form in [
+        vec!["git", "push", "origin", "fix/acme-outage"],
+        vec![
+            "git",
+            "-c",
+            "user.name=x",
+            "push",
+            "origin",
+            "fix/acme-outage",
+        ],
+        vec![
+            "git",
+            "-C",
+            "elsewhere",
+            "push",
+            "origin",
+            "fix/acme-outage",
+        ],
+        vec![
+            "git",
+            "--git-dir",
+            "elsewhere/.git",
+            "push",
+            "origin",
+            "fix/acme-outage",
+        ],
+        // The name appears nowhere in argv, so the subject comes off `HEAD`.
+        vec!["git", "-c", "user.name=x", "push"],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("git ran:"), "{form:?}");
+    }
+
+    // And the other half: a name nothing refuses still reaches the command,
+    // past the same option.
+    let output = shim(
+        &root,
+        &["git", "-c", "user.name=x", "push", "origin", "fix/ordinary"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("git ran:"), "{}", stdout(&output));
+}
+
 #[test]
 fn an_option_nothing_can_classify_is_said_out_loud_rather_than_passed_in_silence() {
     // TWO options nothing can classify, which is what leaves the subcommand
