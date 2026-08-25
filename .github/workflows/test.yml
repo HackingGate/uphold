@@ -39,7 +39,7 @@ jobs:
       # a runner image refresh is the whole distance between that working and
       # not. `uv run --no-project` chooses instead of inheriting.
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.0
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Validate the catalog
         run: uv run --no-project scripts/validate.py
@@ -80,7 +80,7 @@ jobs:
       # toolchain.toml and this runner did not have it, so `deps.sh check`
       # failed here first and named the tool. That is the manifest working.
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.0
+        uses: astral-sh/setup-uv@v10.0.1
 
       # The same preflight a contributor runs, on the runner that is supposed to
       # satisfy it. A manifest nothing reads goes stale the first time a tool is
@@ -115,7 +115,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.0
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Read the MSRV from Cargo.toml
         id: msrv
@@ -231,7 +231,7 @@ jobs:
       # `language: python` hooks, and that copy is not on PATH -- which is what
       # this job failed on when the hooks moved off bare `python3`.
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.0
+        uses: astral-sh/setup-uv@v10.0.1
 
       # The `rg` executable is no longer a dependency: the search stack is
       # linked into `uphold`, so there is nothing left to shell out to. A
