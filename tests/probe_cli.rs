@@ -330,3 +330,102 @@ fn a_probe_file_carrying_waivers_is_read_by_the_probe_reader_too() {
         text(&output)
     );
 }
+
+// ── expect: the words a refusal must contain ─────────────────────────
+
+const EXPECTING_PROBE: &str = r#"
+[[probe]]
+id = "no-markers"
+path = "sample.txt"
+refuses = "MARKER\n"
+allows = "clean\n"
+expect = "no-shouting"
+"#;
+
+#[test]
+fn a_refusal_carrying_the_expected_words_is_demonstrated() {
+    let root = repository(EXPECTING_PROBE);
+    let stub =
+        runner("grep -q MARKER sample.txt && { echo 'refused by no-shouting'; exit 1; }\nexit 0");
+
+    let output = probe(&root, Some(&stub));
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains("refuses its fixture, accepts a clean one"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn a_refusal_without_the_expected_words_is_a_red_from_somewhere_else() {
+    // The case `expect` exists for: the planted fixture trips a NEIGHBOURING
+    // rule, the rule the probe was written for has silently stopped matching,
+    // and without the words the probe reports a demonstrated gate.
+    let root = repository(EXPECTING_PROBE);
+    let stub = runner(
+        "grep -q MARKER sample.txt && { echo 'trailing whitespace fixed'; exit 1; }\nexit 0",
+    );
+
+    let output = probe(&root, Some(&stub));
+    assert_eq!(code(&output), 1, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("somewhere else"), "{said}");
+    // The reader is shown what the refusal DID say, so the next step does not
+    // begin with running the probe again.
+    assert!(said.contains("trailing whitespace fixed"), "{said}");
+}
+
+#[test]
+fn an_empty_expect_asserts_nothing_and_is_refused() {
+    let root = repository(
+        "[[probe]]\nid = \"no-markers\"\npath = \"sample.txt\"\nrefuses = \"MARKER\\n\"\nexpect = \"  \"\n",
+    );
+    let stub = runner("exit 1");
+
+    let output = probe(&root, Some(&stub));
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    assert!(
+        text(&output).contains("empty `expect`"),
+        "{}",
+        text(&output)
+    );
+}
+
+// ── timeout: a hook that never answers is unmeasured, not passed ─────
+
+#[test]
+fn a_hook_still_running_at_its_deadline_is_unmeasured_and_exit_2() {
+    let root = repository(
+        "timeout_seconds = 1\n\n[[probe]]\nid = \"no-markers\"\npath = \"sample.txt\"\nrefuses = \"MARKER\\n\"\nallows = \"clean\\n\"\n",
+    );
+    let stub = runner("sleep 30");
+
+    let output = probe(&root, Some(&stub));
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    assert!(text(&output).contains("never"), "{}", text(&output));
+}
+
+#[test]
+fn the_timeout_flag_overrides_the_file_for_one_run() {
+    // How a suite proves a timeout is a FAILURE rather than a silent pass:
+    // the file may declare all the patience in the world, and one run can
+    // still take it away.
+    let root = repository(
+        "timeout_seconds = 600\n\n[[probe]]\nid = \"no-markers\"\npath = \"sample.txt\"\nrefuses = \"MARKER\\n\"\n",
+    );
+    let stub = runner("sleep 30");
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command.args(["probe", "--runner", "prek", "--timeout", "1"]);
+    let mut path = stub.as_os_str().to_owned();
+    path.push(":/usr/bin:/bin");
+    let output = command
+        .env("PATH", path)
+        .current_dir(&root)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    assert!(text(&output).contains("never"), "{}", text(&output));
+}

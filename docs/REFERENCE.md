@@ -1544,12 +1544,16 @@ and not a neighbour.
 
 ```toml
 # policy/hooks.toml
+timeout_seconds = 900       # optional; how long one run may take, for every probe
+
 [[probe]]
 id = "gofmt"
 path = "probe/fixture.go"
 refuses = "package main\nfunc  main( ){}\n"
 allows = "package main\n\nfunc main() {}\n"
 stage = "pre-commit"        # optional; pre-commit is the default
+expect = "gofmt"            # optional; words the refusal must contain
+timeout_seconds = 60        # optional; this probe's own patience
 ```
 
 | report | means |
@@ -1558,6 +1562,31 @@ stage = "pre-commit"        # optional; pre-commit is the default
 | refuses its fixture, no `allows` | one verdict driven, and the report says so |
 | **ACCEPTED what it is declared to refuse** | the hook cannot fail |
 | refused the clean fixture as well | it refuses everything, so its refusal says nothing |
+| refused **without the words `expect` names** | a red from somewhere else — reported with what it did say |
+| still running at its deadline | killed and **unmeasured** — exit `2`, never a refusal and never a pass |
+
+`expect` pins the refusal to the *rule* the probe is about. Running the hook
+alone already narrows a non-zero exit to the hook; it cannot narrow it further,
+and a planted fixture that trips a **neighbouring** rule in the same hook — a
+whitespace fixer objecting to the fixture written for a home-path rule — reads
+as a demonstrated gate without it. An empty `expect` is refused: every refusal
+contains the empty string, so it would assert nothing while reading as though
+the refusal had been pinned.
+
+`timeout_seconds` is a declaration rather than a constant compiled in, because
+where it sits is an operator's call about the machines this runs on: long
+enough that a probe pulling a container image on a cold runner is not called a
+timeout, short enough that a hook which has wedged is not waited on all
+afternoon. The nearest declaration wins — `--timeout` for one run, the probe's
+own field, then the file's — and with none of the three the run waits, which
+is what it always did. A hook killed at its deadline is **unmeasured**: exit
+`2`, never a pass, and `--timeout` is how a suite proves that a timeout is a
+failure rather than a silent green. `timeout_seconds = 0` is refused wherever
+it is written.
+
+Fixtures are staged in the throwaway worktree the moment they are planted, so
+a rule that reads **tracked** files sees every plant — a probe is never
+invisible to the scan it drives.
 
 Fixtures are written down rather than generated. uphold knows what its own rules
 match and knows nothing about `gofmt`, `ruff`, or a hook somebody wrote this
