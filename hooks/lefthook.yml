@@ -127,6 +127,11 @@ pre-push:
     uphold-guard:
       use_stdin: true
       run: uphold guard --stage pre-push --remote {1} --remote-url {2}
+    # Five external scanners, one verdict; a scanner missing from the host is
+    # exit 2, never a pass. Here and in the manual group below, not at commit:
+    # every scanner reaches the network.
+    uphold-supply-chain:
+      run: uphold supply-chain
 
 # The stages that are too slow to sit in front of a commit: the tree-wide name
 # scans and the pin check each ask the forge over the network, once per distinct
@@ -139,6 +144,8 @@ uphold-manual:
       run: uphold scan
     uphold-guard:
       run: uphold guard --stage manual
+    uphold-supply-chain:
+      run: uphold supply-chain
 
 # The four Go jobs are NOT repeated here, and .pre-commit-hooks.yaml declares
 # them `stages: [pre-commit]` for the same reason rather than the

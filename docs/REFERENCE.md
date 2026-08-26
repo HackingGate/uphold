@@ -1484,6 +1484,55 @@ nothing else does. It is not a pass — the shim says on stderr that the command
 ran unchecked, every time, so a bypass that becomes habit is visible in a shell
 history and in a CI log. An empty `UPHOLD_ALLOW=` switches nothing off.
 
+## `uphold supply-chain` — five scanners, one verdict
+
+```sh
+uphold supply-chain
+```
+
+Orchestrates the five external scanners a fleet had been driving from a
+~100-line shell task copied into seven repositories: **osv-scanner** (known
+vulnerabilities and reported-malicious packages), **zizmor** (workflow
+security), **cargo-deny** (origin, advisories, bans, licenses), **cargo-vet**
+(has anyone looked at this dependency) and **guarddog** (publisher identity
+and typosquats — the half OSV cannot reach, scoring an *unknown* package on
+how closely its name shadows a popular one). The copies had already diverged:
+one grew a failure-output dump the others lack, so the same red printed a
+reason on one machine and a bare FAILED on the rest.
+
+The scanners come from the host's own toolchain; none is built or fetched
+here. What this command adds over the shell it replaces is the third answer:
+a tool that is not on PATH is **could not look** — reported by name, exit `2`
+through the same verdict ranking every other command here uses — where the
+shell spelled it exactly like a refusal, and a wrapper less careful would
+spell it like a pass.
+
+Per section: `vendor/`, `upstream/`, `target/`, `node_modules/` and `.git/`
+are never descended into — somebody else's manifests are somebody else's
+backlog. cargo-deny runs once per crate or workspace root against the root
+`deny.toml` (no `deny.toml`, and the section says so and stands down);
+cargo-vet runs only where a `supply-chain/` store exists, because a store
+created automatically is a store nobody owns; guarddog reads each `uv.lock`
+through `uv export` and each `package.json` directly, metadata rules only. A
+section with nothing to read says so — "no workflows here" and "checked and
+clean" must never look the same.
+
+zizmor is handed the repository's own `zizmor.yml` where one exists, and a
+**bundled default** — `ref-pin`, the policy six repositories carried
+byte-identically — where none does. `--config` is always named explicitly:
+zizmor resolves a discovered config relative to a single input path and finds
+none when handed several, then silently falls back to its hash-pin default
+and invents a backlog.
+
+Each scanner's own exit code decides; findings are shown, never re-judged.
+The one filter applied is cargo-deny's headline lines, dropping the four
+classes that describe `deny.toml` rather than a dependency.
+
+Two hook ids ship it — `uphold-supply-chain` in `.pre-commit-hooks.yaml` and
+the same name under `hooks/lefthook.yml` — at `pre-push` and `manual` and
+never at `pre-commit`: every scanner reaches the network, and a check that
+adds a network round trip to a commit is a check somebody switches off.
+
 ## `uphold hooks --identity` — across repositories
 
 ```sh

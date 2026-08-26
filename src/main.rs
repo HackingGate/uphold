@@ -96,6 +96,7 @@ mod scan;
 mod selection;
 mod shim;
 mod sources;
+mod supply;
 mod text;
 
 use std::ffi::{OsStr, OsString};
@@ -114,6 +115,8 @@ usage:
   uphold audit --for-publication     what a private->public flip would republish
   uphold hooks --identity DIR...     do these repositories declare the same hooks
   uphold hooks --install             write the hooks git runs, as tracked files
+  uphold supply-chain                origin, advisories, typosquats and workflow
+                                     security -- five scanners, one verdict
   uphold probe [--runner NAME]       can each declared hook actually refuse
                [--timeout SECONDS]   one run's patience, over the file's
   uphold rules --set NAME [--json]   what a bundled rule set refuses, rule by rule
@@ -359,6 +362,17 @@ fn run() -> Result<Exit> {
                 "usage: uphold hooks --identity DIR [DIR...]\n\n{USAGE}"
             ))),
         },
+        "supply-chain" => {
+            if !rest.is_empty() {
+                return Err(Fatal::new(format!("usage: uphold supply-chain\n\n{USAGE}")));
+            }
+            let working = std::env::current_dir()?;
+            // The root, not the policy: the scanners read manifests and
+            // workflows, and a superproject that only tracks submodules is
+            // still where its own workflows live.
+            let (root, _) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
+            supply::run(&root)
+        }
         "probe" => {
             let usage = || {
                 Fatal::new(format!(

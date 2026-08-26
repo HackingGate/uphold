@@ -158,6 +158,22 @@
   pass_filenames: false
   always_run: true
 
+# Five external scanners, one verdict. The scanners are NOT built by this
+# hook -- osv-scanner, zizmor, cargo-deny, cargo-vet and guarddog come from
+# the host's own toolchain, and one that is missing is exit 2, never a pass.
+# At pre-push and manual, not pre-commit: every one of them reaches the
+# network, and a check that adds a network round trip to a commit is a check
+# somebody switches off. Seven repositories carried this orchestration as a
+# ~100-line shell task, near-identical, already drifting; pin this id instead.
+- id: uphold-supply-chain
+  name: uphold supply-chain
+  description: origin, advisories, typosquats and workflow security -- five scanners, one verdict
+  entry: uphold supply-chain
+  language: rust
+  stages: [pre-push, manual]
+  pass_filenames: false
+  always_run: true
+
 # How CI reaches the guards that are too slow for pre-commit. Both of the
 # tree-wide name scans and the pin check ask the forge over the network, once
 # per distinct name or pin, which is why they are not registered at commit time
