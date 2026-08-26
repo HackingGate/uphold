@@ -59,6 +59,17 @@ commands = ["gh", "git push"]
 # username, home path, hostname -- searched for in the text. The fallback runs
 # even in a repository that declares no literal rule of its own, which is how
 # text mode has always answered "nobody thought to configure it".
+#
+# `command.scope = "always"` on this rule and the next, overriding whatever
+# scope the repository's `[[shim]]` tables carry. A table scoped to
+# `public-target` stands down for a private destination, and two workspaces
+# discovered what that costs: host identity and refused markers in text bound
+# for a PRIVATE forge repository are still text on somebody else's
+# infrastructure, with its own retention, so each grew a hand-rolled agent
+# hook standing OUTSIDE the shim, re-invoking this binary for the same two
+# rules the policy already declared. The third rule below does NOT carry it --
+# a private name bound for a private repository is not a disclosure, and
+# refusing it would refuse the repository its own vocabulary.
 [rule.no-published-host-identity]
 builtin = "text-literals"
 message = """
@@ -66,6 +77,7 @@ Use neutral placeholders -- example-user, example-host, example.test --
 instead of values read off the machine you are standing on.
 """
 command.before = ["gh", "git push"]
+command.scope = "always"
 
 # Every text-capable guard the policy declares, asked again about text that
 # never becomes a commit. The same rule that judges a commit message judges
@@ -79,6 +91,7 @@ pull-request body reaches a public API without passing a single git hook,
 which is the whole reason this seam exists.
 """
 command.before = ["gh", "git push"]
+command.scope = "always"
 
 # The private-name check, pinned to `visibility = "public"` on the rule rather
 # than read from the top of the policy: text leaving through `gh` or a push

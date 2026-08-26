@@ -1080,3 +1080,88 @@ fn a_text_guards_builtin_judges_the_subject_without_a_subprocess() {
     assert_eq!(code(&clean), 0, "{}", stderr(&clean));
     assert!(stdout(&clean).contains("faux ran:"), "{}", stdout(&clean));
 }
+
+// ── per-rule scope: the rule says when it applies ────────────────────
+
+/// A table whose own scope never holds, and one rule that applies anyway.
+/// The shape two workspaces hand-rolled an agent hook for: `public-target`
+/// tables over an all-private fleet, and two rules that should read every
+/// egress regardless.
+const WIDER_RULE_POLICY: &str = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+builtin = "text-guards"
+command.before = ["faux"]
+command.scope = "always"
+
+[rule.prevent-ai-author]
+builtin = "prevent-ai-author"
+
+[rule.prevent-ai-author.git]
+hooks = ["commit-msg"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-t", "--title", "-b", "--body"]
+scope = { command = { command = "exit 1" } }
+"#;
+
+#[test]
+fn a_rule_scoped_always_applies_where_the_table_stands_down() {
+    let root = workspace(WIDER_RULE_POLICY);
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+
+    let refused = shim(
+        &root,
+        &["faux", "pr", "create", "-t", "Generated with Claude Code"],
+    );
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        !stdout(&refused).contains("faux ran:"),
+        "{}",
+        stdout(&refused)
+    );
+
+    let clean = shim(&root, &["faux", "pr", "create", "-t", "An ordinary title"]);
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert!(stdout(&clean).contains("faux ran:"), "{}", stdout(&clean));
+}
+
+/// The other direction: the table applies, one rule's own scope does not, and
+/// that rule alone is stood down.
+const NARROWER_RULE_POLICY: &str = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+builtin = "text-guards"
+command.before = ["faux"]
+command.scope = { command = { command = "exit 1" } }
+
+[rule.prevent-ai-author]
+builtin = "prevent-ai-author"
+
+[rule.prevent-ai-author.git]
+hooks = ["commit-msg"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-t", "--title", "-b", "--body"]
+scope = "always"
+"#;
+
+#[test]
+fn a_rule_whose_own_scope_does_not_hold_is_stood_down_alone() {
+    // The policy answered: this check does not apply to this destination.
+    // The marker walks through because the ONLY rule for it stood down --
+    // which is the declared behaviour, not a gap.
+    let root = workspace(NARROWER_RULE_POLICY);
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+
+    let output = shim(
+        &root,
+        &["faux", "pr", "create", "-t", "Generated with Claude Code"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran:"), "{}", stdout(&output));
+}
