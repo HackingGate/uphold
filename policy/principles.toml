@@ -110,6 +110,12 @@ sets = [
     # where text reaches a forge API with no hook at all -- is the `[[shim]]`
     # further down, because no set may put a program in front of a real command.
     "private-names",
+    # The checkers for that fourth seam. The set supplies checkers and never
+    # shims, so the `[[shim]]` tables further down stay this repository's own
+    # declaration -- and two of its three rules are shadowed below, because
+    # this repository stands in front of `glab` and `npm` as well and a rule
+    # arriving from a set cannot be handed a wider command list.
+    "published-text",
 ]
 
 # The engine's own tests write Japanese, because the two rules they exercise --
@@ -244,15 +250,19 @@ files.exclude = ["**/tests/**", "**/test/**"]
 # front of `gh` is not something to acquire by inheriting a name.
 
 # ---------------------------------------------------------------------------
-# Checkers -- the contract any executable can satisfy.
+# Checkers -- what the shims consult.
 #
-# The subject on stdin, its kind in UPHOLD_KIND, 0 to pass, 1 to refuse, 2
-# to say it could not look. cmd-shims documented this and it is the only
-# checker contract now.
+# Both rules here SHADOW the `published-text` set inherited at the top of this
+# file, same ids and same built-ins, because this repository stands in front
+# of `glab` and `npm` as well and a rule arriving from a set cannot be handed
+# a wider command list. The built-ins are this binary consulting itself
+# in-process, which is the point twice over: the rule that judges a commit
+# message and the rule that judges a pull-request body are the same rule, and
+# the binary answering is the binary that asked rather than whatever `uphold`
+# PATH happens to reach.
 #
-# Both of these are this binary consulting itself, which is the point: the rule
-# that judges a commit message and the rule that judges a pull-request body are
-# the same rule, and a second implementation of it would agree until it did not.
+# The `exec` contract -- subject on stdin, kind in UPHOLD_KIND, 0/1/2 --
+# remains for a checker written in anything else; nothing here needs it now.
 # ---------------------------------------------------------------------------
 
 [rule.no-published-host-identity]
@@ -260,7 +270,7 @@ message = """
 Use neutral placeholders -- example-user, example-host, example.test,
 /srv/example -- instead of values read off the machine you are standing on.
 """
-exec = "uphold scan --text -"
+builtin = "text-literals"
 # Every command a shim collects a subject from. A hostname reaches a public
 # place through a pull-request body, through a branch name in a push, and
 # through a package's metadata, and none of those is more forgiving than the
@@ -281,7 +291,7 @@ message = """
 A pull-request body reaches a public API without passing a single hook, which
 is the whole reason this seam exists.
 """
-exec = "uphold guard --text -"
+builtin = "text-guards"
 # Not `npm publish`: a package directory is not prose, and asking a guard that
 # reads prose about one produces a pass over a subject it has nothing to say
 # about. `git push` is here, and leaving it out was wrong. The three

@@ -62,9 +62,20 @@ one of them would be read by nothing while looking enforced. A rule naming no
 place is refused, because it runs nowhere and that reads exactly like a rule
 that passes. `command.before` is refused on a check no shim can consult — the
 shim consults `exec` checkers and the built-ins that can judge arbitrary text
-(`prevent-ai-author`, `prevent-unusual-unicode`, `no-private-repo-names`), and
-anything else reads an index, an identity or a push range and has nothing to say
-about a pull-request body.
+(`prevent-ai-author`, `prevent-unusual-unicode`, `no-private-repo-names`, and
+the two consultations `text-guards` and `text-literals`), and anything else
+reads an index, an identity or a push range and has nothing to say about a
+pull-request body.
+
+`text-guards` and `text-literals` are the same dispatches `uphold guard
+--text` and `uphold scan --text` run, as built-ins: every text-capable guard
+the policy declares, and every literal rule plus the running-host fallback,
+consulted in-process. They exist so a checker does not have to be written as
+`exec = "uphold guard --text -"` — a subprocess that answers with whatever
+`uphold` PATH happens to reach, which is not necessarily the binary that
+asked. They judge text and nothing else, so `command.before` is the only
+place a rule may put them; at a git hook or in a scan every rule they would
+consult already runs itself, and a declaration there is refused at load.
 
 A text-capable built-in with `command.before` and no `git.hooks` is a deliberate
 shape, not an omission. `no-private-repo-names` reads the commit message at
@@ -245,7 +256,7 @@ files.glob = ["*.yml", "*.yaml"]
 
 `inherit.sets` names bundled sets to inherit; it does not add settings. There
 is no `true` shorthand — naming the sets is cheap, and what a repository
-inherits should be written in the repository. Sixteen are compiled into the
+inherits should be written in the repository. Seventeen are compiled into the
 binary and mirrored in [`policy/base/`](../policy/base), each **named by what
 it refuses** so the name predicts the rule list:
 
@@ -267,8 +278,9 @@ it refuses** so the name predicts the rule list:
 | `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |
 | `private-names` | a private organisation or repository named in a commit message, a staged diff, or the tracked tree of a **public** repository — **installs five stages**, and refuses to run until the repository says whether it is published |
 | `stale-visibility` | a policy declaring `private` over a repository the forge serves as **public** — **installs `pre-push` and `manual`**, and reaches the network. Refuses that one direction only; it can never confirm privacy |
+| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push. **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [ADR 0006](adr/0006-what-a-bundled-set-may-attach-to-a-command.md) |
 
-The last seven install git hooks. Taking one is a decision about what will be
+The seven before it install git hooks. Taking one is a decision about what will be
 refused and when, so each is named and argued separately: `stale-pins` reaches
 the network and cannot answer on a train, `invisible-characters` reads the tree
 at four stages and is the slowest thing in a hook, `unreviewed-history` stands
@@ -417,9 +429,19 @@ than a description:
 ```toml
 [set]
 stages = ["pre-commit", "manual"]   # empty (the default) means: no git hook at all
+commands = ["gh", "git push"]       # empty (the default) means: no command at all
 ```
 
 A rule in a bundled set declaring a hook outside that list is refused at load.
+`commands` is the same ceiling for the shim seam: the `command.before` lines
+the set's rules may name, matched **verbatim** — `"git push"` does not admit
+`"git"` — so a set cannot widen its reach without editing the line that says
+what it may do. What the ceiling does not grant is a shim: a set declaring
+`[[shim]]` is refused outright, and a repository inheriting a set whose rules
+name a command it has no `[[shim]]` for is refused at load with the table to
+write, because a program in front of a real command is a decision the
+repository makes visibly or not at all
+([ADR 0006](adr/0006-what-a-bundled-set-may-attach-to-a-command.md)).
 The constraint it makes mechanical is *a new guard gets a new set name rather
 than joining an existing one*: a content rule arriving with a version bump is a
 finding somebody argues about, and a guard arriving the same way is a commit

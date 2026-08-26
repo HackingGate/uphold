@@ -1022,3 +1022,61 @@ fn an_empty_allow_variable_switches_nothing_off() {
         .unwrap();
     assert_eq!(output.status.code().unwrap(), 2, "{}", stderr(&output));
 }
+
+// ── the consultations, in-process ────────────────────────────────────
+
+/// The `POLICY` above with the `exec` line replaced by the built-in it was
+/// re-invoking this binary for, which is the promotion `published-text` ships.
+const BUILTIN_POLICY: &str = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+builtin = "text-guards"
+
+[rule.no-published-markers.command]
+before = ["faux"]
+
+[rule.prevent-ai-author]
+builtin = "prevent-ai-author"
+
+[rule.prevent-ai-author.git]
+hooks = ["commit-msg"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-t", "--title", "-b", "--body"]
+scope = "always"
+"#;
+
+#[test]
+fn a_text_guards_builtin_judges_the_subject_without_a_subprocess() {
+    // The `exec` form answered with whatever `uphold` PATH happened to reach,
+    // which is not necessarily the binary that asked. The built-in is the same
+    // consultation compiled in, so the symlink the exec form needs is removed
+    // here on purpose: a subprocess sneaking back in would fail on CI, where
+    // no other uphold is installed.
+    let root = workspace(BUILTIN_POLICY);
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+
+    let refused = shim(
+        &root,
+        &["faux", "pr", "create", "-t", "Generated with Claude Code"],
+    );
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        !stdout(&refused).contains("faux ran:"),
+        "{}",
+        stdout(&refused)
+    );
+    // The fold names the rule that refused, not only the consultation that
+    // carried it: a reader has to know which check to argue with.
+    assert!(
+        stderr(&refused).contains("prevent-ai-author"),
+        "{}",
+        stderr(&refused)
+    );
+
+    let clean = shim(&root, &["faux", "pr", "create", "-t", "An ordinary title"]);
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert!(stdout(&clean).contains("faux ran:"), "{}", stdout(&clean));
+}

@@ -122,6 +122,16 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
         "private-names",
         include_str!("../policy/base/private-names.toml"),
     ),
+    // The one set whose rules run at the shim seam and nowhere else. It ships
+    // checkers and never shims: every `command.before` line in it must sit
+    // inside the `[set] commands` ceiling, and each names a `[[shim]]` the
+    // inheriting repository has declared itself -- a repository that has not
+    // put a program in front of `gh` is refused at load with the table to
+    // write, not handed one by a version bump. See ADR 0006.
+    (
+        "published-text",
+        include_str!("../policy/base/published-text.toml"),
+    ),
 ];
 
 /// What a rule checks. NOT a field -- there is nothing in the file to read it
@@ -1307,15 +1317,7 @@ impl Rule {
                 .map_err(|error| Fatal::new(format!("rule {:?}: git.hooks {error}", self.id)))?;
         }
 
-        if let Some(name) = self.builtin() {
-            if !crate::guard::EVERY_BUILTIN.contains(&name) {
-                return Err(Fatal::new(format!(
-                    "rule {:?}: no built-in is called {name:?}. This binary carries: {}",
-                    self.id,
-                    crate::guard::EVERY_BUILTIN.join(", ")
-                )));
-            }
-        }
+        self.validate_builtin_name()?;
 
         // Each built-in declares the parameters it reads; a parameter beside a
         // check that does not read it is refused exactly as a second check
@@ -1359,6 +1361,38 @@ impl Rule {
             )));
         }
 
+        Ok(())
+    }
+
+    /// The `builtin` half of [`Rule::validate`]: the name resolves, and a
+    /// consultation is not declared at a seam whose rules it would re-run.
+    fn validate_builtin_name(&self) -> Result<()> {
+        let Some(name) = self.builtin() else {
+            return Ok(());
+        };
+        if !crate::guard::EVERY_BUILTIN.contains(&name) {
+            return Err(Fatal::new(format!(
+                "rule {:?}: no built-in is called {name:?}. This binary carries: {}",
+                self.id,
+                crate::guard::EVERY_BUILTIN.join(", ")
+            )));
+        }
+        // The consultations run OTHER rules, and every rule they run already
+        // declares its own hooks and its own files. At a git hook or in a scan
+        // they would report each of those rules' findings a second time under
+        // a second id, so the one seam they exist for is the one they may
+        // declare.
+        if crate::guard::META_TEXT_GUARDS.contains(&name)
+            && (self.git.is_some() || self.files.is_some())
+        {
+            return Err(Fatal::new(format!(
+                "rule {:?}: {name:?} consults the rules this policy already runs, and \
+                 at a git hook or in a scan each of those rules runs itself -- this \
+                 rule there would report every finding twice. `command.before` is the \
+                 seam it exists for; declare that and nothing else",
+                self.id
+            )));
+        }
         Ok(())
     }
 }
@@ -1528,6 +1562,25 @@ pub(crate) struct SetHeader {
     /// the set carries content rules only.
     #[serde(default)]
     pub stages: Vec<String>,
+    /// `command.before` lines the rules in this set may name, verbatim. Empty
+    /// means none: the set stands in front of no command.
+    ///
+    /// The same ceiling as `stages`, for the seam `stages` cannot see. A rule
+    /// joining a set with `command.before = ["gh"]` starts being consulted in
+    /// front of a real command in every inheriting repository on the strength
+    /// of a version bump, which is exactly the arrival the stage ceiling
+    /// exists to make a visible diff. Verbatim lines rather than command
+    /// names, because a rule's entry is a line -- `"git push"` and `"git"`
+    /// are different reaches, and a ceiling that matched on the first word
+    /// would let a set widen from one to the other without editing the line
+    /// that says what it may do.
+    ///
+    /// What this ceiling deliberately does NOT grant: a shim. A set's rule
+    /// reaches a command only through a `[[shim]]` the repository declared
+    /// itself, and inheriting a set in a repository that has not declared one
+    /// is refused at load, naming the table to write. See ADR 0006.
+    #[serde(default)]
+    pub commands: Vec<String>,
 }
 
 /// A loaded policy: inherited rules merged with the repository's own, ids
@@ -1807,7 +1860,47 @@ fn parse_bundled(name: &str, text: &str) -> Result<PolicyFile> {
     let path = Path::new("<bundled>").join(format!("{name}.toml"));
     let file = parse(&path, text)?;
     refuse_inherited_declaration(&path, &file, "a bundled set")?;
-    let allowed = file.set.clone().unwrap_or_default().stages;
+    // A set supplies checkers and never shims. A `[[shim]]` is a program
+    // standing in front of a real command, and only `.rules` is adopted from a
+    // set -- so a shim written here would vanish silently, which is worse than
+    // either answer. The repository declares the shim; the set may only name
+    // it, inside the `commands` ceiling below.
+    if !file.shims.is_empty() {
+        return Err(Fatal::at(
+            &path,
+            format!(
+                "a bundled set declares {} `[[shim]]` table(s), and a set may not put a \
+                 program in front of a real command. Ship the checker rule inside the \
+                 `[set] commands` ceiling and let the repository declare the shim",
+                file.shims.len()
+            ),
+        ));
+    }
+    let header = file.set.clone().unwrap_or_default();
+    for rule in file.rules.values() {
+        for line in rule.command.iter().flat_map(|where_| where_.before.iter()) {
+            if !header.commands.iter().any(|entry| entry == line) {
+                return Err(Fatal::at(
+                    &path,
+                    format!(
+                        "rule {:?} names {line:?} in `command.before`, and the set's \
+                         `[set] commands` admits {}. A set ships compiled in, so a rule \
+                         joining one starts standing in front of a real command in every \
+                         repository that inherits it with nothing in any tree to review. \
+                         Give it a new set named for what it checks, or widen `commands` \
+                         -- which is a line a reader of this file will see.",
+                        rule.id,
+                        if header.commands.is_empty() {
+                            String::from("no command at all")
+                        } else {
+                            format!("only {}", header.commands.join(", "))
+                        }
+                    ),
+                ));
+            }
+        }
+    }
+    let allowed = header.stages;
     for rule in file.rules.values() {
         for hook in rule.hooks() {
             if !allowed.iter().any(|stage| stage == hook) {
@@ -2164,6 +2257,9 @@ pub(crate) struct BundledSet {
     pub name: String,
     /// The hook stages this set is allowed to install. See [`SetHeader`].
     pub stages: Vec<String>,
+    /// The `command.before` lines this set is allowed to name. See
+    /// [`SetHeader`].
+    pub commands: Vec<String>,
     pub rules: Vec<Rule>,
 }
 
@@ -2185,9 +2281,11 @@ pub(crate) fn bundled_set(name: &str) -> Result<BundledSet> {
         )));
     };
     let file = parse_bundled(name, bundled)?;
+    let header = file.set.clone().unwrap_or_default();
     Ok(BundledSet {
         name: name.to_owned(),
-        stages: file.set.clone().unwrap_or_default().stages,
+        stages: header.stages,
+        commands: header.commands,
         rules: file
             .rules
             .into_values()
@@ -2542,21 +2640,29 @@ fn validate_shims(policy_path: &Path, rules: &[Rule], shims: &[crate::shim::Shim
     // text-capable built-in is one the binary carries, and `shim::run` consults
     // both. Counting only the first refused a policy whose shim was checked --
     // by a guard rather than by a script -- as a shim checked by nothing.
-    let checked: BTreeSet<&str> = rules
-        .iter()
-        .filter(|rule| {
-            rule.is(Check::Exec)
-                || rule
-                    .builtin()
-                    .is_some_and(|builtin| crate::guard::TEXT_GUARDS.contains(&builtin))
-        })
-        .filter_map(|rule| rule.command.as_ref())
-        .flat_map(|where_| where_.before.iter())
-        .filter_map(|line| line.split_whitespace().next())
-        .collect();
+    // A map to the rule that named each command rather than a set of names,
+    // because the refusal below has to say where the naming rule CAME from --
+    // "drop the entry" is a cure only for a rule written in this file, and a
+    // rule arriving from a bundled set has no entry here to drop.
+    let mut checked: BTreeMap<&str, &Rule> = BTreeMap::new();
+    for rule in rules.iter().filter(|rule| {
+        rule.is(Check::Exec)
+            || rule
+                .builtin()
+                .is_some_and(|builtin| crate::guard::TEXT_GUARDS.contains(&builtin))
+    }) {
+        for name in rule
+            .command
+            .iter()
+            .flat_map(|where_| where_.before.iter())
+            .filter_map(|line| line.split_whitespace().next())
+        {
+            checked.entry(name).or_insert(rule);
+        }
+    }
 
     for shim in shims {
-        if !checked.contains(shim.command.as_str()) {
+        if !checked.contains_key(shim.command.as_str()) {
             return Err(Fatal::at(
                 policy_path,
                 format!(
@@ -2570,15 +2676,28 @@ fn validate_shims(policy_path: &Path, rules: &[Rule], shims: &[crate::shim::Shim
         }
     }
 
-    for name in checked {
+    for (name, rule) in checked {
         if !declared.contains(name) {
+            // Which cure applies depends on where the rule was written. A set
+            // supplies the checker and never the shim, so the only cures for
+            // an inherited rule are the repository's: declare the table, or
+            // stop inheriting the set.
+            let cure = match &rule.origin {
+                Origin::Set(set) => format!(
+                    "This rule arrives from the bundled set {set:?}, which supplies the \
+                     checker and never the shim. Declare `[[shim]]` with \
+                     `command = {name:?}`, or drop {set:?} from `[inherit] sets`"
+                ),
+                _ => format!("Declare `[[shim]]` with `command = {name:?}`, or drop the entry"),
+            };
             return Err(Fatal::at(
                 policy_path,
                 format!(
-                    "`command.before` names {name:?}, which no `[[shim]]` declares. A \
-                     shim is the only thing that invokes a checker, so this rule runs \
-                     nowhere -- which reads exactly like a rule that passes. Declare \
-                     `[[shim]]` with `command = {name:?}`, or drop the entry"
+                    "`command.before` on {:?} names {name:?}, which no `[[shim]]` \
+                     declares. A shim is the only thing that invokes a checker, so this \
+                     rule runs nowhere -- which reads exactly like a rule that passes. \
+                     {cure}",
+                    rule.id
                 ),
             ));
         }
@@ -3765,6 +3884,106 @@ mod tests {
             "[set]\nstages = [\"manual\"]\n\n[rule.thing]\nbuiltin = \"no-merge-commit\"\ngit.hooks = [\"manual\"]\n",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_bundled_set_may_not_reach_past_the_commands_it_declares() {
+        // The stage ceiling's argument at the other seam: a rule joining a set
+        // starts standing in front of a real command in every inheriting
+        // repository, so the permission is written in the set.
+        let error = parse_bundled(
+            "pretend",
+            "[set]\ncommands = [\"gh\"]\n\n[rule.thing]\nbuiltin = \"text-guards\"\ncommand.before = [\"git push\"]\n",
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("git push"), "{text}");
+        assert!(text.contains("only gh"), "{text}");
+
+        // The default is the strict one: a set that says nothing about
+        // commands stands in front of none.
+        let silent = parse_bundled(
+            "pretend",
+            "[rule.thing]\nbuiltin = \"text-guards\"\ncommand.before = [\"gh\"]\n",
+        )
+        .unwrap_err();
+        assert!(silent.to_string().contains("no command at all"));
+
+        // Verbatim lines rather than first words: `git` does not admit
+        // `git push`, or the set could widen its reach without editing the
+        // line that says what it may do.
+        parse_bundled(
+            "pretend",
+            "[set]\ncommands = [\"git\"]\n\n[rule.thing]\nbuiltin = \"text-guards\"\ncommand.before = [\"git push\"]\n",
+        )
+        .unwrap_err();
+
+        // And a set staying inside its ceiling loads.
+        parse_bundled(
+            "pretend",
+            "[set]\ncommands = [\"gh\", \"git push\"]\n\n[rule.thing]\nbuiltin = \"text-guards\"\ncommand.before = [\"gh\", \"git push\"]\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_bundled_set_may_not_declare_a_shim() {
+        // A set supplies checkers and never shims; only `.rules` is adopted at
+        // load, so a `[[shim]]` here would vanish silently -- and a program in
+        // front of a real command is not something to acquire from a version
+        // bump even if it did not.
+        let error = parse_bundled(
+            "pretend",
+            "[set]\ncommands = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\"]\n\n[rule.thing]\nbuiltin = \"text-guards\"\ncommand.before = [\"gh\"]\n",
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(
+            text.contains("program in front of a real command"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn inheriting_published_text_without_the_shims_is_refused_naming_the_set() {
+        // The set's whole design: it supplies the checkers, and the repository
+        // that has not declared the shims is refused with the cure that is
+        // actually available to it -- there is no `command.before` entry in
+        // this file to drop.
+        let error = policy_from("[inherit]\nsets = [\"published-text\"]\n").unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("published-text"), "{text}");
+        assert!(text.contains("[[shim]]"), "{text}");
+
+        // With the tables declared, the same inherit loads, and the set's
+        // rules arrive carrying its name.
+        let policy = policy_from(
+            "[inherit]\nsets = [\"published-text\"]\n\n\
+             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\", \"--body\"]\n\n\
+             [[shim]]\ncommand = \"git\"\nmatch = [\"push:*\"]\n",
+        )
+        .unwrap();
+        let arrived = policy
+            .rules
+            .iter()
+            .filter(|rule| rule.origin == Origin::Set(String::from("published-text")))
+            .count();
+        assert_eq!(arrived, 3, "{:?}", policy.rules);
+    }
+
+    #[test]
+    fn a_meta_text_guard_runs_at_the_command_seam_and_nowhere_else() {
+        // At a git hook or in a scan every rule the consultation would run
+        // already runs itself, so the only seam these may declare is the one
+        // they exist for.
+        for place in ["git.hooks = [\"commit-msg\"]", "files.include = [\".\"]"] {
+            let error = policy_from(&format!(
+                "[rule.consult]\nbuiltin = \"text-guards\"\n{place}\n"
+            ))
+            .unwrap_err();
+            let text = error.to_string();
+            assert!(text.contains("command.before"), "{place}: {text}");
+        }
     }
 
     #[test]
