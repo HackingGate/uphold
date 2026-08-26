@@ -302,6 +302,7 @@ cargo run --quiet -- guard --stage manual   # every pin still names a ref
 principles/*.toml       canonical records
 QUICK_REFERENCE.md      generated human index
 REVIEW.md, AGENTS.md    generated review tier: the judgment no rule decides
+review-controls.json    generated: the change each controlled record must be found by
 name-index.json         generated lookup index: every name -> a record id
 uphold_check.py     reconciler; the hook other repos install
 scripts/                analysis, catalog loading, validation, generation

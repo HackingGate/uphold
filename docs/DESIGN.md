@@ -67,6 +67,77 @@ nobody wrote is one nobody can review. Amending the record instead would make
 the catalog describe one repository rather than the principle, and the next
 consumer would read `partially` and believe it.
 
+### A control is the probe fixture, one tier up
+
+The compiled document cannot say whether any entry in it can produce a finding.
+A record nobody has raised and a record that says nothing a reviewer could act
+on are the same silence in every report anybody reads, and counting citations
+does not separate them — it needs N reviews to accumulate first, and then still
+answers "was it used" rather than "could it fire".
+
+`uphold probe` already refuses that shape for a git hook: a hook seen only
+passing is indistinguishable from one that cannot fail, so a fixture it must
+refuse is written down and planted. `[[review.control]]` is the same fixture for
+a record — `catches`, a change the record must be named for; `misses`, a change
+it must not fire on — and the refusals are borrowed with it. An empty `catches`
+is refused for exactly probe's reason about an empty `refuses`: a reviewer
+handed nothing either names the record, crediting it with a finding nobody
+planted, or does not, and reports a live record as dead.
+
+It measures capability and not applicability. A control is a change the record's
+`applies_when` describes by construction, so a caught control removes "dead"
+from the reasons a record is quiet and leaves "nothing violated it" — the weaker
+claim a citation count can then honestly support.
+
+A control over an `automatable = "yes"` record is refused, because such a record
+is not in the document a reviewer is handed at all — `route` drops it at *a rule
+enforces it; a reviewer repeating it is noise*. Failing that control would
+report a reviewer for missing what nobody showed them; passing it would reward
+one for repeating a static rule. Either way it measures the harness.
+
+The count **and the names** of review-carried records with no control print on
+every run, refusal or not, in the words probe prints its own denominator in. One
+control beside nineteen records is a different claim from one beside two, and
+the reader who most needs the difference is the one skimming a green run.
+
+The honest exposure is probe's as well: a control is written by whoever wrote
+the record, so it can be written easy. The answer is the same — it lives in
+`policy/upheld.toml` where a diff can read it.
+
+Driving an actual reviewer against a control needs a model, a budget and a
+verdict nothing here can make deterministic, so the harness is out of scope and
+`[review] emit_controls` is the seam to it: `record`, `catches` and `misses` as
+JSON, generated under the same `--check` gate as the document. Three fields and
+no more — a harness also handed the claim and the questions would be carrying a
+second copy of the compiled document, going stale on its own schedule, which is
+the failure `single-authoritative-source` names.
+
+### Why `emit` is still per-document and not per-record
+
+`[review] emit` names targets of more than one shape today: `REVIEW.md` for a
+person and `AGENTS.md` for an agent are two names for one compiled document, and
+`emit_controls` names a machine-read export of a different kind entirely. So the
+field is already a list of destinations rather than a list of documents, and the
+generalization on the table — selecting which records reach which target — is a
+change to what is *selected*, not to how many things are written.
+
+A unit emitted alone would have to carry the automatable-exclusion inline. The
+preamble is what currently says *do not re-enforce the static rules, they run
+first*, and it is emitted once at the top of the whole document; a record
+emitted on its own arrives with no preamble, and a reviewer reading it has
+nothing telling them which findings a rule already refuses. That is not a
+formatting detail — the exclusion is the reason the tier is worth a reviewer's
+attention at all.
+
+Adoption is deferred until two conditions hold together: the compiled document
+approaches its `max_lines` ceiling, so selection buys something the ceiling is
+otherwise about to take; and controls exist over the records that would be
+selected, so a unit that is never selected fails to catch its own control and
+says so. Until then a conditionally-loaded unit that is never selected produces
+no finding and no citation, and neither absence is distinguishable from a quiet
+tree — a failure one step earlier than failing to fire, with less evidence than
+the always-read document leaves.
+
 ## Coverage is not the reconcile
 
 The reconcile only ever sees what somebody already claimed, so `reconciled 7

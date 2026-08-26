@@ -14,6 +14,7 @@ namespace — that is what lets a claim in
 - [`uphold probe` — can each hook refuse?](#uphold-probe--can-each-hook-refuse)
 - [`uphold check --coverage` and `--oscal`](#uphold-check---coverage-and---oscal)
 - [The review tier](#the-review-tier)
+  - [Controls: can a record produce a finding at all?](#controls-can-a-record-produce-a-finding-at-all)
 
 ## Rule shape
 
@@ -1780,3 +1781,50 @@ backpressure = "Nothing here has a queue, an admission decision, or a producer t
 
 An entry goes stale the moment a rule does claim the record, and is reported
 then.
+
+### Controls: can a record produce a finding at all?
+
+A record nobody has raised and a record that says nothing a reviewer could act
+on are the same silence. A control is the change that separates them — the
+[probe](#uphold-probe--can-each-hook-refuse) fixture one tier
+up, written beside the declaration and refused on the same grounds:
+
+```toml
+[[review.control]]
+record = "single-authoritative-source"
+catches = "Add a hand-written page restating what the generated one already compiles."
+misses  = "Change the renderer that generates it."
+```
+
+`catches` is a change the record **must** be found by; `misses` is optional and
+is a change it must **not** fire on. An empty `catches` is refused — a reviewer
+handed nothing either names the record, crediting it with a finding nobody
+planted, or does not, and reports a live record as dead. So is an empty
+`misses`, a field no control has, a `record` the catalog does not define, and a
+`record` no reviewer is shown: one that is `automatable = "yes"` is excluded
+from the compiled document because a static rule already refuses it, and one
+outside `include_domains` here is not in the document either. The shape of the
+declaration is exit `2`; a control that names the wrong record is exit `1`,
+beside a stale exemption.
+
+The count **and the names** of review-carried records with no control print on
+every run:
+
+```text
+18 review-carried record(s) have no control, so nothing here shows they can produce a finding: complete-mediation, ...
+```
+
+`[review] emit_controls` writes them where a harness can read them, under the
+same `--check` gate as the document, so a control that was added and never
+exported is refused:
+
+```toml
+emit_controls = ["review-controls.json"]
+```
+
+It carries `record`, `catches`, `misses` and the uncontrolled list, and nothing
+from the catalog: a harness also handed the claim and the questions would be
+carrying a second copy of the compiled document. Driving a reviewer against a
+control needs a model, a budget and a verdict nothing here can make
+deterministic, so the harness itself is outside this repository. See
+[DESIGN.md](DESIGN.md#a-control-is-the-probe-fixture-one-tier-up).
