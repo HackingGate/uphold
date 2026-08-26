@@ -138,6 +138,21 @@ Then the sets, once the two above made them safe to ship:
    body that each named a private organisation and a private repository with
    nothing in their path.
 
+9. **`published-text`**, the first set whose rules run at the shim seam. Six
+   repositories had declared the same three checker rules by hand -- same ids,
+   same `command.before`, same two `exec` lines re-invoking this binary from
+   PATH -- and the copies had already begun to drift. The set required two
+   things to exist first, in the order the guard sets did: **`[set] commands`**,
+   the stage ceiling's argument at the other seam, verbatim lines so a set
+   cannot widen from `git push` to `git` without a reviewable diff; and the
+   **`text-guards` / `text-literals` built-ins**, because a bundled set may not
+   ship a shell command (the `private-names` objection to
+   `private_owners_from`) and the subprocess answered with whatever `uphold`
+   PATH reached, which is not necessarily the binary that asked. The set
+   supplies checkers and never shims: a repository that has not declared the
+   `[[shim]]` tables is refused at load with the table to write, which is the
+   `unowned-push` shape at a new seam. See ADR 0006.
+
 This repository inherits all seven. The seven guard declarations that stood in
 its own policy were byte-identical to the sets', which is the argument the sets
 were promoted on.

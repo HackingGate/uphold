@@ -1,0 +1,92 @@
+# Base rule set: published-text (the text a command is about to publish)
+#
+# The three checkers for the seam no git hook is in: a pull-request body, an
+# issue title, a release note, a branch name in a push. Each reaches a forge
+# API the moment the command runs, from a surface that was composed in an
+# editor or on a command line and was never a file in the tree. Pull in with:
+#
+#   [inherit]
+#   sets = ["published-text"]
+#
+#   [[shim]]
+#   command = "gh"            # the repository's own table, verbatim
+#   ...
+#
+#   [[shim]]
+#   command = "git"
+#   ...
+#
+# THE SHIM TABLES ARE NOT OPTIONAL, and that is the design rather than a
+# missing half. A `[[shim]]` puts a program in front of a real command, and
+# `private-names` already records why a set must never do that quietly:
+# acquiring one on the strength of a version bump is a program in front of
+# `git` that no line in the inheriting tree asked for. So this set supplies
+# the CHECKERS and never the shims -- a repository that inherits it without
+# declaring the tables is refused at load, with the table to write named in
+# the refusal. Declaring the shim is the visible decision; this set is what
+# stops six repositories from transcribing the checkers behind it. See
+# ADR 0006.
+#
+# WHAT THE SWEEP FOUND. Six repositories in one workspace declared these three
+# rules by hand, near-identically -- the same ids, the same `command.before`,
+# the same two `exec` lines re-invoking this binary from PATH. One copy had
+# grown an `UPHOLD_ALLOW` prefix, one a `private_owners_from` the others
+# deliberately omit, and nothing compared the copies. That is the transcription
+# failure every promotion in `policy/base/` exists to end.
+#
+# IN-PROCESS, NOT `exec`. The hand copies ran `uphold scan --text -` and
+# `uphold guard --text -` as subprocesses. A bundled set may not ship a shell
+# command -- the `private-names` set records that objection against
+# `private_owners_from`, and it holds harder here -- and the subprocess
+# answered with whatever binary `uphold` on PATH happened to reach, which is
+# not necessarily the binary that asked. `text-guards` and `text-literals` are
+# the same two consultations compiled in: the same dispatch `uphold guard
+# --text` and `uphold scan --text` run, reached without a process, a PATH, or
+# a version skew.
+#
+# WHAT EACH RULE READS. The shim hands these the SUBJECTS of an invocation --
+# the body a flag or an editor supplied, a title, a branch name -- one at a
+# time, with the kind in the label.
+
+# WHAT THIS SET MAY INSTALL. No git hook at all: these run at the shim seam
+# and nowhere else. `commands` is the ceiling for that seam, verbatim lines --
+# a rule here reaching for a command outside this list is refused at load, so
+# the set cannot quietly widen from `git push` to `git`.
+[set]
+commands = ["gh", "git push"]
+
+# Every literal rule the policy declares, plus the running-host fallback --
+# username, home path, hostname -- searched for in the text. The fallback runs
+# even in a repository that declares no literal rule of its own, which is how
+# text mode has always answered "nobody thought to configure it".
+[rule.no-published-host-identity]
+builtin = "text-literals"
+message = """
+Use neutral placeholders -- example-user, example-host, example.test --
+instead of values read off the machine you are standing on.
+"""
+command.before = ["gh", "git push"]
+
+# Every text-capable guard the policy declares, asked again about text that
+# never becomes a commit. The same rule that judges a commit message judges
+# the pull-request body, because two implementations of one rule would agree
+# until they did not.
+[rule.no-published-markers]
+builtin = "text-guards"
+message = """
+Published text must satisfy the repository's text-capable guards. A
+pull-request body reaches a public API without passing a single git hook,
+which is the whole reason this seam exists.
+"""
+command.before = ["gh", "git push"]
+
+# The private-name check, pinned to `visibility = "public"` on the rule rather
+# than read from the top of the policy: text leaving through `gh` or a push
+# lands on a forge whatever this repository's own visibility is, so the
+# condition the family fires under always holds at this seam. A private
+# repository that inherits `private-names` keeps its hook-side guards standing
+# down; this one does not stand down, and that is the point.
+[rule.no-published-private-repo-names]
+builtin = "no-private-repo-names"
+visibility = "public"
+command.before = ["gh", "git push"]

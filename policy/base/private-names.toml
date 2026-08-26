@@ -71,8 +71,10 @@
 #   actually happened -- text reaching a forge API with no git hook in its path.
 #   It is not here because a `command.before` entry names a `[[shim]]`, and a
 #   shim is a program standing in front of a real command; acquiring one by
-#   inheriting a set is not a thing to do quietly. Declare the shim and the
-#   `command.before` in the repository, where the decision is visible.
+#   inheriting a set is not a thing to do quietly. That seam has a set of its
+#   own now -- `published-text`, which supplies the checkers and still refuses
+#   to run until the repository has declared the shim tables itself, where the
+#   decision is visible. See ADR 0006.
 #
 # * `refuse_unknown`. This is the sharpest choice in the file and it is made
 #   deliberately, so read it before assuming the default is an oversight. With

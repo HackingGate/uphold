@@ -76,6 +76,19 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     // would RUN. Scan-dispatched like both, and the comparison is against a
     // parsed dispatch, which no content search reaches.
     "commands-resolve",
+    // The two consultations a fleet had been reaching by `exec`-ing this
+    // binary from PATH: every text-capable guard the policy declares, and
+    // every literal rule plus the running-host fallback. In-process rather
+    // than a shipped shell line, because a bundled set that ships a shell
+    // command runs that command in every inheriting repository on the strength
+    // of a version bump -- the exact objection `private-names` records against
+    // `private_owners_from` -- and because the subprocess answered with
+    // whatever `uphold` PATH happened to reach, which is not necessarily the
+    // binary that asked. They judge text and nothing else, so `command.before`
+    // is the only place they run; `text-guards` runs the OTHER text guards and
+    // never itself, which is what keeps the dispatch finite.
+    "text-guards",
+    "text-literals",
 ];
 
 /// The moment a guard is being asked about.
@@ -207,13 +220,25 @@ pub(crate) fn bypassed_entirely() -> bool {
 ///
 /// Not all of them can. A guard that reads the index, an identity, or a push
 /// range has nothing to say about a pull-request body; handing it one and
-/// reporting a pass would be a check that did not happen. These three judge
-/// text and nothing else, which is exactly what a shim has to hand them.
+/// reporting a pass would be a check that did not happen. These judge text and
+/// nothing else, which is exactly what a shim has to hand them. The last two
+/// are consultations rather than single checks -- see [`META_TEXT_GUARDS`].
 pub(crate) const TEXT_GUARDS: &[&str] = &[
     "prevent-ai-author",
     "prevent-unusual-unicode",
     "no-private-repo-names",
+    "text-guards",
+    "text-literals",
 ];
+
+/// The two text guards that run OTHER rules rather than one check of their own.
+///
+/// `over_text` must skip them: it is the loop `text-guards` dispatches to, and
+/// a meta rule reachable from its own dispatch is not a stack overflow risk to
+/// hold, it is one to make unrepresentable. Skipping them there also keeps
+/// `uphold guard --text` honest -- that command already runs every text guard,
+/// and a meta rule re-running them would report each refusal twice.
+pub(crate) const META_TEXT_GUARDS: &[&str] = &["text-guards", "text-literals"];
 
 /// Run every text-capable guard over one piece of text.
 pub(crate) fn over_text(
@@ -224,6 +249,12 @@ pub(crate) fn over_text(
 ) -> Result<Vec<Refusal>> {
     let mut refusals = Vec::new();
     for rule in policy.of_check(Check::Builtin) {
+        if rule
+            .builtin()
+            .is_some_and(|builtin| META_TEXT_GUARDS.contains(&builtin))
+        {
+            continue;
+        }
         if let Some(refusal) = text_refusal(root, policy, rule, label, text)? {
             refusals.push(refusal);
         }
@@ -256,7 +287,46 @@ pub(crate) fn text_refusal(
         "prevent-ai-author" => message::ai_author_in(rule, label, text),
         "prevent-unusual-unicode" => message::unusual_unicode_in(rule, label, text),
         "no-private-repo-names" => names::in_text(root, policy, rule, label, text)?,
+        // The consultations. Each folds what it ran into one refusal under this
+        // rule's id, naming each inner rule, so the reader is told which check
+        // refused and not only that the consultation did. `over_text` skips the
+        // meta guards, so the recursion is one level deep by construction.
+        "text-guards" => {
+            let inner = over_text(root, policy, label, text)?;
+            fold(
+                rule,
+                inner
+                    .into_iter()
+                    .map(|refusal| format!("{}: {}", refused_by(policy, &refusal), refusal.report)),
+            )
+        }
+        "text-literals" => {
+            let failures = crate::text::failures_in(root, policy, text)?;
+            fold(
+                rule,
+                failures.into_iter().map(|failure| {
+                    format!("{}: {}\n{}", failure.label, failure.message, failure.body)
+                }),
+            )
+        }
         _ => None,
+    })
+}
+
+/// What a consultation answers with: one refusal carrying every inner one.
+///
+/// One rather than many, because the caller attributes what it gets back to
+/// the rule it asked about -- a consultation returning three refusals under
+/// three other ids would be three reports from rules the caller never
+/// consulted. `None` for none, exactly as a single check answers.
+fn fold(rule: &Rule, reports: impl Iterator<Item = String>) -> Option<Refusal> {
+    let joined = reports.collect::<Vec<String>>().join("\n");
+    if joined.is_empty() {
+        return None;
+    }
+    Some(Refusal {
+        id: rule.id.clone(),
+        report: joined,
     })
 }
 
@@ -446,7 +516,7 @@ mod tests {
                 "{id} is in EVERY_BUILTIN with no dispatch arm"
             );
         }
-        assert_eq!(EVERY_BUILTIN.len(), 16);
+        assert_eq!(EVERY_BUILTIN.len(), 18);
     }
 
     #[test]

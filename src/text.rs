@@ -106,7 +106,19 @@ pub(crate) fn failures(found: Option<&(PathBuf, PathBuf)>, text: &str) -> Result
         Some((root, policy_path)) => (root.clone(), config::load(root, policy_path)?),
         None => (std::env::current_dir()?, Policy::default()),
     };
+    failures_in(&root, &policy, text)
+}
 
+/// The same rules over an already-loaded policy.
+///
+/// Split from [`failures`] for the `text-literals` built-in: a shim consulting
+/// it already holds the policy that named the rule, and loading it again from
+/// disk would be a second reading free to disagree with the first.
+pub(crate) fn failures_in(
+    root: &std::path::Path,
+    policy: &Policy,
+    text: &str,
+) -> Result<Vec<Failure>> {
     // The test is for the identity rule itself, not for the CHECK KIND it
     // happens to use. Asking whether any `forbidden_literals` rule existed made
     // an unrelated one -- a repository's own list of literals, a command
@@ -134,7 +146,7 @@ pub(crate) fn failures(found: Option<&(PathBuf, PathBuf)>, text: &str) -> Result
                 rule.forbidden_literals.as_deref().unwrap_or_default()
             },
             rule.forbidden_literals_from.as_deref(),
-            &root,
+            root,
             rule.files().word,
             &rule.id,
             rule.ignore_literals.as_deref().unwrap_or(&[]),

@@ -1,5 +1,6 @@
 [
   {
+    "commands": [],
     "rules": [
       {
         "files": {
@@ -172,6 +173,7 @@
     ]
   },
   {
+    "commands": [],
     "rules": [
       {
         "files": {
@@ -263,6 +265,7 @@
     "stages": []
   },
   {
+    "commands": [],
     "rules": [
       {
         "files": {
@@ -335,6 +338,7 @@
     "stages": []
   },
   {
+    "commands": [],
     "rules": [
       {
         "files": {
@@ -354,6 +358,7 @@
     "stages": []
   },
   {
+    "commands": [],
     "rules": [
       {
         "builtin": "links-resolve",
@@ -377,6 +382,7 @@
     "stages": []
   },
   {
+    "commands": [],
     "rules": [
       {
         "files": {
@@ -403,6 +409,7 @@
     "stages": []
   },
   {
+    "commands": [],
     "rules": [
       {
         "builtin": "anchors-resolve",
@@ -422,6 +429,7 @@
     "stages": []
   },
   {
+    "commands": [],
     "rules": [
       {
         "files": {
@@ -445,6 +453,7 @@
     "stages": []
   },
   {
+    "commands": [],
     "rules": [
       {
         "files": {
@@ -497,6 +506,7 @@
     "stages": []
   },
   {
+    "commands": [],
     "rules": [
       {
         "builtin": "prevent-ai-author",
@@ -523,6 +533,7 @@
     ]
   },
   {
+    "commands": [],
     "rules": [
       {
         "builtin": "no-local-merge",
@@ -550,6 +561,7 @@
     ]
   },
   {
+    "commands": [],
     "rules": [
       {
         "builtin": "prevent-unusual-unicode-in-files",
@@ -573,6 +585,7 @@
     ]
   },
   {
+    "commands": [],
     "rules": [
       {
         "builtin": "no-stale-hook-pins",
@@ -592,6 +605,7 @@
     ]
   },
   {
+    "commands": [],
     "rules": [
       {
         "builtin": "no-stale-visibility",
@@ -611,6 +625,7 @@
     ]
   },
   {
+    "commands": [],
     "rules": [
       {
         "builtin": "prevent-public-push",
@@ -629,6 +644,7 @@
     ]
   },
   {
+    "commands": [],
     "rules": [
       {
         "builtin": "no-private-repo-names",
@@ -671,5 +687,48 @@
       "pre-push",
       "manual"
     ]
+  },
+  {
+    "commands": [
+      "gh",
+      "git push"
+    ],
+    "rules": [
+      {
+        "builtin": "text-literals",
+        "command": {
+          "before": [
+            "gh",
+            "git push"
+          ]
+        },
+        "id": "no-published-host-identity",
+        "message": "Use neutral placeholders -- example-user, example-host, example.test --\ninstead of values read off the machine you are standing on.\n"
+      },
+      {
+        "builtin": "text-guards",
+        "command": {
+          "before": [
+            "gh",
+            "git push"
+          ]
+        },
+        "id": "no-published-markers",
+        "message": "Published text must satisfy the repository's text-capable guards. A\npull-request body reaches a public API without passing a single git hook,\nwhich is the whole reason this seam exists.\n"
+      },
+      {
+        "builtin": "no-private-repo-names",
+        "command": {
+          "before": [
+            "gh",
+            "git push"
+          ]
+        },
+        "id": "no-published-private-repo-names",
+        "visibility": "public"
+      }
+    ],
+    "set": "published-text",
+    "stages": []
   }
 ]

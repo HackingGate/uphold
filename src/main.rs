@@ -682,6 +682,7 @@ fn set_json_command(only: Option<&str>) -> Result<Exit> {
             serde_json::json!({
                 "set": set.name,
                 "stages": set.stages,
+                "commands": set.commands,
                 "rules": rules,
             })
         })
