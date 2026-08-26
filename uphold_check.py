@@ -578,12 +578,88 @@ def review_settings(declaration: dict) -> dict:
             "review document to"
         )
 
+    # Defaults to nothing written. The compiled document IS the tier, so `emit`
+    # defaults to a name; the control export is the seam to a harness that
+    # lives outside this repository, and a repository with no harness should
+    # not find a generated file it cannot explain appear in its tree.
+    emit_controls = settings.get("emit_controls", [])
+    if not isinstance(emit_controls, list) or not all(
+        isinstance(value, str) and value.strip() for value in emit_controls
+    ):
+        raise CouldNotLook(
+            "`review.emit_controls` must be an array of file names to write the "
+            "control export to"
+        )
+
     return {
         "max_lines": max_lines,
         "include_domains": domains,
         "emit": emit,
+        "emit_controls": emit_controls,
         "exempt": exempt,
+        "controls": review_controls(settings),
     }
+
+
+def review_controls(settings: dict) -> list[dict]:
+    """Read `[[review.control]]`, refusing a fixture that demonstrates nothing.
+
+    The refusals are `uphold probe`'s, because the failure is: an empty
+    `refuses` is refused there since a hook that accepted an empty fixture
+    would be reported as unable to fail, and an empty `catches` is the same
+    fixture one tier up. A reviewer handed nothing and asked whether a record
+    fires either names it -- crediting the record for a finding nobody planted
+    -- or does not, and reports a live record as dead.
+
+    Everything here is the SHAPE of the declaration, so everything here is exit
+    2. Whether a control names a record that exists, and one a reviewer is
+    actually shown, is a question about the catalog rather than about the file,
+    and `review.audit_controls` answers it at exit 1 alongside a stale
+    exemption -- the same split `review.max_lines` already draws between a
+    ceiling this tool could not read and a document that broke one.
+    """
+    declared = settings.get("control", [])
+    if not isinstance(declared, list) or not all(
+        isinstance(entry, dict) for entry in declared
+    ):
+        raise CouldNotLook(
+            "`review.control` must be an array of `[[review.control]]` tables, "
+            "each naming a record and the change it must be found by"
+        )
+
+    for entry in declared:
+        record_id = entry.get("record")
+        if not isinstance(record_id, str) or not record_id.strip():
+            raise CouldNotLook(
+                "every `[[review.control]]` needs `record`, the id of the record "
+                "the control demonstrates"
+            )
+        catches = entry.get("catches")
+        if not isinstance(catches, str) or not catches.strip():
+            raise CouldNotLook(
+                f"the control for `{record_id}` has no `catches`, or an empty one. "
+                f"An empty fixture demonstrates nothing, and a record a reviewer "
+                f"failed to name against it would be reported as unable to fire"
+            )
+        misses = entry.get("misses")
+        if misses is not None and (not isinstance(misses, str) or not misses.strip()):
+            raise CouldNotLook(
+                f"the control for `{record_id}` has an empty `misses`. Every "
+                f"reviewer declines to fire on nothing, so it would assert "
+                f"nothing while reading as though the record had been shown to "
+                f"be narrow"
+            )
+        # The same argument `deny_unknown_fields` makes on the probe side: a
+        # misspelled `misses` is silently no `misses` at all, and the control
+        # goes on reading like a two-sided fixture.
+        unknown = sorted(set(entry) - {"record", "catches", "misses"})
+        if unknown:
+            raise CouldNotLook(
+                f"the control for `{record_id}` declares {', '.join(unknown)}, "
+                f"which no control has. A control is `record`, `catches` and an "
+                f"optional `misses`"
+            )
+    return declared
 
 
 def emit_target(root: Path, name: str) -> Path:
@@ -626,6 +702,9 @@ def run_review(argv: list[str]) -> int:
         # write to is refused as unreadable configuration rather than after a
         # document exists to write.
         targets = [(name, emit_target(root, name)) for name in settings["emit"]]
+        control_targets = [
+            (name, emit_target(root, name)) for name in settings["emit_controls"]
+        ]
         claims = declared_claims(declaration)
         suppliers = engine_suppliers(root, strict=False)
     except CouldNotLook as error:
@@ -651,15 +730,35 @@ def run_review(argv: list[str]) -> int:
     active = sorted({rule for _, rule in claims if rule in suppliers})
     document = review_mod.render(for_review, active)
 
+    control_errors, uncontrolled = review_mod.audit_controls(
+        settings["controls"], for_review, records
+    )
+    export = review_mod.render_controls(settings["controls"], uncontrolled)
+
+    # Before the verdict and never behind a flag. A run that refuses for some
+    # other reason is exactly a run whose reader is about to edit the catalog,
+    # and the count of records nothing can show to fire is what they should be
+    # editing against.
+    note = review_mod.uncontrolled_note(uncontrolled)
+    if note:
+        print(note)
+
     over = review_mod.over_budget(document, settings["max_lines"])
-    for message in errors + stale:
+    for message in errors + stale + control_errors:
         print(f"- {message}", file=sys.stderr)
     if over:
         print(f"- {over}", file=sys.stderr)
-    if errors or stale or over:
+    if errors or stale or control_errors or over:
         return 1
 
     if emit:
+        for name, path in control_targets:
+            try:
+                path.write_text(export, encoding="utf-8")
+            except OSError as error:
+                print(f"uphold review could not write {name}: {error}", file=sys.stderr)
+                return 2
+            print(f"wrote {name} ({len(settings['controls'])} control(s))")
         for name, path in targets:
             try:
                 path.write_text(document, encoding="utf-8")
@@ -673,13 +772,15 @@ def run_review(argv: list[str]) -> int:
         return 0
 
     if check:
-        for name, path in targets:
+        pending = [(name, path, document) for name, path in targets]
+        pending += [(name, path, export) for name, path in control_targets]
+        for name, path, expected in pending:
             try:
                 current = read_text(path) if path.is_file() else ""
             except CouldNotLook as error:
                 print(f"uphold review could not look: {error}", file=sys.stderr)
                 return 2
-            if current != document:
+            if current != expected:
                 print(
                     f"{name} is not what the catalog compiles to; run --review --emit",
                     file=sys.stderr,

@@ -111,7 +111,30 @@ max_lines = 900
 # cannot be committed. AGENTS.md is where an agent looks; REVIEW.md is where a
 # person does.
 emit = ["REVIEW.md", "AGENTS.md"]
+# Where the controls below are written for a harness to read. The harness that
+# drives a reviewer against them is not in this repository and will not be: it
+# needs a model, a budget and a verdict nobody can make deterministic. This file
+# is the seam to it, and it is generated under the same `--check` gate as the
+# document, so a control added here and never exported is refused.
+emit_controls = ["review-controls.json"]
 
 [review.no_subject_here]
 backpressure = "Nothing here has a queue, an admission decision, or a producer to slow down. The record's checks are about a running service; this repository is a catalog and a command-line tool."
 idempotency = "Nothing here has a retryable side-effecting endpoint. `uphold` commands read and report; the one that writes, --review --emit, is idempotent by construction because it writes a pure function of the catalog."
+
+# A record with no findings against it is either guarding a clean tree or saying
+# nothing a reviewer can act on, and no count of citations tells those apart. A
+# control is the change that does: plant it, and a reviewer who does not name
+# the record has shown the record cannot fire. Same argument as `uphold probe`,
+# one tier up, and the fixtures are written down here for the same reason --
+# whoever wrote the record is the only reader who knows what violating it looks
+# like, and a fixture in a file is reviewable.
+#
+# One control, deliberately, and the run says so on every invocation: eighteen
+# review-carried records have none. That line is the honest reading of what has
+# been demonstrated here, and it is what the next control should be chosen
+# against.
+[[review.control]]
+record = "single-authoritative-source"
+catches = "Add a hand-written docs/PRINCIPLES.md that restates each record's claim and applies_when, alongside the generated REVIEW.md that already compiles them from principles/*.toml."
+misses = "Change scripts/review.py's render() so the compiled document prints applies_when before the claim."

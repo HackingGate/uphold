@@ -1,0 +1,29 @@
+{
+  "controls": [
+    {
+      "record": "single-authoritative-source",
+      "catches": "Add a hand-written docs/PRINCIPLES.md that restates each record's claim and applies_when, alongside the generated REVIEW.md that already compiles them from principles/*.toml.",
+      "misses": "Change scripts/review.py's render() so the compiled document prints applies_when before the claim."
+    }
+  ],
+  "uncontrolled": [
+    "complete-mediation",
+    "defense-in-depth",
+    "end-to-end-principle",
+    "enforcement-needs-a-trigger",
+    "fail-fast",
+    "graceful-degradation",
+    "high-cohesion-low-coupling",
+    "information-hiding",
+    "informed-consent",
+    "least-astonishment",
+    "make-illegal-states-unrepresentable",
+    "mechanism-policy-separation",
+    "observability",
+    "parameterize-do-not-enumerate",
+    "psychological-acceptability",
+    "reversible-decisions",
+    "separation-of-concerns",
+    "unix-composability"
+  ]
+}

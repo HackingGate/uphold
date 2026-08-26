@@ -167,6 +167,89 @@ class Composition(unittest.TestCase):
         self.assertNotIn("the rationale", document)
 
 
+class Controls(unittest.TestCase):
+    """A control is what separates a quiet record from a dead one.
+
+    Citation counting cannot: a record with no findings against it is either
+    guarding a clean tree or saying nothing a reviewer could act on. So the
+    refusals here are the ones `uphold probe` makes for a hook fixture, and for
+    the same reason -- a control that demonstrates nothing would report a live
+    record as dead, or credit a dead one with a finding nobody planted.
+    """
+
+    def control(self, **fields: object) -> list[dict]:
+        base = {"record": "a", "catches": "a change it must be named for"}
+        base.update(fields)
+        return uphold_check.review_controls({"control": [base]})
+
+    def test_a_control_over_a_review_carried_record_loads_and_is_counted(self):
+        declared = self.control(misses="a change it must not fire on")
+        records = {"a": record("a", "partially"), "b": record("b", "no")}
+        for_review, _, _ = review_mod.route(records, set(), {})
+        errors, uncontrolled = review_mod.audit_controls(declared, for_review, records)
+        self.assertEqual(errors, [])
+        self.assertEqual(uncontrolled, ["b"])
+
+    def test_misses_is_optional_and_travels_as_an_explicit_null(self):
+        # Only one direction was written down, and a harness that saw no key
+        # would have to guess whether the miss was untested or untestable.
+        export = review_mod.render_controls(self.control(), [])
+        self.assertIn('"misses": null', export)
+
+    def test_an_empty_catches_is_refused_because_it_demonstrates_nothing(self):
+        for empty in ["", "   "]:
+            with self.assertRaises(uphold_check.CouldNotLook) as raised:
+                self.control(catches=empty)
+            self.assertIn("empty fixture demonstrates nothing", str(raised.exception))
+
+    def test_an_empty_misses_is_refused_from_the_other_side(self):
+        # Every reviewer declines to fire on nothing, so it asserts nothing
+        # while reading as though the record had been shown to be narrow.
+        with self.assertRaises(uphold_check.CouldNotLook):
+            self.control(misses=" ")
+
+    def test_a_misspelled_field_is_refused_rather_than_silently_dropped(self):
+        with self.assertRaises(uphold_check.CouldNotLook) as raised:
+            self.control(mises="a change it must not fire on")
+        self.assertIn("mises", str(raised.exception))
+
+    def test_a_control_naming_no_record_in_the_catalog_is_refused(self):
+        errors, _ = review_mod.audit_controls(self.control(), [], {})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("the catalog does not define it", errors[0])
+
+    def test_a_control_over_an_automatable_record_is_refused(self):
+        # `route` drops such a record at "a rule enforces it; a reviewer
+        # repeating it is noise", so a reviewer is never shown it: failing the
+        # control would report a miss of something nobody was handed, and
+        # passing it would reward a reviewer for repeating a static rule.
+        records = {"a": record("a", "yes")}
+        for_review, _, _ = review_mod.route(records, {"a"}, {})
+        errors, uncontrolled = review_mod.audit_controls(
+            self.control(), for_review, records
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("excluded from the compiled document", errors[0])
+        self.assertEqual(uncontrolled, [])
+
+    def test_a_control_over_a_record_this_repository_filters_out_is_refused(self):
+        # Narrowing `include_domains` takes the entry away; the control has no
+        # document to be driven against, and saying so is the whole point.
+        records = {"a": record("a", "partially", domains=["product"])}
+        for_review, _, _ = review_mod.route(records, set(), {}, ["security"])
+        errors, _ = review_mod.audit_controls(self.control(), for_review, records)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("does not compile into the review document", errors[0])
+
+    def test_the_denominator_names_the_records_and_not_only_the_count(self):
+        # "One record carries a control" means one thing beside two
+        # review-carried records and another beside nineteen.
+        note = review_mod.uncontrolled_note(["b", "c"])
+        self.assertIn("2 review-carried record(s) have no control", note)
+        self.assertIn("b, c", note)
+        self.assertIsNone(review_mod.uncontrolled_note([]))
+
+
 @needs_the_engine
 class ClaimsThatEnforceNothing(unittest.TestCase):
     """A claim naming a rule no seam supplies must not silence the review.
@@ -385,6 +468,23 @@ class SelfApplication(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_the_denominator_is_printed_on_a_run_that_found_nothing_wrong(self):
+        # The reader who most needs it is the one skimming a green run: this
+        # repository declares one control and carries nineteen records, and a
+        # run that said only "19 record(s) compile" would read like coverage.
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--review"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("have no control", result.stdout)
+        self.assertIn("nothing here shows they can produce a finding", result.stdout)
+        # The one record that does carry a control is not in that list.
+        self.assertNotIn("single-authoritative-source", result.stdout)
 
     def test_the_compiled_documents_are_current(self):
         result = subprocess.run(
