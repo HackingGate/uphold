@@ -122,6 +122,8 @@ pub(crate) struct VerbFlags {
     #[serde(default)]
     pub text_flags: Vec<String>,
     #[serde(default)]
+    pub title_flags: Vec<String>,
+    #[serde(default)]
     pub file_flags: Vec<String>,
     #[serde(default)]
     pub path_flags: Vec<String>,
@@ -144,6 +146,14 @@ pub(crate) struct Shim {
     pub match_: Vec<String>,
     #[serde(default)]
     pub text_flags: Vec<String>,
+    /// Flags whose value is a TITLE -- a name the forge shows above the body.
+    /// A separate kind rather than more `text_flags`, for both directions of
+    /// the difference: a format rule about titles must not be asked about a
+    /// body, and a title given alone must not read as "the body was supplied"
+    /// -- which is what `text_flags` marks, and what used to close the editor
+    /// checkpoint over the body the command was about to open an editor for.
+    #[serde(default)]
+    pub title_flags: Vec<String>,
     #[serde(default)]
     pub file_flags: Vec<String>,
     #[serde(default)]
@@ -555,6 +565,7 @@ impl Shim {
         };
         let mut effective = self.clone();
         effective.text_flags.clone_from(&entry.text_flags);
+        effective.title_flags.clone_from(&entry.title_flags);
         effective.file_flags.clone_from(&entry.file_flags);
         effective.path_flags.clone_from(&entry.path_flags);
         effective.skip_flags.clone_from(&entry.skip_flags);
@@ -595,6 +606,16 @@ impl Shim {
                     value,
                 });
                 collected.body_given = true;
+                true
+            } else if in_list(&self.title_flags, &flag) {
+                // NOT `body_given`. A title is a subject of its own, and a
+                // `text_flags` title used to mark the body as given -- which
+                // told the shim not to install itself as the editor, so the
+                // body the command then opened an editor FOR closed unread.
+                collected.subjects.push(Subject {
+                    kind: "title",
+                    value,
+                });
                 true
             } else if in_list(&self.path_flags, &flag) {
                 collected.subjects.push(Subject {
@@ -1018,6 +1039,51 @@ fn json_bool_field(text: &str, field: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// One pattern rule's verdict over one subject.
+///
+/// The same engine `scan` searches files with, asked about a string that never
+/// becomes one -- same regex grammar, same meaning. `require_regexp` refuses a
+/// subject the pattern is absent from; `regexp` refuses one it is present in.
+/// Both name the kind and the pattern, because the reader's next step is to
+/// fix the text, and "refused" without which-test-failed is a round trip.
+fn pattern_refusal(rule: &Rule, subject: &Subject) -> Result<Option<String>> {
+    let multiline = rule.files().multiline;
+    if let Some(pattern) = rule.require_regexp.as_deref() {
+        let hits = crate::engine::search_text(
+            &subject.value,
+            &crate::engine::Query::regex(pattern, multiline),
+            &rule.id,
+        )?;
+        if hits.is_empty() {
+            return Ok(Some(format!(
+                "{}: the {} subject does not satisfy {pattern:?}\n{}",
+                rule.id,
+                subject.kind,
+                rule.message()
+            )));
+        }
+        return Ok(None);
+    }
+    let Some(pattern) = rule.regexp.as_deref() else {
+        return Ok(None);
+    };
+    let hits = crate::engine::search_text(
+        &subject.value,
+        &crate::engine::Query::regex(pattern, multiline),
+        &rule.id,
+    )?;
+    let Some(hit) = hits.first() else {
+        return Ok(None);
+    };
+    Ok(Some(format!(
+        "{}: the {} subject matches {pattern:?}: {}\n{}",
+        rule.id,
+        subject.kind,
+        hit.text.trim_end(),
+        rule.message()
+    )))
+}
+
 /// Run one checker over one subject.
 ///
 /// The contract cmd-shims documented, unchanged and now the only one: the
@@ -1033,8 +1099,22 @@ fn json_bool_field(text: &str, field: &str) -> bool {
 /// what happened.
 fn consult(root: &Path, rule: &Rule, subject: &Subject) -> Result<Option<String>> {
     // `exec`, not `values_from`. They were one field called `run` in v2, and a
-    // checker whose command reads empty passes everything it is asked about.
-    let run = rule.exec.as_deref().unwrap_or_default();
+    // checker whose command reads empty passes everything it is asked about --
+    // which is also why an ABSENT command is an error here rather than a
+    // default: a rule mis-dispatched to this function once ran `sh -c ""`,
+    // approved everything, and the pass was indistinguishable from a checker
+    // that looked.
+    let Some(run) = rule
+        .exec
+        .as_deref()
+        .filter(|command| !command.trim().is_empty())
+    else {
+        return Err(Fatal::new(format!(
+            "{}: consulted as an `exec` checker while declaring no `exec` command, so \
+             nothing could have been asked -- a dispatch hole, not a pass",
+            rule.id
+        )));
+    };
     let mut child = Command::new("sh")
         .arg("-c")
         .arg(run)
@@ -1492,7 +1572,12 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
     // exited 0.
     let named: Vec<&Rule> = policy
         .before_command(name, &opened_for)
-        .filter(|rule| rule.is(Check::Exec) || rule.is(Check::Builtin))
+        .filter(|rule| {
+            rule.is(Check::Exec)
+                || rule.is(Check::Builtin)
+                || rule.is(Check::Regexp)
+                || rule.is(Check::RequireRegexp)
+        })
         .collect();
     if named.is_empty() {
         // Nothing to consult, and the text exists now: this is a checkpoint
@@ -1540,6 +1625,15 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
     let mut refusals: Vec<String> = Vec::new();
     for rule in checkers {
         if crate::guard::bypassed(&rule.id) {
+            continue;
+        }
+        if !rule.selects_subject(subject.kind) {
+            continue;
+        }
+        if rule.is(Check::Regexp) || rule.is(Check::RequireRegexp) {
+            if let Some(refusal) = pattern_refusal(rule, &subject)? {
+                refusals.push(refusal);
+            }
             continue;
         }
         if rule.is(Check::Builtin) {
@@ -1719,7 +1813,12 @@ pub(crate) fn run(
     // not an `exec`. The field means what they meant now.
     let checkers: Vec<&Rule> = policy
         .before_command(name, &words)
-        .filter(|rule| rule.is(Check::Exec) || rule.is(Check::Builtin))
+        .filter(|rule| {
+            rule.is(Check::Exec)
+                || rule.is(Check::Builtin)
+                || rule.is(Check::Regexp)
+                || rule.is(Check::RequireRegexp)
+        })
         .collect();
     let mut refusals: Vec<String> = Vec::new();
 
@@ -1800,6 +1899,18 @@ pub(crate) fn run(
                     if !scopes.holds(shim, effective_scope(rule, shim), root, &collected, &words)? {
                         continue;
                     }
+                    // `subjects` narrows every kind of checker the same way:
+                    // a rule about titles is not asked about a body, whichever
+                    // field does its checking.
+                    if !rule.selects_subject(subject.kind) {
+                        continue;
+                    }
+                    if rule.is(Check::Regexp) || rule.is(Check::RequireRegexp) {
+                        if let Some(refusal) = pattern_refusal(rule, subject)? {
+                            refusals.push(refusal);
+                        }
+                        continue;
+                    }
                     if rule.is(Check::Builtin) {
                         // The same dispatch `uphold guard --text` runs, so a
                         // guard cannot judge a commit message one way and a
@@ -1867,6 +1978,7 @@ mod tests {
             command: String::from("gh"),
             match_: vec!["pr:create".into(), "issue:*".into()],
             text_flags: vec!["-t".into(), "--title".into(), "-b".into(), "--body".into()],
+            title_flags: Vec::new(),
             file_flags: vec!["-F".into(), "--body-file".into()],
             path_flags: Vec::new(),
             target_flags: vec!["-R".into(), "--repo".into()],
@@ -1890,6 +2002,7 @@ mod tests {
             command: String::from("git"),
             match_: vec!["push:*".into()],
             text_flags: Vec::new(),
+            title_flags: Vec::new(),
             file_flags: Vec::new(),
             path_flags: Vec::new(),
             target_flags: Vec::new(),

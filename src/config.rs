@@ -549,6 +549,14 @@ pub(crate) struct Rule {
     pub git: Option<Git>,
     #[serde(default)]
     pub command: Option<CommandWhere>,
+    /// Which subject kinds of an invocation this rule is asked about --
+    /// `"title"`, `"text"`, `"path"`, `"ref"`, `"argv"`. Absent means every
+    /// subject the shim collected, which is every rule written before this
+    /// existed. Only meaningful beside `command.before`: nothing else hands a
+    /// rule a subject that HAS a kind, so writing it anywhere else is refused
+    /// as configuration read by nothing.
+    #[serde(default)]
+    pub subjects: Option<Vec<String>>,
 
     // -- knobs of the links-resolve built-in ---------------------------------
     //
@@ -687,6 +695,7 @@ impl Rule {
             origin: Origin::Own,
             id: id.to_owned(),
             message: None,
+            subjects: None,
             regexp: None,
             comment_regexp: None,
             trivial_comments: None,
@@ -880,6 +889,14 @@ impl Rule {
     /// Before this, the list was a `match` arm in `guard::stages` -- so a
     /// repository could not add a stage, could not drop one, and could not see
     /// from its own configuration which stages it had.
+    /// Whether this rule is asked about a subject of one kind. Absent means
+    /// every kind, which is every rule written before `subjects` existed.
+    pub(crate) fn selects_subject(&self, kind: &str) -> bool {
+        self.subjects
+            .as_ref()
+            .is_none_or(|kinds| kinds.iter().any(|named| named == kind))
+    }
+
     pub(crate) fn hooks(&self) -> &[String] {
         match &self.git {
             Some(git) => &git.hooks,
@@ -1115,10 +1132,17 @@ impl Rule {
              Delete the rule instead, so no claim can name it",
         )?;
 
-        if check.requires_files() && self.files.is_none() {
+        // A pattern rule standing in front of a command searches that
+        // command's subjects instead of the tree, so `command.before` is the
+        // other way for it to say where -- with neither, it searches nothing.
+        let pattern_at_command =
+            matches!(check, Check::Regexp | Check::RequireRegexp) && self.command.is_some();
+        if check.requires_files() && self.files.is_none() && !pattern_at_command {
             return Err(Fatal::new(format!(
                 "rule {:?}: `{check}` searches files, so it needs `files.*` keys \
-                 saying which. Write `files.include = [\".\"]` for the whole tree",
+                 saying which -- or, for the two pattern checks, `command.before` \
+                 naming the invocation whose subjects it searches. Write \
+                 `files.include = [\".\"]` for the whole tree",
                 self.id
             )));
         }
@@ -1281,7 +1305,13 @@ impl Rule {
         let text_capable = self
             .builtin()
             .is_some_and(|builtin| crate::guard::TEXT_GUARDS.contains(&builtin));
-        if check != Check::Exec && !text_capable && self.command.is_some() {
+        // A pattern is text-capable by construction: a regex means the same
+        // thing against a pull-request title as against a line of a file. What
+        // it lacks at this seam is a default place, which `command.before`
+        // supplies -- so a repository can say "a release title is the tag,
+        // vX.Y.Z" as one declarative rule instead of a checker script.
+        let pattern_capable = matches!(check, Check::Regexp | Check::RequireRegexp);
+        if check != Check::Exec && !text_capable && !pattern_capable && self.command.is_some() {
             let built_in_note = if check == Check::Builtin {
                 format!(
                     "\nThe built-ins that can judge the text a command publishes are {}; \
@@ -1318,6 +1348,8 @@ impl Rule {
                 self.id
             )));
         }
+
+        self.validate_subjects()?;
 
         if self.files.is_none() && self.git.is_none() && self.command.is_none() {
             return Err(Fatal::new(format!(
@@ -1377,6 +1409,40 @@ impl Rule {
             )));
         }
 
+        Ok(())
+    }
+
+    /// The `subjects` half of [`Rule::validate`]: the filter names kinds a
+    /// shim collects, beside the one table that hands this rule a subject.
+    fn validate_subjects(&self) -> Result<()> {
+        const KINDS: [&str; 5] = ["text", "title", "path", "ref", "argv"];
+        let Some(kinds) = self.subjects.as_ref() else {
+            return Ok(());
+        };
+        if self.command.is_none() {
+            return Err(Fatal::new(format!(
+                "rule {:?}: `subjects` filters the subjects of a command invocation, and \
+                 only `command.before` hands this rule one -- written anywhere else it is \
+                 read by nothing. Add `command.before`, or drop it",
+                self.id
+            )));
+        }
+        if kinds.is_empty() {
+            return Err(Fatal::new(format!(
+                "rule {:?}: `subjects = []` selects no subject at all, so the rule runs \
+                 on nothing while reading as though it had been scoped",
+                self.id
+            )));
+        }
+        for kind in kinds {
+            if !KINDS.contains(&kind.as_str()) {
+                return Err(Fatal::new(format!(
+                    "rule {:?}: no subject kind is called {kind:?}. A shim collects {}",
+                    self.id,
+                    KINDS.join(", ")
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -2663,6 +2729,8 @@ fn validate_shims(policy_path: &Path, rules: &[Rule], shims: &[crate::shim::Shim
     let mut checked: BTreeMap<&str, &Rule> = BTreeMap::new();
     for rule in rules.iter().filter(|rule| {
         rule.is(Check::Exec)
+            || rule.is(Check::Regexp)
+            || rule.is(Check::RequireRegexp)
             || rule
                 .builtin()
                 .is_some_and(|builtin| crate::guard::TEXT_GUARDS.contains(&builtin))
@@ -2986,13 +3054,13 @@ mod tests {
     /// with no place is the one this rule walked past.
     fn a_command_place_the_check_cannot_use_is_refused() {
         // A built-in that reads the index, an identity or a push range has
-        // nothing to say about the text a command publishes. The regexp case
-        // carries `files.*` too: it is a rule that really does run, by the scan,
-        // and the `command.before` beside it is the part that reaches nothing.
+        // nothing to say about the text a command publishes. The pattern
+        // checks are no longer in this list: a regex means the same thing
+        // against a title as against a line of a file, so `command.before`
+        // is a place they can use now.
         for check in [
             "builtin = \"prevent-public-push\"",
             "builtin = \"prevent-unusual-unicode-in-files\"",
-            "message = \"no\"\nregexp = \"TODO\"\nfiles.include = [\".\"]",
         ] {
             let error = policy_from(&format!(
                 "[rule.wrong]\n{check}\n\n[rule.wrong.command]\nbefore = [\"gh\"]\n"
@@ -3003,6 +3071,39 @@ mod tests {
                 "{check}: {error}"
             );
         }
+
+        // And a pattern rule standing in front of a command loads, with its
+        // subject filter -- the release-title shape this was built for.
+        let policy = policy_from(
+            "[rule.release-title-is-the-tag]\nmessage = \"title a release by its tag\"\nrequire_regexp = '^v[0-9]+'\nsubjects = [\"title\"]\n\n[rule.release-title-is-the-tag.command]\nbefore = [\"gh release create\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"release:create\"]\ntitle_flags = [\"-t\", \"--title\"]\n",
+        )
+        .unwrap();
+        assert!(policy.rules[0].selects_subject("title"));
+        assert!(!policy.rules[0].selects_subject("text"));
+    }
+
+    #[test]
+    fn a_subjects_filter_needs_a_command_and_a_kind_that_exists() {
+        // Written anywhere else it is read by nothing.
+        let orphan = policy_from(
+            "[rule.wrong]\nmessage = \"no\"\nregexp = \"TODO\"\nsubjects = [\"title\"]\nfiles.include = [\".\"]\n",
+        )
+        .unwrap_err();
+        assert!(orphan.to_string().contains("command.before"), "{orphan}");
+
+        // An empty filter selects nothing while reading as scoped.
+        let empty = policy_from(
+            "[rule.wrong]\nmessage = \"no\"\nregexp = \"TODO\"\nsubjects = []\n\n[rule.wrong.command]\nbefore = [\"gh\"]\n",
+        )
+        .unwrap_err();
+        assert!(empty.to_string().contains("selects no subject"), "{empty}");
+
+        // A kind the shim never collects is a typo, not a scope.
+        let unknown = policy_from(
+            "[rule.wrong]\nmessage = \"no\"\nregexp = \"TODO\"\nsubjects = [\"headline\"]\n\n[rule.wrong.command]\nbefore = [\"gh\"]\n",
+        )
+        .unwrap_err();
+        assert!(unknown.to_string().contains("headline"), "{unknown}");
     }
 
     #[test]

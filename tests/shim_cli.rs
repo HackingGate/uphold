@@ -1165,3 +1165,77 @@ fn a_rule_whose_own_scope_does_not_hold_is_stood_down_alone() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(stdout(&output).contains("faux ran:"), "{}", stdout(&output));
 }
+
+// ── pattern rules at the command seam, and the title kind ────────────
+
+/// The release-title shape this exists for: a format rule about one subject
+/// kind, refusing before anything is published.
+const TITLE_POLICY: &str = r#"
+[rule.release-title-is-the-tag]
+message = "title a release by its tag"
+require_regexp = '^v[0-9]+\.[0-9]+\.[0-9]+$'
+subjects = ["title"]
+command.before = ["faux release create", "faux release edit"]
+
+[[shim]]
+command = "faux"
+match = ["release:create", "release:edit"]
+title_flags = ["-t", "--title"]
+text_flags = ["-n", "--notes"]
+scope = "always"
+"#;
+
+#[test]
+fn a_title_format_rule_refuses_the_title_and_only_the_title() {
+    let root = workspace(TITLE_POLICY);
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+
+    // A sentence where the tag should be: refused, naming the rule, the kind
+    // and the pattern, and the command never runs.
+    let refused = shim(
+        &root,
+        &[
+            "faux",
+            "release",
+            "edit",
+            "v1.9.0",
+            "-t",
+            "the seams a fleet held by hand",
+        ],
+    );
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        !stdout(&refused).contains("faux ran:"),
+        "{}",
+        stdout(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("title subject"),
+        "{}",
+        stderr(&refused)
+    );
+
+    // The tag itself passes.
+    let clean = shim(
+        &root,
+        &["faux", "release", "create", "v2.0.0", "-t", "v2.0.0"],
+    );
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert!(stdout(&clean).contains("faux ran:"), "{}", stdout(&clean));
+
+    // And prose in the NOTES is not a title: the `subjects` filter keeps a
+    // format rule about one kind away from every other.
+    let notes = shim(
+        &root,
+        &[
+            "faux",
+            "release",
+            "edit",
+            "v1.9.0",
+            "-n",
+            "prose notes, full sentences",
+        ],
+    );
+    assert_eq!(code(&notes), 0, "{}", stderr(&notes));
+    assert!(stdout(&notes).contains("faux ran:"), "{}", stdout(&notes));
+}
