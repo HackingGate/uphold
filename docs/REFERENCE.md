@@ -1546,6 +1546,47 @@ longer describes the fleet reads as a decision that is doing something while
 doing nothing. Whether a waiver is stale depends on which repositories were
 compared, because the comparison set is whatever was named on the command line.
 
+## `uphold hooks --install` — the hooks git actually runs
+
+```sh
+uphold hooks --install                      # runner detected from PATH
+uphold hooks --install --runner pre-commit  # or named; --dir DIR for the directory
+```
+
+Writes the four guard-stage hook files — `pre-commit`, `commit-msg`,
+`pre-merge-commit`, `pre-push` — into a **tracked** directory (`.githooks/` by
+default) and points `core.hooksPath` at it. The hook git runs is then a file a
+diff can review, and a rerun of the runner's own `install` cannot quietly take
+its place.
+
+The file that earns the inversion is `pre-push`. Measured 2026-08-16, prek
+0.3.13: prek computes the pushed range as `<local sha> --not --remotes` and,
+when that range comes back empty, skips the whole pre-push stage —
+`always_run: true` included. The empty range is the dangerous case, not the
+boring one: repointing `origin` at somebody else's remote is a URL edit, not a
+commit, so the push that publishes the entire history hands the runner a range
+of zero commits. The written `pre-push` runs `uphold guard --stage pre-push`
+unconditionally, reading the destination off argv — where git puts it, and
+where a `git config` lookup would answer with the very thing that was just
+changed — and only then delegates to the runner. One fleet carried this file
+by hand, byte-identical in ten trees, with a script whose whole job was to
+notice when a copy drifted.
+
+The other three files are delegates. `core.hooksPath` makes git look for
+**every** hook in the named directory, so a directory holding only `pre-push`
+would silently switch the other stages off — the defect the pre-push file
+exists to close, at the other stages.
+
+Fail-closed, in every direction it can be: the written `pre-push` refuses
+(exit `2`) when `uphold` or the runner is not on PATH rather than passing what
+it could not check; a file in the directory this command did not write is
+refused, never replaced; a `core.hooksPath` already pointing elsewhere is
+refused, never repointed; and a `default_install_hook_types` naming a hook
+type outside the four is refused, because that type would otherwise stop
+firing while the install read as one that worked. lefthook is refused by name:
+it installs and owns its own hooks, and a `core.hooksPath` written here would
+displace them.
+
 ## `uphold probe` — can each hook refuse?
 
 ```sh

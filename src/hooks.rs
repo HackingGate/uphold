@@ -434,3 +434,267 @@ fn waived(
     }
     answered
 }
+
+// ─── `uphold hooks --install`: the hooks git actually runs ───────────────────
+
+/// The four hook files this command writes, and the line that marks them as
+/// its own. A file without the marker was written by somebody, and somebody's
+/// file is looked at and refused, never replaced.
+const MARKER: &str = "Written by `uphold hooks --install`; the next install overwrites this file.";
+
+const STAGES: [&str; 4] = ["pre-commit", "commit-msg", "pre-merge-commit", "pre-push"];
+
+/// `uphold hooks --install [--runner prek|pre-commit] [--dir DIR]`
+///
+/// Writes the four guard-stage hook files into a TRACKED directory and points
+/// `core.hooksPath` at it, so the hook git runs is reviewable in a diff and a
+/// rerun of the runner's own `install` cannot quietly take its place.
+///
+/// The file that earns the inversion is `pre-push`. prek computes the pushed
+/// range as `<local sha> --not --remotes` and, when that range comes back
+/// empty, skips the whole pre-push stage -- `always_run: true` included.
+/// Measured 2026-08-16, prek 0.3.13: a throwaway repository whose only
+/// pre-push hook was a `local` entry with `always_run: true` ran it for a
+/// range of one commit and skipped it, silently, for a range of none. An
+/// empty range is the dangerous case, not the boring one: repointing `origin`
+/// at somebody else's remote is a URL edit, not a commit, so the push that
+/// publishes the entire history to the wrong place hands the runner a range
+/// of zero commits. The pre-push file written here runs
+/// `uphold guard --stage pre-push` unconditionally, BEFORE anything
+/// downstream decides the push is uninteresting, and only then delegates.
+///
+/// One fleet carried this file by hand, byte-identical in ten trees, plus a
+/// script whose whole job was to notice when a copy drifted. The other three
+/// files are delegates: `core.hooksPath` makes git look for EVERY hook in the
+/// named directory, so a directory holding only `pre-push` would silently
+/// switch the other stages off -- the same defect the pre-push file closes.
+pub(crate) fn install(root: &Path, runner: Option<&str>, directory: &str) -> Result<Exit> {
+    let runner = match runner {
+        Some("prek") => "prek",
+        Some("pre-commit") => "pre-commit",
+        Some("lefthook") => {
+            return Err(Fatal::new(
+                "lefthook installs and owns its own git hooks (`lefthook install`), and a \
+                 `core.hooksPath` written here would displace them. This command wires prek \
+                 and pre-commit",
+            ))
+        }
+        Some(other) => {
+            return Err(Fatal::new(format!(
+                "unknown runner {other:?}; this writes hooks that delegate to prek or \
+                 pre-commit"
+            )))
+        }
+        // Which of the two is detected from PATH, not from the config: both
+        // read the same .pre-commit-config.yaml, and the one that is installed
+        // is the one the delegate must call.
+        None => {
+            if crate::probe::on_path("prek") {
+                "prek"
+            } else if crate::probe::on_path("pre-commit") {
+                "pre-commit"
+            } else {
+                return Err(Fatal::new(
+                    "neither prek nor pre-commit is on PATH, so a delegate written now \
+                     could not be run. Install one, or name one with --runner",
+                ));
+            }
+        }
+    };
+
+    let config = root.join(".pre-commit-config.yaml");
+    if !config.is_file() {
+        return Err(Fatal::new(
+            "no .pre-commit-config.yaml here, so there is nothing for the written hooks \
+             to delegate to",
+        ));
+    }
+    // A hook type outside the four written here would be silently switched
+    // off: `core.hooksPath` makes git look in one directory for every hook,
+    // and a type with no file there is a hook that no longer fires.
+    let text = crate::error::read_to_string(&config)?;
+    let parsed: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&text).map_err(|error| Fatal::at(&config, error))?;
+    if let Some(declared) = parsed
+        .get("default_install_hook_types")
+        .and_then(serde_yaml_ng::Value::as_sequence)
+    {
+        for declared_type in declared {
+            let name = declared_type.as_str().unwrap_or_default();
+            if !STAGES.contains(&name) {
+                return Err(Fatal::new(format!(
+                    "default_install_hook_types names {name:?}, and this command writes \
+                     only {}. With core.hooksPath set, a hook type with no file in the \
+                     directory is a hook git no longer runs -- which would switch \
+                     {name:?} off while reading as an install that worked",
+                    STAGES.join(", ")
+                )));
+            }
+        }
+    }
+
+    // Somebody else's core.hooksPath is somebody else's decision. Equal is a
+    // re-install; different is a question this command must not answer.
+    let existing = git_config(root, "core.hooksPath")?;
+    if let Some(existing) = existing.as_deref() {
+        if existing != directory {
+            return Err(Fatal::new(format!(
+                "core.hooksPath is already {existing:?}, and overwriting it would take \
+                 the hooks that directory holds out of git's path. Point --dir at it, or \
+                 unset it first"
+            )));
+        }
+    }
+
+    let hooks_dir = root.join(directory);
+    std::fs::create_dir_all(&hooks_dir).map_err(|error| Fatal::at(&hooks_dir, error))?;
+    for stage in STAGES {
+        let path = hooks_dir.join(stage);
+        if path.exists() {
+            let current = crate::error::read_to_string(&path)?;
+            if !current.contains(MARKER) {
+                return Err(Fatal::at(
+                    &path,
+                    "this file was not written by `uphold hooks --install`, and replacing \
+                     a hook somebody wrote is not this command's call. Move it aside, or \
+                     fold what it does into the runner's own config",
+                ));
+            }
+        }
+        let body = if stage == "pre-push" {
+            pre_push_hook(runner, directory)
+        } else {
+            delegate_hook(runner, stage)
+        };
+        std::fs::write(&path, body).map_err(|error| Fatal::at(&path, error))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .map_err(|error| Fatal::at(&path, error))?;
+        }
+    }
+
+    if existing.is_none() {
+        let output = std::process::Command::new("git")
+            .args(["config", "core.hooksPath", directory])
+            .current_dir(root)
+            .output()
+            .map_err(|error| Fatal::new(format!("could not run git config: {error}")))?;
+        if !output.status.success() {
+            return Err(Fatal::new(format!(
+                "git config core.hooksPath failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+    }
+
+    println!(
+        "wrote {} into {directory}/ and pointed core.hooksPath at it.\n\
+         Commit the directory: the hook git runs is now a tracked file, and a rerun of \
+         `{runner} install` cannot take its place.",
+        STAGES.join(", ")
+    );
+    Ok(Exit::Clean)
+}
+
+fn git_config(root: &Path, key: &str) -> Result<Option<String>> {
+    let output = std::process::Command::new("git")
+        .args(["config", "--get", key])
+        .current_dir(root)
+        .output()
+        .map_err(|error| Fatal::new(format!("could not run git config: {error}")))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    Ok((!value.is_empty()).then_some(value))
+}
+
+/// The arguments `hook-impl` takes, which differ between the two runners.
+///
+/// prek's generated shim passes `--script-version 4`; a prek that changes that
+/// contract refuses this invocation with a usage error, which fails the hook
+/// CLOSED -- a commit stopped by a version skew is recoverable, a stage that
+/// silently stopped running is not.
+fn impl_args(runner: &str) -> &'static str {
+    match runner {
+        "prek" => "--hook-dir \"$hook_dir\" --script-version 4",
+        _ => "--config=.pre-commit-config.yaml --hook-dir \"$hook_dir\"",
+    }
+}
+
+fn delegate_hook(runner: &str, stage: &str) -> String {
+    format!(
+        "#!/bin/sh\n\
+         # {MARKER}\n\
+         #\n\
+         # A delegate, and the reason it exists is the pre-push file beside it.\n\
+         # `core.hooksPath` points git at this directory, so git looks for EVERY hook\n\
+         # here and nowhere else: a directory holding only `pre-push` would silently\n\
+         # switch this stage off. `hook-impl` is what the shim `{runner} install`\n\
+         # generates calls, so calling it from a tracked file means the hook git runs\n\
+         # is reviewable in a diff, and nothing here depends on `{runner} install`\n\
+         # having been run.\n\
+         \n\
+         set -e\n\
+         \n\
+         hook_dir=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\n\
+         exec {runner} hook-impl {args} --hook-type={stage} -- \"$@\"\n",
+        args = impl_args(runner),
+    )
+}
+
+fn pre_push_hook(runner: &str, directory: &str) -> String {
+    format!(
+        "#!/bin/sh\n\
+         # {MARKER}\n\
+         #\n\
+         # The push-destination guard, run by git itself, BEFORE anything downstream\n\
+         # gets to decide that this push is uninteresting.\n\
+         #\n\
+         # Measured 2026-08-16, prek 0.3.13: prek computes the pushed range as\n\
+         # `<local sha> --not --remotes` and, when that range comes back empty, skips\n\
+         # the WHOLE pre-push stage -- `always_run: true` included. An empty range is\n\
+         # the dangerous case, not the boring one: repointing `origin` at somebody\n\
+         # else's remote is a URL edit, not a commit, so the push that publishes the\n\
+         # entire history hands the runner a range of zero commits. The guard below\n\
+         # runs first, unconditionally, and reads the destination off argv -- which is\n\
+         # where git puts it, and which asking `git config` would answer with the very\n\
+         # thing that was just changed.\n\
+         \n\
+         set -e\n\
+         \n\
+         hook_dir=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\n\
+         remote_name=\"$1\"\n\
+         remote_url=\"$2\"\n\
+         \n\
+         # git hands the ref lines to the hook on stdin, and both the guard and the\n\
+         # runner want them. There is only one stdin, so it is read once and replayed.\n\
+         ref_lines=\"$(cat)\"\n\
+         \n\
+         # A checkout where `uphold` is not on PATH is one where this hook cannot\n\
+         # answer the question it exists to answer, and exiting 0 there is precisely\n\
+         # the failure this file removes. {directory} is on no PATH by accident.\n\
+         if ! command -v uphold >/dev/null 2>&1; then\n\
+         \techo \"pre-push: uphold is not on PATH, so the push destination was not\" >&2\n\
+         \techo \"checked and this push is refused rather than guessed at.\" >&2\n\
+         \texit 2\n\
+         fi\n\
+         \n\
+         printf '%s\\n' \"$ref_lines\" | uphold guard --stage pre-push \\\n\
+         \t--remote \"$remote_name\" --remote-url \"$remote_url\"\n\
+         \n\
+         # Everything else this repository runs at pre-push, handed the same argv and\n\
+         # the same ref lines.\n\
+         if ! command -v {runner} >/dev/null 2>&1; then\n\
+         \techo \"pre-push: {runner} is not on PATH, so the pre-push hooks that\" >&2\n\
+         \techo \".pre-commit-config.yaml declares did not run.\" >&2\n\
+         \texit 2\n\
+         fi\n\
+         \n\
+         printf '%s\\n' \"$ref_lines\" | {runner} hook-impl {args} \\\n\
+         \t--hook-type=pre-push -- \"$@\"\n",
+        args = impl_args(runner),
+    )
+}
