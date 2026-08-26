@@ -329,6 +329,26 @@ command.scope = "always"
 # ones carry text is one release away from either missing a new one in silence
 # or blocking one that never carried any, and only the first failure is visible.
 
+# A release is titled by its tag. The release list is a version picker, and
+# every entry in this repository's is its tag -- except the one that was not,
+# published as a sentence while every neighbour read vX.Y.Z, and renamed by
+# hand afterwards. The prose belongs in the notes; the format belongs to a
+# rule, so the next inconsistent title is refused before it is published
+# rather than renamed after.
+[rule.release-title-is-the-tag]
+message = """
+Title a release by its tag -- vX.Y.Z, nothing appended. The release list is a
+version picker; the prose belongs in the notes.
+"""
+require_regexp = '^v[0-9]+\.[0-9]+\.[0-9]+$'
+subjects = ["title"]
+command.before = ["gh release create", "gh release edit"]
+# `always`: a format is a fact about the text, not about the destination, and
+# the table's public-target would stand this rule down exactly where a lookup
+# failed -- which is how the incident this rule exists for nearly repeated
+# itself during its own test.
+command.scope = "always"
+
 [[shim]]
 command = "gh"
 match = [
@@ -343,7 +363,12 @@ match = [
   "pr:merge",
   "issue:close", "pr:close", "issue:reopen", "pr:reopen",
 ]
-text_flags = ["-t", "--title", "-b", "--body", "-n", "--notes", "-d", "--description"]
+text_flags = ["-b", "--body", "-n", "--notes", "-d", "--description"]
+# A title is a subject of its own kind, so a format rule about titles is never
+# asked about a body -- and a title given alone no longer reads as "the body
+# was supplied", which used to close the editor checkpoint over the body the
+# command was about to open an editor for.
+title_flags = ["-t", "--title"]
 file_flags = ["-F", "--body-file", "--notes-file"]
 target_flags = ["-R", "--repo"]
 # --fill takes the body from commit messages, which commit-msg already guarded
@@ -372,7 +397,8 @@ scope = "public-target"
 [[shim]]
 command = "glab"
 match = ["mr:create", "mr:update", "mr:note", "issue:create", "issue:update", "issue:note"]
-text_flags = ["-t", "--title", "-d", "--description", "-m", "--message"]
+text_flags = ["-d", "--description", "-m", "--message"]
+title_flags = ["-t", "--title"]
 file_flags = ["--description-file"]
 target_flags = ["-R", "--repo"]
 editor_env = "GLAB_EDITOR"

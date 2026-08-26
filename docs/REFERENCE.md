@@ -62,11 +62,34 @@ Both halves are checked at load. A rule naming two checks is refused, because
 one of them would be read by nothing while looking enforced. A rule naming no
 place is refused, because it runs nowhere and that reads exactly like a rule
 that passes. `command.before` is refused on a check no shim can consult — the
-shim consults `exec` checkers and the built-ins that can judge arbitrary text
+shim consults `exec` checkers, the two pattern checks (`regexp` and
+`require_regexp`, which mean the same thing against a title as against a line
+of a file), and the built-ins that can judge arbitrary text
 (`prevent-ai-author`, `prevent-unusual-unicode`, `no-private-repo-names`, and
-the two consultations `text-guards` and `text-literals`), and anything else
-reads an index, an identity or a push range and has nothing to say about a
+the two consultations `text-guards` and `text-literals`); anything else reads
+an index, an identity or a push range and has nothing to say about a
 pull-request body.
+
+A pattern rule at this seam may also say **which subjects** it is asked about,
+with `subjects` — a list drawn from `text`, `title`, `path`, `ref`, `argv` —
+and the filter narrows every kind of checker the same way. Absent means every
+subject, which is every rule written before the field existed; `subjects`
+anywhere but beside `command.before` is refused, because nothing else hands a
+rule a subject that has a kind. The worked example is the release title:
+
+```toml
+[rule.release-title-is-the-tag]
+message = "Title a release by its tag -- vX.Y.Z; the prose belongs in the notes."
+require_regexp = '^v[0-9]+\.[0-9]+\.[0-9]+$'
+subjects = ["title"]
+command.before = ["gh release create", "gh release edit"]
+command.scope = "always"     # a format is a fact about the text, not the destination
+```
+
+The same shape reaches a branch- or tag-naming convention through
+`subjects = ["ref"]` on `git push`. These rules run at the shim seam only —
+`uphold hook` hands a harness's call to the text guards and literal rules, and
+a pattern scoped to one command's subjects has no flag vocabulary there.
 
 `text-guards` and `text-literals` are the same dispatches `uphold guard
 --text` and `uphold scan --text` run, as built-ins: every text-capable guard
@@ -107,7 +130,8 @@ So a table may carry entries for the verbs whose grammar differs:
 [[shim]]
 command = "gh"
 match = ["pr:review", "issue:close"]
-text_flags = ["-t", "--title", "-b", "--body"]
+text_flags = ["-b", "--body"]
+title_flags = ["-t", "--title"]
 
   [[shim.verbs]]
   match = ["issue:close"]
@@ -126,8 +150,8 @@ a vocabulary nobody wrote -- here `issue close --body`, a flag the real command
 does not accept -- and reading a flag a command will not take is the shim
 claiming to have checked a subject that was never published.
 
-`text_flags`, `file_flags`, `path_flags`, `skip_flags` and `web_flags` may be
-overridden. `target_flags` may not: `-R`/`--repo` means the same thing on every
+`text_flags`, `title_flags`, `file_flags`, `path_flags`, `skip_flags` and
+`web_flags` may be overridden. `target_flags` may not: `-R`/`--repo` means the same thing on every
 verb, and a per-verb answer to "which repository is this going to" would be a way
 to publish somewhere the table did not expect.
 
@@ -1181,13 +1205,21 @@ standing in front of anything and the caller asked.
 [[shim]]
 command = "gh"
 match = ["pr:create", "pr:edit", "issue:create"]   # named, never guessed
-text_flags = ["-t", "--title", "-b", "--body"]
+text_flags = ["-b", "--body"]
+title_flags = ["-t", "--title"]
 file_flags = ["-F", "--body-file"]
 skip_flags = ["--fill"]
 editor_env = "GH_EDITOR"
 target = "forge-repo"
 scope = "public-target"
 ```
+
+`title_flags` is `text_flags` for the subject a forge shows above the body,
+and a separate kind for both directions of the difference: a format rule with
+`subjects = ["title"]` is never asked about a body, and a title given alone no
+longer reads as "the body was supplied" — under `text_flags` it did, which
+told the shim not to install itself as the editor, so the body the command was
+about to open an editor *for* closed unread.
 
 `target` is `forge-repo` or `git-remote`, both built-in resolvers. `scope` is
 `public-target | public-registry | always`, with
