@@ -114,6 +114,7 @@ usage:
   uphold audit --for-publication     what a private->public flip would republish
   uphold hooks --identity DIR...     do these repositories declare the same hooks
   uphold probe [--runner NAME]       can each declared hook actually refuse
+               [--timeout SECONDS]   one run's patience, over the file's
   uphold rules --set NAME [--json]   what a bundled rule set refuses, rule by rule
   uphold rules --sets --json         every bundled set, field for field, so two
                                      versions of this binary can be diffed
@@ -329,18 +330,46 @@ fn run() -> Result<Exit> {
             ))),
         },
         "probe" => {
-            let runner = match rest {
-                [] => None,
-                [flag, name] if flag == "--runner" => Some(text_of(name)?),
-                _ => {
-                    return Err(Fatal::new(format!(
-                        "usage: uphold probe [--runner prek|pre-commit|lefthook]\n\n{USAGE}"
-                    )))
-                }
+            let usage = || {
+                Fatal::new(format!(
+                    "usage: uphold probe [--runner prek|pre-commit|lefthook] \
+                     [--timeout SECONDS]\n\n{USAGE}"
+                ))
             };
+            let mut runner: Option<&str> = None;
+            let mut timeout: Option<u64> = None;
+            let mut index = 0;
+            while let Some(flag) = rest.get(index) {
+                match text_of(flag)? {
+                    "--runner" => {
+                        index += 1;
+                        runner = Some(text_of(rest.get(index).ok_or_else(usage)?)?);
+                    }
+                    // One run's answer, overriding whatever the file declares
+                    // -- which is how a suite proves a timeout is a FAILURE
+                    // rather than a silent pass. Zero is refused for the
+                    // reason the file refuses it: no hook can be measured
+                    // under it.
+                    "--timeout" => {
+                        index += 1;
+                        let value = text_of(rest.get(index).ok_or_else(usage)?)?;
+                        let seconds: u64 = value.parse().map_err(|_| {
+                            Fatal::new(format!("--timeout takes whole seconds, not {value:?}"))
+                        })?;
+                        if seconds == 0 {
+                            return Err(Fatal::new(
+                                "--timeout 0 is a run under which no hook can ever be measured",
+                            ));
+                        }
+                        timeout = Some(seconds);
+                    }
+                    _ => return Err(usage()),
+                }
+                index += 1;
+            }
             let working = std::env::current_dir()?;
             let (root, _) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
-            probe::run(&root, runner)
+            probe::run(&root, runner, timeout)
         }
         "rules" => match rest {
             [flag, name] if flag == "--set" => rules_command(text_of(name)?),

@@ -45,6 +45,10 @@ const PROBES: &str = "policy/hooks.toml";
 struct ProbeFile {
     #[serde(default, rename = "probe")]
     probes: Vec<Probe>,
+    /// How long one hook run may take before it is called unmeasured, for
+    /// every probe that does not carry its own. See [`Probe::timeout_seconds`].
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
     /// The waivers `hooks --identity` reads. Named here so this file can hold
     /// both without `deny_unknown_fields` refusing the other one's table.
     #[serde(default, rename = "waive")]
@@ -70,6 +74,29 @@ struct Probe {
     /// most hooks live and is what every runner defaults to.
     #[serde(default)]
     stage: Option<String>,
+    /// Words the refusal must contain -- a rule id, a finding's own text.
+    ///
+    /// Without it a probe passes on a red that came from somewhere else: the
+    /// planted fixture trips a NEIGHBOURING rule in the same hook, the hook it
+    /// was written for silently stops matching, and the probe goes on
+    /// reporting a demonstrated gate. Running the hook alone narrows the
+    /// refusal to the hook; only the words narrow it to the rule. Measured
+    /// before this existed, in the fleet that asked for it: a fixture written
+    /// for a home-path rule was red under an unrelated whitespace fixer, and
+    /// nothing said so.
+    #[serde(default)]
+    expect: Option<String>,
+    /// How long one run may take before the hook is called UNMEASURED --
+    /// exit 2, never a refusal and never a pass.
+    ///
+    /// A declared value rather than a constant compiled in here, because where
+    /// it sits is an operator's call about the machines this runs on: long
+    /// enough that a hook pulling a container image on a cold runner is not
+    /// called a timeout, short enough that a hook which has wedged is not
+    /// waited on all afternoon. Absent means the file-level default, and with
+    /// neither the run waits, which is what it always did.
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
 }
 
 /// What driving one hook to both verdicts found.
@@ -84,11 +111,17 @@ enum Verdict {
     /// Refused the clean fixture too, so it refuses everything and the refusal
     /// says nothing about what it was given.
     RefusesEverything,
+    /// Refused, without the words the probe says the refusal must contain --
+    /// a red that came from somewhere else, reported with what it did say.
+    RefusedForAnotherReason { said: String },
+    /// Still running when its time ran out. Not a refusal and not a pass: the
+    /// hook was never measured, and the exit code says so.
+    Unmeasured { after: u64 },
 }
 
 /// `uphold probe`
-pub(crate) fn run(root: &Path, runner: Option<&str>) -> Result<Exit> {
-    let probes = probes(root)?;
+pub(crate) fn run(root: &Path, runner: Option<&str>, timeout: Option<u64>) -> Result<Exit> {
+    let (probes, file_timeout) = probes(root)?;
     let runner = runner.map_or_else(|| detect(root), Runner::named)?;
 
     // Only the ids the CHOSEN runner can be asked for. A repository carrying
@@ -132,12 +165,18 @@ pub(crate) fn run(root: &Path, runner: Option<&str>) -> Result<Exit> {
     let worktree = Worktree::at(root)?;
     let mut results: Vec<(String, Verdict)> = Vec::new();
     for probe in &probes {
-        results.push((probe.id.clone(), drive(&worktree, runner, probe)?));
+        // The nearest declaration wins: the flag is one operator's answer for
+        // one run, the probe's own field is about one hook, the file's is
+        // about the machines this repository runs on. With none of the three
+        // the run waits, which is what it always did.
+        let patience = timeout.or(probe.timeout_seconds).or(file_timeout);
+        results.push((probe.id.clone(), drive(&worktree, runner, probe, patience)?));
     }
     drop(worktree);
 
     println!("{} hook(s) driven with {}", results.len(), runner.command());
     let mut failed = 0_usize;
+    let mut unmeasured = 0_usize;
     for (id, verdict) in &results {
         match verdict {
             Verdict::Demonstrated => println!("  {id}: refuses its fixture, accepts a clean one"),
@@ -157,6 +196,22 @@ pub(crate) fn run(root: &Path, runner: Option<&str>) -> Result<Exit> {
                 eprintln!(
                     "  {id}: refused the clean fixture as well, so its refusal says nothing \
                      about what it was given"
+                );
+            }
+            Verdict::RefusedForAnotherReason { said } => {
+                failed += 1;
+                eprintln!(
+                    "  {id}: refused its fixture WITHOUT the words `expect` names, so the red \
+                     came from somewhere else and says nothing about the rule this probe is \
+                     for. It said:\n{said}"
+                );
+            }
+            Verdict::Unmeasured { after } => {
+                unmeasured += 1;
+                eprintln!(
+                    "  {id}: still running after {after}s, so it was killed and never \
+                     measured. Not a refusal and not a pass -- raise `timeout_seconds` if \
+                     this machine is simply slow"
                 );
             }
         }
@@ -180,21 +235,48 @@ pub(crate) fn run(root: &Path, runner: Option<&str>) -> Result<Exit> {
         );
     }
 
-    if failed > 0 {
-        return Ok(Exit::Violations);
-    }
-    Ok(Exit::Clean)
+    // A violation outranks an unmeasured hook, and an unmeasured hook is
+    // never a pass -- the same ranking every other command here answers with,
+    // asked of the one function that owns it.
+    Ok(crate::error::verdict(failed, unmeasured))
 }
 
 /// Plant, run, clean, run.
-fn drive(worktree: &Worktree, runner: Runner, probe: &Probe) -> Result<Verdict> {
+fn drive(
+    worktree: &Worktree,
+    runner: Runner,
+    probe: &Probe,
+    patience: Option<u64>,
+) -> Result<Verdict> {
     let stage = probe.stage.as_deref().unwrap_or("pre-commit");
 
     worktree.plant(&probe.path, &probe.refuses)?;
-    let refused = runner.exit(worktree.path(), &probe.id, &probe.path, stage)?;
-    if refused == 0 {
+    let refused = runner.drive(worktree.path(), &probe.id, &probe.path, stage, patience)?;
+    let Ran::Finished { code, output } = refused else {
+        worktree.remove(&probe.path)?;
+        return Ok(Verdict::Unmeasured {
+            after: patience.unwrap_or_default(),
+        });
+    };
+    if code == 0 {
         worktree.remove(&probe.path)?;
         return Ok(Verdict::CannotFail);
+    }
+    if let Some(expected) = probe.expect.as_deref() {
+        if !output.contains(expected) {
+            worktree.remove(&probe.path)?;
+            // The tail rather than the head: runners print their banner first
+            // and the finding last, and a reader shown only the banner would
+            // have to run the probe again to learn what actually spoke.
+            let tail: Vec<&str> = output.lines().rev().take(12).collect();
+            let mut said = String::new();
+            for line in tail.into_iter().rev() {
+                said.push_str("    ");
+                said.push_str(line);
+                said.push('\n');
+            }
+            return Ok(Verdict::RefusedForAnotherReason { said });
+        }
     }
 
     let Some(allows) = probe.allows.as_deref() else {
@@ -202,13 +284,24 @@ fn drive(worktree: &Worktree, runner: Runner, probe: &Probe) -> Result<Verdict> 
         return Ok(Verdict::RefusedOnly);
     };
     worktree.plant(&probe.path, allows)?;
-    let accepted = runner.exit(worktree.path(), &probe.id, &probe.path, stage)?;
+    let accepted = runner.drive(worktree.path(), &probe.id, &probe.path, stage, patience)?;
     worktree.remove(&probe.path)?;
-    if accepted == 0 {
+    let Ran::Finished { code: clean, .. } = accepted else {
+        return Ok(Verdict::Unmeasured {
+            after: patience.unwrap_or_default(),
+        });
+    };
+    if clean == 0 {
         Ok(Verdict::Demonstrated)
     } else {
         Ok(Verdict::RefusesEverything)
     }
+}
+
+/// One hook run's outcome: a verdict with its words, or no verdict at all.
+enum Ran {
+    Finished { code: i32, output: String },
+    TimedOut,
 }
 
 /// Which runner drives the hooks.
@@ -246,12 +339,20 @@ impl Runner {
         }
     }
 
-    /// Run one hook, alone, and return its exit code.
+    /// Run one hook, alone, and return its exit code with everything it said.
     ///
     /// Alone is the whole point: asked for one id, a non-zero exit is that
-    /// hook refusing rather than a neighbour at the same stage, so nothing here
-    /// has to parse a report to find out who spoke.
-    fn exit(self, directory: &Path, id: &str, file: &str, stage: &str) -> Result<i32> {
+    /// hook refusing rather than a neighbour at the same stage. The words come
+    /// back too, because `expect` narrows a refusal to the RULE the probe is
+    /// about, and only the output holds the rule's name.
+    fn drive(
+        self,
+        directory: &Path,
+        id: &str,
+        file: &str,
+        stage: &str,
+        patience: Option<u64>,
+    ) -> Result<Ran> {
         let mut command = detached(self.command(), directory);
         match self {
             // Two spellings of one flag, and there is no third answer: prek
@@ -268,18 +369,96 @@ impl Runner {
                 command.args(["run", stage, "--commands", id, "--force"]);
             }
         }
-        let output = command
-            .output()
+        let outcome = bounded(command, patience)
             .map_err(|error| Fatal::new(format!("could not run {}: {error}", self.command())))?;
-        // A runner that died on a signal answered nothing. Reporting that as a
-        // refusal would credit the hook with a verdict it never gave.
-        output.status.code().ok_or_else(|| {
-            Fatal::new(format!(
+        match outcome {
+            Bounded::TimedOut => Ok(Ran::TimedOut),
+            // A runner that died on a signal answered nothing. Reporting that
+            // as a refusal would credit the hook with a verdict it never gave.
+            Bounded::Exited { code: None, .. } => Err(Fatal::new(format!(
                 "{} was killed while running `{id}`, so this hook gave no verdict",
                 self.command()
-            ))
-        })
+            ))),
+            Bounded::Exited {
+                code: Some(code),
+                output,
+            } => Ok(Ran::Finished { code, output }),
+        }
     }
+}
+
+/// What running a command under a deadline produced.
+enum Bounded {
+    Exited { code: Option<i32>, output: String },
+    TimedOut,
+}
+
+/// Run one command to completion or to its deadline, whichever comes first.
+///
+/// The streams are drained on their own threads for the reason `shim::consult`
+/// gives about its pipes: a hook that writes more than a bufferful blocks on a
+/// pipe nobody empties, and a run that deadlocked would be reported as a
+/// timeout -- a diagnosis about the hook for a failure that was here.
+///
+/// The wait is a poll rather than a blocking `wait`, because a blocking wait
+/// has no deadline; fifty milliseconds is far below the run time of any hook
+/// runner and far above the cost of `try_wait`.
+fn bounded(mut command: Command, patience: Option<u64>) -> std::io::Result<Bounded> {
+    use std::io::Read as _;
+    use std::process::Stdio;
+
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let readers = (
+        std::thread::spawn(move || {
+            let mut collected = Vec::new();
+            if let Some(pipe) = stdout.as_mut() {
+                drop(pipe.read_to_end(&mut collected));
+            }
+            collected
+        }),
+        std::thread::spawn(move || {
+            let mut collected = Vec::new();
+            if let Some(pipe) = stderr.as_mut() {
+                drop(pipe.read_to_end(&mut collected));
+            }
+            collected
+        }),
+    );
+
+    let deadline =
+        patience.map(|seconds| std::time::Instant::now() + std::time::Duration::from_secs(seconds));
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+            // Killed and then reaped, so a timed-out hook does not linger as a
+            // zombie under a long report. The readers are NOT joined on this
+            // path: a grandchild the kill did not reach can hold the pipe open
+            // for as long as it likes, a join would wait on it for exactly the
+            // time the deadline existed to bound, and an unmeasured verdict
+            // has no use for the words. The threads end when the pipe closes,
+            // or with this process.
+            drop(child.kill());
+            drop(child.wait());
+            return Ok(Bounded::TimedOut);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+
+    let mut output = readers.0.join().unwrap_or_default();
+    output.extend(readers.1.join().unwrap_or_default());
+    let output = String::from_utf8_lossy(&output).into_owned();
+    Ok(Bounded::Exited {
+        code: status.code(),
+        output,
+    })
 }
 
 /// Which runner this repository is configured for, and installed here.
@@ -444,10 +623,10 @@ impl Drop for Worktree {
     }
 }
 
-fn probes(root: &Path) -> Result<Vec<Probe>> {
+fn probes(root: &Path) -> Result<(Vec<Probe>, Option<u64>)> {
     let path = root.join(PROBES);
     if !path.is_file() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     }
     let text = read_to_string(&path)?;
     let parsed: ProbeFile = toml::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
@@ -462,8 +641,43 @@ fn probes(root: &Path) -> Result<Vec<Probe>> {
                 ),
             ));
         }
+        // The same argument as an empty `refuses`, from the other side: an
+        // empty `expect` is contained by every refusal, so it asserts nothing
+        // while reading as though the rule had been named.
+        if probe
+            .expect
+            .as_deref()
+            .is_some_and(|expected| expected.trim().is_empty())
+        {
+            return Err(Fatal::at(
+                &path,
+                format!(
+                    "the probe for `{}` has an empty `expect`. Every refusal contains the \
+                     empty string, so it would assert nothing while reading as though the \
+                     refusal had been pinned to a rule",
+                    probe.id
+                ),
+            ));
+        }
+        if probe.timeout_seconds == Some(0) {
+            return Err(Fatal::at(
+                &path,
+                format!(
+                    "the probe for `{}` declares `timeout_seconds = 0`, under which no hook \
+                     can ever be measured",
+                    probe.id
+                ),
+            ));
+        }
     }
-    Ok(parsed.probes)
+    if parsed.timeout_seconds == Some(0) {
+        return Err(Fatal::at(
+            &path,
+            "`timeout_seconds = 0` at the top of this file, under which no hook can ever \
+             be measured",
+        ));
+    }
+    Ok((parsed.probes, parsed.timeout_seconds))
 }
 
 #[cfg(test)]

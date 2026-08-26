@@ -69,7 +69,10 @@ allows = "A document with nothing a rule objects to.\n"
 # `no-status-source-metadata`, from the `process-residue` set. Chosen because it
 # is inherited rather than local: the fixture proves the SET arrives and fires,
 # which is the half of a bundled set that no configuration file in this tree
-# shows.
+# shows. `expect` pins the refusal to that rule: without it this probe passes
+# on any red at all -- a whitespace fixer objecting to the fixture would read
+# as the set demonstrated.
+expect = "no-status-source-metadata"
 
 [[probe]]
 id = "trailing-whitespace"
