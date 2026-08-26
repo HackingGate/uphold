@@ -148,6 +148,7 @@ uphold hook claude-code         # judge a pending agent tool call, read on stdin
 uphold audit --for-publication  # before flipping private -> public
 
 uphold hooks --identity ../a ../b   # do these repositories declare the same hooks
+uphold hooks --install              # write the hooks git runs, as tracked files
 uphold probe                        # can each declared hook actually refuse
 
 uphold_check.py --explain ID    # one record in full; also accepts a name

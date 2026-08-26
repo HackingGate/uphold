@@ -505,6 +505,11 @@ fn detect(root: &Path) -> Result<Runner> {
     )))
 }
 
+/// Whether a command is reachable on PATH, for callers outside this module.
+pub(crate) fn on_path(command: &str) -> bool {
+    which(command).is_some()
+}
+
 fn which(command: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)

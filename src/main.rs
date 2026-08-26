@@ -113,6 +113,7 @@ usage:
   uphold check --coverage            which rules run here and carry no principle
   uphold audit --for-publication     what a private->public flip would republish
   uphold hooks --identity DIR...     do these repositories declare the same hooks
+  uphold hooks --install             write the hooks git runs, as tracked files
   uphold probe [--runner NAME]       can each declared hook actually refuse
                [--timeout SECONDS]   one run's patience, over the file's
   uphold rules --set NAME [--json]   what a bundled rule set refuses, rule by rule
@@ -312,6 +313,35 @@ fn run() -> Result<Exit> {
             ))),
         },
         "hooks" => match rest {
+            [flag, tail @ ..] if flag == "--install" => {
+                let mut runner: Option<&OsString> = None;
+                let mut directory = ".githooks";
+                let mut index = 0;
+                let usage = || {
+                    Fatal::new(format!(
+                        "usage: uphold hooks --install [--runner prek|pre-commit] \
+                         [--dir DIR]\n\n{USAGE}"
+                    ))
+                };
+                while let Some(word) = tail.get(index) {
+                    match text_of(word)? {
+                        "--runner" => {
+                            index += 1;
+                            runner = Some(tail.get(index).ok_or_else(usage)?);
+                        }
+                        "--dir" => {
+                            index += 1;
+                            directory = text_of(tail.get(index).ok_or_else(usage)?)?;
+                        }
+                        _ => return Err(usage()),
+                    }
+                    index += 1;
+                }
+                let runner = runner.map(|name| text_of(name)).transpose()?;
+                let working = std::env::current_dir()?;
+                let (root, _) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
+                hooks::install(&root, runner, directory)
+            }
             [flag, paths @ ..] if flag == "--identity" && !paths.is_empty() => {
                 let mut directories = Vec::new();
                 for path in paths {
