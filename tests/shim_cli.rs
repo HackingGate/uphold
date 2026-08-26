@@ -1239,3 +1239,42 @@ fn a_title_format_rule_refuses_the_title_and_only_the_title() {
     assert_eq!(code(&notes), 0, "{}", stderr(&notes));
     assert!(stdout(&notes).contains("faux ran:"), "{}", stdout(&notes));
 }
+
+/// An empty title is a published title, and `require_regexp` is asked about it.
+///
+/// The skip in front of the checker loop is older than the pattern checks --
+/// it was written when `exec` was the only kind, where "" is genuinely nothing
+/// to hand a program. A `require_regexp` claims the subject MUST look a certain
+/// way, so "" is the clearest violation it has, and skipping it made the one
+/// rule that would have refused report clean instead: `-t ""` published a
+/// release with no title, past a policy whose entire subject was the title.
+#[test]
+fn an_empty_title_does_not_walk_past_a_require_regexp() {
+    let root = workspace(TITLE_POLICY);
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+
+    let refused = shim(&root, &["faux", "release", "create", "v3.0.0", "-t", ""]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        !stdout(&refused).contains("faux ran:"),
+        "{}",
+        stdout(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("title subject"),
+        "{}",
+        stderr(&refused)
+    );
+
+    // Whitespace is the same answer. The subject was given, and what it names
+    // satisfies the pattern no better for having a space in it.
+    let blank = shim(&root, &["faux", "release", "create", "v3.0.0", "-t", "   "]);
+    assert_eq!(code(&blank), 1, "{}", stderr(&blank));
+
+    // Not giving the flag at all is the case that stays untouched: no title
+    // subject is collected, so no rule is asked and the command supplies its
+    // own default. A rule cannot judge text that was never published.
+    let absent = shim(&root, &["faux", "release", "create", "v3.0.0"]);
+    assert_eq!(code(&absent), 0, "{}", stderr(&absent));
+    assert!(stdout(&absent).contains("faux ran:"), "{}", stdout(&absent));
+}

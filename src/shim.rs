@@ -1886,9 +1886,25 @@ pub(crate) fn run(
         }
         if any_applies {
             for subject in &collected.subjects {
-                if subject.value.trim().is_empty() {
-                    continue;
-                }
+                // An empty subject is not a subject a checker can read: a
+                // program handed "" on stdin, or a text guard asked whether ""
+                // names a private repository, is being asked to judge text that
+                // was never published. So the skip stands -- but it used to
+                // stand out here, in front of every kind of checker, and it was
+                // written when `exec` was the only kind there was.
+                //
+                // A pattern is the one kind an empty subject is an answer for,
+                // and `require_regexp` is why. Its whole claim is that the
+                // subject MUST look a certain way, and "" looks no way at all,
+                // so skipping it turns the one check that would have refused
+                // into one that reports clean: `--title ""` walked past a
+                // release-title policy and published a release with no title.
+                // An absent flag is genuinely different and stays different --
+                // no subject of that kind is collected at all, so no rule is
+                // asked, and the command supplies whatever default it has. This
+                // is the case where the flag WAS given and what it named is
+                // empty, which is a published subject like any other.
+                let empty = subject.value.trim().is_empty();
                 for rule in &checkers {
                     if crate::guard::bypassed(&rule.id) {
                         continue;
@@ -1909,6 +1925,9 @@ pub(crate) fn run(
                         if let Some(refusal) = pattern_refusal(rule, subject)? {
                             refusals.push(refusal);
                         }
+                        continue;
+                    }
+                    if empty {
                         continue;
                     }
                     if rule.is(Check::Builtin) {

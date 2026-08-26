@@ -130,7 +130,8 @@ So a table may carry entries for the verbs whose grammar differs:
 [[shim]]
 command = "gh"
 match = ["pr:review", "issue:close"]
-text_flags = ["-t", "--title", "-b", "--body"]
+text_flags = ["-b", "--body"]
+title_flags = ["-t", "--title"]
 
   [[shim.verbs]]
   match = ["issue:close"]
