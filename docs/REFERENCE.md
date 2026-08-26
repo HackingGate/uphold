@@ -1528,10 +1528,15 @@ Each scanner's own exit code decides; findings are shown, never re-judged.
 The one filter applied is cargo-deny's headline lines, dropping the four
 classes that describe `deny.toml` rather than a dependency.
 
-Two hook ids ship it — `uphold-supply-chain` in `.pre-commit-hooks.yaml` and
-the same name under `hooks/lefthook.yml` — at `pre-push` and `manual` and
-never at `pre-commit`: every scanner reaches the network, and a check that
-adds a network round trip to a commit is a check somebody switches off.
+One hook id ships it — `uphold-supply-chain` in `.pre-commit-hooks.yaml` —
+at `pre-push` and `manual` and never at `pre-commit`: every scanner reaches
+the network, and a check that adds a network round trip to a commit is a check
+somebody switches off. It is deliberately absent from `hooks/lefthook.yml`:
+that file is merged into a consumer's own config wholesale, so a command there
+arrives with a `ref:` bump in every consuming repository — and on any machine
+without the scanners installed it refuses every push with exit `2`. A
+lefthook consumer opts in by writing the command in its own file, where the
+decision is visible.
 
 ## `uphold hooks --identity` — across repositories
 

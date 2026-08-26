@@ -127,11 +127,26 @@ pre-push:
     uphold-guard:
       use_stdin: true
       run: uphold guard --stage pre-push --remote {1} --remote-url {2}
-    # Five external scanners, one verdict; a scanner missing from the host is
-    # exit 2, never a pass. Here and in the manual group below, not at commit:
-    # every scanner reaches the network.
-    uphold-supply-chain:
-      run: uphold supply-chain
+
+# `uphold-supply-chain` is deliberately NOT in this file, and the Go jobs'
+# paragraph at the bottom is the reason at a different severity. A remote
+# config is merged into the consumer's own wholesale -- there is no pinning an
+# id out of it -- so a command here starts running in every consuming
+# repository on the strength of a `ref:` bump. For the Go jobs that meant a
+# job failing for want of a module; for a command whose scanners come from the
+# host toolchain it meant every push refused with exit 2 on any machine
+# without osv-scanner installed, measured by this repository's own consumer
+# matrix on the day it was added. A lefthook consumer opts in by writing the
+# command in its own file, where the decision is visible:
+#
+#   pre-push:
+#     commands:
+#       uphold-supply-chain:
+#         run: uphold supply-chain
+#
+# .pre-commit-hooks.yaml still publishes the id, because that file is a
+# MANIFEST: nothing runs from it until a consumer names the id in their own
+# config, which is exactly the property this file lacks.
 
 # The stages that are too slow to sit in front of a commit: the tree-wide name
 # scans and the pin check each ask the forge over the network, once per distinct
@@ -144,8 +159,6 @@ uphold-manual:
       run: uphold scan
     uphold-guard:
       run: uphold guard --stage manual
-    uphold-supply-chain:
-      run: uphold supply-chain
 
 # The four Go jobs are NOT repeated here, and .pre-commit-hooks.yaml declares
 # them `stages: [pre-commit]` for the same reason rather than the
