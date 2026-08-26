@@ -1189,10 +1189,37 @@ scope = "public-target"
 ```
 
 `target` is `forge-repo` or `git-remote`, both built-in resolvers. `scope` is
-`public-target | public-registry | always`, with `scope = { command = "..." }`
-as the escape hatch — `npm publish` has no repository, owner or visibility
-endpoint in it. `collect = "git-refs"` replaces the argv walk for `git`, whose
+`public-target | public-registry | always`, with
+`scope = { command = { command = "..." } }` as the escape hatch — exit `0` to
+be in scope, for a question that is none of the other three. (The doubly
+nested form is the enum's own spelling; the flatter one this page used to show
+never parsed.) `collect = "git-refs"` replaces the argv walk for `git`, whose
 published text is positional.
+
+**A rule may carry its own scope.** The table's `scope` answers for the
+command — is this push going somewhere public — and one answer cannot fit
+every rule consulted behind it. `command.scope` on a rule overrides the
+table's for that rule alone, in the same vocabulary:
+
+```toml
+[rule.no-published-host-identity]
+builtin = "text-literals"
+command.before = ["gh", "git push"]
+command.scope = "always"     # this rule reads every egress the shim collects
+```
+
+A private-name check belongs only where the destination is public, and the
+table's `public-target` says so once for it. Host identity in a pull-request
+body is worth refusing whatever the destination — a private forge repository
+is still somebody else's infrastructure with its own retention — and before
+this field, a workspace whose every repository is private had a
+`public-target` table standing down on every invocation, with the checkers it
+declared never consulted. Two workspaces closed that with a hand-rolled agent
+hook standing outside the shim, re-invoking this binary for the same rules
+the policy already declared; this field is that hook retired. Each distinct
+scope is evaluated once per invocation, the editor checkpoint stays open when
+any rule's scope holds, and the editor pass consults only the rules whose
+scope held.
 
 `editor_env` names the variable the command consults for its editor —
 `GH_EDITOR` for `gh`, `GLAB_EDITOR` for `glab`. The shim sets it to itself

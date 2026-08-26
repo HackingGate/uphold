@@ -58,7 +58,7 @@ pub(crate) enum Target {
 }
 
 /// Whether this invocation publishes to somewhere that matters.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Scope {
     /// `visibility == "public"` on the target repository. `internal` is
@@ -782,14 +782,22 @@ impl Shim {
         Ok(collected)
     }
 
-    /// Whether this invocation publishes somewhere that matters.
-    pub(crate) fn in_scope(
+    /// Whether one scope predicate holds for this invocation.
+    ///
+    /// The predicate is a parameter rather than the table's own, because a rule
+    /// may carry its own `command.scope`: the table's answers for the command,
+    /// and a rule that applies on every egress -- host identity in a
+    /// pull-request body is worth refusing whatever the destination -- says so
+    /// beside its `command.before` rather than inheriting the table's idea of
+    /// the question.
+    pub(crate) fn scope_holds(
         &self,
+        scope: &Scope,
         root: &Path,
         collected: &Collected,
         argv: &[String],
     ) -> Result<bool> {
-        match &self.scope {
+        match scope {
             Scope::Always => Ok(true),
             Scope::PublicTarget => {
                 let Some(target) = self.resolve_target(root, collected)? else {
@@ -1379,6 +1387,50 @@ fn install_editor(
     Ok(())
 }
 
+/// The scope one rule is judged under: its own where it wrote one, the
+/// table's where it did not.
+fn effective_scope<'a>(rule: &'a Rule, shim: &'a Shim) -> &'a Scope {
+    rule.command
+        .as_ref()
+        .and_then(|where_| where_.scope.as_ref())
+        .unwrap_or(&shim.scope)
+}
+
+/// One invocation's scope answers, each predicate evaluated at most once.
+///
+/// A memo rather than a per-rule call, because `public-target` asks a forge
+/// and three rules behind one table would ask it three times -- and because
+/// the could-not-resolve arm says its piece on stderr, which said three times
+/// reads as three failures.
+#[derive(Default)]
+struct ScopeMemo {
+    answers: BTreeMap<String, bool>,
+}
+
+impl ScopeMemo {
+    fn holds(
+        &mut self,
+        shim: &Shim,
+        scope: &Scope,
+        root: &Path,
+        collected: &Collected,
+        argv: &[String],
+    ) -> Result<bool> {
+        let key = match scope {
+            Scope::Always => return Ok(true),
+            Scope::PublicTarget => String::from("public-target"),
+            Scope::PublicRegistry => String::from("public-registry"),
+            Scope::Command { command } => format!("command:{command}"),
+        };
+        if let Some(answer) = self.answers.get(&key) {
+            return Ok(*answer);
+        }
+        let answer = shim.scope_holds(scope, root, collected, argv)?;
+        self.answers.insert(key, answer);
+        Ok(answer)
+    }
+}
+
 /// Run the user's editor, then judge what it produced.
 ///
 /// Refusing here is what makes it a checkpoint rather than a report: `gh` and
@@ -1438,11 +1490,11 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
     // here meant a policy whose checker for this command is a BUILT-IN had a
     // checkpoint that opened an editor, read the file back, consulted nobody and
     // exited 0.
-    let checkers: Vec<&Rule> = policy
+    let named: Vec<&Rule> = policy
         .before_command(name, &opened_for)
         .filter(|rule| rule.is(Check::Exec) || rule.is(Check::Builtin))
         .collect();
-    if checkers.is_empty() {
+    if named.is_empty() {
         // Nothing to consult, and the text exists now: this is a checkpoint
         // with nobody standing at it. Exit 2 rather than 0, because the command
         // abandons what it was doing on any non-zero -- and a body that reached
@@ -1455,6 +1507,36 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
             opened_for.join(" ")
         )));
     }
+    // The same per-rule scopes the argv pass judges under. The editor was
+    // installed because SOME rule's scope held; which ones consult the text is
+    // answered here again, so a rule whose scope is the table's `public-target`
+    // is not asked about a body bound for a private repository just because a
+    // wider rule kept the checkpoint open.
+    let checkers: Vec<&Rule> = match policy.shims.iter().find(|shim| shim.command == name) {
+        Some(shim) => {
+            let collected = shim.collect(root, &opened_for)?;
+            let mut scopes = ScopeMemo::default();
+            let mut kept: Vec<&Rule> = Vec::new();
+            for rule in named {
+                if scopes.holds(
+                    shim,
+                    effective_scope(rule, shim),
+                    root,
+                    &collected,
+                    &opened_for,
+                )? {
+                    kept.push(rule);
+                }
+            }
+            if kept.is_empty() {
+                // The policy answered: none of these checks applies to this
+                // destination. That is a decision, not a gap.
+                return Ok(Exit::Clean);
+            }
+            kept
+        }
+        None => named,
+    };
     let mut refusals: Vec<String> = Vec::new();
     for rule in checkers {
         if crate::guard::bypassed(&rule.id) {
@@ -1642,11 +1724,12 @@ pub(crate) fn run(
     let mut refusals: Vec<String> = Vec::new();
 
     let mut collected = Collected::default();
-    let mut in_scope = false;
+    let mut any_applies = false;
+    let mut scopes = ScopeMemo::default();
     let reading = shim.reading(&words);
     if let Reading::Unclear(flag) = &reading {
         // Said out loud, and for the same reason the unresolvable-target arm in
-        // `in_scope` says its piece: the decision to run the command anyway is
+        // `scope_holds` says its piece: the decision to run the command anyway is
         // deliberate, and making it in silence is not available. Refusing here
         // would stop every invocation carrying an option a release added to a
         // command this shim stands in front of machine-wide; running one whose
@@ -1675,7 +1758,12 @@ pub(crate) fn run(
             )));
         }
         collected = shim.collect(root, &words)?;
-        in_scope = shim.in_scope(root, &collected, &words)?;
+        let in_scope = scopes.holds(shim, &shim.scope, root, &collected, &words)?;
+        for rule in &checkers {
+            if scopes.holds(shim, effective_scope(rule, shim), root, &collected, &words)? {
+                any_applies = true;
+            }
+        }
         // A `[[shim]]` that named this invocation and a policy with no rule
         // standing in front of it: the shim collects the body, consults nobody,
         // execs the command and exits 0 -- which is indistinguishable from a
@@ -1697,13 +1785,19 @@ pub(crate) fn run(
                 words.join(" ")
             )));
         }
-        if in_scope {
+        if any_applies {
             for subject in &collected.subjects {
                 if subject.value.trim().is_empty() {
                     continue;
                 }
                 for rule in &checkers {
                     if crate::guard::bypassed(&rule.id) {
+                        continue;
+                    }
+                    // The rule's own scope where it wrote one, the table's
+                    // where it did not -- answered from the memo, so a
+                    // destination is looked up once however many rules ask.
+                    if !scopes.holds(shim, effective_scope(rule, shim), root, &collected, &words)? {
                         continue;
                     }
                     if rule.is(Check::Builtin) {
@@ -1750,10 +1844,14 @@ pub(crate) fn run(
     // Everything the command needs that this shim took from it, arranged before
     // the hand-off because after it there is no arranging anything: the body
     // read off stdin, and the editor it is about to open.
+    // `any_applies`, not the table's answer: the editor exists to be read by
+    // the rules, and what decides whether anything will read it is whether any
+    // rule's scope holds -- a rule that applies on every egress keeps the
+    // checkpoint open where the table alone would have stood down.
     let editor_env = shim
         .editor_env
         .as_deref()
-        .filter(|_| in_scope && !collected.body_given && !collected.web);
+        .filter(|_| any_applies && !collected.body_given && !collected.web);
     if let Some(variable) = editor_env {
         install_editor(&mut command, name, variable, own.as_deref(), &words)?;
     }
@@ -2007,7 +2105,12 @@ mod tests {
         npm.command = String::from("npm");
         npm.scope = Scope::PublicRegistry;
         assert!(!npm
-            .in_scope(&dir, &Collected::default(), &argv("publish"))
+            .scope_holds(
+                &Scope::PublicRegistry,
+                &dir,
+                &Collected::default(),
+                &argv("publish")
+            )
             .unwrap());
     }
 
@@ -2018,7 +2121,8 @@ mod tests {
         let mut npm = gh();
         npm.scope = Scope::PublicRegistry;
         assert!(!npm
-            .in_scope(
+            .scope_holds(
+                &Scope::PublicRegistry,
                 Path::new("."),
                 &Collected::default(),
                 &argv("publish --dry-run")

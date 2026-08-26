@@ -700,7 +700,8 @@
           "before": [
             "gh",
             "git push"
-          ]
+          ],
+          "scope": "always"
         },
         "id": "no-published-host-identity",
         "message": "Use neutral placeholders -- example-user, example-host, example.test --\ninstead of values read off the machine you are standing on.\n"
@@ -711,7 +712,8 @@
           "before": [
             "gh",
             "git push"
-          ]
+          ],
+          "scope": "always"
         },
         "id": "no-published-markers",
         "message": "Published text must satisfy the repository's text-capable guards. A\npull-request body reaches a public API without passing a single git hook,\nwhich is the whole reason this seam exists.\n"

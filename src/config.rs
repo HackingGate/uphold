@@ -308,6 +308,22 @@ pub(crate) struct CommandWhere {
     /// otherwise.
     #[serde(default)]
     pub before: Vec<String>,
+    /// When this rule applies, overriding the `[[shim]]` table's own `scope`
+    /// for this rule alone. Absent means the table decides, which is every
+    /// rule written before this field existed.
+    ///
+    /// The table's scope answers for the COMMAND -- is this push going
+    /// somewhere public -- and one answer cannot fit every rule consulted
+    /// behind it. A private-name check belongs only where the destination is
+    /// public; host identity in a pull-request body is worth refusing
+    /// whatever the destination, because a private forge repository is still
+    /// somebody else's infrastructure with its own retention. Two workspaces
+    /// held that second class of rule in a hand-rolled agent hook, standing
+    /// OUTSIDE the shim to escape its table's `public-target`, re-invoking
+    /// this binary for the same two rules the policy already declared --
+    /// which is the same rule twice, free to disagree.
+    #[serde(default)]
+    pub scope: Option<crate::shim::Scope>,
 }
 
 impl CommandWhere {

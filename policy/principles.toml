@@ -285,6 +285,12 @@ builtin = "text-literals"
 # checker keeps both subcommands checked; narrowing the shim would have bought
 # the same green by looking at less.
 command.before = ["gh", "glab", "git push", "npm"]
+# `always`, overriding the tables' `public-target` and `public-registry`: host
+# identity in text bound for a PRIVATE destination is still text on somebody
+# else's infrastructure, with its own retention. The private-name rule keeps
+# the tables' scope -- a private name bound for a private repository is the
+# repository's own vocabulary, not a disclosure.
+command.scope = "always"
 
 [rule.no-published-markers]
 message = """
@@ -305,6 +311,8 @@ builtin = "text-guards"
 # check, and `git push origin main:refs/heads/PrivateOrg-probe` walked straight
 # through this seam while the field said otherwise.
 command.before = ["gh", "glab", "git push"]
+# `always`, for the reason the rule above gives.
+command.scope = "always"
 
 # ---------------------------------------------------------------------------
 # Shims -- what a command is about to publish.
