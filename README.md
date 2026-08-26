@@ -146,6 +146,7 @@ uphold shim --install           # link this binary under each command's name
 uphold shim --status            # what is linked, and whether PATH reaches it
 uphold hook claude-code         # judge a pending agent tool call, read on stdin
 uphold audit --for-publication  # before flipping private -> public
+uphold supply-chain             # five scanners, one verdict; a missing one is exit 2
 
 uphold hooks --identity ../a ../b   # do these repositories declare the same hooks
 uphold hooks --install              # write the hooks git runs, as tracked files
