@@ -192,6 +192,11 @@ comment_regexp = '(?i)\b(?:used to be|used to (?:use|call|return|do|have|rely)|p
 files.include = ["src", "scripts", "uphold_check.py"]
 files.glob = ["*.rs", "*.py"]
 files.exclude = ["**/tests/**", "**/test/**"]
+# Three named roots and two globs, which is five ways for this rule to stop
+# covering anything without one line of it changing. A comment rule that selects
+# no files reports the same green as one that read the whole crate, so the claim
+# that it still covers something is written where the run can check it.
+files.min_selected = 1
 
 # A comment carrying no word its own code does not already name.
 #
@@ -216,6 +221,8 @@ trivial_comments = true
 files.include = ["src", "scripts", "uphold_check.py"]
 files.glob = ["*.rs", "*.py"]
 files.exclude = ["**/tests/**", "**/test/**"]
+# The same selection as the rule above, and the same floor for the same reason.
+files.min_selected = 1
 
 # ---------------------------------------------------------------------------
 # Guards -- what git is about to do.

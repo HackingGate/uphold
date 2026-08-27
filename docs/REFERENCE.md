@@ -54,7 +54,7 @@ does not run.**
 
 | keys | vocabulary | runs it |
 |---|---|---|
-| `files.*` | ripgrep scoping — `glob`, `multiline`, `fixed_strings` | `uphold scan` |
+| `files.*` | ripgrep scoping — `glob`, `multiline`, `fixed_strings` — and `min_selected`, the floor under what the scoping leaves | `uphold scan` |
 | `git.hooks` | githooks(5) names — `pre-commit`, `commit-msg`, `pre-merge-commit`, `pre-push`, `manual` | `uphold guard --stage <hook>` |
 | `command.before` | the command line as typed — `"gh pr create"`, `"git push"` | `uphold shim <command>` |
 
@@ -192,6 +192,71 @@ reason: both are a baseline that has stopped recording a decision somebody made.
 A signature is an addition to the record and not a way out of it. A reason says
 why an entry is there; it says nothing about whether it still needs to be, so a
 signed entry still goes stale.
+
+### A rule may declare a floor under what it selects
+
+`files.min_selected = N` fails the rule when its selection comes in under `N`
+files, naming the floor, the count and the keys that produced the count.
+
+The defect it closes is the quietest one here. A rule that selects nothing runs
+cleanly over nothing, and every check kind reports that the same way:
+
+| check | with zero files selected | reported |
+|---|---|---|
+| `regexp` | nothing to match | `policy checks passed` |
+| `require_regexp` | nothing to be missing the pattern | `policy checks passed` |
+| `max_lines` | nothing to be too long | `policy checks passed` |
+
+`require_regexp` is the sharpest of the three, because its whole job is to
+insist that something is there. Rename the directory its `include` names, or
+narrow its `glob` past the files it was written for, and the rule stops
+insisting — permanently, silently, and with a green run every time. An
+`include` root that is not there is already named on stderr, but stderr is not
+an exit code, and a `glob` that stops matching is not reported at all.
+
+So the floor is written down, and the count is measured against it:
+
+```toml
+[rule.workflows-declare-permissions]
+require_regexp = '^permissions:'
+message = "declare the token scopes the job needs"
+files.include = [".github/workflows"]
+files.glob = ["*.yml", "*.yaml"]
+files.min_selected = 1
+```
+
+```text
+policy check failed: workflows-declare-permissions (selection floor)
+This rule selected fewer files than it declared it must. ...
+selected 0 file(s), and `files.min_selected = 1` requires at least 1.
+The keys that selected them: include = [".github/workflows"], glob = ["*.yml", "*.yaml"]
+```
+
+**A number rather than a `require_selection = true`**, because one is a value
+and not a kind of floor: a repository whose selection must cover four workflow
+files writes `4`, and no second field has to be invented for it. `1` is the
+smallest claim the field can make — *this rule still selects something* — and
+is what most rules want. `0` is refused at load, because every selection there
+is meets it, the empty one included: the line would declare a floor and enforce
+nothing.
+
+**Every check whose selection this scan builds reads it**, and that is a
+decision rather than a convenience. Zero *findings* is the goal state for a
+match-forbidding rule; zero *files* is the goal state for none of them, so
+"this rule still covers something" is as live a claim under `regexp` as it is
+under `require_regexp`. The floor is measured at the one place every rule's
+selection passes through, so a check kind added later carries it without its
+author having to know the field exists.
+
+Where it is refused is a **guard** built-in carrying `[rule.files]` —
+`prevent-unusual-unicode-in-files` scoped to `docs/`, say. There the table is a
+scope the guard applies to one path at a time, and the scan never dispatches the
+rule, so no count is ever taken for a floor to stand under. The three built-ins
+the scan does select for — `links-resolve`, `anchors-resolve`,
+`commands-resolve` — accept it, and it counts *files* where `require_any_link`
+counts links and `require_any_anchor` counts anchors. A `links-resolve` rule may
+hold both; they fail differently, and a glob typo is caught by the one that
+counts files.
 
 ### A rule may not be about its own declaration
 
@@ -1091,7 +1156,10 @@ later has been reporting a clean tree the whole way. The same mechanism holds be
 its job is dropping a matched *line* inside a `#[cfg(test)]` block, and no
 other check has one), `require_any_link` / `allow_outside_repo` are read only
 by `links-resolve`, `require_any_anchor` only by `anchors-resolve`, and
-`command_sources` only by `commands-resolve`.
+`command_sources` only by `commands-resolve`. `files.min_selected` is the one
+that goes the other way — every check whose selection the scan builds reads it,
+and it is refused only on a guard built-in whose `[rule.files]` is a scope
+rather than a selection.
 
 **Which bytes a guard reads: the index, unless a push says otherwise.** At a
 push there is no index at all — the artifact is the pushed commit's whole tree
