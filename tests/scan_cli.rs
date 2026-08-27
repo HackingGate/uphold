@@ -1043,6 +1043,127 @@ fn require_any_link_fires_when_the_glob_selects_nothing() {
     );
 }
 
+/// The defect `files.min_selected` closes. A `require_regexp` over an empty
+/// selection returned no failures at all, so a rule whose `include` root had
+/// been renamed away reported `policy checks passed` forever -- the loudest
+/// version of the silence `require_any_link` was given for links.
+#[test]
+fn a_require_rule_over_an_empty_selection_fails_under_a_floor() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.workflows-declare-permissions]
+        message = "declare the token scopes the job needs"
+        require_regexp = '^permissions:'
+        files.include = [".github/workflows-renamed-away"]
+        files.glob = ["*.yml"]
+        files.min_selected = 1
+"#,
+    );
+    write(&root, ".github/workflows/ci.yml", "on: push\n");
+    let output = scan(&root);
+    assert_eq!(code(&output), 1);
+    let said = stderr(&output);
+    // The four things the reader edits from: which rule, the floor, the count,
+    // and the keys that produced the count.
+    assert!(said.contains("workflows-declare-permissions"), "{said}");
+    assert!(said.contains("files.min_selected = 1"), "{said}");
+    assert!(said.contains("selected 0 file(s)"), "{said}");
+    assert!(
+        said.contains("include = [\".github/workflows-renamed-away\"]"),
+        "{said}"
+    );
+    assert!(said.contains("glob = [\"*.yml\"]"), "{said}");
+}
+
+/// The other half, and the half that catches a floor which has quietly become a
+/// constant: with the failing case tested alone, a floor that fired on every
+/// selection would pass every test while refusing every repository's scan.
+#[test]
+fn a_selection_that_meets_its_floor_passes() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.workflows-declare-permissions]
+        message = "declare the token scopes the job needs"
+        require_regexp = '^permissions:'
+        files.include = [".github/workflows"]
+        files.glob = ["*.yml"]
+        files.min_selected = 2
+"#,
+    );
+    write(&root, ".github/workflows/ci.yml", "permissions: {}\n");
+    write(&root, ".github/workflows/release.yml", "permissions: {}\n");
+    let output = scan(&root);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+/// The floor is measured where every rule's selection is built, so it is not
+/// the require check's own knob. A `regexp` rule finds nothing over nothing and
+/// reports exactly what it reports over a tree it read in full.
+#[test]
+fn the_floor_is_read_by_every_check_that_selects() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TO[D]O'
+        files.include = ["src"]
+        files.glob = ["*.renamed"]
+        files.min_selected = 1
+"#,
+    );
+    write(&root, "src/a.rs", "fine\n");
+    let output = scan(&root);
+    assert_eq!(code(&output), 1);
+    assert!(
+        stderr(&output).contains("selected 0 file(s)"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// One rule below its floor is one finding, however many times the scan builds
+/// its selection. The script check reads an `encoding` rule's selection to
+/// learn how to decode a file, and the encoding check then builds it again --
+/// so this rule's count is taken twice in one run, and a reader must not be
+/// told twice that one rule selected nothing.
+#[test]
+fn a_rule_selected_for_twice_reports_its_floor_once() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.captures-are-shift-jis]
+        message = "a capture keeps the venue's own encoding"
+        encoding = "Shift_JIS"
+        files.include = ["captures-renamed-away"]
+        files.min_selected = 1
+
+        [rule.latin-only]
+        allowed_scripts = ["Latin"]
+        files.include = ["src"]
+"#,
+    );
+    write(&root, "src/a.txt", "plain\n");
+    let output = scan(&root);
+    assert_eq!(code(&output), 1);
+    let said = stderr(&output);
+    assert_eq!(
+        said.matches("(selection floor)").count(),
+        1,
+        "one rule, one finding: {said}"
+    );
+}
+
 // --- text mode -------------------------------------------------------------
 
 #[test]

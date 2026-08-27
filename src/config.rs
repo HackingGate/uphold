@@ -277,6 +277,23 @@ pub(crate) struct Files {
     pub exclude_cfg_test: bool,
     #[serde(default)]
     pub baseline: Option<String>,
+    /// The smallest selection this rule accepts. Fewer files than this and the
+    /// rule fails, naming the count and the keys that produced it.
+    ///
+    /// Here rather than beside a check, and that is the whole placement
+    /// argument: the count is a fact about the SELECTION, so it belongs in the
+    /// shared selection vocabulary every check reads, and one implementation at
+    /// the funnel covers the check kinds nobody has written yet. `min_selected`
+    /// rather than a `require_selection = true` boolean, because a floor of one
+    /// is a value and not a kind of floor -- a repository whose selection must
+    /// cover four workflow files writes `4`, and no second field has to be
+    /// invented for it.
+    ///
+    /// A written `0` is refused at load: it is satisfied by every selection
+    /// there is, so it declares a floor and enforces nothing, which is the
+    /// shape `trivial_comments = false` is refused for.
+    #[serde(default)]
+    pub min_selected: Option<u64>,
 }
 
 /// git's own hook names, as written in githooks(5).
@@ -996,6 +1013,31 @@ impl Rule {
         }
     }
 
+    /// The floor this rule sets under its own selection.
+    ///
+    /// `0` is the absence of a floor and is the only way to spell it, because a
+    /// written `0` is refused at load -- so a caller comparing a count against
+    /// this needs no second question about whether a floor was declared.
+    pub(crate) fn min_selected(&self) -> u64 {
+        self.files().min_selected.unwrap_or(0)
+    }
+
+    /// Whether `uphold scan` takes a count of what this rule selects.
+    ///
+    /// The three tree-reading built-ins select the way a content rule does; every
+    /// other built-in's `[rule.files]` is a scope the guard applies one path at a
+    /// time, and answering "is this path in scope" never produces a count for a
+    /// floor to stand under.
+    fn selection_is_counted(&self) -> bool {
+        match self.check() {
+            Some(Check::Builtin) => self
+                .builtin()
+                .is_some_and(|name| crate::guard::SCAN_BUILTINS.contains(&name)),
+            Some(check) => check.requires_files(),
+            None => false,
+        }
+    }
+
     /// The message, or the empty string where a check composes its own report.
     pub(crate) fn message(&self) -> &str {
         self.message.as_deref().unwrap_or("")
@@ -1209,6 +1251,8 @@ impl Rule {
                 self.id
             )));
         }
+
+        self.validate_selection_floor()?;
 
         // The label is resolved at load, so a typo is a refusal here and not a
         // rule that fails every file it selects.
@@ -1436,6 +1480,41 @@ impl Rule {
         }
 
         Ok(())
+    }
+
+    /// The `files.min_selected` half of [`Rule::validate`]: a floor needs a
+    /// count under it, and a floor of zero is not a floor.
+    fn validate_selection_floor(&self) -> Result<()> {
+        let Some(floor) = self.files().min_selected else {
+            return Ok(());
+        };
+        // A guard built-in's `[rule.files]` is a scope rather than a selection
+        // -- `scope::in_file_scope` asks whether ONE path is in it -- and the
+        // scan never dispatches the rule, so the field would sit in the file
+        // looking like a floor with nothing measured against it.
+        if !self.selection_is_counted() {
+            return Err(Fatal::new(format!(
+                "rule {:?}: `files.min_selected` is a floor under the number of files \
+                 `uphold scan` selects, and built-in {:?} runs at a git hook over the bytes \
+                 git is about to record -- its `files.*` keys scope that guard one path at a \
+                 time, and a scope test produces no count for a floor to stand under. On this \
+                 rule the field would be read by nothing and would look like configuration \
+                 that works. The built-ins the scan selects for are {}",
+                self.id,
+                self.builtin().unwrap_or_default(),
+                crate::guard::SCAN_BUILTINS.join(", ")
+            )));
+        }
+        // Every selection there is meets a floor of zero, so writing one
+        // declares a floor and enforces nothing -- the objection
+        // `trivial_comments = false` is refused for. One is the smallest claim
+        // the field can make: this rule still selects something.
+        self.refuse(
+            floor == 0,
+            "`files.min_selected = 0` is met by every selection, including the empty one the \
+             field exists to catch. Write `1` for \"this rule still selects something\", or \
+             delete the line",
+        )
     }
 
     /// The `subjects` half of [`Rule::validate`]: the filter names kinds a
@@ -3420,6 +3499,67 @@ mod tests {
                 "{check}: {error}"
             );
         }
+    }
+
+    /// `min_selected` is a floor under a COUNT, and a guard built-in's
+    /// `[rule.files]` is a scope applied to one path at a time. The scan never
+    /// dispatches such a rule, so nothing there would ever take the count the
+    /// floor stands under.
+    #[test]
+    fn min_selected_is_refused_on_a_builtin_whose_files_are_a_guard_scope() {
+        let error = policy_from(
+            r#"
+            [rule.unicode]
+            builtin = "prevent-unusual-unicode-in-files"
+            files.include = ["docs"]
+            files.min_selected = 1
+
+            [rule.unicode.git]
+            hooks = ["pre-commit"]
+            "#,
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("read by nothing"), "{text}");
+        // The refusal names where the field DOES work, so the fix is in the
+        // message rather than in a docs round-trip.
+        assert!(text.contains("links-resolve"), "{text}");
+    }
+
+    /// The three the scan selects for read it, so the refusal above must not
+    /// reach them.
+    #[test]
+    fn min_selected_is_accepted_on_the_builtins_the_scan_selects_for() {
+        let policy = policy_from(
+            r#"
+            [rule.links]
+            builtin = "links-resolve"
+            files.glob = ["*.md"]
+            files.min_selected = 3
+            "#,
+        )
+        .expect("a floor on a scan-dispatched built-in is the ordinary case");
+        assert_eq!(policy.rules[0].min_selected(), 3);
+    }
+
+    /// Every selection meets a floor of zero, the empty one included -- so the
+    /// line declares a floor and enforces nothing, which is the shape
+    /// `trivial_comments = false` is refused for.
+    #[test]
+    fn a_floor_of_zero_is_refused() {
+        let error = policy_from(
+            "[rule.x]\nmessage = \"no\"\nregexp = \"TODO\"\n\
+             [rule.x.files]\ninclude = [\".\"]\nmin_selected = 0\n",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("every selection"), "{error}");
+    }
+
+    /// An unwritten floor is no floor, and it has to read as `0` rather than as
+    /// a second "was it written" question at every comparison.
+    #[test]
+    fn an_unwritten_floor_is_no_floor() {
+        assert_eq!(Rule::synthetic("x", Check::RequireRegexp).min_selected(), 0);
     }
 
     /// The link-checker knobs sat in the shared selection table, so every rule

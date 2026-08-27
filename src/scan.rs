@@ -60,6 +60,17 @@ exemption -- they satisfy the rule now, or they are gone. Delete them: an entry 
 describes the tree is the requirement switched off for that path if the pattern ever disappears \
 again.";
 
+/// Explains a selection that came in under the floor its rule declared.
+///
+/// Separate from the rule's own message, which explains the prohibition -- and
+/// deliberately so, because nothing in the tree violated it. What is wrong is
+/// the selection, and printing "resolve the conflict" over a rule that read no
+/// files sends the reader to look for a hit that is not there.
+const BELOW_SELECTION_FLOOR: &str = "This rule selected fewer files than it declared it must. \
+`files.min_selected` is the claim that the rule still covers something, and an include root that \
+moved, a glob that stopped matching or an exclude that widened all leave it reporting a pass over \
+files it never read -- which is indistinguishable, in every report, from a clean tree.";
+
 /// One scoped `allowed_scripts` rule, resolved: the files it selects, the
 /// scripts it admits there, and whether it claims them exclusively.
 struct Scoped {
@@ -83,6 +94,24 @@ pub(crate) struct Scan<'a> {
     /// it, and sorted because a report whose order depends on rule order diffs
     /// against itself between runs.
     unreadable: RefCell<BTreeSet<String>>,
+    /// Findings from the `files.min_selected` floors, waiting for the rule that
+    /// earned them to finish.
+    ///
+    /// Interior mutability for the reason `unreadable` has it, and gathered at
+    /// the same one place. The floor is a claim about the SELECTION rather than
+    /// about any one check's findings, so implementing it inside a check arm
+    /// would be implementing it once per kind -- which is how `require_regexp`
+    /// came to have none while `links-resolve` and `anchors-resolve` each grew
+    /// their own.
+    ///
+    /// Keyed by rule id, and the value is taken out rather than removed, for
+    /// the reason `unreadable` is a set: one rule below its floor is one
+    /// finding however many times its count was taken, and some rules are
+    /// selected for twice -- `script_failures` builds an `encoding` rule's
+    /// selection to learn how to decode a file, and the encoding check then
+    /// builds it again. The emptied key is what stops the second one repeating
+    /// the finding under a later check's heading.
+    below_floor: RefCell<BTreeMap<String, Option<Failure>>>,
 }
 
 impl<'a> Scan<'a> {
@@ -101,6 +130,7 @@ impl<'a> Scan<'a> {
             policy,
             not_text,
             unreadable: RefCell::new(unreadable),
+            below_floor: RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -136,7 +166,7 @@ impl<'a> Scan<'a> {
                     if !rule.reads_files() {
                         continue;
                     }
-                    failures.extend(match rule.builtin().unwrap_or_default() {
+                    let found = match rule.builtin().unwrap_or_default() {
                         "links-resolve" => self.link_failures(rule)?,
                         "anchors-resolve" => self.anchor_failures(rule)?,
                         "commands-resolve" => self.command_failures(rule)?,
@@ -164,7 +194,9 @@ impl<'a> Scan<'a> {
                                 rule.id
                             )))
                         }
-                    });
+                    };
+                    failures.extend(self.take_floor_failures());
+                    failures.extend(found);
                 }
                 continue;
             }
@@ -176,14 +208,16 @@ impl<'a> Scan<'a> {
                 // one for its files, and an exclusive rule speaks about files
                 // it does not select -- so they are evaluated once as a
                 // policy rather than independently.
-                failures.extend(self.script_failures()?);
+                let found = self.script_failures()?;
+                failures.extend(self.take_floor_failures());
+                failures.extend(found);
                 continue;
             }
             for rule in self.policy.of_check(check) {
                 if !rule.reads_files() {
                     continue;
                 }
-                failures.extend(match check {
+                let found = match check {
                     Check::Regexp => self.pattern_failures(rule)?,
                     Check::CommentRegexp => self.comment_pattern_failures(rule)?,
                     Check::TrivialComments => self.trivial_comment_failures(rule)?,
@@ -195,7 +229,9 @@ impl<'a> Scan<'a> {
                     Check::AllowedScripts | Check::Builtin | Check::Exec => {
                         unreachable!("filtered above")
                     }
-                });
+                };
+                failures.extend(self.take_floor_failures());
+                failures.extend(found);
             }
         }
         Ok(failures)
@@ -209,7 +245,31 @@ impl<'a> Scan<'a> {
         self.unreadable
             .borrow_mut()
             .extend(selection.unreadable().iter().cloned());
-        Ok(selection.files())
+        let files = selection.files();
+        // And the floor is measured here for the same reason. Every check kind
+        // reaches the tree through this function, so a kind added tomorrow
+        // enforces `files.min_selected` without its author having to know the
+        // field exists.
+        if let Some(failure) = below_floor_failure(rule, files.len()) {
+            self.below_floor
+                .borrow_mut()
+                .entry(rule.id.clone())
+                .or_insert(Some(failure));
+        }
+        Ok(files)
+    }
+
+    /// The floor findings gathered since the last rule was asked for.
+    ///
+    /// Drained per rule rather than at the end of the run, so the report reads
+    /// "this rule selected nothing" beside that rule's own findings instead of
+    /// in a block after every other rule has spoken.
+    fn take_floor_failures(&self) -> Vec<Failure> {
+        self.below_floor
+            .borrow_mut()
+            .values_mut()
+            .filter_map(Option::take)
+            .collect()
     }
 
     const fn redact(&self) -> bool {
@@ -1357,6 +1417,42 @@ fn stale_baseline_failure(
         message,
         body,
     )]
+}
+
+/// The finding for a rule whose selection came in under `files.min_selected`.
+///
+/// `None` where no floor was declared -- an unwritten floor reads as zero, and
+/// a written zero is refused at load, so one comparison answers both.
+///
+/// The body names the count, the floor and the keys that produced the count,
+/// because those three are what the reader edits. A report saying only that the
+/// floor was missed sends them to the rule to find out what it selects, which is
+/// the question they just asked.
+fn below_floor_failure(rule: &Rule, selected: usize) -> Option<Failure> {
+    let floor = rule.min_selected();
+    if floor == 0 || u64::try_from(selected).unwrap_or(u64::MAX) >= floor {
+        return None;
+    }
+    let files = rule.files();
+    let mut keys = vec![match rule.include() {
+        [] => String::from("include = [\".\"] (the default)"),
+        include => format!("include = {include:?}"),
+    }];
+    if !files.glob.is_empty() {
+        keys.push(format!("glob = {:?}", files.glob));
+    }
+    if !files.exclude.is_empty() {
+        keys.push(format!("exclude = {:?}", files.exclude));
+    }
+    Some(Failure::new(
+        format!("{} (selection floor)", rule.id),
+        BELOW_SELECTION_FLOOR,
+        format!(
+            "selected {selected} file(s), and `files.min_selected = {floor}` requires at least \
+             {floor}.\nThe keys that selected them: {}",
+            keys.join(", ")
+        ),
+    ))
 }
 
 /// 1-based line numbers inside any `#[cfg(test)]` item.

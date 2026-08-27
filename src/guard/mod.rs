@@ -91,6 +91,15 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     "text-literals",
 ];
 
+/// The built-ins `uphold scan` dispatches, rather than `guard`.
+///
+/// Their subject is the tree, so they run over a SELECTION the way a content
+/// rule does -- which is what makes them the built-ins that read the shared
+/// `files.*` vocabulary in full, `files.min_selected` included. Every other
+/// built-in carrying a `[rule.files]` table is using it as a scope for one path
+/// at a time (`scope::in_file_scope`), and a scope test never takes a count.
+pub(crate) const SCAN_BUILTINS: &[&str] = &["links-resolve", "anchors-resolve", "commands-resolve"];
+
 /// The moment a guard is being asked about.
 ///
 /// Not a formality: the same guard reads a different artifact at each of these,
@@ -503,10 +512,7 @@ mod tests {
         // config can declare, validate, install, and never run.
         let source = include_str!("mod.rs");
         for id in EVERY_BUILTIN {
-            if matches!(
-                *id,
-                "links-resolve" | "anchors-resolve" | "commands-resolve"
-            ) {
+            if SCAN_BUILTINS.contains(id) {
                 // Read the tree rather than git, so `scan` dispatches them and
                 // this match never sees them.
                 continue;
