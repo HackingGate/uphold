@@ -145,7 +145,7 @@ repos:
         always_run: true
         stages: [pre-commit, manual]
       - id: guards-commit-msg
-        name: guards (commit message)
+        name: "guards (stage: commit-msg)"
         entry: cargo run --quiet -- guard --stage commit-msg --message
         language: system
         pass_filenames: true
@@ -159,14 +159,14 @@ repos:
         always_run: true
         stages: [pre-commit, manual]
       - id: guards-pre-merge-commit
-        name: guards (merge)
+        name: "guards (stage: pre-merge-commit)"
         entry: cargo run --quiet -- guard --stage pre-merge-commit
         language: system
         pass_filenames: false
         always_run: true
         stages: [pre-merge-commit]
       - id: guards-pre-push
-        name: guards (push)
+        name: "guards (stage: pre-push)"
         entry: cargo run --quiet -- guard --stage pre-push
         language: system
         pass_filenames: false
@@ -189,7 +189,7 @@ repos:
       # first -- and losing that sweep is why this entry exists rather than
       # leaving `guards-pre-push` alone.
       - id: guards-manual
-        name: guards (manual sweep)
+        name: "guards (stage: manual)"
         entry: cargo run --quiet -- guard --stage manual
         language: system
         pass_filenames: false

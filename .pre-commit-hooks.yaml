@@ -68,7 +68,7 @@
 # written and a tree-scanning check cannot see it at all, so the host-identity
 # rules run against the message itself at commit-msg time.
 - id: uphold-scan-text
-  name: uphold scan (commit message)
+  name: "uphold scan (stage: commit-msg)"
   description: run the host-identity rules over the commit message
   entry: uphold scan --text
   language: rust
@@ -91,7 +91,7 @@
 # "no guards declared" rather than a failure.
 
 - id: uphold-guard
-  name: uphold guard (pre-commit)
+  name: "uphold guard (stage: pre-commit)"
   description: run the guards that fire at pre-commit -- author identity, staged content, merge commits
   entry: uphold guard --stage pre-commit
   language: rust
@@ -112,7 +112,7 @@
 # With no filename forwarded the guard reads the message left behind by the last
 # commit, which is clean, and reports a pass over a file it never opened.
 - id: uphold-guard-commit-msg
-  name: uphold guard (commit message)
+  name: "uphold guard (stage: commit-msg)"
   description: run the guards that fire at commit-msg -- AI-authorship trailers, unusual unicode, private repo names
   entry: uphold guard --stage commit-msg --message
   language: rust
@@ -129,7 +129,7 @@
 # one and runs no hook, so there is no moment to refuse at. What arrives that
 # way is judged at the next commit or push by the tree-wide guards.
 - id: uphold-guard-merge
-  name: uphold guard (merge)
+  name: "uphold guard (stage: pre-merge-commit)"
   description: run the guards that fire at pre-merge-commit
   entry: uphold guard --stage pre-merge-commit
   language: rust
@@ -150,7 +150,7 @@
 # is almost never one of them. A check that only runs when its own config
 # changes is a check that never runs.
 - id: uphold-guard-push
-  name: uphold guard (push)
+  name: "uphold guard (stage: pre-push)"
   description: run the guards that fire at pre-push -- push destination, pushed-range content, stale hook pins
   entry: uphold guard --stage pre-push
   language: rust
@@ -180,7 +180,7 @@
 # -- a guard that adds twenty seconds to every commit is one somebody deletes.
 # At the manual stage a scheduled run finds them instead of whoever pushes next.
 - id: uphold-guard-manual
-  name: uphold guard (manual)
+  name: "uphold guard (stage: manual)"
   description: run the guards that fire at the manual stage, for CI and scheduled runs
   entry: uphold guard --stage manual
   language: rust
