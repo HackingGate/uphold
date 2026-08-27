@@ -224,6 +224,52 @@ files.exclude = ["**/tests/**", "**/test/**"]
 # The same selection as the rule above, and the same floor for the same reason.
 files.min_selected = 1
 
+# A hook's display name is the one line it prints while it runs, and it is read
+# by somebody who is not reading the file it came from. `uphold guard
+# (pre-commit)` meant the stage, and under prek the terminal said
+#
+#   uphold guard (pre-commit)....................................Passed
+#
+# which an operator read as pre-commit -- the runner of that name -- having run
+# this repository's guard. The question came back as "so pre-commit is running
+# uphold?", which is the measurement: a parenthetical carrying nothing but a
+# stage word is attached to the name of a program, and the reader binds it to
+# the only other name on the line. Every runner this file is published to
+# collides the same way, because the stage vocabulary and the runner vocabulary
+# share their words: `pre-commit` is both, and `merge`, `push` and `manual` are
+# plain enough English to be read as whoever is doing the running.
+#
+# So the parenthetical says which half it is, and says it with the githooks(5)
+# spelling rather than a shortened one -- `(stage: pre-merge-commit)`, not
+# `(merge)`. The short forms are what made the line ambiguous in the first
+# place, and the long ones are what `git.hooks` and `--stage` already take, so a
+# name and the argument it describes can be compared without translating either.
+#
+# The colon costs a pair of quotes, and there is no way around it: `name:
+# uphold guard (stage: pre-commit)` is a `: ` inside a plain scalar, which YAML
+# refuses to parse -- `uphold check` reads this repository's own manifest and
+# said so before either runner got the chance. So every name in this shape is
+# quoted, and a name that is not is a file neither prek nor pre-commit can load
+# rather than a hook that runs under the wrong label.
+#
+# The rule reads the display names of both files that carry them: the manifest
+# this repository publishes to consumers and the config it runs on itself. A
+# rule over the published half alone would be enforcement that never applies to
+# the tree it lives in, and the next name is as likely to be written in one file
+# as the other.
+[rule.hook-name-says-stage]
+message = """
+Write a stage parenthetical in a hook display name as (stage: <githooks name>)
+-- a bare stage word reads as the name of the runner rather than the stage, and
+the display name is the one line a hook prints while it runs.
+"""
+regexp = '^\s*name:.*\((?:pre-commit|pre-push|pre-merge-commit|commit-msg|commit message|merge|push|manual)\)'
+files.glob = [".pre-commit-hooks.yaml", ".pre-commit-config.yaml"]
+# Two globs naming two exact paths, which is two ways for this rule to select
+# nothing if either file is renamed -- and a name rule that reads no names
+# reports the same green as one that read every hook in the repository.
+files.min_selected = 2
+
 # ---------------------------------------------------------------------------
 # Guards -- what git is about to do.
 #
