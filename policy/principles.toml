@@ -257,13 +257,21 @@ files.min_selected = 1
 # rule over the published half alone would be enforcement that never applies to
 # the tree it lives in, and the next name is as likely to be written in one file
 # as the other.
+#
+# `manual sweep` is in the alternation on weaker grounds than the rest: no
+# runner is called that, so the line it makes is less ambiguous than a bare
+# `manual`. It is there because it is what this repository's own config said --
+# `guards (manual sweep)`, renamed by the change that wrote this rule -- and a
+# ratchet that does not hold the exact state the fix removed lets that state
+# back in under a spelling nobody listed. The alternation covers what this tree
+# has actually carried, not only the words whose collision is sharpest.
 [rule.hook-name-says-stage]
 message = """
 Write a stage parenthetical in a hook display name as (stage: <githooks name>)
 -- a bare stage word reads as the name of the runner rather than the stage, and
 the display name is the one line a hook prints while it runs.
 """
-regexp = '^\s*name:.*\((?:pre-commit|pre-push|pre-merge-commit|commit-msg|commit message|merge|push|manual)\)'
+regexp = '^\s*name:.*\((?:pre-commit|pre-push|pre-merge-commit|commit-msg|commit message|merge|push|manual sweep|manual)\)'
 files.glob = [".pre-commit-hooks.yaml", ".pre-commit-config.yaml"]
 # Two globs naming two exact paths, which is two ways for this rule to select
 # nothing if either file is renamed -- and a name rule that reads no names
