@@ -103,8 +103,21 @@ pub(crate) fn prevent_public_push(request: &Request<'_>) -> Result<Option<Refusa
     // An owner is a blunt unit: allowing one to let a single repository through
     // allows every repository it will ever have. `allowed_repos` is the finer
     // grant, and the two are checked together.
+    //
+    // A written `allowed_owners` JOINS the pinned owner rather than standing in
+    // for it. The pin says who this repository is, and naming a fork it also
+    // pushes to does not stop it being that: replacing the pin refused a push
+    // to the workspace's own owner under a refusal whose next line still read
+    // "This workspace is pinned to acme", so the decision and the explanation
+    // disagreed and only one of them could be right.
+    //
+    // The DERIVED owner stays the fallback for an empty list and joins nothing.
+    // Origin is the remote this guard exists to catch being wrong, so a rule
+    // that wrote its destinations down is answered from what it wrote; folding
+    // origin in beside the list would put that tautology back on every rule
+    // carrying one.
     let mut allowed_owners: Vec<String> = request.rule.allowed_owners().to_vec();
-    if allowed_owners.is_empty() {
+    if pinned || allowed_owners.is_empty() {
         if let Some(workspace) = workspace.as_deref() {
             allowed_owners.push(workspace.to_owned());
         }

@@ -143,23 +143,49 @@ fn refresh_origin(root: &Path) -> Option<String> {
     }
 }
 
-fn history(root: &Path) -> Result<Vec<Surface>> {
-    let listed = git_lines(root, &["log", "--remotes=origin", "--format=%H%x1f%B%x1e"])?;
-    let mut surfaces = Vec::new();
-    for record in listed.split('\u{1e}') {
-        let record = record.trim_start_matches('\n');
-        let Some((sha, body)) = record.split_once('\u{1f}') else {
-            continue;
-        };
-        if sha.trim().is_empty() {
-            continue;
-        }
-        surfaces.push(Surface {
-            label: format!("commit {}", &sha.trim()[..sha.trim().len().min(8)]),
+/// The `git log` arguments every commit-message read here shares.
+///
+/// `--format=%H%x1f%B%x1e` stood here, and a message holding either of those
+/// bytes was CUT at it. The half after a `\x1e` became a record with no `\x1f`
+/// in it, fell through the `continue` for a record that does not parse, and was
+/// never scanned by anything: a private name written past that byte -- pasted
+/// terminal output and `git log` output quoted into a message are the ordinary
+/// ways one arrives -- read as a clean commit. That is the fail-open this
+/// subcommand exists to close, arriving through the reader rather than through
+/// the rule.
+///
+/// NUL is the one byte a message cannot hold: git refuses to write a commit
+/// whose log message contains one -- measured: `git commit-tree` answers "a NUL
+/// byte in commit log message not allowed." and writes nothing -- so `-z` is a
+/// separator no message can forge. The tab is safe for a different reason:
+/// `%H` is forty hex characters, so the FIRST tab in a record is always the
+/// delimiter and every other one belongs to the body.
+///
+/// Same two arguments as `guard::scope`, which reads pushed messages: the
+/// pre-push guard already had the shape that cannot be cut, and this half is
+/// the copy that did not.
+const LOG_MESSAGES: &[&str] = &["log", "-z", "--format=%H%x09%B"];
+
+/// The commits in one `LOG_MESSAGES` output, as surfaces named `<what> <sha>`.
+///
+/// One parse for both readings below, because the separator bug lived in two
+/// copies of it and a fix to one of them is a fix to half the surface.
+fn commit_surfaces(listed: &str, what: &str) -> Vec<Surface> {
+    listed
+        .split('\0')
+        .filter_map(|record| record.split_once('\t'))
+        .map(|(sha, body)| Surface {
+            label: format!("{what} {}", &sha[..sha.len().min(8)]),
             text: body.to_owned(),
-        });
-    }
-    Ok(surfaces)
+        })
+        .collect()
+}
+
+fn history(root: &Path) -> Result<Vec<Surface>> {
+    let mut argv = LOG_MESSAGES.to_vec();
+    argv.push("--remotes=origin");
+    let listed = git_lines(root, &argv)?;
+    Ok(commit_surfaces(&listed, "commit"))
 }
 
 /// Commit messages on refs a forge keeps forever.
@@ -207,10 +233,9 @@ fn retained_pull_refs(root: &Path) -> Result<(Vec<Surface>, Vec<String>)> {
     // revision argument: `refs/audit/pull/*` resolves to nothing and `git log`
     // walks HEAD instead, so the audit read the branch it had already scanned
     // and reported the retained refs as clean without opening one of them.
-    let listed = git_lines(
-        root,
-        &["log", "--format=%H%x1f%B%x1e", "--glob=refs/audit/pull/*"],
-    )?;
+    let mut argv = LOG_MESSAGES.to_vec();
+    argv.push("--glob=refs/audit/pull/*");
+    let listed = git_lines(root, &argv)?;
     if listed.trim().is_empty() {
         // Asked, rather than assumed either way. "The forge retains none" and
         // "the fetch matched nothing" produce the identical empty log, and the
@@ -224,22 +249,7 @@ fn retained_pull_refs(root: &Path) -> Result<(Vec<Surface>, Vec<String>)> {
             unreadable.push(note);
         }
     }
-    for record in listed.split('\u{1e}') {
-        let record = record.trim_start_matches('\n');
-        let Some((sha, body)) = record.split_once('\u{1f}') else {
-            continue;
-        };
-        if sha.trim().is_empty() {
-            continue;
-        }
-        surfaces.push(Surface {
-            label: format!(
-                "retained pull ref {}",
-                &sha.trim()[..8.min(sha.trim().len())]
-            ),
-            text: body.to_owned(),
-        });
-    }
+    surfaces.extend(commit_surfaces(&listed, "retained pull ref"));
     Ok((surfaces, unreadable))
 }
 
