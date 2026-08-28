@@ -1136,3 +1136,389 @@ fn stdin_that_parses_as_no_ref_line_at_all_still_refuses() {
         stderr(&output)
     );
 }
+
+// ── the two merge guards ─────────────────────────────────────────────
+//
+// `no-merge-commit` refuses the COMMIT that would finish a merge somebody
+// started; `no-local-merge` refuses the merge itself, one hook earlier. They
+// are two rules rather than one because git offers two moments and a repository
+// may want either, and each has to be refused where it happens: a merge stopped
+// at `pre-merge-commit` leaves no MERGE_HEAD for the other to find.
+
+const MERGE_COMMIT: &str = r#"
+[rule.no-merge-commit]
+builtin = "no-merge-commit"
+
+[rule.no-merge-commit.git]
+hooks = ["pre-commit", "pre-merge-commit"]
+"#;
+
+const LOCAL_MERGE: &str = r#"
+[rule.no-local-merge]
+builtin = "no-local-merge"
+
+[rule.no-local-merge.git]
+hooks = ["pre-merge-commit"]
+"#;
+
+/// A real merge in progress, which is the half a `SQUASH_MSG` cannot stand in
+/// for.
+///
+/// `git merge --no-commit` is the state the guard exists for: git has written
+/// `MERGE_HEAD`, resolved the tree, and stopped -- so the next `git commit` is
+/// the one that records a merge nobody reviewed, and `pre-commit` is the last
+/// moment anything runs before it does. The two branches touch different files
+/// on purpose: a conflicted merge is refused by git itself and would test git
+/// rather than this guard.
+#[test]
+fn a_merge_git_has_prepared_but_not_recorded_is_refused_at_the_commit() {
+    let root = repository(MERGE_COMMIT);
+    write(&root, "a.txt", "one\n");
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+
+    git(&root, &["checkout", "-q", "-b", "topic"]);
+    write(&root, "b.txt", "two\n");
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "two", "--no-verify"]);
+
+    git(&root, &["checkout", "-q", "main"]);
+    write(&root, "c.txt", "three\n");
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "three", "--no-verify"]);
+    // Nothing is recorded yet, so the guard is asked at the moment a person
+    // would type `git commit`.
+    git(&root, &["merge", "-q", "--no-commit", "--no-ff", "topic"]);
+    assert!(root.join(".git/MERGE_HEAD").is_file());
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("A merge is in progress"), "{text}");
+    // The way out is the point: a refusal that leaves the tree half-merged and
+    // says nothing about it is one somebody escapes with `--no-verify`.
+    assert!(text.contains("git merge --abort"), "{text}");
+}
+
+/// The unconditional refusal, and the reason it is unconditional.
+///
+/// `no-local-merge` runs at `pre-merge-commit`, which git runs only when it is
+/// about to record a merge commit -- so reaching this guard at all IS the
+/// violation, and there is no state of the tree that makes it a pass. A version
+/// that looked for something first would pass every merge whose evidence it
+/// could not find.
+#[test]
+fn the_merge_itself_is_refused_at_pre_merge_commit_whatever_the_tree_holds() {
+    let root = repository(LOCAL_MERGE);
+    write(&root, "a.txt", "one\n");
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+
+    let output = guard(&root, &["--stage", "pre-merge-commit"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("Local merges are disabled"), "{text}");
+    // Named commands, because "use your forge" is advice and `gh pr merge` is
+    // the next thing typed.
+    assert!(text.contains("gh pr merge"), "{text}");
+
+    // And it is scoped to that one moment. An ordinary commit is not a merge,
+    // and a guard that refused every commit would be switched off within a day.
+    assert_eq!(code(&guard(&root, &["--stage", "pre-commit"])), 0);
+}
+
+// ── the falsifier with nothing to ask about ──────────────────────────
+//
+// `no-stale-visibility` disproves a declaration by asking the forge. Each case
+// here stops before the forge is reached, and every one of them is exit 2: the
+// declaration was not checked, and an unchecked claim has never been a claim
+// that passed. None of these runs `gh`, which is what makes them the cases a
+// suite can assert on with no network and no stub.
+
+/// The rule's own `visibility` is a declaration, and the rule reads it.
+///
+/// It is the field `parameters()` lists for this built-in, so a policy can pin
+/// the claim on the rule instead of at the top of the file -- and if it were
+/// ignored the run would refuse for the wrong reason, saying nothing declares a
+/// visibility while the rule in front of it does.
+///
+/// The repository has no `origin`, which is the second half: no remote is no
+/// name to ask about, so the declared privacy was checked against nothing.
+#[test]
+fn a_visibility_declared_on_the_rule_is_read_and_a_missing_origin_is_not_a_pass() {
+    let root = repository(
+        "[rule.no-stale-visibility]\nbuiltin = \"no-stale-visibility\"\nvisibility = \"private\"\n\n\
+         [rule.no-stale-visibility.git]\nhooks = [\"manual\"]\n",
+    );
+
+    let output = guard(&root, &["--stage", "manual"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("has no `origin` remote"), "{text}");
+    // Quoted back, which is how a reader sees that the rule's own field was the
+    // claim under test rather than a policy-level one that is not there.
+    assert!(text.contains("\"private\""), "{text}");
+    assert!(text.contains("UPHOLD_ALLOW=no-stale-visibility"), "{text}");
+}
+
+/// A word that is not a visibility is refused rather than read as public.
+///
+/// A policy-level `visibility` is held to the three spellings at load. The
+/// rule's own field is not -- nothing validates it before a guard reads it --
+/// so this is the only place a typo there is caught. Reading an unrecognised
+/// word as "not private" would exit 0 on the sentence "there is no claim of
+/// privacy to disprove", which is a check reporting a pass over a claim it did
+/// not understand.
+#[test]
+fn a_misspelt_visibility_on_the_rule_is_refused_and_not_taken_for_public() {
+    let root = repository(
+        "[rule.no-stale-visibility]\nbuiltin = \"no-stale-visibility\"\n\
+         visibility = \"privateish\"\n\n\
+         [rule.no-stale-visibility.git]\nhooks = [\"manual\"]\n",
+    );
+
+    let output = guard(&root, &["--stage", "manual"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("is not a visibility"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// An origin that is not a forge name leaves the claim unchecked.
+///
+/// A filesystem remote -- `git remote add origin mirror.git`, a clone of a bare
+/// repository beside this one -- has no owner and no repository in it, so there
+/// is no question to put to the forge. The tempting reading is that a
+/// repository with no forge name cannot be public, and it is wrong twice: the
+/// remote says nothing about where else this history is published, and the
+/// declaration this rule exists to falsify is untouched by it.
+#[test]
+fn an_origin_with_no_owner_and_repository_in_it_is_not_a_checked_claim() {
+    let root = repository(
+        "visibility = \"private\"\n\n[rule.no-stale-visibility]\n\
+         builtin = \"no-stale-visibility\"\n\n\
+         [rule.no-stale-visibility.git]\nhooks = [\"manual\"]\n",
+    );
+    git(&root, &["remote", "add", "origin", "mirror.git"]);
+
+    let output = guard(&root, &["--stage", "manual"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("mirror.git"), "{text}");
+    assert!(text.contains("Could not look is not a pass"), "{text}");
+}
+
+// ── where a push is allowed to go ────────────────────────────────────
+
+/// A pre-push guard told nothing but its flags.
+///
+/// `runner::push` falls back to the variables pre-commit and prek export, and
+/// this suite is run from a hook often enough that an inherited
+/// `PRE_COMMIT_REMOTE_NAME` would answer for a fixture that deliberately says
+/// nothing about its destination -- which is the one input these tests vary.
+fn push_guard(root: &Path, args: &[&str]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command
+        .args(["guard", "--stage", "pre-push"])
+        .args(args)
+        .current_dir(root)
+        .env_remove("UPHOLD_ALLOW")
+        .stdin(Stdio::null());
+    for name in [
+        "PRE_COMMIT_REMOTE_NAME",
+        "PRE_COMMIT_REMOTE_URL",
+        "PRE_COMMIT_LOCAL_BRANCH",
+        "PRE_COMMIT_REMOTE_BRANCH",
+        "PRE_COMMIT_TO_REF",
+        "PRE_COMMIT_FROM_REF",
+        "PRE_COMMIT_SOURCE",
+        "PRE_COMMIT_ORIGIN",
+    ] {
+        command.env_remove(name);
+    }
+    command.output().unwrap()
+}
+
+const PINNED_PUSH: &str = r#"
+[rule.prevent-public-push]
+builtin = "prevent-public-push"
+owner = "acme"
+
+[rule.prevent-public-push.git]
+hooks = ["pre-push"]
+"#;
+
+/// A destination nobody could read is not an allowed destination.
+///
+/// No flag, no runner variable, no `origin`: there is no name to compare
+/// against the allow-list. The fail-open reading is that an unknown destination
+/// is not on the deny-list either, and it inverts the guard -- the push that
+/// tells it least would be the push it permits.
+#[test]
+fn a_push_whose_destination_cannot_be_read_is_refused() {
+    let root = repository(PINNED_PUSH);
+
+    let output = push_guard(&root, &[]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("could not work out where this push is going"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// The remote NAMED is the remote resolved, and `origin` is not a synonym.
+///
+/// `git push upstream` hands the hook the name `upstream`, and the fork it
+/// points at is exactly the public repository this guard exists to catch a push
+/// to. Resolving `origin` instead reads the URL of the remote nobody is pushing
+/// to, and answers about it: here that answer is the pinned owner, so the guard
+/// would exit 0 over a push to somebody else's fork.
+#[test]
+fn the_remote_named_on_the_command_line_is_the_one_resolved() {
+    let root = repository(PINNED_PUSH);
+    git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/someone-else/thing.git",
+        ],
+    );
+
+    let output = push_guard(&root, &["--remote", "upstream"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("someone-else/thing"),
+        "{}",
+        stderr(&output)
+    );
+
+    // The other name through the same path, so that the refusal above is the
+    // name being read rather than the lookup failing and refusing everything.
+    let output = push_guard(&root, &["--remote", "origin"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+/// A workspace that never said who it is refuses rather than judging nothing.
+///
+/// No `owner` on the rule, none in the policy, and no `origin` to derive one
+/// from: the allow-list is empty, so every destination is off it. The refusal
+/// says that is why, because "not on the allow-list" over an allow-list that
+/// was never built sends the reader looking for a list to add themselves to.
+#[test]
+fn a_push_from_a_workspace_with_no_owner_anywhere_says_it_had_nothing_to_judge_against() {
+    let root = repository(
+        "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\n\n\
+         [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
+    );
+
+    let output = push_guard(
+        &root,
+        &["--remote-url", "https://github.com/someone-else/thing.git"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("nothing to judge against"), "{text}");
+    assert!(text.contains("someone-else/thing"), "{text}");
+}
+
+/// The finer grant, and the note it deliberately does not print.
+///
+/// `allowed_repos` admits one repository under an owner the workspace is not,
+/// which is what an owner-wide allowance cannot express. The derived-owner note
+/// is scoped to `!pinned && !by_repo` on purpose: this push was decided by a
+/// written list whatever `origin` says, so a warning about origin here would be
+/// a line on every push to a permitted mirror, and a line on every push is a
+/// line nobody reads by the time it matters.
+#[test]
+fn an_allowed_repo_admits_one_repository_without_the_derived_owner_note() {
+    let root = repository(
+        "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\n\
+         allowed_repos = [\"someone-else/thing\"]\n\n\
+         [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
+    );
+    git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+
+    let output = push_guard(
+        &root,
+        &["--remote-url", "https://github.com/someone-else/thing.git"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        !stderr(&output).contains("DERIVED FROM ORIGIN"),
+        "{}",
+        stderr(&output)
+    );
+
+    // The grant is that one repository and not that owner: a sibling under the
+    // same owner is a different repository, and an allow-list that leaked to
+    // the owner would be the blunt unit this field exists to avoid.
+    let output = push_guard(
+        &root,
+        &["--remote-url", "https://github.com/someone-else/other.git"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+}
+
+/// A written `allowed_owners` is the list the destination is judged against.
+///
+/// The derived owner is the fallback for a repository that wrote nothing down,
+/// so a rule that names its owners is answered from the names it wrote rather
+/// than from `origin`. The discriminating half is the second push: a list that
+/// admitted its one entry and everything else would be an allow-list only in
+/// name.
+#[test]
+fn a_written_allowed_owners_admits_its_own_and_refuses_the_rest() {
+    let root = repository(
+        "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\n\
+         allowed_owners = [\"friendly-org\"]\n\n\
+         [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
+    );
+    git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+
+    let output = push_guard(
+        &root,
+        &["--remote-url", "https://github.com/friendly-org/thing.git"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let output = push_guard(
+        &root,
+        &["--remote-url", "https://github.com/someone-else/thing.git"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("someone-else/thing"),
+        "{}",
+        stderr(&output)
+    );
+}

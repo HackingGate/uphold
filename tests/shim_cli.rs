@@ -1278,3 +1278,315 @@ fn an_empty_title_does_not_walk_past_a_require_regexp() {
     assert_eq!(code(&absent), 0, "{}", stderr(&absent));
     assert!(stdout(&absent).contains("faux ran:"), "{}", stdout(&absent));
 }
+
+// ── what the shim does with the answers it collected ─────────────────
+
+#[test]
+fn a_shim_that_cannot_reach_the_real_command_does_not_exit_zero() {
+    // A link is on PATH for the whole machine and outlives the command it
+    // stands in front of: uninstall the real one and the link is still there.
+    // The walk past ourselves then finds nothing to hand the process to, and
+    // exiting 0 would be this shim reporting that a command ran when none did
+    // -- the shape it exists to make impossible, arriving out of the
+    // transparent half of the code.
+    let root = workspace(POLICY);
+    std::fs::remove_file(root.join("bin/faux")).unwrap();
+
+    let checked = shim(&root, &["faux", "pr", "create", "-t", "An ordinary title"]);
+    assert_eq!(code(&checked), 2, "{}", stderr(&checked));
+    assert!(
+        stderr(&checked).contains("could not find the real one on PATH"),
+        "{}",
+        stderr(&checked)
+    );
+
+    // And the reading that runs no checker at all lands in the same place,
+    // still having said out loud that it could not tell which subcommand this
+    // was. A could-not-look line followed by a silent 0 is the pair refused
+    // here.
+    let unclear = shim(
+        &root,
+        &["faux", "--fic-a", "x", "--fic-b", "y", "repo", "clone"],
+    );
+    assert_eq!(code(&unclear), 2, "{}", stderr(&unclear));
+    assert!(
+        stderr(&unclear).contains("This is not a pass."),
+        "{}",
+        stderr(&unclear)
+    );
+}
+
+/// Two checkers over one invocation, so a bypass has something to leave alone.
+const TWO_CHECKERS: &str = r#"
+[rule.marker-in-the-body]
+message = "remove the marker"
+regexp = "Claude Code"
+command.before = ["faux"]
+# A pattern that names itself in the file it is declared in selects that
+# file, which the load refuses. The rule is about what a command publishes.
+files.exclude = ["policy/**"]
+
+[rule.marker-again]
+message = "remove the marker"
+regexp = "Claude Code"
+command.before = ["faux"]
+files.exclude = ["policy/**"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-t", "--title"]
+scope = "always"
+"#;
+
+#[test]
+fn a_bypass_switches_off_the_checker_it_names_and_no_other() {
+    // UPHOLD_ALLOW names a rule, and the loop skips that rule. A bypass that
+    // switched off the PASS rather than the checker would be an override
+    // nobody asked for, granted by whoever typed the first rule's name.
+    let root = workspace(TWO_CHECKERS);
+    let path = format!(
+        "{}:{}",
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args([
+            "shim",
+            "faux",
+            "pr",
+            "create",
+            "-t",
+            "Generated with Claude Code",
+        ])
+        .current_dir(&root)
+        .env("PATH", path)
+        .env("UPHOLD_ALLOW", "marker-in-the-body")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("marker-again"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("marker-in-the-body"),
+        "the bypass reached a rule it was not named for: {}",
+        stderr(&output)
+    );
+}
+
+/// One rule that wrote its own scope beside one that did not.
+const A_SCOPE_OF_ITS_OWN: &str = r#"
+[rule.stood-down]
+message = "would refuse anything at all"
+regexp = "."
+command.before = ["faux"]
+command.scope = { command = { command = "exit 1" } }
+files.exclude = ["policy/**"]
+
+[rule.marker-in-the-title]
+message = "remove the marker"
+regexp = "Claude Code"
+command.before = ["faux"]
+files.exclude = ["policy/**"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-t", "--title"]
+scope = "always"
+"#;
+
+#[test]
+fn a_rule_whose_scope_does_not_hold_does_not_stand_down_the_rule_beside_it() {
+    // The scope is answered per rule and memoized per predicate, not decided
+    // once for the invocation. `stood-down` would refuse this title -- its
+    // pattern matches anything -- so a loop that read the wrong rule's answer
+    // shows up here as a refusal naming it.
+    let root = workspace(A_SCOPE_OF_ITS_OWN);
+    let output = shim(
+        &root,
+        &["faux", "pr", "create", "-t", "Generated with Claude Code"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("marker-in-the-title"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("stood-down"),
+        "a rule whose own scope does not hold was consulted anyway: {}",
+        stderr(&output)
+    );
+}
+
+/// A rule about one subject kind, beside one about every kind.
+const ONE_KIND_AND_EVERY_KIND: &str = r#"
+[rule.release-title-is-the-tag]
+message = "title a release by its tag"
+require_regexp = '^v[0-9]+\.[0-9]+\.[0-9]+$'
+subjects = ["title"]
+command.before = ["faux"]
+
+[rule.marker-anywhere]
+message = "remove the marker"
+regexp = "Claude Code"
+command.before = ["faux"]
+files.exclude = ["policy/**"]
+
+[[shim]]
+command = "faux"
+match = ["release:create"]
+title_flags = ["-t", "--title"]
+text_flags = ["-n", "--notes"]
+scope = "always"
+"#;
+
+#[test]
+fn a_rule_about_one_kind_is_not_asked_about_the_subject_beside_it() {
+    // `subjects` narrows every kind of checker the same way. Asked about the
+    // notes, a title-shape rule refuses prose that was never a title and was
+    // never going to look like a tag -- so the filter is what keeps a format
+    // rule from becoming a rule about everything the invocation carries.
+    let root = workspace(ONE_KIND_AND_EVERY_KIND);
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "release",
+            "create",
+            "-t",
+            "v1.2.3",
+            "-n",
+            "Generated with Claude Code",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("marker-anywhere"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("release-title-is-the-tag"),
+        "a title rule was asked about the notes: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn an_empty_subject_is_not_handed_to_a_program_and_the_one_beside_it_still_is() {
+    // A program handed "" on stdin is being asked to judge text that was never
+    // published, so the skip stands for `exec` -- and it must not take the
+    // rest of the invocation with it. The body here is a marker, and a walker
+    // that stopped at the empty title would publish it.
+    let root = workspace(
+        r#"
+[rule.no-published-markers]
+message = "remove the marker"
+exec = "uphold guard --text -"
+
+[rule.no-published-markers.command]
+before = ["faux"]
+
+[rule.prevent-ai-author]
+builtin = "prevent-ai-author"
+
+[rule.prevent-ai-author.git]
+hooks = ["commit-msg"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+title_flags = ["-t"]
+text_flags = ["-b"]
+scope = "always"
+"#,
+    );
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "pr",
+            "create",
+            "-t",
+            "",
+            "-b",
+            "Generated with Claude Code",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("refused a text subject"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("refused a title subject"),
+        "an empty title was handed to a program: {}",
+        stderr(&output)
+    );
+}
+
+/// A `git`-shaped shim: positional refs rather than flag values.
+const REF_POLICY: &str = r#"
+[rule.no-customer-in-a-branch-name]
+message = "name a branch for the work, not the customer"
+regexp = "acme-outage"
+subjects = ["ref"]
+command.before = ["faux"]
+files.exclude = ["policy/**"]
+
+[[shim]]
+command = "faux"
+match = ["push:*"]
+collect = "git-refs"
+scope = "always"
+"#;
+
+#[test]
+fn a_push_with_no_refspec_still_names_the_branch_it_is_publishing() {
+    // With no refspec git pushes the current branch, so the name going out
+    // appears nowhere in argv. Collecting only what was typed leaves the one
+    // string this shim is standing in front of unread -- and it goes to the
+    // ref list, the pull request the forge suggests, and every notification.
+    let root = workspace(REF_POLICY);
+    Command::new(support::real_git())
+        .args(["checkout", "-q", "-b", "fix/acme-outage"])
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+
+    let refused = shim(&root, &["faux", "push", "origin"]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        !stdout(&refused).contains("faux ran:"),
+        "{}",
+        stdout(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("ref subject"),
+        "{}",
+        stderr(&refused)
+    );
+
+    // And a name that was typed is read from the position it was typed in,
+    // rather than from the branch this checkout happens to be on.
+    let clean = shim(&root, &["faux", "push", "origin", "topic"]);
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert!(stdout(&clean).contains("faux ran:"), "{}", stdout(&clean));
+}

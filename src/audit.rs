@@ -786,4 +786,104 @@ mod tests {
         // carrying only caveats is a clean one.
         assert_eq!(verdict(0, 0), Exit::Clean);
     }
+
+    /// A repository fixture, under this run's directory rather than the system
+    /// temporary one -- see `crate::fixture` for what the other shape cost.
+    fn repository(kind: &str) -> std::path::PathBuf {
+        let root = crate::fixture::scratch(kind);
+        std::fs::create_dir_all(&root).unwrap();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["config", "user.name", "Test"][..],
+            &["config", "user.email", "test@example.test"][..],
+        ] {
+            git(&root, args);
+        }
+        root
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    /// A fetch that never RAN is not a fetch that found nothing new.
+    ///
+    /// This is the case with no output at all to misread: git is never started,
+    /// so there is no exit code and no stderr, and the only thing standing
+    /// between the reader and a report over whatever refs this clone happened to
+    /// hold is this note. `refresh_origin` returned `()` while its own doc
+    /// comment claimed the caller reported the staleness, which is exactly how
+    /// an audit answers "clean" about a forge it never reached.
+    #[test]
+    fn a_fetch_that_could_not_be_run_at_all_is_still_reported_as_stale() {
+        // Never created. `Command` fails to spawn when its working directory
+        // does not exist, which is the same io error an absent git produces.
+        let missing = crate::fixture::scratch("audit-unspawnable");
+        let note = refresh_origin(&missing)
+            .expect("a fetch that could not be run is not a fetch that succeeded");
+        assert!(note.contains("git fetch --prune origin"), "{note}");
+        assert!(note.contains("Every reading below"), "{note}");
+    }
+
+    /// A forge that could not be ASKED is not a forge that answered "none".
+    ///
+    /// The empty log that `refs/pull/*/head` leaves behind says nothing about
+    /// which of the two happened, and the difference is this subcommand's exit
+    /// code. Both spellings of "could not ask" are here because they arrive
+    /// differently -- one as a non-zero exit from a git that ran, one as an io
+    /// error from a git that never did -- and a note that named only the first
+    /// would leave the second silently indistinguishable from an empty forge.
+    #[test]
+    fn a_forge_that_cannot_be_asked_about_pull_refs_is_an_unread_surface() {
+        let unaskable = repository("audit-no-origin");
+        let exited = no_pull_refs(&unaskable)
+            .expect("a repository with no origin cannot establish that the forge retains none");
+        assert!(exited.contains("git ls-remote origin exited"), "{exited}");
+        assert!(exited.contains("went unread"), "{exited}");
+
+        let missing = crate::fixture::scratch("audit-unspawnable");
+        let unrun = no_pull_refs(&missing)
+            .expect("a question that could not be put is not a question that was answered");
+        assert!(unrun.contains("could not be run"), "{unrun}");
+        std::fs::remove_dir_all(&unaskable).ok();
+    }
+
+    /// Pull refs the forge LISTS but the fetch did not bring are unread.
+    ///
+    /// The one state where the two halves disagree, and the one the empty log
+    /// cannot tell apart on its own: `ls-remote` says the forge holds refs under
+    /// that namespace, and nothing came down. Read as "the forge retains none"
+    /// this is a clean report over commit messages a closed pull request renders
+    /// to anyone, permanently, and which the rewrite this audit asks for does
+    /// not touch.
+    #[test]
+    fn pull_refs_the_forge_lists_but_the_fetch_did_not_bring_are_unread() {
+        let root = repository("audit-pull-listed");
+        std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
+        git(&root, &["add", "-A"]);
+        git(&root, &["commit", "-qm", "one", "--no-verify"]);
+        let origin = crate::fixture::scratch("audit-pull-listed-origin");
+        git(&root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
+        git(
+            &root,
+            &["remote", "add", "origin", origin.to_str().unwrap()],
+        );
+        git(&root, &["push", "-q", "origin", "HEAD:refs/pull/1/head"]);
+
+        let note =
+            no_pull_refs(&root).expect("a forge that lists pull refs is not one that retains none");
+        assert!(
+            note.contains("the forge lists some under that namespace"),
+            "{note}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&origin).ok();
+    }
 }
