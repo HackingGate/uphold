@@ -472,3 +472,109 @@ mod tempfile_guard {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{find_named, find_workflow_dirs, PRUNE};
+
+    /// Paths under the fixture, as strings, so a failure names what was found.
+    fn relative(root: &std::path::Path, found: &[std::path::PathBuf]) -> Vec<String> {
+        found
+            .iter()
+            .map(|path| {
+                path.strip_prefix(root)
+                    .unwrap_or(path)
+                    .display()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// The prune list decides what the run reports on, not how fast it is.
+    ///
+    /// A `Cargo.toml` under `vendor/` or `upstream/` is somebody else's
+    /// manifest, and scanning it makes every run report a backlog nobody in
+    /// this tree can act on. The same five names were carried by all seven
+    /// copies of the shell task this replaces. `deep/vendor` is here because
+    /// the name is matched at every level: the equivalent osv-scanner argument
+    /// had to be spelled as a glob for exactly that reason, and a filter that
+    /// only pruned at the root would leave this test the one thing that noticed.
+    #[test]
+    fn the_prune_list_keeps_vendored_and_generated_trees_out_of_the_enumeration() {
+        let root = crate::fixture::scratch("supply-prune");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]\n").unwrap();
+        for directory in ["member", "deep/vendor"].iter().chain(PRUNE.iter()) {
+            std::fs::create_dir_all(root.join(directory)).unwrap();
+            std::fs::write(root.join(directory).join("Cargo.toml"), "[package]\n").unwrap();
+        }
+
+        assert_eq!(
+            relative(&root, &find_named(&root, "Cargo.toml").unwrap()),
+            ["Cargo.toml", "member/Cargo.toml"]
+        );
+    }
+
+    /// A workflow directory is found wherever it sits, and never inside a
+    /// pruned tree.
+    ///
+    /// zizmor is handed every directory at once, so one missed submodule is a
+    /// workflow nobody ever scanned -- and one vendored copy is a finding
+    /// nobody can fix. Both halves are the same enumeration.
+    #[test]
+    fn workflow_directories_are_found_at_any_depth_and_not_inside_a_pruned_tree() {
+        let root = crate::fixture::scratch("supply-workflows");
+        for directory in [".github/workflows", "sub/.github/workflows"] {
+            std::fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        std::fs::create_dir_all(root.join("vendor/.github/workflows")).unwrap();
+
+        assert_eq!(
+            relative(&root, &find_workflow_dirs(&root).unwrap()),
+            [".github/workflows", "sub/.github/workflows"]
+        );
+    }
+
+    /// A directory that cannot be read poisons the enumeration.
+    ///
+    /// The failure this refuses is the one the whole crate exists to refuse: an
+    /// unreadable directory that merely SHRINKS the result gives a scan that
+    /// looked at part of the tree and reported on all of it -- a clean run over
+    /// manifests nobody read. It has to be an error, so the section is COULD
+    /// NOT LOOK and the run exits 2.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_directory_fails_the_enumeration_rather_than_shrinking_it() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = crate::fixture::scratch("supply-unreadable");
+        std::fs::create_dir_all(root.join("open")).unwrap();
+        std::fs::write(root.join("open/Cargo.toml"), "[package]\n").unwrap();
+        let locked = root.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Root reads everything, so on a machine where the fixture is readable
+        // there is nothing here to prove; say so rather than assert a false
+        // negative.
+        let unreadable = std::fs::read_dir(&locked).is_err();
+        let named = find_named(&root, "Cargo.toml");
+        let workflows = find_workflow_dirs(&root);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        if !unreadable {
+            return;
+        }
+        let named = named.unwrap_err().to_string();
+        assert!(
+            named.contains("could not enumerate the tree looking for Cargo.toml"),
+            "{named}"
+        );
+        assert!(named.contains("must not report on all of it"), "{named}");
+        let workflows = workflows.unwrap_err().to_string();
+        assert!(
+            workflows.contains("could not enumerate workflow directories"),
+            "{workflows}"
+        );
+    }
+}

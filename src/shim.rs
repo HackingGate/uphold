@@ -2389,4 +2389,521 @@ mod tests {
         assert!(!json_bool_field(r#"{"private": false}"#, "private"));
         assert!(!json_bool_field(r#"{"name": "x"}"#, "private"));
     }
+
+    #[test]
+    fn a_star_match_names_every_invocation_without_walking_argv() {
+        // The answer a whole-command table gives, read before argv is walked at
+        // all: a command whose every subcommand publishes has no pair to list,
+        // and a `*` reached through the pair list would only ever match the
+        // literal words `*` and nothing.
+        let mut every = gh();
+        every.match_ = vec!["*".into()];
+        assert!(named(&every, "repo clone"));
+        assert!(named(&every, "pr create"));
+        assert!(named(&every, ""));
+        // And the table that did not write it still says no to what it does not
+        // name, which is the half a looser matcher would lose.
+        assert!(!named(&gh(), "repo clone"));
+    }
+
+    #[test]
+    fn two_unclassifiable_options_that_leave_the_same_pair_are_not_unclear() {
+        // Past one unclassified option the two readings are a sample rather
+        // than the space, so the older test stands: they leave the SUBCOMMAND
+        // in doubt only where they DISAGREE about which word it is. Reporting
+        // could-not-look on a pair both readings agree about puts the refusal
+        // on ordinary commands, and a refusal a reader sees everywhere is one
+        // they stop reading.
+        assert!(matches!(
+            gh().reading(&argv("--fic-a --fic-b pr checkout")),
+            Reading::Absent
+        ));
+        // The same two options with a word between them do move the pair, and
+        // that is the doubt this arm exists to say out loud.
+        assert!(matches!(
+            gh().reading(&argv("--fic-a x --fic-b y pr checkout")),
+            Reading::Unclear(flag) if flag == "--fic-a"
+        ));
+    }
+
+    #[test]
+    fn a_path_flag_collects_a_path_rather_than_a_body() {
+        // The kind is not decoration: a checker that greps prose for a private
+        // name and one that judges a tree are not the same checker, and only
+        // the kind tells them apart. Nor is a path a body -- marking one
+        // `body_given` would close the editor checkpoint over the text the
+        // command is about to open an editor for.
+        let mut with_paths = gh();
+        with_paths.path_flags = vec!["-p".into(), "--path".into()];
+        let collected = with_paths
+            .collect(
+                Path::new("."),
+                &argv("pr create -p src/lib.rs --path=README.md"),
+            )
+            .unwrap();
+        let subjects: Vec<(&str, &str)> = collected
+            .subjects
+            .iter()
+            .map(|subject| (subject.kind, subject.value.as_str()))
+            .collect();
+        assert_eq!(
+            subjects,
+            vec![("path", "src/lib.rs"), ("path", "README.md")]
+        );
+        assert!(!collected.body_given);
+    }
+
+    #[test]
+    fn a_body_file_that_is_not_there_is_refused_rather_than_run_unchecked() {
+        // `body_given` is set before the file is read, so a `-F` naming a file
+        // that is not there left the shim with a body it had been told about,
+        // no subject to check and nothing to say: it collected nothing and
+        // exec'd the command, which is a pass over text no checker saw.
+        let missing = crate::fixture::scratch("shim-missing-body").join("body.md");
+        let report = gh()
+            .collect(
+                Path::new("."),
+                &argv(&format!("pr create -F {}", missing.display())),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(report.contains("which is not a file"), "{report}");
+        assert!(report.contains("nothing checked"), "{report}");
+    }
+
+    /// The `npm` table as the shipped policy declares it: a tree rather than a
+    /// flag value, and a registry rather than a repository.
+    fn npm() -> Shim {
+        let mut npm = gh();
+        npm.command = String::from("npm");
+        npm.match_ = vec!["publish:*".into()];
+        npm.collect = Collect::NpmPackage;
+        npm.scope = Scope::PublicRegistry;
+        npm.target = Target::None;
+        npm
+    }
+
+    #[test]
+    fn an_npm_package_publishes_its_metadata_its_readme_and_its_tree() {
+        // What `npm publish` sends is a FILE TREE, so the subject kinds are
+        // `text` for the metadata and `path` for the tree. Read off the file
+        // rather than out of `npm pkg get`: that runs npm, and this shim is
+        // what npm is currently behind.
+        let dir = crate::fixture::scratch("shim-npm");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{"name": "widget", "description": "a widget"}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("README.md"), "the readme\n").unwrap();
+
+        let collected = npm().collect(&dir, &argv("publish")).unwrap();
+        let subjects: Vec<(&str, &str)> = collected
+            .subjects
+            .iter()
+            .map(|subject| (subject.kind, subject.value.as_str()))
+            .collect();
+        assert_eq!(
+            subjects,
+            vec![
+                ("text", "widget"),
+                ("text", "a widget"),
+                ("text", "the readme\n"),
+                ("path", dir.to_string_lossy().as_ref()),
+            ]
+        );
+        // npm opens no editor and has no web form, so neither seam is left
+        // open behind this collector.
+        assert!(collected.body_given);
+        assert!(!collected.web);
+
+        // A dry run publishes nothing, and refusing one would stop the very
+        // command somebody runs to find out what they are about to publish.
+        let dry = npm().collect(&dir, &argv("publish --dry-run")).unwrap();
+        assert!(dry.subjects.is_empty());
+    }
+
+    #[test]
+    fn an_argv_subject_carries_the_whole_command_line() {
+        // For the rule whose subject is the invocation itself rather than
+        // anything it names, and it is collected BESIDE the flag values rather
+        // than instead of them.
+        let mut whole = gh();
+        whole.argv_subject = true;
+        let collected = whole
+            .collect(Path::new("."), &argv("pr create -t Hello"))
+            .unwrap();
+        let last = collected.subjects.last().unwrap();
+        assert_eq!(
+            (last.kind, last.value.as_str()),
+            ("argv", "pr create -t Hello")
+        );
+        assert_eq!(collected.subjects.len(), 2);
+    }
+
+    #[test]
+    fn a_scope_of_always_holds_without_asking_anything() {
+        // The right default for a command with no destination. Asked directly,
+        // because every other caller reaches it through the memo, which
+        // answers `always` before the predicate is consulted at all.
+        assert!(gh()
+            .scope_holds(
+                &Scope::Always,
+                Path::new("."),
+                &Collected::default(),
+                &argv("pr create")
+            )
+            .unwrap());
+    }
+
+    #[test]
+    fn a_target_that_could_not_be_resolved_is_not_a_pass() {
+        // No answer is not "public": refusing a push because a lookup was
+        // unavailable would make the guard the reason work stops. Falling open
+        // is the decision; doing it in SILENCE was not, and silence looks
+        // exactly like a checker that ran and approved.
+        let mut nowhere = gh();
+        // Neither forge CLI, so nothing here reaches a network.
+        nowhere.command = String::from("faux");
+        nowhere.target = Target::None;
+        assert!(!nowhere
+            .scope_holds(
+                &Scope::PublicTarget,
+                Path::new("."),
+                &Collected::default(),
+                &argv("pr create")
+            )
+            .unwrap());
+    }
+
+    #[test]
+    fn a_target_on_a_host_no_resolver_knows_is_not_a_pass_either() {
+        // `-R acme/widget` answers WHICH repository without answering whose
+        // forge it is, and an unrecognised host means no resolver applies. The
+        // caller says so rather than reporting a pass over a visibility nobody
+        // read.
+        let dir = crate::fixture::scratch("shim-no-forge");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut unknown_host = gh();
+        // Not `gh` or `glab`: those name their forge by being run at all, and
+        // asking one would reach the network.
+        unknown_host.command = String::from("faux");
+        let collected = Collected {
+            target: Some(String::from("acme/widget")),
+            ..Collected::default()
+        };
+        assert_eq!(unknown_host.forge(&dir), None);
+        assert!(!unknown_host
+            .scope_holds(&Scope::PublicTarget, &dir, &collected, &argv("pr create"))
+            .unwrap());
+    }
+
+    #[test]
+    fn a_package_that_is_not_private_is_judged_by_the_registry_it_names() {
+        // Two independent reasons npm's question is nobody's business, and
+        // either one is enough. `"private": false` is not one of them -- the
+        // field is WRITTEN, so a scan for the word alone would stand the whole
+        // check down -- so the registry decides.
+        let dir = crate::fixture::scratch("shim-registry");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{"name": "widget", "private": false}"#,
+        )
+        .unwrap();
+        assert!(npm()
+            .scope_holds(
+                &Scope::PublicRegistry,
+                &dir,
+                &Collected::default(),
+                &argv("publish")
+            )
+            .unwrap());
+        // A registry that is not the public one is somebody's internal
+        // infrastructure, whatever the package says about itself.
+        let internal = Collected {
+            target: Some(String::from("https://npm.acme.example/")),
+            ..Collected::default()
+        };
+        assert!(!npm()
+            .scope_holds(&Scope::PublicRegistry, &dir, &internal, &argv("publish"))
+            .unwrap());
+    }
+
+    #[test]
+    fn one_scope_predicate_is_asked_once_however_many_rules_ask_it() {
+        // `public-target` asks a forge, and three rules behind one table would
+        // ask it three times -- and the could-not-resolve arm says its piece on
+        // stderr, which said three times reads as three failures.
+        let dir = crate::fixture::scratch("shim-memo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("package.json"), r#"{"private": true}"#).unwrap();
+        let asked = dir.join("asked");
+        let scope = Scope::Command {
+            command: format!("echo asked >> {}", asked.display()),
+        };
+        let mut memo = ScopeMemo::default();
+        for _ in 0..3 {
+            assert!(memo
+                .holds(
+                    &npm(),
+                    &scope,
+                    &dir,
+                    &Collected::default(),
+                    &argv("publish")
+                )
+                .unwrap());
+            // A different predicate is a different key, and is not answered
+            // out of the first one's memo.
+            assert!(!memo
+                .holds(
+                    &npm(),
+                    &Scope::PublicRegistry,
+                    &dir,
+                    &Collected::default(),
+                    &argv("publish")
+                )
+                .unwrap());
+        }
+        assert_eq!(
+            std::fs::read_to_string(&asked).unwrap().lines().count(),
+            1,
+            "the scope command was run more than once"
+        );
+    }
+
+    #[test]
+    fn a_field_spelled_as_a_number_or_a_bool_is_still_an_answer() {
+        // A forge that answers with a number has answered, and a caller that
+        // dropped it would treat a lookup that happened as one that did not.
+        assert_eq!(
+            json_string_field(r#"{"visibility": "public"}"#, "visibility").as_deref(),
+            Some("public")
+        );
+        assert_eq!(
+            json_string_field(r#"{"id": 42}"#, "id").as_deref(),
+            Some("42")
+        );
+        assert_eq!(
+            json_string_field(r#"{"private": true}"#, "private").as_deref(),
+            Some("true")
+        );
+        // A nested object is not an answer the caller can use, and -- the
+        // reason this is a parser rather than a scan for `"visibility"` -- a
+        // field found INSIDE one is somebody else's field. The shim stands in
+        // front of publication on the strength of this value.
+        assert_eq!(
+            json_string_field(r#"{"owner": {"login": "acme"}}"#, "owner"),
+            None
+        );
+        assert_eq!(
+            json_string_field(r#"{"owner": {"visibility": "public"}}"#, "visibility"),
+            None
+        );
+    }
+
+    /// A pattern rule the config would accept, in whichever direction.
+    fn pattern_rule(check: Check, pattern: &str) -> Rule {
+        let mut rule = Rule::synthetic("pattern-rule", check);
+        if check == Check::RequireRegexp {
+            rule.require_regexp = Some(pattern.to_owned());
+        } else {
+            rule.regexp = Some(pattern.to_owned());
+        }
+        rule.message = Some(String::from("fix the text"));
+        rule
+    }
+
+    #[test]
+    fn a_pattern_rule_names_the_kind_the_pattern_and_what_it_found() {
+        // The reader's next step is to fix the text, so "refused" without
+        // which-test-failed is a round trip.
+        let title = Subject {
+            kind: "title",
+            value: String::from("Generated with Claude Code"),
+        };
+        let refusal = pattern_refusal(&pattern_rule(Check::Regexp, "Claude Code"), &title)
+            .unwrap()
+            .unwrap();
+        for wanted in [
+            "pattern-rule",
+            "title subject",
+            "Claude Code",
+            "fix the text",
+        ] {
+            assert!(
+                refusal.contains(wanted),
+                "{wanted} is missing from {refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pattern_that_is_satisfied_refuses_nothing_in_either_direction() {
+        // The half that is easy to lose: a checkpoint that refuses everything
+        // is not a checkpoint. Both directions, because they are opposite
+        // tests over one engine -- `regexp` refuses a subject the pattern is
+        // present in, `require_regexp` one it is absent from.
+        let ordinary = Subject {
+            kind: "title",
+            value: String::from("v2.0.0"),
+        };
+        assert!(
+            pattern_refusal(&pattern_rule(Check::Regexp, "Claude Code"), &ordinary)
+                .unwrap()
+                .is_none()
+        );
+        assert!(pattern_refusal(
+            &pattern_rule(Check::RequireRegexp, r"^v[0-9]+\.[0-9]+\.[0-9]+$"),
+            &ordinary
+        )
+        .unwrap()
+        .is_none());
+        // And a rule carrying neither pattern says nothing rather than
+        // refusing a subject no pattern was ever written for.
+        assert!(
+            pattern_refusal(&Rule::synthetic("no-pattern", Check::Builtin), &ordinary)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_checker_consulted_without_an_exec_command_is_a_dispatch_hole_not_a_pass() {
+        // `exec` and `values_from` were one field called `run` in v2, and a
+        // rule mis-dispatched to this function once ran `sh -c ""`, approved
+        // everything it was asked about, and the pass was indistinguishable
+        // from a checker that looked.
+        let subject = Subject {
+            kind: "text",
+            value: String::from("anything at all"),
+        };
+        let mut blank = Rule::synthetic("blank-exec", Check::Exec);
+        blank.exec = Some(String::from("   "));
+        for rule in [Rule::synthetic("no-exec", Check::Builtin), blank] {
+            let report = consult(Path::new("."), &rule, &subject)
+                .unwrap_err()
+                .to_string();
+            assert!(report.contains("a dispatch hole, not a pass"), "{report}");
+        }
+    }
+
+    #[test]
+    fn a_checker_that_stopped_reading_the_subject_has_not_answered_about_it() {
+        // The one case where a 0 means nothing at all: the checker approved
+        // whatever part of the subject got through, and that is not what this
+        // invocation is about to publish. Well past a pipe's 64 KiB, because
+        // inside one the write completes and the question never arises.
+        let mut deaf = Rule::synthetic("reads-nothing", Check::Exec);
+        deaf.exec = Some(String::from("exit 0"));
+        let subject = Subject {
+            kind: "text",
+            value: "ordinary text\n".repeat(80_000),
+        };
+        let report = consult(Path::new("."), &deaf, &subject)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            report.contains("did not take the whole text subject"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn the_real_command_is_never_this_binary_under_the_commands_name() {
+        // "Past ourselves" is a question about the FILE, not the directory: a
+        // shim is a link, and a link resolves to the binary while living
+        // somewhere else entirely. A directory comparison skips nothing, finds
+        // the link, and execs it -- which is this program again, forever.
+        let Some(shell) = real_command("sh", None) else {
+            return;
+        };
+        let told_it_is_itself = real_command("sh", Some(&shell));
+        assert_ne!(
+            told_it_is_itself.as_deref().and_then(file_identity),
+            file_identity(&shell),
+            "PATH resolution handed back the very file it was told was itself"
+        );
+        // And a name nothing on PATH spells has no real command at all, which
+        // is what keeps the transparent path from running something else.
+        assert_eq!(real_command("uphold-no-such-command-4b1f", None), None);
+    }
+
+    #[test]
+    fn a_command_that_is_on_no_path_is_reported_rather_than_quietly_not_run() {
+        // The transparent path still has to be a path. A link left behind
+        // after the real command was uninstalled has nothing to exec, and
+        // exiting 0 there is a shim reporting a command ran when none did.
+        let report = exec_through("uphold-no-such-command-4b1f", &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            report.contains("nothing here stands in front of"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn an_editor_this_shim_cannot_point_at_itself_is_refused_rather_than_warned_about() {
+        // This printed a warning and returned, and the caller went on to exec
+        // the command -- so the one path the editor re-entry exists to close
+        // stayed open, and the run that could not check the text published it.
+        // The warning even said "This is not a pass" while exiting 0.
+        let mut command = Command::new("true");
+        let report = install_editor(
+            &mut command,
+            "faux",
+            "FAUX_EDITOR",
+            None,
+            &argv("pr create"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(report.contains("could not find its own path"), "{report}");
+        assert!(
+            command.get_envs().next().is_none(),
+            "an editor was installed for a command that is not going to run"
+        );
+    }
+
+    #[test]
+    fn the_editor_variable_names_this_binary_and_remembers_the_users_own() {
+        // The command runs its editor through a shell, so the variable holds a
+        // command LINE. What says "you are the editor" is the flag, which only
+        // the process the command launches as its editor is given: an
+        // environment reaches every descendant, and the descendants of a
+        // checking pass include the `git` that IS this binary under a link.
+        let mut command = Command::new("true");
+        install_editor(
+            &mut command,
+            "faux",
+            "FAUX_EDITOR",
+            Some(Path::new("/opt/my tools/uphold")),
+            &argv("pr create"),
+        )
+        .unwrap();
+        let environment: BTreeMap<String, String> = command
+            .get_envs()
+            .filter_map(|(name, value)| {
+                Some((
+                    name.to_string_lossy().into_owned(),
+                    value?.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect();
+        let installed = &environment["FAUX_EDITOR"];
+        assert_eq!(
+            installed, "'/opt/my tools/uphold' shim --as-editor 'faux'",
+            "the editor line has to survive a shell that splits it"
+        );
+        // The command line the editor was opened FOR, so the pass on the way
+        // back consults the checkers that stand in front of that line.
+        assert_eq!(
+            environment.get(EDITOR_ARGV).map(String::as_str),
+            Some("pr create")
+        );
+        // And the user's own editor, which this variable no longer names.
+        assert!(environment.contains_key(EDITOR_REAL));
+    }
 }

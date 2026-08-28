@@ -776,3 +776,453 @@ fn an_editor_pass_does_not_re_enter_the_git_it_runs() {
          exercise the path it is named for: {calls:?}"
     );
 }
+
+// ── the seams the exec hides: stdin that is not text, the editor's own
+//    answers, and which forge is asked about a remote ───────────────────
+
+#[test]
+fn a_body_on_stdin_that_is_not_text_cannot_be_checked_and_is_not_a_pass() {
+    // A checker reads a subject as text, so bytes that are not text cannot be
+    // checked. The lossy copy the shim decides WITH would report a pass over
+    // U+FFFD where the bytes were, and the command would publish the bytes.
+    let root = workspace(
+        &format!(
+            r#"{MARKER_RULE}
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+file_flags = ["-F", "--body-file"]
+scope = "always"
+"#
+        ),
+        &[("faux", "#!/bin/sh\necho \"faux ran: $*\"\n")],
+    );
+    let output = Run {
+        args: &["faux", "pr", "create", "-F", "-"],
+        stdin: Some(&[0xff, 0xfe, b'n', b'o', 0x00]),
+        ..Run::default()
+    }
+    .go(&root);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("which is not UTF-8 text"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A policy whose checker at the editor checkpoint is a PATTERN rather than a
+/// program, which is the kind the round trip used to read past.
+const EDITOR_MARKER_POLICY: &str = r#"
+[rule.body-marker]
+message = "remove the marker"
+regexp = "Claude Code"
+# A pattern that names itself in the file it is declared in selects that file,
+# which the load refuses. This rule is about what a command publishes.
+files.exclude = ["policy/**"]
+command.before = ["faux"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-b", "--body"]
+editor_env = "FAUX_EDITOR"
+scope = "always"
+"#;
+
+/// The editor pass, entered the way the command enters it: as the editor.
+fn as_editor(root: &Path, editor: &Path, envs: &[(&str, &str)]) -> Output {
+    let mut all: Vec<(&str, &str)> = vec![("UPHOLD_SHIM_EDITOR_ARGV", "faux pr create")];
+    let spelled = editor.to_string_lossy().into_owned();
+    all.push(("UPHOLD_SHIM_EDITOR_REAL", &spelled));
+    all.extend_from_slice(envs);
+    Run {
+        args: &["--as-editor", "faux", "body.md"],
+        envs: &all,
+        ..Run::default()
+    }
+    .go(root)
+}
+
+#[test]
+fn an_editor_that_failed_is_neither_a_pass_nor_a_refusal() {
+    // The editor is how the text was going to be written, so an editor that
+    // failed means nothing was looked at -- which is exit 2 and not exit 0.
+    // The file left on disk is not judged either: it holds whatever was there
+    // before the editor was opened, and refusing THAT would name a violation
+    // in text this invocation was not going to publish.
+    let root = workspace(
+        EDITOR_MARKER_POLICY,
+        &[
+            ("faux", EDITING_COMMAND),
+            ("failing-editor", "#!/bin/sh\nexit 3\n"),
+        ],
+    );
+    std::fs::write(root.join("body.md"), "Generated with Claude Code\n").unwrap();
+    let editor = root.join("bin/failing-editor");
+    let output = as_editor(&root, &editor, &[]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("the editor exited without success"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("body-marker"),
+        "a file the editor never wrote was judged anyway: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn an_editor_that_left_nothing_to_publish_has_nothing_to_check() {
+    // Abandoning a body is how a person cancels the command: `gh` and `git`
+    // both read an empty file as "do not publish this". A checkpoint that
+    // refused the absence would make the cancel path the loudest one there is.
+    let root = workspace(
+        EDITOR_MARKER_POLICY,
+        &[
+            ("faux", EDITING_COMMAND),
+            ("quiet-editor", "#!/bin/sh\nexit 0\n"),
+        ],
+    );
+    let editor = root.join("bin/quiet-editor");
+
+    // No file at all: the editor wrote nothing anywhere.
+    let absent = as_editor(&root, &editor, &[]);
+    assert_eq!(code(&absent), 0, "{}", stderr(&absent));
+
+    // And a file holding only whitespace, which is the same answer arriving
+    // through the editor that did open.
+    std::fs::write(root.join("body.md"), "   \n\n").unwrap();
+    let blank = as_editor(&root, &editor, &[]);
+    assert_eq!(code(&blank), 0, "{}", stderr(&blank));
+}
+
+#[test]
+fn a_pattern_rule_stands_at_the_editor_checkpoint() {
+    // The round trip consulted `exec` rules and then `exec` and built-ins, and
+    // a policy whose checker for this command is a PATTERN still had a
+    // checkpoint with nobody at it: the shim installed itself as the editor,
+    // ran it, read the file back, consulted zero rules and exited 0. A guard
+    // cannot judge a body typed into an editor one way and the same body given
+    // with `--body` another under one id.
+    let root = workspace(
+        EDITOR_MARKER_POLICY,
+        &[
+            ("faux", EDITING_COMMAND),
+            (
+                "dirty-editor",
+                "#!/bin/sh\nprintf 'Generated with Claude Code\\n' > \"$1\"\n",
+            ),
+        ],
+    );
+    let editor = root.join("bin/dirty-editor");
+    let output = as_editor(&root, &editor, &[]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("body-marker"),
+        "{}",
+        stderr(&output)
+    );
+    // And it says where the text still is, because the editor has closed and
+    // what was written is not on any screen any more.
+    assert!(
+        stderr(&output).contains("still in body.md"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn the_bypass_reaches_the_editor_checkpoint_as_well() {
+    // One override, both seams. A bypass that held for `--body` and not for the
+    // editor would leave the documented way out working only where the body
+    // happened to be typed.
+    let root = workspace(
+        EDITOR_MARKER_POLICY,
+        &[
+            ("faux", EDITING_COMMAND),
+            (
+                "dirty-editor",
+                "#!/bin/sh\nprintf 'Generated with Claude Code\\n' > \"$1\"\n",
+            ),
+        ],
+    );
+    let editor = root.join("bin/dirty-editor");
+    let output = as_editor(&root, &editor, &[("UPHOLD_ALLOW", "body-marker")]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+/// A rule about titles, standing at a checkpoint whose subject is a body.
+const EDITOR_TITLE_POLICY: &str = r#"
+[rule.release-title-is-the-tag]
+message = "title a release by its tag"
+require_regexp = '^v[0-9]+$'
+subjects = ["title"]
+command.before = ["faux"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+title_flags = ["-t", "--title"]
+editor_env = "FAUX_EDITOR"
+scope = "always"
+"#;
+
+#[test]
+fn a_rule_about_titles_is_not_asked_about_the_body_an_editor_wrote() {
+    // What the editor leaves in the file is a `text` subject, and a rule that
+    // wrote `subjects = ["title"]` says it is not about that. Asked anyway, a
+    // format rule refuses every body ever typed into an editor -- which is the
+    // checkpoint refusing prose for not being a tag.
+    let root = workspace(
+        EDITOR_TITLE_POLICY,
+        &[
+            ("faux", EDITING_COMMAND),
+            (
+                "clean-editor",
+                "#!/bin/sh\nprintf 'An ordinary body\\n' > \"$1\"\n",
+            ),
+        ],
+    );
+    let editor = root.join("bin/clean-editor");
+    let output = as_editor(&root, &editor, &[]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        !stderr(&output).contains("release-title-is-the-tag"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// The same checker, at a checkpoint the table's scope stands down for.
+const EDITOR_OUT_OF_SCOPE_POLICY: &str = r#"
+[rule.body-marker]
+message = "remove the marker"
+regexp = "Claude Code"
+files.exclude = ["policy/**"]
+command.before = ["faux"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-b", "--body"]
+editor_env = "FAUX_EDITOR"
+scope = { command = { command = "exit 1" } }
+"#;
+
+#[test]
+fn an_editor_checkpoint_the_policy_stood_down_for_is_a_decision_not_a_gap() {
+    // The scopes are asked again here, and for the reason they are asked at
+    // all: a rule whose scope is the table's `public-target` must not be
+    // consulted about a body bound for a private repository just because some
+    // wider rule kept the checkpoint open. Exit 0 -- and NOT the exit 2 that
+    // says nobody was standing here, which is a different answer to a
+    // different question.
+    let root = workspace(
+        EDITOR_OUT_OF_SCOPE_POLICY,
+        &[
+            ("faux", EDITING_COMMAND),
+            (
+                "dirty-editor",
+                "#!/bin/sh\nprintf 'Generated with Claude Code\\n' > \"$1\"\n",
+            ),
+        ],
+    );
+    let editor = root.join("bin/dirty-editor");
+    let output = as_editor(&root, &editor, &[]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        !stderr(&output).contains("nothing would have been checked"),
+        "a destination the policy answered about was reported as a gap: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn re_entered_as_an_editor_with_no_file_to_edit_is_refused() {
+    // The command appends the file it wants written to the editor command
+    // line, so an editor's argv always ends in one. Arriving without it means
+    // this process was routed here by something that is not the command, and
+    // there is nothing to read back.
+    let root = workspace(EDITOR_MARKER_POLICY, &[("faux", EDITING_COMMAND)]);
+    let output = Run {
+        args: &["--as-editor", "faux"],
+        ..Run::default()
+    }
+    .go(&root);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no file to edit"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// The GitHub visibility endpoint, and a stub that publishes.
+///
+/// `gh api ... --jq .visibility` prints one word, so the WHOLE of stdout is the
+/// answer -- the arm `glab`, which cannot be asked to do the extraction, does
+/// not reach. Every call is recorded, because "which repository was the forge
+/// asked about" is the half a passing exit code cannot show.
+const GITHUB_COMMAND: &str = "#!/bin/sh\nif [ \"$1\" = api ]; then\n  echo \"$*\" >> \"$GH_CALLS\"\n  if [ -n \"$FAKE_FAILS\" ]; then exit 1; fi\n  printf '%s\\n' \"${FAKE_VISIBILITY:-public}\"\n  exit 0\nfi\necho \"gh ran: $*\"\n";
+
+/// Two rules over one invocation: one that applies wherever this command is
+/// typed, and one that inherits the table's `public-target`.
+const REMOTE_TARGET_RULES: &str = r#"
+[rule.marker-on-every-egress]
+message = "remove the marker"
+regexp = "Claude Code"
+files.exclude = ["policy/**"]
+command.before = ["faux"]
+command.scope = "always"
+
+[rule.marker-on-a-public-target]
+message = "remove the marker"
+regexp = "Claude Code"
+files.exclude = ["policy/**"]
+command.before = ["faux"]
+"#;
+
+/// A remote to resolve a target out of, written rather than fetched.
+fn origin(root: &Path, url: &str) {
+    Command::new(support::real_git())
+        .args(["remote", "add", "origin", url])
+        .current_dir(root)
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+}
+
+#[test]
+fn the_forge_asked_about_a_target_is_the_one_the_remote_names() {
+    // One shim stands in front of a command that pushes to either forge, so
+    // the remote decides which one can answer -- and the target is the
+    // repository that remote names rather than whatever `-R` a verb happened
+    // to carry. Asking `gh` about everything is why the shipped `glab` shim
+    // resolved nothing and was inert.
+    let policy = format!(
+        r#"{REMOTE_TARGET_RULES}
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-t", "--title"]
+target = "git-remote"
+scope = "public-target"
+"#
+    );
+    let root = workspace(
+        &policy,
+        &[
+            ("faux", "#!/bin/sh\necho \"faux ran: $*\"\n"),
+            ("gh", GITHUB_COMMAND),
+        ],
+    );
+    origin(&root, "https://github.com/acme/widget.git");
+    let calls = root.join("gh-calls.log");
+
+    // Private: the table's scope does not hold, so the rule that inherits it
+    // stands down and the one scoped `always` still refuses.
+    let private = Run {
+        args: &["faux", "pr", "create", "-t", "Generated with Claude Code"],
+        envs: &[
+            ("GH_CALLS", &calls.to_string_lossy()),
+            ("FAKE_VISIBILITY", "private"),
+        ],
+        ..Run::default()
+    }
+    .go(&root);
+    assert_eq!(code(&private), 1, "{}", stderr(&private));
+    assert!(
+        stderr(&private).contains("marker-on-every-egress"),
+        "{}",
+        stderr(&private)
+    );
+    assert!(
+        !stderr(&private).contains("marker-on-a-public-target"),
+        "a `public-target` rule was consulted about a private repository: {}",
+        stderr(&private)
+    );
+    let asked = std::fs::read_to_string(&calls).unwrap_or_default();
+    assert!(
+        asked.contains("repos/acme/widget"),
+        "the forge was not asked about the repository the remote names: {asked:?}"
+    );
+
+    // Public: both apply, and the one that stood down above says so here.
+    let public = Run {
+        args: &["faux", "pr", "create", "-t", "Generated with Claude Code"],
+        envs: &[
+            ("GH_CALLS", &calls.to_string_lossy()),
+            ("FAKE_VISIBILITY", "public"),
+        ],
+        ..Run::default()
+    }
+    .go(&root);
+    assert_eq!(code(&public), 1, "{}", stderr(&public));
+    assert!(
+        stderr(&public).contains("marker-on-a-public-target"),
+        "{}",
+        stderr(&public)
+    );
+}
+
+#[test]
+fn a_forge_that_could_not_answer_is_not_a_pass() {
+    // Unauthenticated, rate-limited, offline, or a host no resolver knows: the
+    // decision to fall open is deliberate, and making it in SILENCE is not
+    // available. Silence here looks exactly like a checker that ran and
+    // approved, which is the shape this whole seam exists to refuse.
+    let policy = format!(
+        r#"{REMOTE_TARGET_RULES}
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-t", "--title"]
+target = "forge-repo"
+scope = "public-target"
+"#
+    );
+    for (url, fails) in [
+        // The forge is the right one and cannot answer.
+        ("https://github.com/acme/widget.git", "1"),
+        // And a host no resolver knows, where there is nobody to ask at all.
+        ("https://git.example.com/acme/widget.git", ""),
+    ] {
+        let root = workspace(
+            &policy,
+            &[
+                ("faux", "#!/bin/sh\necho \"faux ran: $*\"\n"),
+                ("gh", GITHUB_COMMAND),
+            ],
+        );
+        origin(&root, url);
+        let calls = root.join("gh-calls.log");
+        let output = Run {
+            args: &["faux", "pr", "create", "-t", "Generated with Claude Code"],
+            envs: &[
+                ("GH_CALLS", &calls.to_string_lossy()),
+                ("FAKE_FAILS", fails),
+            ],
+            ..Run::default()
+        }
+        .go(&root);
+        assert_eq!(code(&output), 1, "{url}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("This is not a pass."),
+            "{url}: {}",
+            stderr(&output)
+        );
+        assert!(
+            !stderr(&output).contains("marker-on-a-public-target"),
+            "{url}: an unread visibility was treated as public: {}",
+            stderr(&output)
+        );
+    }
+}
