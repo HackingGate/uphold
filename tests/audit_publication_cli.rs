@@ -674,7 +674,12 @@ fn a_commit_only_on_a_retained_pull_ref_is_read() {
     // the forge's retained ref reaches this commit now.
     git(&root, &["reset", "-q", "--hard", "HEAD~1"]);
 
-    let output = audit(&root);
+    // A stub `gh`, for the reason `audit_with_gh` gives: the private-name rule
+    // asks the forge about every owner/repo shape it meets, and on a runner
+    // with no token that question is exit 2 before the retained ref is ever
+    // walked. Measured: this test passed on a logged-in machine and failed in
+    // CI at the visibility lookup, which is the wrong reason to be red.
+    let output = audit_with_gh(&root, "exit 0\n");
     let report = text(&output);
     assert_eq!(
         code(&output),
