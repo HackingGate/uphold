@@ -1522,3 +1522,46 @@ fn a_written_allowed_owners_admits_its_own_and_refuses_the_rest() {
         stderr(&output)
     );
 }
+
+/// A written `allowed_owners` adds to the PINNED owner instead of replacing it.
+///
+/// The pin is who this repository is, and naming a fork it also pushes to does
+/// not stop it being that. Replacing the pin refused `acme/widget` -- the
+/// workspace's own repository -- under a refusal whose next line still read
+/// "This workspace is pinned to acme": a decision and an explanation that
+/// disagreed, and only one of them could be right.
+///
+/// All three destinations are asserted because either half alone is passed by a
+/// wrong guard: the pinned owner alone is the replacing version's bug, the two
+/// permitted pushes alone are also an allow-all.
+#[test]
+fn allowed_owners_joins_the_pinned_owner_rather_than_replacing_it() {
+    let root = repository(
+        "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\n\
+         owner = \"acme\"\nallowed_owners = [\"friend\"]\n\n\
+         [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
+    );
+
+    let output = push_guard(
+        &root,
+        &["--remote-url", "https://github.com/acme/widget.git"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let output = push_guard(
+        &root,
+        &["--remote-url", "https://github.com/friend/thing.git"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let output = push_guard(
+        &root,
+        &["--remote-url", "https://github.com/other/thing.git"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("other/thing"),
+        "{}",
+        stderr(&output)
+    );
+}

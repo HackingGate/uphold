@@ -1037,7 +1037,7 @@ enforced and is not.
 | parameter | read by | meaning |
 |---|---|---|
 | `owner` | `prevent-public-push` | the owner this workspace is pinned to |
-| `allowed_owners` | `prevent-public-push` | owners a push may go to; defaults to the pinned owner |
+| `allowed_owners` | `prevent-public-push` | further owners a push may go to — the pinned `owner` is always allowed, and where nothing is pinned the list stands in for the owner read off `origin` |
 | `allowed_repos` | `prevent-public-push` | single repositories allowed through, `"owner/repo"` |
 | `visibility` | the `no-private-repo-names` family, `no-stale-visibility` | this repository's visibility, declared instead of looked up |
 | `visibility_required` | the `no-private-repo-names` family | exit `2` rather than fall back to the forge when nothing has declared a visibility |

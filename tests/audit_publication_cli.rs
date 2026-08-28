@@ -644,6 +644,60 @@ fn an_object_walk_that_git_refused_is_not_reported_as_an_empty_tree() {
     );
 }
 
+/// A commit message is read WHOLE, past any byte the reader once split on.
+///
+/// The audit asked git for `--format=%H%x1f%B%x1e` and split the output on
+/// those bytes, so a message holding one of them was cut at it: everything
+/// after the `\x1e` became a record with no `\x1f` in it, hit the `continue`
+/// for a record that does not parse, and was scanned by nothing. A private name
+/// written past that byte therefore read as a clean commit -- the fail-open
+/// this whole subcommand exists to close, arriving through the reader rather
+/// than through the rule. Pasted terminal output is the ordinary way such a
+/// byte reaches a commit message.
+///
+/// The name is in the MESSAGE and in no file, so the finding can only have come
+/// from reading the message to its end.
+#[test]
+fn a_name_after_the_old_record_separator_in_a_message_is_found() {
+    let root = repository();
+    let origin = origin_for(&root, "publication-separator-origin");
+    std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    std::fs::write(root.join("b.txt"), "an ordinary change\n").unwrap();
+    git(&root, &["add", "-A"]);
+    git(
+        &root,
+        &[
+            "commit",
+            "-qm",
+            "pasted a log line \u{1e} as PrivateOrg asked",
+            "--no-verify",
+        ],
+    );
+    git(&root, &["push", "-q", "origin", "main"]);
+
+    // A stub `gh`, for the reason `audit_with_gh` gives: on a runner with no
+    // token the visibility lookup exits 2 before any message is judged.
+    let output = audit_with_gh(&root, "exit 0\n");
+    let report = text(&output);
+    assert_eq!(
+        code(&output),
+        1,
+        "the name sits after the byte the reader split on:\n{report}"
+    );
+    // Named by the commit it is in, not merely counted: a report that found the
+    // text somewhere else entirely would not identify this commit.
+    let head = Command::new(support::real_git())
+        .args(["rev-parse", "--short=8", "HEAD"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let sha = String::from_utf8_lossy(&head.stdout).trim().to_owned();
+    assert!(report.contains(&format!("commit {sha}")), "{report}");
+    let _ = std::fs::remove_dir_all(&origin);
+}
+
 /// A commit that exists only on a retained pull-request head ref is read.
 ///
 /// The surface named in the module docstring as the one a rewrite does not
