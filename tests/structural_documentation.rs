@@ -68,7 +68,6 @@ const KNOWN: &[&str] = &[
     "guard/message.rs::unusual_unicode_in",
     "guard/mod.rs::RunRequest",
     "guard/names.rs::in_message",
-    "guard/push.rs::prevent_public_push",
     "guard/sets.rs::no_hand_copied_base_rule",
     "guard/unicode.rs::in_files",
     "pins.rs::Declaration",

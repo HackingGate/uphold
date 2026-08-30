@@ -48,6 +48,14 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     "no-private-repo-names-staged",
     "no-private-repo-names-in-files",
     "prevent-public-push",
+    // The same question as `prevent-public-push`, asked at the other seam and
+    // answered by the same predicate. A push is not the only way text leaves
+    // this workspace: `gh issue create --repo other-owner/their-repo` publishes
+    // through a forge API, past every git hook, and until this existed the shim
+    // asked whether the TEXT was safe and never whether the DESTINATION was
+    // ours. It is dispatched from `target_refusal` rather than `evaluate`,
+    // because a git hook is handed no destination to judge.
+    "prevent-unowned-target",
     "no-local-merge",
     "no-merge-commit",
     "no-stale-hook-pins",
@@ -249,6 +257,74 @@ pub(crate) const TEXT_GUARDS: &[&str] = &[
 /// and a meta rule re-running them would report each refusal twice.
 pub(crate) const META_TEXT_GUARDS: &[&str] = &["text-guards", "text-literals"];
 
+/// The guards that judge a DESTINATION rather than a piece of text.
+///
+/// A parallel list to [`TEXT_GUARDS`], and parallel for a reason: what a shim
+/// hands a checker is a subject and a destination, and those are two different
+/// things to be asked about. A text guard reads what is about to be published;
+/// one of these reads WHERE. Neither can answer the other's question, so a
+/// guard in this list is never handed a subject and a guard in that one is
+/// never handed a target.
+///
+/// The destination is a property of the INVOCATION and not of any subject it
+/// carries, which is why these are consulted once per run rather than once per
+/// subject -- and why they are consulted even where the invocation collected no
+/// subject at all. `--repo other-owner/their-repo` with an empty body still
+/// publishes to somewhere.
+pub(crate) const TARGET_GUARDS: &[&str] = &["prevent-unowned-target"];
+
+/// One destination-judging guard's verdict over one invocation's destination.
+///
+/// The command-seam twin of [`text_refusal`], and it exists for the same
+/// reason: so the shim reaches the same rule body a hook does. `prevent-public-push`
+/// at `pre-push` and `prevent-unowned-target` at a `[[shim]]` are one decision
+/// -- is this destination one this workspace owns -- and [`push::unowned`] is
+/// the single place it is made.
+///
+/// `None` where the rule judges no destination, or is bypassed, or found
+/// nothing. `Err` where the rule is in scope and there was no destination to
+/// look at, which is the third answer and never a pass.
+pub(crate) fn target_refusal(
+    root: &Path,
+    policy: &Policy,
+    rule: &Rule,
+    target: Option<&str>,
+) -> Result<Option<Refusal>> {
+    let Some(builtin) = rule.builtin() else {
+        return Ok(None);
+    };
+    if !TARGET_GUARDS.contains(&builtin) || bypassed(&rule.id) {
+        return Ok(None);
+    }
+    // In scope, and nothing to judge. Exit 2 rather than a pass, and rather
+    // than a refusal: nothing was found to be wrong, the subject could not be
+    // looked at -- `explicit-unknown`, the same reading the editor pass and the
+    // non-UTF-8 argv take. Falling open here would be the whole gap back: an
+    // invocation whose `--repo` this shim could not read is exactly the one
+    // that most needs asking about.
+    //
+    // `git::owner_repo` is the one parser, so `--repo owner/name`, a full forge
+    // url and the remote all become the same pair. A value it cannot split is
+    // not a destination this guard can judge.
+    let Some((owner, repo)) = target.and_then(crate::git::owner_repo) else {
+        return Err(Fatal::new(format!(
+            "rule {:?}: this invocation publishes to a repository and nothing here says \
+             which one -- no `--repo`/`-R` on the command line, and no remote to read one \
+             off. Whether a destination belongs to this workspace cannot be answered \
+             without knowing the destination, and a check that could not look is not a \
+             check that passed. Nothing was published; name the destination explicitly, \
+             or run this where the repository has a remote",
+            rule.id
+        )));
+    };
+    Ok(match builtin {
+        "prevent-unowned-target" => {
+            push::unowned(root, policy, rule, (&owner, &repo), push::Seam::Command)?
+        }
+        _ => None,
+    })
+}
+
 /// Run every text-capable guard over one piece of text.
 pub(crate) fn over_text(
     root: &Path,
@@ -404,7 +480,13 @@ pub(crate) fn evaluate(request: &Request<'_>) -> Result<Option<Refusal>> {
 /// way it refuses a second check field and for the same reason.
 pub(crate) fn parameters(builtin: &str) -> &'static [&'static str] {
     match builtin {
-        "prevent-public-push" => &["owner", "owner_required", "allowed_owners", "allowed_repos"],
+        // One row for two built-ins, because they are one decision reached from
+        // two seams: the fields that say who this workspace is and where it may
+        // publish mean the same thing whether a push or a `gh` invocation is
+        // asking.
+        "prevent-public-push" | "prevent-unowned-target" => {
+            &["owner", "owner_required", "allowed_owners", "allowed_repos"]
+        }
         "no-private-repo-names"
         | "no-private-repo-names-staged"
         | "no-private-repo-names-in-files" => &[
@@ -510,6 +592,12 @@ mod tests {
         // that into a runtime error rather than a compile one. So the arms are
         // read here: a name in the list with no arm beside it is a guard a
         // config can declare, validate, install, and never run.
+        //
+        // The whole FILE is read rather than one function, because a built-in
+        // is dispatched from the seam that can hand it what it reads --
+        // `evaluate` for a git hook, `text_refusal` for a subject,
+        // `target_refusal` for a destination. Which of them carries the arm is
+        // the built-in's business; that one of them does is this test's.
         let source = include_str!("mod.rs");
         for id in EVERY_BUILTIN {
             if SCAN_BUILTINS.contains(id) {
@@ -522,7 +610,7 @@ mod tests {
                 "{id} is in EVERY_BUILTIN with no dispatch arm"
             );
         }
-        assert_eq!(EVERY_BUILTIN.len(), 18);
+        assert_eq!(EVERY_BUILTIN.len(), 19);
     }
 
     #[test]

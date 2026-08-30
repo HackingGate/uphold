@@ -64,11 +64,14 @@ place is refused, because it runs nowhere and that reads exactly like a rule
 that passes. `command.before` is refused on a check no shim can consult — the
 shim consults `exec` checkers, the two pattern checks (`regexp` and
 `require_regexp`, which mean the same thing against a title as against a line
-of a file), and the built-ins that can judge arbitrary text
+of a file), the built-ins that can judge arbitrary text
 (`prevent-ai-author`, `prevent-unusual-unicode`, `no-private-repo-names`, and
-the two consultations `text-guards` and `text-literals`); anything else reads
-an index, an identity or a push range and has nothing to say about a
-pull-request body.
+the two consultations `text-guards` and `text-literals`), and the built-in that
+judges a **destination** rather than text (`prevent-unowned-target`); anything
+else reads an index, an identity or a push range and has nothing to say about a
+pull-request body. The destination-judging built-in is refused in the other
+direction too — `git.hooks` or `files.*` beside it, where nothing hands it a
+destination, would be a rule looking at nothing and reporting clean.
 
 A pattern rule at this seam may also say **which subjects** it is asked about,
 with `subjects` — a list drawn from `text`, `title`, `path`, `ref`, `argv` —
@@ -989,6 +992,7 @@ stamped on it, the range about to be pushed.
 | `no-private-repo-names-staged` | the same, in the lines a commit adds |
 | `no-private-repo-names-in-files` | the same, anywhere in what is being introduced — content, **path names**, and at a push the **commit messages** the push publishes |
 | `prevent-public-push` | a push to somewhere off the allow-list |
+| `prevent-unowned-target` | a **command** told to publish to a repository this workspace does not own. The same decision as the row above, reached from the shim seam instead of a hook — so it registers with `command.before` and never `git.hooks`, and a destination it could not resolve is exit `2` |
 | `no-local-merge` | a merge that would make a merge commit |
 | `no-merge-commit` | a commit finishing a merge or a squash merge |
 | `no-stale-hook-pins` | a pin left behind its upstream, or naming no ref — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree; a pin it **could not check** is exit `2` |
@@ -1036,9 +1040,10 @@ enforced and is not.
 
 | parameter | read by | meaning |
 |---|---|---|
-| `owner` | `prevent-public-push` | the owner this workspace is pinned to |
-| `allowed_owners` | `prevent-public-push` | further owners a push may go to — the pinned `owner` is always allowed, and where nothing is pinned the list stands in for the owner read off `origin` |
-| `allowed_repos` | `prevent-public-push` | single repositories allowed through, `"owner/repo"` |
+| `owner` | `prevent-public-push`, `prevent-unowned-target` | the owner this workspace is pinned to |
+| `owner_required` | `prevent-public-push`, `prevent-unowned-target` | exit `2` rather than read the owner off `origin` when nothing has declared one |
+| `allowed_owners` | `prevent-public-push`, `prevent-unowned-target` | further owners a publication may go to — the pinned `owner` is always allowed, and where nothing is pinned the list stands in for the owner read off `origin` |
+| `allowed_repos` | `prevent-public-push`, `prevent-unowned-target` | single repositories allowed through, `"owner/repo"` |
 | `visibility` | the `no-private-repo-names` family, `no-stale-visibility` | this repository's visibility, declared instead of looked up |
 | `visibility_required` | the `no-private-repo-names` family | exit `2` rather than fall back to the forge when nothing has declared a visibility |
 | `private_owners` | the `no-private-repo-names` family | owners whose repositories are private regardless of what a forge says |
@@ -1048,7 +1053,10 @@ enforced and is not.
 | `allow` | `prevent-unusual-unicode-in-files` | codepoints admitted, optionally under one glob — `"U+00A0:docs/captured/**"` |
 
 The "family" is `no-private-repo-names`, `-staged` and `-in-files`. No other
-built-in reads any parameter. `no-stale-visibility` reads `visibility` and
+built-in reads any parameter. The first four rows are **one row twice**:
+`prevent-public-push` and `prevent-unowned-target` are one decision reached from
+two seams, and who this workspace is means the same thing whether a push or a
+`gh` invocation is asking. `no-stale-visibility` reads `visibility` and
 nothing else — everything else in that row is about judging names in text, which
 the falsifier never does.
 
@@ -1346,6 +1354,48 @@ command.before = ["gh", "glab", "git push"]
 Any executable: the subject on stdin, its kind in `UPHOLD_KIND`, **0** to
 pass, **1** to refuse, **2** to say it could not look. Exit 2 is the third
 answer and is never folded into either of the others.
+
+**A checker need not be asked about text at all.** A shim resolves two things
+from an invocation: the **subjects** it is about to publish, and the
+**destination** it was told to publish them to. Those are two questions, and a
+checker answers one of them. Every kind above judges a subject; a rule whose
+built-in is `prevent-unowned-target` judges the destination:
+
+```toml
+[rule.unowned-forge-target]
+builtin = "prevent-unowned-target"
+owner_required = true
+command.before = ["gh", "glab"]
+command.scope = "always"
+```
+
+The distinction is not decorative. A destination is a property of the
+**invocation** and not of any subject it carries, so a target-judging checker is
+consulted **once per invocation**, outside the per-subject loop — and it is
+consulted even where the invocation collected no subject at all, since `gh issue
+create --repo other-owner/their-repo` with an empty body still publishes to
+somewhere. Before this kind existed, an invocation carrying blameless prose and
+somebody else's `--repo` satisfied every checker standing in front of `gh` and
+published: nothing was wrong with the text, and no rule was looking at where it
+was going.
+
+It is the same decision `prevent-public-push` makes at `pre-push`, and it is
+**the same rule body** — one predicate, reached from both seams, so a push and a
+`gh` invocation cannot come to different conclusions about the same owner. The
+parameters are the ones in that guard's row: `owner`, `owner_required`,
+`allowed_owners`, `allowed_repos`.
+
+`command.scope = "always"` is the scope to write here, and `public-target` is
+the wrong one twice over. It stands the rule down exactly where the forge lookup
+failed, which is the invocation that most needs asking about; and whether a
+destination is *yours* is a fact about the destination, not about its
+visibility — a private repository belonging to somebody else is still not yours.
+The resolution costs no round trip either way: the destination is read off
+`--repo`/`-R` or off the remote, and no forge is asked.
+
+**A destination that could not be resolved is exit `2`.** No `--repo` on the
+command line and no remote to read one off is a could-not-look, not a pass —
+`explicit-unknown`, the same reading the editor pass and a non-UTF-8 argv take.
 
 **A checker must read stdin to the end.** One that exits 0 having consumed part
 of a long subject — a bare `grep -q`, a `head -c` — is answering about text it
