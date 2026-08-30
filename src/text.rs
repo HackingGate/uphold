@@ -82,7 +82,18 @@ fn read(source: &str) -> Result<String> {
 
 pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<Exit> {
     let text = read(source)?;
-    let refusals = failures(found, &text)?;
+    let (root, policy) = load_for(found)?;
+    let mut refusals = failures_in(&root, &policy, &text)?;
+    // The prose rules that stand in front of a command, over the same text.
+    // `uphold scan --text` is what a commit-msg hook runs, so a shape refused
+    // in the pull-request body announcing a commit is refused in the commit
+    // message too.
+    //
+    // Appended HERE and not inside `failures_in`, deliberately. That function
+    // is what the `text-literals` built-in consults at the shim seam, where a
+    // prose rule is already a checker in its own right -- folding these in
+    // would report each of them twice on the one invocation, under two ids.
+    refusals.extend(crate::prose::over_text(&policy, &text)?);
 
     for failure in &refusals {
         failure.print();
@@ -102,11 +113,21 @@ pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<
 /// commit message is refused for and a tool call is allowed for would be two
 /// rules wearing one id.
 pub(crate) fn failures(found: Option<&(PathBuf, PathBuf)>, text: &str) -> Result<Vec<Failure>> {
-    let (root, policy) = match found {
-        Some((root, policy_path)) => (root.clone(), config::load(root, policy_path)?),
-        None => (std::env::current_dir()?, Policy::default()),
-    };
+    let (root, policy) = load_for(found)?;
     failures_in(&root, &policy, text)
+}
+
+/// The policy a text check runs under, and the root it was loaded from.
+///
+/// An empty policy where the caller found none, which is the fallback this
+/// module exists to keep: text mode is reached from `gh pr create` wherever the
+/// author happens to be standing, and "no policy here" must not mean "nothing
+/// to check".
+fn load_for(found: Option<&(PathBuf, PathBuf)>) -> Result<(PathBuf, Policy)> {
+    match found {
+        Some((root, policy_path)) => Ok((root.clone(), config::load(root, policy_path)?)),
+        None => Ok((std::env::current_dir()?, Policy::default())),
+    }
 }
 
 /// The same rules over an already-loaded policy.

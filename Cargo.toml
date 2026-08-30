@@ -68,7 +68,10 @@ tree-sitter-python = "0.25"
 # The grammar the doc-command resolver needs, and the one language whose
 # dispatch this was measured against. Its star count reads marginal and
 # mismeasures it: nobody stars a grammar, and it carries 11.2M downloads with
-# 4.7M in the last ninety days.
+# 4.7M in the last ninety days. It is read by the comment checks too, and that
+# is the argument for adding a language rather than a second reason to have one:
+# Go joined `comment_regexp`, `trivial_comments` and `prose_regexp` at the cost
+# of three lines, because the dependency was already here.
 tree-sitter-go = "0.25"
 
 [profile.release]

@@ -44,6 +44,20 @@ struct Case {
     allows: &'static [&'static str],
 }
 
+/// What a set needs written beside `[inherit]` before it will load.
+///
+/// A set that supplies checkers and never shims is refused in a repository that
+/// has not declared the `[[shim]]` tables itself -- which is the design (ADR
+/// 0006) and not a gap, so the corpus writes the tables a consuming repository
+/// writes. Keyed by set name rather than carried on every `Case`, because it is
+/// a fact about the SET: every rule in one needs the same tables, and a
+/// per-case field would be the same two tables transcribed once per rule.
+const PRELUDE: &[(&str, &str)] = &[(
+    "prose-shapes",
+    "\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\", \"--body\"]\n\n\
+     [[shim]]\ncommand = \"git\"\nmatch = [\"push:*\"]\nscope = \"always\"\n",
+)];
+
 const CORPUS: &[Case] = &[
     Case {
         set: "process-residue",
@@ -251,6 +265,79 @@ const CORPUS: &[Case] = &[
             "name: ci\non: [push]\n'permissions':\n  contents: read\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
         ],
     },
+    // The prose set. Its `allows` are the near misses each pattern was written
+    // to let through, and they are the half worth reading: a shape rule that
+    // widened by one alternative refuses the sentence it was written to permit,
+    // and nothing in a report would say which edit did it.
+    Case {
+        set: "prose-shapes",
+        rule: "no-announcing-sentence",
+        path: "notes.md",
+        refuses: &[
+            "The next section will explain how the count is taken.\n",
+            "As we will see, the ledger disagrees with the book.\n",
+            "In what follows the two clocks are separated.\n",
+        ],
+        allows: &[
+            // A data document says what it is about; it is not announcing a
+            // sentence it is about to write.
+            "This document is about the ledger and the book.\n",
+            // A table is a thing on the page, not a paragraph promising one.
+            "The following table lists every clock.\n",
+        ],
+    },
+    Case {
+        set: "prose-shapes",
+        rule: "no-restating-clause",
+        path: "notes.md",
+        refuses: &[
+            "The ledger is empty -- in other words, nothing was written to it.\n",
+            "It returns zero \u{2014} which is to say the search found nothing.\n",
+            "The clock is the venue's -- i.e. not this machine's.\n",
+        ],
+        allows: &[
+            // A pronoun clause after a dash carries the sentence forward; it
+            // does not say the first half again.
+            "The count is taken once -- that is how it returns 0.\n",
+            // The abbreviation on its own is somebody naming an example, and
+            // the dash is what makes it a restatement.
+            "Every clock, i.e. each of the four, is read separately.\n",
+        ],
+    },
+    Case {
+        set: "prose-shapes",
+        rule: "no-empty-hedge",
+        path: "notes.md",
+        refuses: &[
+            "Arguably the count is the one a reader wants.\n",
+            "It is worth noting that the two clocks disagree.\n",
+            "Needless to say the ledger is authoritative.\n",
+        ],
+        allows: &[
+            // Deliberately not on the list: these can carry a real doubt, and
+            // a rule refusing them would refuse the sentence that honestly
+            // does not know.
+            "Perhaps the clock is the venue's; nobody has measured it.\n",
+            "The count might be stale, and the run before it would say.\n",
+            "Note that the ledger is read twice.\n",
+        ],
+    },
+    Case {
+        set: "prose-shapes",
+        rule: "no-unproposed-alternative",
+        path: "notes.md",
+        refuses: &[
+            "One might argue the count belongs to the book.\n",
+            "A sceptic might say the ledger is never read.\n",
+            "It could be tempting to read the clock twice.\n",
+        ],
+        allows: &[
+            // `one could` followed by a verb that is not an objection.
+            "Not one could say it held before the run.\n",
+            // The alternative that was actually proposed, being discussed.
+            "The alternative was measured and it lost.\n",
+        ],
+    },
 ];
 
 /// The rules this corpus does not cover, and why each is somewhere else.
@@ -301,7 +388,11 @@ fn scan(root: &Path) -> Output {
 /// some ignore pattern also matches is still pushed and still read by everyone
 /// who clones it. An untracked sample would be testing nothing.
 fn verdict(case: &Case, sample: &str) -> (i32, String) {
-    let root = repository(&format!("[inherit]\nsets = [\"{}\"]\n", case.set));
+    let prelude = PRELUDE
+        .iter()
+        .find(|(set, _)| *set == case.set)
+        .map_or("", |(_, text)| *text);
+    let root = repository(&format!("[inherit]\nsets = [\"{}\"]\n{prelude}", case.set));
     let path = root.join(case.path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap();
@@ -383,7 +474,7 @@ fn every_content_rule_in_every_bundled_set_is_in_the_corpus() {
             // A built-in is compiled in and has its own tests; a corpus line
             // about one would be a line about this binary rather than about a
             // pattern. What is left is the patterns.
-            let checks_content = ["regexp", "path_regexp", "require_regexp"]
+            let checks_content = ["regexp", "path_regexp", "require_regexp", "prose_regexp"]
                 .iter()
                 .any(|field| rule.get(field).is_some());
             if !checks_content {

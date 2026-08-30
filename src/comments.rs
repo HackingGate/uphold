@@ -20,13 +20,15 @@ use tree_sitter::{Node, Parser};
 
 /// The languages a comment rule can be asked about.
 ///
-/// Two, because two is what the fleet is written in. A third is a grammar
-/// dependency and three lines in [`Language::for_path`]; it is not a redesign,
-/// which is the property worth keeping.
+/// Three, and the third is the demonstration of what the first two claimed: a
+/// language is a grammar dependency and three lines in [`Language::for_path`],
+/// not a redesign. Go cost neither a dependency nor a design -- the grammar was
+/// already linked in for the doc-command resolver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Language {
     Rust,
     Python,
+    Go,
 }
 
 impl Language {
@@ -36,6 +38,7 @@ impl Language {
         match path.rsplit_once('.') {
             Some((_, "rs")) => Some(Self::Rust),
             Some((_, "py" | "pyi")) => Some(Self::Python),
+            Some((_, "go")) => Some(Self::Go),
             _ => None,
         }
     }
@@ -44,6 +47,7 @@ impl Language {
         match self {
             Self::Rust => tree_sitter_rust::LANGUAGE.into(),
             Self::Python => tree_sitter_python::LANGUAGE.into(),
+            Self::Go => tree_sitter_go::LANGUAGE.into(),
         }
     }
 
@@ -51,7 +55,7 @@ impl Language {
     const fn comment_kinds(self) -> &'static [&'static str] {
         match self {
             Self::Rust => &["line_comment", "block_comment"],
-            Self::Python => &["comment"],
+            Self::Python | Self::Go => &["comment"],
         }
     }
 }
@@ -68,6 +72,14 @@ pub(crate) struct Comment {
     /// ordinary kind because it is an artefact -- rustdoc publishes it -- and a
     /// rule that treats it as a comment about the code is a rule that deletes
     /// the public API's documentation.
+    ///
+    /// Always false for Python and for Go, and for Go that is a fact about the
+    /// language rather than a gap here. godoc publishes the comment ABOVE a
+    /// declaration with no marker to distinguish it -- `//` is the whole of the
+    /// syntax -- so there is nothing in the grammar to read, and guessing from
+    /// position would make every comment above a function a doc comment and
+    /// exclude it from the check. An ordinary comment is the safe reading: it
+    /// is the one that leaves the rule doing something.
     pub doc: bool,
     /// Whether the comment stands on its own line rather than trailing code.
     pub own_line: bool,
@@ -219,13 +231,25 @@ fn subject_words(node: Node<'_>, source: &str) -> BTreeSet<String> {
             // Identifiers and literals in one arm, because they are one thing
             // to this check: both are words the code puts on the page, and a
             // comment repeating either is repeating the code.
+            // Go spells its literals differently -- `interpreted_string_literal`
+            // and `raw_string_literal` -- and a subject built without them would
+            // call `// Stop dnsmasq` over `exec.Command("systemctl", "stop",
+            // "dnsmasq")` informative, which is the exact case the string
+            // literals are here for. `package_identifier` is the name in an
+            // import or a qualified call, which is a word the code puts on the
+            // page like any other.
             "identifier"
             | "type_identifier"
             | "field_identifier"
+            | "package_identifier"
             | "primitive_type"
             | "shorthand_field_identifier"
             | "string_content"
             | "string_literal"
+            | "interpreted_string_literal"
+            | "interpreted_string_literal_content"
+            | "raw_string_literal"
+            | "raw_string_literal_content"
             | "string" => {
                 identifier_words(node_text(current, source), &mut words);
             }
@@ -313,6 +337,11 @@ pub(crate) fn collect(source: &str, language: Language) -> Vec<Comment> {
             Comment {
                 line,
                 text: strip_markers(node_text(node, source)),
+                // Rust is the one language here whose grammar marks a doc
+                // comment. Python has no such syntax at all, and Go's godoc
+                // comment is spelled `//` like every other -- see `Comment::doc`
+                // for why guessing from position would be worse than not
+                // asking.
                 doc: language == Language::Rust && is_doc_comment(node, source),
                 own_line,
                 in_run,
@@ -531,6 +560,64 @@ mod tests {
     }
 
     #[test]
+    fn go_comments_are_read_with_the_go_grammar() {
+        let found = collect(
+            "package main\n\nfunc f() {\n\t// Stop dnsmasq\n\tsystemd.Stop(\"dnsmasq\")\n}\n",
+            Language::Go,
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].text, "Stop dnsmasq");
+        // The Go string literal is part of the subject, which is what makes
+        // this a restatement rather than a comment carrying a new word.
+        assert!(is_trivial(&found[0]), "{:?}", found[0]);
+    }
+
+    /// The reason the grammar is asked rather than the line: this file spells
+    /// `//` inside a string and holds no comment at all.
+    #[test]
+    fn a_go_comment_marker_inside_a_string_is_not_a_comment() {
+        let found = collect(
+            "package main\n\nfunc f() {\n\tmarker := \"// TODO: not a comment\"\n\t_ = marker\n}\n",
+            Language::Go,
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// Go has no doc-comment syntax, so every comment is an ordinary one --
+    /// including the one godoc publishes.
+    #[test]
+    fn a_go_comment_above_a_declaration_is_an_ordinary_comment() {
+        let found = collect(
+            "package main\n\n// Config is the outer method.\ntype Config struct{}\n",
+            Language::Go,
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(!found[0].doc);
+    }
+
+    /// A comment whose subject could not be read is never trivial, whatever
+    /// node kinds the grammar puts under it. The verdict a subject-free comment
+    /// must never get is "says only what the code says", because nothing was
+    /// read to compare it against.
+    #[test]
+    fn a_go_comment_with_no_readable_subject_is_not_trivial() {
+        let found = collect("package main\n\n// Stop dnsmasq\n", Language::Go);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].subject.is_empty(), "{:?}", found[0]);
+        assert!(!is_trivial(&found[0]), "{:?}", found[0]);
+    }
+
+    #[test]
+    fn a_go_block_comment_loses_its_markers_like_every_other() {
+        let found = collect(
+            "package main\n\n/* Stop dnsmasq */\nfunc f() {}\n",
+            Language::Go,
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].text, "Stop dnsmasq");
+    }
+
+    #[test]
     fn an_identifier_splits_on_case_and_underscore() {
         let mut words = BTreeSet::new();
         identifier_words("set_zone_target", &mut words);
@@ -576,6 +663,7 @@ mod tests {
     fn a_language_is_chosen_by_extension_and_nothing_else() {
         assert_eq!(Language::for_path("src/scan.rs"), Some(Language::Rust));
         assert_eq!(Language::for_path("scripts/x.py"), Some(Language::Python));
+        assert_eq!(Language::for_path("cmd/x/main.go"), Some(Language::Go));
         assert_eq!(Language::for_path("README.md"), None);
     }
 }

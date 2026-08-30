@@ -37,11 +37,13 @@ anything else (`[rule."my rule"]`).
 | field | fails when |
 |---|---|
 | `regexp` | the regex matches anywhere in the selected files |
-| `comment_regexp` | the regex matches a **comment** in a selected Rust or Python file |
+| `comment_regexp` | the regex matches a **comment** in a selected Rust, Python or Go file |
+| `prose_regexp` | the regex matches the **prose** of a selected file — a document minus its code blocks, a source file's comments, a configuration file's `#` lines |
 | `trivial_comments` | a comment contributes no word the code beneath it already names |
 | `path_regexp` | a tracked path matches the regex |
 | `require_regexp` | a selected file does **not** contain the regex |
 | `max_lines` | a selected file is longer than that, or grew past its baseline |
+| `max_bytes` | a selected file is bigger than that, or grew past its baseline |
 | `forbidden_literals` / `forbidden_literals_from` | a runtime literal — username, hostname, route — appears in them |
 | `encoding` | a selected file does not decode cleanly under the declared charset |
 | `allowed_scripts` | a letter uses a Unicode script outside the declared list |
@@ -62,9 +64,9 @@ Both halves are checked at load. A rule naming two checks is refused, because
 one of them would be read by nothing while looking enforced. A rule naming no
 place is refused, because it runs nowhere and that reads exactly like a rule
 that passes. `command.before` is refused on a check no shim can consult — the
-shim consults `exec` checkers, the two pattern checks (`regexp` and
-`require_regexp`, which mean the same thing against a title as against a line
-of a file), the built-ins that can judge arbitrary text
+shim consults `exec` checkers, the three pattern checks (`regexp`,
+`require_regexp` and `prose_regexp`, which mean the same thing against a title
+as against a line of a file), the built-ins that can judge arbitrary text
 (`prevent-ai-author`, `prevent-unusual-unicode`, `no-private-repo-names`, and
 the two consultations `text-guards` and `text-literals`), and the built-in that
 judges a **destination** rather than text (`prevent-unowned-target`); anything
@@ -209,6 +211,7 @@ cleanly over nothing, and every check kind reports that the same way:
 | `regexp` | nothing to match | `policy checks passed` |
 | `require_regexp` | nothing to be missing the pattern | `policy checks passed` |
 | `max_lines` | nothing to be too long | `policy checks passed` |
+| `prose_regexp` | nothing whose prose could be read | `policy checks passed` |
 
 `require_regexp` is the sharpest of the three, because its whole job is to
 insist that something is there. Rename the directory its `include` names, or
@@ -349,7 +352,7 @@ files.glob = ["*.yml", "*.yaml"]
 
 `inherit.sets` names bundled sets to inherit; it does not add settings. There
 is no `true` shorthand — naming the sets is cheap, and what a repository
-inherits should be written in the repository. Seventeen are compiled into the
+inherits should be written in the repository. Eighteen are compiled into the
 binary and mirrored in [`policy/base/`](../policy/base), each **named by what
 it refuses** so the name predicts the rule list:
 
@@ -372,6 +375,7 @@ it refuses** so the name predicts the rule list:
 | `private-names` | a private organisation or repository named in a commit message, a staged diff, or the tracked tree of a **public** repository — **installs five stages**, and refuses to run until the repository says whether it is published |
 | `stale-visibility` | a policy declaring `private` over a repository the forge serves as **public** — **installs `pre-push` and `manual`**, and reaches the network. Refuses that one direction only; it can never confirm privacy |
 | `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push. **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [ADR 0006](adr/0006-what-a-bundled-set-may-attach-to-a-command.md) |
+| `prose-shapes` | four sentence shapes that carry nothing — a sentence announcing what the next one will say, a clause behind a dash restating the one in front of it, a hedge admitting no uncertainty, an objection nobody raised being answered. **Installs no git hook**: its rules run in `uphold scan` and at the shim seam (`gh`, `git push`), and like `published-text` it refuses to load until the repository has declared the `[[shim]]` tables itself. `UPHOLD_ALLOW=<rule-id>` is the waiver for the sentence a rule is wrong about |
 
 The seven before it install git hooks. Taking one is a decision about what will be
 refused and when, so each is named and argued separately: `stale-pins` reaches
@@ -645,10 +649,14 @@ uphold scan --text -        # a commit message, a release note, a PR body
 ```
 
 `--text` exists because the content that leaks host identity most often is the
-content that never becomes a file. It runs the `forbidden_literals` rules only:
-those describe the running machine, so they mean something against any text,
-while a `regexp` rule is scoped to paths and file types and firing it at prose
-would be guesswork.
+content that never becomes a file. It runs the `forbidden_literals` rules —
+those describe the running machine, so they mean something against any text —
+and every [`prose_regexp`](#prose_regexp--the-sentence-not-the-file) rule that
+declares `command.before`, which is how a shape refused in a pull-request body
+is also refused in the commit message `uphold-scan-text` reads at `commit-msg`.
+A `regexp` rule is not run here: it is scoped to paths and file types, and
+firing it at prose would be guesswork. Neither is a prose rule that names no
+command, for the same reason.
 
 Two things it does not do. It does not decode: text that is not UTF-8 is exit
 `2` naming the offset, because a lossy decode searches U+FFFD where the bytes
@@ -660,8 +668,8 @@ else is not a decision to stop checking this.
 
 ### `comment_regexp` and `trivial_comments` — the comment, not the line
 
-Both parse the file rather than searching it, in Rust and Python. That is the
-whole reason they are separate checks: `regexp` reads bytes, so
+Both parse the file rather than searching it, in Rust, Python and Go. That is
+the whole reason they are separate checks: `regexp` reads bytes, so
 `let marker = "// TODO";` is a hit for a rule about `// TODO` and there is no
 way to write the difference down. These read comment nodes, so a marker inside a
 string literal is a string literal.
@@ -671,13 +679,13 @@ string literal is a string literal.
 message = "State what holds, not what it replaced."
 comment_regexp = '(?i)\bused to be\b'
 files.include = ["src"]
-files.glob = ["*.rs", "*.py"]
+files.glob = ["*.rs", "*.py", "*.go"]
 
 [rule.no-trivial-comment]
 message = "This comment says only what the code beneath it already says."
 trivial_comments = true
 files.include = ["src"]
-files.glob = ["*.rs", "*.py"]
+files.glob = ["*.rs", "*.py", "*.go"]
 ```
 
 **Documentation comments are excluded from both.** `///` and `//!` are published
@@ -685,6 +693,12 @@ output, not remarks to the next reader, and a check that cannot tell them apart
 from `//` is one whose findings, acted on, delete a public item's documentation.
 The grammar marks them; nothing here matches on the prefix, which is what a
 prefix test gets wrong by construction — `///` starts with `//`.
+
+Rust is the only one of the three whose grammar marks them. Python has no such
+syntax, and Go's godoc comment is spelled `//` like every other — so in Go every
+comment is an ordinary one, which is the reading that leaves the check doing
+something. Guessing from position would make every comment above a declaration a
+doc comment and exclude it.
 
 `trivial_comments` is a subset test and carries no list of boring verbs: a
 comment fails when every word it contributes is a word the statements beneath it
@@ -770,12 +784,12 @@ file containing Japanese" and "Shift-JIS file containing Japanese" apart —
 and they compose, so a Shift-JIS file covered by both is decoded under its
 declared charset and then script-checked as text.
 
-### `max_lines`, and the baseline that ratchets it
+### `max_lines` and `max_bytes`, and the baseline that ratchets them
 
-A language's own linter caps the length of the files its parser opens. This one
-runs over whatever `files.*` selects, so the Markdown, the workflow YAML
-and the generated table are in scope too — and it takes a baseline, which is
-the reason it is here rather than deferred to that linter.
+A language's own linter caps the length of the files its parser opens. These run
+over whatever `files.*` selects, so the Markdown, the workflow YAML and the
+generated table are in scope too — and they take a baseline, which is the reason
+they are here rather than deferred to that linter.
 
 ```toml
 [rule.keep-modules-readable]
@@ -783,12 +797,29 @@ max_lines = 400
 message = "split the module"
 files.glob = ["src/**/*.rs"]
 files.baseline = "policy/size-baseline.txt"
+
+[rule.keep-the-agent-file-small]
+max_bytes = 20000
+message = "the file outgrew its purpose; split it"
+files.glob = ["AGENTS.md"]
+files.baseline = "policy/byte-baseline.txt"
 ```
 
-One `path count` per line. A listed file is held to **its own number** instead
-of the limit and fails when it grows, so what is already oversized is frozen
-rather than exempted — the difference between a ratchet and a suppression
-comment, which is invisible in the policy and permanent in the file.
+**Two checks and not one field with a unit**, because they bound different
+things and a repository means one of them. Lines are what a reader feels, and a
+reflow changes them; bytes do not move when a paragraph is rewrapped, and a cap
+in lines is defeated by writing longer lines while a cap in bytes reads as
+arbitrary to the person who hits it. A file that should be bounded both ways
+gets two rules — which is what the exactly-one-check rule says everywhere else,
+and it keeps each report in the unit its own cap was written in.
+
+One `path count` per line, in that rule's own unit. A listed file is held to
+**its own number** instead of the limit and fails when it grows, so what is
+already oversized is frozen rather than exempted — the difference between a
+ratchet and a suppression comment, which is invisible in the policy and
+permanent in the file. A file listed under a `max_bytes` rule is a count of
+bytes; the same file listed under a `max_lines` rule is a count of lines, and
+neither baseline can be read by the other rule.
 
 A baselined path the rule no longer selects is reported. An allowance nothing
 reports is the rule switched off for that path, and it would apply again in full
@@ -796,6 +827,65 @@ the day something takes the name back.
 
 Not to be confused with [`[review] max_lines`](#the-review-tier), which budgets
 the compiled review document rather than a file a rule selects.
+
+### `prose_regexp` — the sentence, not the file
+
+`regexp` reads bytes and `comment_regexp` reads comment nodes. Neither can carry
+a rule about how a **sentence** is written, because a sentence is spelled
+differently in every file that holds one: a wrapped paragraph in a document, a
+run of `//` lines in a source file, a run of `#` lines no grammar here parses at
+all. So `prose_regexp` is handed the prose, one **span** at a time — one run of
+it, unwrapped onto a single line, carrying the line the run starts at.
+
+```toml
+[rule.no-empty-hedge]
+prose_regexp = '(?i)\b(?:arguably|it is worth noting|needless to say)\b'
+message = "State the claim, or state what is actually unknown about it."
+files.include = ["."]
+files.min_selected = 1
+command.before = ["gh", "git push"]
+```
+
+The extractor is chosen by the file's kind:
+
+| file | what is prose |
+|---|---|
+| `.md` | the whole file, minus fenced blocks (` ``` `, `~~~`) and indented code (4+ spaces) |
+| `.rst`, `.txt`, `.adoc`, and a file with **no extension** | the whole file, minus fenced blocks |
+| `.rs`, `.py`, `.pyi`, `.go` | the comments, read by the grammar — **doc comments included** |
+| `.toml`, `.yaml`, `.yml`, `.sh`, `.bash`, `.zsh`, `.ini`, `.cfg`, and a dotfile with no extension (`.gitignore`) | the lines whose first non-space character is `#`, with the `#` stripped |
+| anything else | nothing |
+
+Two consequences worth writing down. **A wrapped sentence still matches**: the
+lines of a paragraph are joined before the pattern sees them, which is why
+`files.multiline` is refused beside `prose_regexp` — the span is already one
+line and there is nothing left to span. And **a file of any other kind
+contributes nothing**, silently: `files.include = ["."]` over a mixed tree is
+the normal thing to write, and a captured PNG under it is not a document
+somebody wrote badly. That silence is indistinguishable from prose with nothing
+wrong in it, so a prose rule is the one most worth giving a
+[`files.min_selected`](#a-rule-may-declare-a-floor-under-what-it-selects).
+
+**Doc comments are included**, which is the one place this parts company with
+`comment_regexp`. That check excludes them because acting on its findings
+deletes a public item's documentation; this one is about how a sentence is
+written, and a published sentence is exactly what a style rule is for.
+
+**The seams.** `files.*` runs it in `uphold scan`. `command.before` runs it at
+the shim, where the subject — a pull-request body, an issue title, a branch name
+— is read as whole-text prose, so a fenced example in a body is an example there
+too. A prose rule standing in front of a command is **also consulted by
+`--text`**: both `uphold scan --text` and `uphold guard --text` ask it about the
+text they were handed, so a shape refused in the pull-request body announcing a
+commit is refused in the commit message that `uphold-scan-text` reads at
+`commit-msg`. A prose rule with no `command.before` is left out of `--text`, for
+the reason every other pattern rule is: it is scoped by `files.*` to particular
+paths, and firing it at prose that has no path would be guesswork.
+
+`UPHOLD_ALLOW=<rule-id>` is the waiver at both of those seams, and it is what
+makes refusing a sentence acceptable: the rule is wrong about this one, the
+person standing there says so, and what was switched off is legible in the shell
+history that switched it.
 
 ### What `allowed_scripts` reads
 
@@ -1466,8 +1556,12 @@ name in front of, so `prevent-ai-author`, the `private-names` guards and the
 of them are reached from a seam that needs a process to have been spawned.
 
 `hook` is that seam without the process. The harness hands over the pending call
-and reads a verdict back, and the rules it consults are the ones `scan --text`
-and `guard --text` consult, through the same functions.
+and reads a verdict back, and the rules it consults are the literal rules and
+the text-capable guards — the same two dispatches `scan --text` and `guard
+--text` reach, through the same functions. The `prose_regexp` rules are
+deliberately not among them: what a tool call carries is a list of argument
+strings joined together rather than a paragraph anybody wrote, and a rule about
+how a sentence is written would be reading a sentence that is not there.
 
 ### Configuring it
 
@@ -1916,7 +2010,7 @@ uphold_check.py --review --check  # refuse a stale or over-budget document
 
 A compiled entry is `claim`, `applies_when` and `review_questions` — no new
 schema. `[review] max_lines` (default 900) budgets that compiled document, and
-is a different field from the [rule one](#max_lines-and-the-baseline-that-ratchets-it)
+is a different field from the [rule one](#max_lines-and-max_bytes-and-the-baseline-that-ratchets-them)
 of the same name. It is load-bearing rather than a nicety: see
 [DESIGN.md](DESIGN.md#why-the-review-tier-is-not-what-that-record-refuses).
 Over budget fails the build and says to shorten records or narrow

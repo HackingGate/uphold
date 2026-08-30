@@ -1,0 +1,137 @@
+# Base rule set: prose-shapes (four sentence shapes, refused rather than warned)
+#
+# Four shapes a sentence can have that carry nothing: a sentence announcing what
+# the next one will say, a clause behind a dash restating the one in front of it,
+# a hedge that admits no uncertainty, and an objection nobody raised being
+# answered. Pull in with:
+#
+#   [inherit]
+#   sets = ["prose-shapes"]
+#
+#   [[shim]]
+#   command = "gh"            # the repository's own tables, verbatim
+#   ...
+#
+#   [[shim]]
+#   command = "git"
+#   ...
+#
+# THE SHIM TABLES ARE NOT OPTIONAL. Every rule here declares `command.before`,
+# and a set supplies checkers and never shims -- so a repository that has not
+# put a program in front of `gh` and `git` is refused at load, with the table to
+# write named in the refusal. That is the same design `published-text` records
+# and for the same reason: acquiring a program in front of `git` on the strength
+# of a version bump is a thing no line in the inheriting tree asked for. See
+# ADR 0006.
+#
+# WHY THESE FOUR AND NOT THE OTHERS. Each of the four can be recognised without
+# understanding the sentence. "As we will see" is that shape wherever it appears;
+# so is "-- in other words"; so is "arguably"; so is "one might argue". Nothing
+# here has to know what the paragraph is about, which is what makes a regex the
+# right instrument rather than an approximation of one.
+#
+# The two shapes deliberately left out are the ones where the same characters
+# mean two things. An ALL-CAPS term reads as shouting in a paragraph and is how
+# a policy comment DEFINES a term -- this file is full of them, on purpose. An
+# ISO date reads as a dated status line and is how a decision record states when
+# it was decided. A pattern cannot tell those apart, and a rule that refused
+# both would be refusing the correct use to catch the incorrect one. They stay
+# judgement, which is where a reviewer already holds them.
+#
+# WHY IT REFUSES RATHER THAN WARNS. A lint that warns about prose is advice, and
+# advice about prose is what gets skimmed: the warning is emitted, the text is
+# published, and nothing changed. These refuse. When the sentence is right and
+# the rule is wrong -- a quoted example, a sentence about the shape itself --
+# `UPHOLD_ALLOW=<rule-id>` on the invocation lets that one command through, and
+# what was switched off is legible in the shell history that switched it.
+#
+# WHAT EACH RULE READS. Prose, not bytes: a document minus its code blocks, a
+# source file's comments, a configuration file's `#` lines -- and, at the shim
+# seam, the body or title a command is about to publish. A file kind this binary
+# reads no prose from contributes nothing, so a repository whose selection is
+# narrow enough to matter writes `files.min_selected` beside it.
+
+# WHAT THIS SET MAY INSTALL. No git hook at all: these run in `uphold scan` and
+# at the shim seam. `commands` is the ceiling for the second, verbatim lines --
+# a rule here reaching for a command outside this list is refused at load.
+[set]
+commands = ["gh", "git push"]
+
+# A sentence whose whole content is what the next sentence will contain. The
+# next sentence is already there; this one is the table of contents for a
+# paragraph nobody needed one for.
+[rule.no-announcing-sentence]
+message = """
+This sentence says what the next one will say. Delete it and let the next
+sentence say it -- a reader who needs the announcement has already read past it.
+"""
+prose_regexp = '(?i)\b(?:the (?:next|following) (?:section|paragraph|sentence)s? (?:will|describes?|explains?|shows?|covers?)|as (?:we|you) (?:will|shall) see|in what follows|this (?:section|document) (?:describes|explains|covers|discusses))\b'
+files.include = ["."]
+files.exclude = [
+    "**/tests/**",
+    "**/test/**",
+    "**/testdata/**",
+    "**/fixtures/**",
+    "**/*_test.go",
+    "CHANGELOG*",
+]
+command.before = ["gh", "git push"]
+
+# A clause behind a dash that says the previous clause again. The dash promises
+# the reader something more; a restatement is the one thing it cannot be.
+[rule.no-restating-clause]
+message = """
+This clause restates the one in front of it. Keep whichever half is clearer and
+delete the other -- a sentence that needs a second statement of itself needs a
+better first one.
+"""
+prose_regexp = '(?i)(?:--|\x{2014})[[:space:]]*(?:(?:in other words|which is to say|put differently|to put it (?:another way|differently))\b|i\.e\.)'
+files.include = ["."]
+files.exclude = [
+    "**/tests/**",
+    "**/test/**",
+    "**/testdata/**",
+    "**/fixtures/**",
+    "**/*_test.go",
+    "CHANGELOG*",
+]
+command.before = ["gh", "git push"]
+
+# Hedging that carries no uncertainty. "Perhaps" and "might" are deliberately
+# not here: those can carry a real doubt, and refusing them would refuse the
+# sentence that honestly does not know.
+[rule.no-empty-hedge]
+message = """
+This hedge admits no uncertainty -- it softens the claim without qualifying it.
+State the claim, or state what is actually unknown about it.
+"""
+prose_regexp = '(?i)\b(?:arguably|it could be (?:said|argued)|in some sense|to some extent|it is worth noting|it should be noted|needless to say|as it were|so to speak)\b'
+files.include = ["."]
+files.exclude = [
+    "**/tests/**",
+    "**/test/**",
+    "**/testdata/**",
+    "**/fixtures/**",
+    "**/*_test.go",
+    "CHANGELOG*",
+]
+command.before = ["gh", "git push"]
+
+# An objection nobody raised, answered. The argument reads as engagement and is
+# with a reader who is not there.
+[rule.no-unproposed-alternative]
+message = """
+This answers an objection nobody made. Argue with the alternative that was
+actually proposed, or state the position and stop.
+"""
+prose_regexp = '(?i)\b(?:one (?:might|could) (?:argue|object)|some (?:would|might|may) (?:argue|object)|it (?:might|could) be (?:argued|objected|tempting)|a (?:skeptic|sceptic|critic) (?:might|would|could))\b'
+files.include = ["."]
+files.exclude = [
+    "**/tests/**",
+    "**/test/**",
+    "**/testdata/**",
+    "**/fixtures/**",
+    "**/*_test.go",
+    "CHANGELOG*",
+]
+command.before = ["gh", "git push"]

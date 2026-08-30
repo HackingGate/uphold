@@ -765,6 +765,319 @@ fn a_size_baseline_pins_a_file_at_its_current_length() {
     );
 }
 
+#[test]
+fn a_byte_rule_reports_the_count_and_the_limit_in_bytes() {
+    // The other measure, and the reason there is one: a reflow changes the
+    // line count of a document and does not change its size, so a repository
+    // that means "this file may not get bigger" says so in the unit that does
+    // not move.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.small-files]
+        message = "too big"
+        max_bytes = 8
+
+        [rule.small-files.files]
+        glob = ["*.txt"]
+"#,
+    );
+    write(&root, "big.txt", "0123456789\n");
+    write(&root, "small.txt", "hi\n");
+    let output = scan(&root);
+    assert_eq!(code(&output), 1);
+    let text = stderr(&output);
+    assert!(text.contains("big.txt: 11 bytes (limit 8)"), "{text}");
+    assert!(!text.contains("small.txt"), "{text}");
+}
+
+/// The two are separate rules over one tree, and each reports in its own unit.
+///
+/// A file inside the line cap and over the byte cap is the case that says the
+/// measures are not the same question: one long line is one line.
+#[test]
+fn a_line_cap_and_a_byte_cap_bound_the_same_file_from_two_sides() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.short-files]
+        message = "too long"
+        max_lines = 4
+
+        [rule.short-files.files]
+        glob = ["*.txt"]
+
+        [rule.small-files]
+        message = "too big"
+        max_bytes = 20
+
+        [rule.small-files.files]
+        glob = ["*.txt"]
+"#,
+    );
+    write(
+        &root,
+        "wide.txt",
+        "0123456789012345678901234567890123456789\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1);
+    let text = stderr(&output);
+    assert!(text.contains("wide.txt: 41 bytes (limit 20)"), "{text}");
+    assert!(!text.contains("lines (limit 4)"), "{text}");
+}
+
+#[test]
+fn a_byte_baseline_ratchets_and_reports_an_entry_that_stopped_matching() {
+    // The same ratchet the line cap has, in bytes: a file listed at its current
+    // size is held THERE rather than at the limit, and an entry naming a path
+    // this rule no longer selects is the allowance nothing reports.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.small-files]
+        message = "too big"
+        max_bytes = 4
+
+        [rule.small-files.files]
+        glob = ["*.txt"]
+        exclude = ["policy/**"]
+        baseline = "policy/sizes.txt"
+"#,
+    );
+    write(&root, "policy/sizes.txt", "legacy.txt 11\n");
+    write(&root, "legacy.txt", "0123456789\n");
+    assert_eq!(code(&scan(&root)), 0, "{}", stderr(&scan(&root)));
+
+    write(&root, "legacy.txt", "01234567890\n");
+    let grown = scan(&root);
+    assert_eq!(code(&grown), 1, "{}", stderr(&grown));
+    assert!(
+        stderr(&grown).contains("legacy.txt: 12 bytes (baseline 11; must not grow)"),
+        "{}",
+        stderr(&grown)
+    );
+
+    // The entry names a path the rule no longer selects.
+    std::fs::remove_file(root.join("legacy.txt")).unwrap();
+    let stale = scan(&root);
+    assert_eq!(code(&stale), 1, "{}", stderr(&stale));
+    let text = stderr(&stale);
+    assert!(text.contains("small-files (stale baseline)"), "{text}");
+    assert!(text.contains("legacy.txt: no longer matches"), "{text}");
+}
+
+/// A malformed byte-baseline entry names the unit it could not read.
+///
+/// The line cap's own refusal says "line count", and telling a reader of a byte
+/// cap to go and fix a line count sends them looking for a file that is not
+/// there.
+#[test]
+fn a_malformed_byte_baseline_entry_is_refused_in_its_own_unit() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.small-files]
+        message = "too big"
+        max_bytes = 4
+
+        [rule.small-files.files]
+        glob = ["*.txt"]
+        exclude = ["policy/**"]
+        baseline = "policy/sizes.txt"
+"#,
+    );
+    write(&root, "legacy.txt", "0123456789\n");
+    write(&root, "policy/sizes.txt", "legacy.txt 11x\n");
+    let output = scan(&root);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("the byte count is not a number"), "{text}");
+    assert!(text.contains("`<path> <bytes>`"), "{text}");
+}
+
+#[test]
+fn a_comment_rule_reads_a_go_file_through_the_go_grammar() {
+    // The third language, and the same property the first two were added for:
+    // the marker inside the string literal is a string literal, and only the
+    // grammar can say so.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-before-after]
+        message = "state what holds"
+        comment_regexp = '(?i)\bused to be\b'
+
+        [rule.no-before-after.files]
+        glob = ["*.go"]
+"#,
+    );
+    write(
+        &root,
+        "cmd/x/main.go",
+        "package main\n\n// This used to be a switch.\nfunc main() {\n\tmarker := \"used to be\"\n\t_ = marker\n}\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("cmd/x/main.go:3"), "{text}");
+    assert!(!text.contains("main.go:5"), "{text}");
+}
+
+// --- prose -----------------------------------------------------------------
+
+#[test]
+fn a_prose_rule_matches_a_sentence_a_formatter_wrapped() {
+    // The reason `prose_regexp` is not `regexp`: the sentence is split across
+    // two lines by whatever last rewrapped the paragraph, and a pattern over
+    // bytes finds neither half.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-announcing-sentence]
+        message = "say it once"
+        prose_regexp = '(?i)\bas (?:we|you) (?:will|shall) see\b'
+
+        [rule.no-announcing-sentence.files]
+        include = ["."]
+        exclude = ["policy/**"]
+"#,
+    );
+    write(
+        &root,
+        "notes.md",
+        "The count is taken once. As we\nwill see, it is wrong.\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("notes.md:1:"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_prose_rule_reads_a_comment_a_configuration_line_and_a_document_alike() {
+    // One rule, four file kinds, one pattern. The point of the extractor is
+    // that the pattern never has to know how the comment is spelled.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-empty-hedge]
+        message = "state the claim"
+        prose_regexp = '(?i)\barguably\b'
+
+        [rule.no-empty-hedge.files]
+        include = ["."]
+        exclude = ["policy/**"]
+"#,
+    );
+    write(&root, "notes.md", "Arguably the count is right.\n");
+    write(
+        &root,
+        "src/lib.rs",
+        "// Arguably the count is right.\npub struct X;\n",
+    );
+    write(
+        &root,
+        "cmd/x/main.go",
+        "package main\n\n// Arguably the count is right.\nfunc main() {}\n",
+    );
+    write(
+        &root,
+        "settings.toml",
+        "# Arguably the count is right.\nkey = 1\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    for path in [
+        "notes.md:1:",
+        "src/lib.rs:1:",
+        "cmd/x/main.go:3:",
+        "settings.toml:1:",
+    ] {
+        assert!(text.contains(path), "{path} missing from {text}");
+    }
+}
+
+#[test]
+fn a_prose_rule_says_nothing_about_a_fenced_example_or_a_file_it_reads_no_prose_from() {
+    // The two silences, and both are deliberate. A shape quoted inside a fence
+    // is an example of the shape, not an instance of it; and a file kind this
+    // binary reads no prose from contributes nothing rather than a finding,
+    // because `include = ["."]` over a mixed tree is the normal thing to write.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-empty-hedge]
+        message = "state the claim"
+        prose_regexp = '(?i)\barguably\b'
+
+        [rule.no-empty-hedge.files]
+        include = ["."]
+        exclude = ["policy/**"]
+"#,
+    );
+    write(
+        &root,
+        "notes.md",
+        "The shape is this:\n\n```\nArguably the count is right.\n```\n",
+    );
+    write(
+        &root,
+        "capture.json",
+        "{\"note\": \"Arguably the count is right.\"}\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+/// A selection with no prose in it reads exactly like prose with nothing wrong,
+/// and `files.min_selected` is the floor that tells them apart.
+#[test]
+fn a_prose_rule_that_selects_nothing_is_caught_by_the_floor_and_not_by_silence() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-empty-hedge]
+        message = "state the claim"
+        prose_regexp = '(?i)\barguably\b'
+
+        [rule.no-empty-hedge.files]
+        glob = ["*.mkd"]
+        min_selected = 1
+"#,
+    );
+    write(&root, "notes.md", "Arguably the count is right.\n");
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("min_selected"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 // --- scoping ---------------------------------------------------------------
 
 #[test]
