@@ -1068,7 +1068,7 @@ the repository rather than to any one rule are declared once, at the top of the
 file, and every rule that needs one reads it from there:
 
 ```toml
-owner = "your-org"          # read by prevent-public-push
+owner = "your-org"          # read by prevent-public-push and prevent-unowned-target
 visibility = "public"       # read by the no-private-repo-names family
 private_owners_from = "cat ~/.config/private-owners"
 private_owners_optional = true    # only where this policy is cloned; see below
