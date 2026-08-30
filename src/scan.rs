@@ -71,6 +71,53 @@ const BELOW_SELECTION_FLOOR: &str = "This rule selected fewer files than it decl
 moved, a glob that stopped matching or an exclude that widened all leave it reporting a pass over \
 files it never read -- which is indistinguishable, in every report, from a clean tree.";
 
+/// What a size rule measures, and the word its report uses.
+///
+/// One check with a measure rather than two implementations, because
+/// everything around the number is the same in both: the same selection, the
+/// same `path count` baseline file, the same ratchet, the same staleness
+/// report. Two copies would be two places for the ratchet to be got wrong, and
+/// only one of them would have a test that noticed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Measure {
+    Lines,
+    Bytes,
+}
+
+impl Measure {
+    /// The unit as a report spells it, and as a baseline file's own error
+    /// message spells it. A reader who is told "8 lines" over a byte cap goes
+    /// looking for a file that is not there.
+    const fn unit(self) -> &'static str {
+        match self {
+            Self::Lines => "lines",
+            Self::Bytes => "bytes",
+        }
+    }
+
+    /// The measure in the singular, for the sentences that name a COUNT of it:
+    /// "no line count after the path" reads, "no lines count" does not.
+    const fn singular(self) -> &'static str {
+        match self {
+            Self::Lines => "line",
+            Self::Bytes => "byte",
+        }
+    }
+
+    /// The number this measure reads off a file's bytes.
+    fn of(self, bytes: &[u8]) -> u64 {
+        match self {
+            // Newline count, matching `wc -l`.
+            #[expect(
+                clippy::naive_bytecount,
+                reason = "a SIMD line-counting dependency is not worth its supply-chain surface for one pass per file"
+            )]
+            Self::Lines => bytes.iter().filter(|byte| **byte == b'\n').count() as u64,
+            Self::Bytes => bytes.len() as u64,
+        }
+    }
+}
+
 /// One scoped `allowed_scripts` rule, resolved: the files it selects, the
 /// scripts it admits there, and whether it claims them exclusively.
 struct Scoped {
@@ -220,9 +267,11 @@ impl<'a> Scan<'a> {
                 let found = match check {
                     Check::Regexp => self.pattern_failures(rule)?,
                     Check::CommentRegexp => self.comment_pattern_failures(rule)?,
+                    Check::ProseRegexp => self.prose_pattern_failures(rule)?,
                     Check::TrivialComments => self.trivial_comment_failures(rule)?,
                     Check::ForbiddenLiterals => self.literal_failures(rule)?,
-                    Check::MaxLines => self.size_failures(rule)?,
+                    Check::MaxLines => self.size_failures(rule, Measure::Lines)?,
+                    Check::MaxBytes => self.size_failures(rule, Measure::Bytes)?,
                     Check::PathRegexp => self.path_failures(rule)?,
                     Check::RequireRegexp => self.require_failures(rule)?,
                     Check::Encoding => self.encoding_failures(rule)?,
@@ -355,9 +404,9 @@ impl<'a> Scan<'a> {
         }
         if parsed == 0 && !files.is_empty() {
             return Err(Fatal::new(format!(
-                "rule {:?}: selects {} file(s) and none of them is Rust or Python, so the \
-                 check reads no comments at all. Narrow `files.glob` to the languages it \
-                 is meant for",
+                "rule {:?}: selects {} file(s) and none of them is Rust, Python or Go, so \
+                 the check reads no comments at all. Narrow `files.glob` to the languages \
+                 it is meant for",
                 rule.id,
                 files.len()
             )));
@@ -379,6 +428,60 @@ impl<'a> Scan<'a> {
                 text: comment.text,
             })
             .collect();
+        if hits.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![Failure::new(
+            &rule.id,
+            rule.message(),
+            body_for(&hits, self.redact()),
+        )])
+    }
+
+    // -- prose ---------------------------------------------------------------
+
+    /// Every prose rule's hits: the regex over the SENTENCES of each selected
+    /// file, with the extractor chosen by the file's kind.
+    ///
+    /// A selected file this binary reads no prose from is skipped and not
+    /// reported, for the reason `comments_of` gives about a Markdown file under
+    /// `files.include = ["src"]`: a mixed tree is the normal thing to select,
+    /// and a PNG in it is not a document somebody wrote badly. What separates
+    /// that from a rule whose whole selection has no prose in it is
+    /// `files.min_selected`, which is where a floor belongs.
+    ///
+    /// The kind is decided from the PATH, before the file is opened. Reading a
+    /// captured artifact as text to discover it has no sentences in it would
+    /// make every binary in a tree an unreadable-path finding.
+    fn prose_pattern_failures(&self, rule: &Rule) -> Result<Vec<Failure>> {
+        let matcher =
+            crate::prose::compile(rule.prose_regexp.as_deref().unwrap_or_default(), &rule.id)?;
+        let mut hits: Vec<Hit> = Vec::new();
+        for file in self.select(rule)? {
+            if !crate::prose::reads(&file) {
+                continue;
+            }
+            let path = self.root.join(&file);
+            let Ok(source) = std::fs::read_to_string(&path) else {
+                // The same accounting every other check here keeps: a file of a
+                // kind that HAS prose and could not be read is recorded, because
+                // a checker that skips what it could not open is claiming a tree
+                // it never examined.
+                self.unreadable
+                    .borrow_mut()
+                    .insert(format!("{}: could not be read as text", path.display()));
+                continue;
+            };
+            for span in crate::prose::of(&file, &source) {
+                if matcher.is_match(&span.text) {
+                    hits.push(Hit {
+                        path: file.clone(),
+                        line: Some(span.line),
+                        text: span.text,
+                    });
+                }
+            }
+        }
         if hits.is_empty() {
             return Ok(Vec::new());
         }
@@ -460,9 +563,14 @@ impl<'a> Scan<'a> {
 
     // -- size ---------------------------------------------------------------
 
-    fn size_failures(&self, rule: &Rule) -> Result<Vec<Failure>> {
-        let max_lines = rule.max_lines.unwrap_or_default();
-        let baseline = self.load_size_baseline(rule.files().baseline.as_deref())?;
+    fn size_failures(&self, rule: &Rule, measure: Measure) -> Result<Vec<Failure>> {
+        let limit = match measure {
+            Measure::Lines => rule.max_lines,
+            Measure::Bytes => rule.max_bytes,
+        }
+        .unwrap_or_default();
+        let unit = measure.unit();
+        let baseline = self.load_size_baseline(rule.files().baseline.as_deref(), measure)?;
         let mut violations: Vec<String> = Vec::new();
         // Which baselined paths this run actually looked at. A size baseline had
         // no staleness check at all while the path baselines have had one since
@@ -482,19 +590,14 @@ impl<'a> Scan<'a> {
             // was quietly stepping over it.
             let bytes = std::fs::read(self.root.join(&relative))
                 .map_err(|error| Fatal::at(&self.root.join(&relative), error))?;
-            // Newline count, matching `wc -l`.
-            #[expect(
-                clippy::naive_bytecount,
-                reason = "a SIMD line-counting dependency is not worth its supply-chain surface for one pass per file"
-            )]
-            let count = bytes.iter().filter(|byte| **byte == b'\n').count() as u64;
+            let count = measure.of(&bytes);
             match baseline.get(normalize_rel(&relative)) {
-                None if count > max_lines => {
-                    violations.push(format!("{relative}: {count} lines (limit {max_lines})"));
+                None if count > limit => {
+                    violations.push(format!("{relative}: {count} {unit} (limit {limit})"));
                 }
                 Some(allowed) if count > *allowed => {
                     violations.push(format!(
-                        "{relative}: {count} lines (baseline {allowed}; must not grow)"
+                        "{relative}: {count} {unit} (baseline {allowed}; must not grow)"
                     ));
                 }
                 _ => {}
@@ -1286,7 +1389,11 @@ impl<'a> Scan<'a> {
         Ok(baseline)
     }
 
-    fn load_size_baseline(&self, relative: Option<&str>) -> Result<BTreeMap<String, u64>> {
+    fn load_size_baseline(
+        &self,
+        relative: Option<&str>,
+        measure: Measure,
+    ) -> Result<BTreeMap<String, u64>> {
         let Some(relative) = relative else {
             return Ok(BTreeMap::new());
         };
@@ -1313,25 +1420,27 @@ impl<'a> Scan<'a> {
             //
             // Reproduced before this was written: `src/big.py 8` holds the file
             // at 8 and growing it fails; `src/big.py 8x` passes the same tree.
+            let unit = measure.unit();
+            let singular = measure.singular();
             let malformed = |what: &str| {
                 Fatal::at(
                     &self.root.join(relative),
                     format!(
                         "line {}: {what}\n  {line}\n\nA size baseline entry is \
-                         `<path> <lines>`. This line was skipped silently until now, which \
+                         `<path> <{unit}>`. This line was skipped silently until now, which \
                          removes the ratchet it was written to hold and reports nothing.",
                         index + 1
                     ),
                 )
             };
             let Some((path, count)) = line.rsplit_once(' ') else {
-                return Err(malformed("no line count after the path"));
+                return Err(malformed(&format!("no {singular} count after the path")));
             };
             let Ok(count) = count.trim().parse::<u64>() else {
-                return Err(malformed("the line count is not a number"));
+                return Err(malformed(&format!("the {singular} count is not a number")));
             };
             if path.trim().is_empty() {
-                return Err(malformed("no path before the line count"));
+                return Err(malformed(&format!("no path before the {singular} count")));
             }
             baseline.insert(normalize_rel(path).to_owned(), count);
         }

@@ -1166,6 +1166,126 @@ fn a_rule_whose_own_scope_does_not_hold_is_stood_down_alone() {
     assert!(stdout(&output).contains("faux ran:"), "{}", stdout(&output));
 }
 
+// ── prose rules at the command seam ──────────────────────────────────
+
+/// A shape rule over the body a command is about to publish.
+///
+/// The body reaches the checker as PROSE, which is what a pull-request body is:
+/// a wrapped paragraph is unwrapped before the pattern sees it, and a fenced
+/// example is an example rather than an instance.
+const PROSE_POLICY: &str = r#"
+[rule.no-empty-hedge]
+message = "state the claim, or state what is unknown about it"
+prose_regexp = '(?i)\barguably\b'
+command.before = ["faux"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+title_flags = ["-t", "--title"]
+text_flags = ["-b", "--body"]
+scope = "always"
+"#;
+
+#[test]
+fn a_prose_rule_refuses_a_shape_in_the_body_a_command_would_publish() {
+    let root = workspace(PROSE_POLICY);
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+
+    let refused = shim(
+        &root,
+        &[
+            "faux",
+            "pr",
+            "create",
+            "-b",
+            "The count is taken once.\n\nArguably it is the one a reader wants.\n",
+        ],
+    );
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        !stdout(&refused).contains("faux ran:"),
+        "{}",
+        stdout(&refused)
+    );
+    let text = stderr(&refused);
+    assert!(text.contains("no-empty-hedge"), "{text}");
+    assert!(text.contains("text subject"), "{text}");
+
+    // A body with no such shape publishes.
+    let clean = shim(
+        &root,
+        &["faux", "pr", "create", "-b", "The count is taken once.\n"],
+    );
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert!(stdout(&clean).contains("faux ran:"), "{}", stdout(&clean));
+}
+
+/// The two properties that make this prose and not bytes, at the seam.
+///
+/// A sentence wrapped by whatever composed the body still matches; a shape
+/// quoted inside a fence is an example of the shape and is not one.
+#[test]
+fn a_wrapped_body_is_read_as_prose_and_a_fenced_example_is_not_an_instance() {
+    let root = workspace(PROSE_POLICY);
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+
+    let wrapped = shim(
+        &root,
+        &[
+            "faux",
+            "pr",
+            "create",
+            "-b",
+            "The count is\nArguably wrong.\n",
+        ],
+    );
+    assert_eq!(code(&wrapped), 1, "{}", stderr(&wrapped));
+
+    let fenced = shim(
+        &root,
+        &[
+            "faux",
+            "pr",
+            "create",
+            "-b",
+            "The rule refuses this shape:\n\n```\nArguably it is right.\n```\n",
+        ],
+    );
+    assert_eq!(code(&fenced), 0, "{}", stderr(&fenced));
+    assert!(stdout(&fenced).contains("faux ran:"), "{}", stdout(&fenced));
+}
+
+/// The waiver, which is what makes a refusal over prose acceptable: the rule is
+/// wrong about one sentence and the operator says so on the invocation.
+#[test]
+fn upholds_allow_lets_one_invocation_past_a_prose_rule() {
+    let root = workspace(PROSE_POLICY);
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+
+    let path = format!(
+        "{}:{}",
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args([
+            "shim",
+            "faux",
+            "pr",
+            "create",
+            "-b",
+            "Arguably it is right.\n",
+        ])
+        .current_dir(&root)
+        .env("PATH", path)
+        .env("UPHOLD_ALLOW", "no-empty-hedge")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran:"), "{}", stdout(&output));
+}
+
 // ── pattern rules at the command seam, and the title kind ────────────
 
 /// The release-title shape this exists for: a format rule about one subject

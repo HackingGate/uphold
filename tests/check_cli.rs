@@ -333,6 +333,46 @@ fn a_rule_enforced_at_two_seams_reports_both() {
     assert!(stdout(&output).contains("pre-push"), "{}", stdout(&output));
 }
 
+/// A prose rule declaring both tables is supplied by the scan and is reported
+/// as standing in front of a command too.
+///
+/// `uphold check` needs no arm of its own for a new check kind, and this is the
+/// test that says so: the seams come from `Rule::seams`, so a kind that reads
+/// files and names a command reconciles correctly the day it exists. What would
+/// be wrong is either half alone -- crediting a scan-only claim to the shim, or
+/// losing the shim seam because the rule also reads files.
+#[test]
+fn a_prose_rule_at_both_seams_is_credited_to_the_scan_and_named_at_the_command() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        "[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\", \"--body\"]\n\n\
+         [rule.no-empty-hedge]\nmessage = \"state the claim\"\n\
+         prose_regexp = '(?i)\\barguably\\b'\nfiles.include = [\".\"]\ncommand.before = [\"gh\"]\n",
+    );
+    write(&root, ".pre-commit-config.yaml", SCAN_ONLY);
+    write(
+        &root,
+        "policy/upheld.toml",
+        "[[enforce]]\nprinciple = \"complete-mediation\"\nrule = \"no-empty-hedge\"\n",
+    );
+    let output = check(&root, &[]);
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+    assert!(
+        stdout(&output).contains("uphold scan"),
+        "{}",
+        stdout(&output)
+    );
+
+    let coverage = check(&root, &["--coverage"]);
+    assert!(
+        stdout(&coverage).contains("stands in front of a command"),
+        "{}",
+        stdout(&coverage)
+    );
+}
+
 #[test]
 fn a_claim_on_a_shim_only_rule_is_refused_and_not_credited_to_the_scan() {
     // The seam an empty hook list could not express. `command.before` runs when

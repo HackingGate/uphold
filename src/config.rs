@@ -132,6 +132,18 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
         "published-text",
         include_str!("../policy/base/published-text.toml"),
     ),
+    // The second shim-seam set, and separate from `published-text` because the
+    // two answer different questions about the same body. That one asks whether
+    // the text discloses something -- a host name, a private repository, a
+    // refused marker -- and the answer is the same wherever the text came from.
+    // This one asks how the sentence is written, which is a house-style
+    // judgement a repository takes on its own: a workspace that wants its
+    // disclosure checks has said nothing about whether it wants its prose
+    // refused for hedging.
+    (
+        "prose-shapes",
+        include_str!("../policy/base/prose-shapes.toml"),
+    ),
 ];
 
 /// What a rule checks. NOT a field -- there is nothing in the file to read it
@@ -159,6 +171,14 @@ pub(crate) enum Check {
     /// pattern that must not appear anywhere is not the pattern that must not
     /// appear in prose a reader is asked to trust.
     CommentRegexp,
+    /// `prose_regexp`: the same regex again, over the PROSE of a file rather
+    /// than over its bytes or its comments. Which text counts as prose is
+    /// decided by the file's kind: a document is prose apart from its code
+    /// blocks, a source file's prose is its comments, a configuration file's is
+    /// its `#` lines. A separate check and not a `files.*` knob for the reason
+    /// `comment_regexp` is one -- the subject is different, so the pattern
+    /// written against it means something different.
+    ProseRegexp,
     /// `trivial_comments`: a comment that says only what the code under it
     /// already says.
     TrivialComments,
@@ -168,6 +188,15 @@ pub(crate) enum Check {
     ForbiddenLiterals,
     /// `max_lines`: a line-count limit with an optional baseline ratchet.
     MaxLines,
+    /// `max_bytes`: a byte-count limit with an optional baseline ratchet.
+    ///
+    /// A sibling of `max_lines` rather than a unit knob on it, because the two
+    /// bound different things and a repository means one of them. Lines are
+    /// what a reader feels, and a reflow changes them; bytes do not move when a
+    /// paragraph is rewrapped, and a cap in lines is defeated by longer lines.
+    /// A rule that wants both writes two rules, which is what the
+    /// exactly-one-check matrix already says everywhere else.
+    MaxBytes,
     /// `path_regexp`: a regex matched against tracked file paths.
     PathRegexp,
     /// `require_regexp`: a regex that must be found in every selected file.
@@ -185,12 +214,14 @@ pub(crate) enum Check {
 
 impl Check {
     /// Evaluation order, and the only enumeration of the checks anywhere.
-    pub(crate) const ALL: [Self; 11] = [
+    pub(crate) const ALL: [Self; 13] = [
         Self::Regexp,
         Self::CommentRegexp,
+        Self::ProseRegexp,
         Self::TrivialComments,
         Self::ForbiddenLiterals,
         Self::MaxLines,
+        Self::MaxBytes,
         Self::PathRegexp,
         Self::RequireRegexp,
         Self::Encoding,
@@ -205,9 +236,11 @@ impl Check {
         match self {
             Self::Regexp => "regexp",
             Self::CommentRegexp => "comment_regexp",
+            Self::ProseRegexp => "prose_regexp",
             Self::TrivialComments => "trivial_comments",
             Self::ForbiddenLiterals => "forbidden_literals",
             Self::MaxLines => "max_lines",
+            Self::MaxBytes => "max_bytes",
             Self::PathRegexp => "path_regexp",
             Self::RequireRegexp => "require_regexp",
             Self::Encoding => "encoding",
@@ -228,9 +261,11 @@ impl Check {
             self,
             Self::Regexp
                 | Self::CommentRegexp
+                | Self::ProseRegexp
                 | Self::TrivialComments
                 | Self::ForbiddenLiterals
                 | Self::MaxLines
+                | Self::MaxBytes
                 | Self::PathRegexp
                 | Self::RequireRegexp
                 | Self::Encoding
@@ -481,6 +516,26 @@ pub(crate) struct Rule {
     /// two apart is one whose fix deletes a public item's documentation.
     #[serde(default)]
     pub comment_regexp: Option<String>,
+    /// A regex over the PROSE of a file. Same dialect as `regexp`, and a third
+    /// subject: the sentences, with whatever is not prose left out and whatever
+    /// is unwrapped into one line, so a pattern never has to know that a
+    /// paragraph was rewrapped or that a comment is spelled `//` here and `#`
+    /// there.
+    ///
+    /// The extractor is chosen by the file's kind -- a document minus its code
+    /// blocks, a source file's comments, a configuration file's `#` lines --
+    /// and a file of no kind this binary reads prose from contributes nothing.
+    /// That silence is why a `prose_regexp` rule is the one most worth giving a
+    /// `files.min_selected`: a selection narrowed to file kinds with no
+    /// extractor reports a pass over prose nobody read.
+    ///
+    /// Documentation comments ARE prose and are included, which is the one
+    /// place this parts company with `comment_regexp`. That check excludes them
+    /// because acting on its findings deletes a public item's documentation;
+    /// this one is about how a sentence is written, and a published sentence is
+    /// exactly the one a style rule is for.
+    #[serde(default)]
+    pub prose_regexp: Option<String>,
     /// A comment that contributes no word the code beneath it does not already
     /// name. There is no pattern to write: the check compares the comment
     /// against the identifiers and literals of the statement it introduces.
@@ -495,6 +550,10 @@ pub(crate) struct Rule {
     /// A line-count limit.
     #[serde(default)]
     pub max_lines: Option<u64>,
+    /// A byte-count limit. The same rule, the same baseline file and the same
+    /// ratchet as `max_lines`, over the measure a reflow does not move.
+    #[serde(default)]
+    pub max_bytes: Option<u64>,
     /// A charset the selected files must decode cleanly under, named by its
     /// WHATWG label: `"Shift_JIS"` here means what it means to every browser.
     /// Encoding is a property of the BYTES where `allowed_scripts` is a
@@ -715,10 +774,12 @@ impl Rule {
             subjects: None,
             regexp: None,
             comment_regexp: None,
+            prose_regexp: None,
             trivial_comments: None,
             path_regexp: None,
             require_regexp: None,
             max_lines: None,
+            max_bytes: None,
             encoding: None,
             allowed_scripts: Vec::new(),
             exclusive: None,
@@ -754,10 +815,12 @@ impl Rule {
         match check {
             Check::Regexp => rule.regexp = Some(String::new()),
             Check::CommentRegexp => rule.comment_regexp = Some(String::new()),
+            Check::ProseRegexp => rule.prose_regexp = Some(String::new()),
             Check::TrivialComments => rule.trivial_comments = Some(true),
             Check::PathRegexp => rule.path_regexp = Some(String::new()),
             Check::RequireRegexp => rule.require_regexp = Some(String::new()),
             Check::MaxLines => rule.max_lines = Some(0),
+            Check::MaxBytes => rule.max_bytes = Some(0),
             Check::Encoding => rule.encoding = Some(String::new()),
             Check::AllowedScripts => rule.allowed_scripts = vec![String::new()],
             Check::ForbiddenLiterals => rule.forbidden_literals = Some(String::new()),
@@ -778,6 +841,9 @@ impl Rule {
         if self.comment_regexp.is_some() {
             return Some(Check::CommentRegexp);
         }
+        if self.prose_regexp.is_some() {
+            return Some(Check::ProseRegexp);
+        }
         if self.trivial_comments.is_some() {
             return Some(Check::TrivialComments);
         }
@@ -789,6 +855,9 @@ impl Rule {
         }
         if self.max_lines.is_some() {
             return Some(Check::MaxLines);
+        }
+        if self.max_bytes.is_some() {
+            return Some(Check::MaxBytes);
         }
         if self.encoding.is_some() {
             return Some(Check::Encoding);
@@ -834,10 +903,12 @@ impl Rule {
     ///
     /// * `exec` -- the original contract. A program this repository names,
     ///   handed the subject on stdin.
-    /// * a pattern -- `regexp` and `require_regexp` are text-capable by
-    ///   construction, since a regex means the same thing against a
-    ///   pull-request title as against a line of a file. What they lack at this
-    ///   seam is a default place, which `command.before` supplies.
+    /// * a pattern -- `regexp`, `require_regexp` and `prose_regexp` are
+    ///   text-capable by construction, since a regex means the same thing
+    ///   against a pull-request title as against a line of a file. What they
+    ///   lack at this seam is a default place, which `command.before` supplies.
+    ///   A `prose_regexp` reads the subject as whole-text prose, which is what
+    ///   a pull-request body is.
     /// * a text-capable built-in -- one the binary carries. This seam is the
     ///   ONLY one some of them belong at: `no-private-repo-names` reads a
     ///   commit message at every git hook, which refuses the issue citations a
@@ -854,7 +925,7 @@ impl Rule {
     pub(crate) fn stands_in_front_of_a_command(&self) -> bool {
         matches!(
             self.check(),
-            Some(Check::Exec | Check::Regexp | Check::RequireRegexp)
+            Some(Check::Exec | Check::Regexp | Check::RequireRegexp | Check::ProseRegexp)
         ) || self.builtin().is_some_and(|builtin| {
             crate::guard::TEXT_GUARDS.contains(&builtin)
                 || crate::guard::TARGET_GUARDS.contains(&builtin)
@@ -1054,6 +1125,7 @@ impl Rule {
         self.regexp
             .as_deref()
             .or(self.comment_regexp.as_deref())
+            .or(self.prose_regexp.as_deref())
             .or(self.path_regexp.as_deref())
             .or(self.require_regexp.as_deref())
     }
@@ -1154,12 +1226,14 @@ impl Rule {
         let set: Vec<&str> = [
             self.regexp.is_some().then_some("regexp"),
             self.comment_regexp.is_some().then_some("comment_regexp"),
+            self.prose_regexp.is_some().then_some("prose_regexp"),
             self.trivial_comments
                 .is_some()
                 .then_some("trivial_comments"),
             self.path_regexp.is_some().then_some("path_regexp"),
             self.require_regexp.is_some().then_some("require_regexp"),
             self.max_lines.is_some().then_some("max_lines"),
+            self.max_bytes.is_some().then_some("max_bytes"),
             self.encoding.is_some().then_some("encoding"),
             (!self.allowed_scripts.is_empty()).then_some("allowed_scripts"),
             self.forbidden_literals
@@ -1178,9 +1252,9 @@ impl Rule {
         let Some(check) = self.check() else {
             return Err(Fatal::new(format!(
                 "rule {:?}: nothing says what it checks. Set one of: regexp, \
-                 comment_regexp, trivial_comments, path_regexp, require_regexp, \
-                 max_lines, encoding, allowed_scripts, forbidden_literals, \
-                 forbidden_literals_from, builtin, exec",
+                 comment_regexp, prose_regexp, trivial_comments, path_regexp, \
+                 require_regexp, max_lines, max_bytes, encoding, allowed_scripts, \
+                 forbidden_literals, forbidden_literals_from, builtin, exec",
                 self.id
             )));
         };
@@ -1221,8 +1295,10 @@ impl Rule {
         // A pattern rule standing in front of a command searches that
         // command's subjects instead of the tree, so `command.before` is the
         // other way for it to say where -- with neither, it searches nothing.
-        let pattern_at_command =
-            matches!(check, Check::Regexp | Check::RequireRegexp) && self.command.is_some();
+        let pattern_at_command = matches!(
+            check,
+            Check::Regexp | Check::RequireRegexp | Check::ProseRegexp
+        ) && self.command.is_some();
         if check.requires_files() && self.files.is_none() && !pattern_at_command {
             return Err(Fatal::new(format!(
                 "rule {:?}: `{check}` searches files, so it needs `files.*` keys \
@@ -1258,6 +1334,7 @@ impl Rule {
             )));
         }
 
+        self.validate_prose(check)?;
         self.validate_selection_floor()?;
 
         // The label is resolved at load, so a typo is a refusal here and not a
@@ -1295,47 +1372,7 @@ impl Rule {
             )));
         }
 
-        // Same mechanism for the link-checker knobs: they are read by the
-        // `links-resolve` built-in and nothing else. They used to sit in the
-        // shared `files.*` selection vocabulary, where every check accepted
-        // them; they are rule-level fields now, refused where no links are
-        // read.
-        if self.builtin() != Some("links-resolve") {
-            let link_fields: Vec<&str> = [
-                self.require_any_link
-                    .is_some()
-                    .then_some("require_any_link"),
-                self.allow_outside_repo
-                    .is_some()
-                    .then_some("allow_outside_repo"),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-            if !link_fields.is_empty() {
-                return Err(Fatal::new(format!(
-                    "rule {:?}: {} read(s) links, and only the `links-resolve` built-in \
-                     reads any -- on this rule the field would be read by nothing and \
-                     would look like configuration that works",
-                    self.id,
-                    link_fields.join(" and ")
-                )));
-            }
-        }
-
-        // The same mechanism for the anchor floor, written the same way rather
-        // than folded in with the link knobs above: they are separate built-ins
-        // and a shared refusal would name the wrong one in its message, which
-        // is the whole failure mode this class of check exists to avoid.
-        if self.builtin() != Some("anchors-resolve") && self.require_any_anchor.is_some() {
-            return Err(Fatal::new(format!(
-                "rule {:?}: `require_any_anchor` is read by the `anchors-resolve` built-in \
-                 and nothing else -- on this rule the field would be read by nothing and \
-                 would look like configuration that works",
-                self.id
-            )));
-        }
-
+        self.validate_resolver_knobs()?;
         self.validate_command_sources()?;
 
         // A built-in that reads files and names a hook belongs to the guard:
@@ -1488,6 +1525,71 @@ impl Rule {
         }
 
         Ok(())
+    }
+
+    /// The resolver-knob half of [`Rule::validate`]: a link or anchor setting
+    /// beside a check that reads neither.
+    ///
+    /// Same mechanism as every other refusal of a written field: they are read
+    /// by the `links-resolve` and `anchors-resolve` built-ins and by nothing
+    /// else. They used to sit in the shared `files.*` selection vocabulary,
+    /// where every check accepted them.
+    ///
+    /// The two are checked separately rather than folded together, and that is
+    /// deliberate: they are separate built-ins, and a shared refusal would name
+    /// the wrong one in its message -- which is the whole failure mode this
+    /// class of check exists to avoid.
+    fn validate_resolver_knobs(&self) -> Result<()> {
+        if self.builtin() != Some("links-resolve") {
+            let link_fields: Vec<&str> = [
+                self.require_any_link
+                    .is_some()
+                    .then_some("require_any_link"),
+                self.allow_outside_repo
+                    .is_some()
+                    .then_some("allow_outside_repo"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if !link_fields.is_empty() {
+                return Err(Fatal::new(format!(
+                    "rule {:?}: {} read(s) links, and only the `links-resolve` built-in \
+                     reads any -- on this rule the field would be read by nothing and \
+                     would look like configuration that works",
+                    self.id,
+                    link_fields.join(" and ")
+                )));
+            }
+        }
+        if self.builtin() != Some("anchors-resolve") && self.require_any_anchor.is_some() {
+            return Err(Fatal::new(format!(
+                "rule {:?}: `require_any_anchor` is read by the `anchors-resolve` built-in \
+                 and nothing else -- on this rule the field would be read by nothing and \
+                 would look like configuration that works",
+                self.id
+            )));
+        }
+        Ok(())
+    }
+
+    /// The `prose_regexp` half of [`Rule::validate`]: a pattern over prose is
+    /// handed one unwrapped span at a time, so there is no second line for
+    /// `files.multiline` to reach.
+    ///
+    /// The extractor collapses a paragraph, a run of comments or a block of `#`
+    /// lines into ONE line before the regex sees it -- which is what makes a
+    /// pattern about a sentence match a sentence somebody rewrapped -- so a
+    /// multiline pattern has no line boundary left to cross. Accepted, the field
+    /// would be read by nothing and would look like configuration that works.
+    fn validate_prose(&self, check: Check) -> Result<()> {
+        self.refuse(
+            check == Check::ProseRegexp && self.files().multiline,
+            "`files.multiline` spans the lines of a file, and `prose_regexp` is handed one \
+             unwrapped span at a time -- a paragraph, a run of comments, a block of `#` \
+             lines -- so a wrapped sentence already matches and there is no line boundary \
+             left to span. Drop the key",
+        )
     }
 
     /// The `files.min_selected` half of [`Rule::validate`]: a floor needs a
@@ -3724,6 +3826,8 @@ mod tests {
             (Check::Builtin, "builtin"),
             (Check::Exec, "exec"),
             (Check::MaxLines, "max_lines"),
+            (Check::MaxBytes, "max_bytes"),
+            (Check::ProseRegexp, "prose_regexp"),
         ] {
             assert_eq!(check.to_string(), name);
         }
@@ -3733,6 +3837,52 @@ mod tests {
         let names: BTreeSet<String> = Check::ALL.iter().map(ToString::to_string).collect();
         assert_eq!(names.len(), Check::ALL.len());
         assert!(!names.iter().any(String::is_empty));
+    }
+
+    /// The two size checks are two rules, never one rule with two caps.
+    ///
+    /// A rule bounding both would have one of the two read by nothing under
+    /// whichever arm the evaluator happened to take first, which is the shape
+    /// the discriminant made easy and the whole reason the field IS the check.
+    #[test]
+    fn a_rule_cannot_bound_lines_and_bytes_at_once() {
+        let error = policy_from(
+            "[rule.short]\nmessage = \"x\"\nmax_lines = 10\nmax_bytes = 400\nfiles.include = [\".\"]\n",
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("max_lines and max_bytes"), "{text}");
+        assert!(text.contains("one rule per check"), "{text}");
+    }
+
+    /// A prose span is one unwrapped line by construction, so there is no
+    /// second line for a multiline pattern to reach -- and a field read by
+    /// nothing is refused here rather than accepted and ignored.
+    #[test]
+    fn multiline_beside_a_prose_rule_is_refused() {
+        let error = policy_from(
+            "[rule.shape]\nmessage = \"x\"\nprose_regexp = 'arguably'\nfiles.include = [\".\"]\nfiles.multiline = true\n",
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("files.multiline"), "{text}");
+        assert!(text.contains("unwrapped span"), "{text}");
+    }
+
+    /// The seams a prose rule reaches, which is what `uphold check` reconciles
+    /// a claim against. A rule declaring both tables runs at both, and reading
+    /// it as scan-only would credit a shim-seam claim to a scan that never
+    /// consults the command.
+    #[test]
+    fn a_prose_rule_runs_at_the_scan_and_at_the_shim() {
+        let policy = policy_from(
+            "[rule.shape]\nmessage = \"x\"\nprose_regexp = 'arguably'\nfiles.include = [\".\"]\n\
+             command.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\n",
+        )
+        .unwrap();
+        let rule = policy.rules.first().unwrap();
+        assert_eq!(rule.seams(), ["scan", "shim"]);
+        assert!(rule.stands_in_front_of_a_command());
     }
 
     #[test]

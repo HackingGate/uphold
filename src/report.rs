@@ -26,6 +26,19 @@ impl Failure {
         }
     }
 
+    /// The message and the finding as one block, which is what a guard's
+    /// refusal carries.
+    ///
+    /// Split out of `print` so a finding can be reported through either seam's
+    /// own form without a second rendering of it: `policy check failed:` in a
+    /// scan, `guard refused:` at a git hook. Two renderings would be two places
+    /// for the dedent to be forgotten, and the one that forgot it would print a
+    /// message indented by however many spaces its TOML literal happened to
+    /// carry.
+    pub(crate) fn report(&self) -> String {
+        format!("{}\n{}", dedent(&self.message), self.body.trim_end())
+    }
+
     pub(crate) fn print(&self) {
         eprintln!("policy check failed: {}", self.label);
         eprintln!("{}", dedent(&self.message));

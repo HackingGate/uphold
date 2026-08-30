@@ -235,3 +235,113 @@ fn a_declared_identity_rule_is_not_reported_twice() {
         stderr(&output)
     );
 }
+
+// ── prose rules, at the seam where text never becomes a file ─────────
+
+/// A prose rule standing in front of a command, and the shim table that rule
+/// needs before the policy will load.
+///
+/// The `[[shim]]` is not decoration: a rule naming a command no `[[shim]]`
+/// declares runs nowhere, and the loader refuses it rather than letting it read
+/// as a rule that passes.
+const PROSE_POLICY: &str = r#"
+[rule.no-empty-hedge]
+message = "state the claim, or state what is unknown about it"
+prose_regexp = '(?i)\barguably\b'
+files.include = ["."]
+command.before = ["gh"]
+
+[[shim]]
+command = "gh"
+match = ["pr:create"]
+text_flags = ["-b", "--body"]
+scope = "always"
+"#;
+
+fn guard_text(root: &Path, stdin: &[u8], home: &str, allow: Option<&str>) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command
+        .args(["guard", "--text", "-"])
+        .current_dir(root)
+        .env("HOME", home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    match allow {
+        Some(value) => command.env("UPHOLD_ALLOW", value),
+        None => command.env_remove("UPHOLD_ALLOW"),
+    };
+    let mut child = command.spawn().unwrap();
+    child.stdin.as_mut().unwrap().write_all(stdin).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+/// A commit message reaches `uphold scan --text` at commit-msg, and a
+/// pull-request body reaches the same rule at the shim. One rule, one answer.
+///
+/// Without this the shape is refused when `gh` publishes the body announcing a
+/// commit and accepted when `git commit` records the commit, which is one rule
+/// with two verdicts under one id.
+#[test]
+fn a_prose_rule_in_front_of_a_command_is_consulted_by_scan_text() {
+    let root = workspace(PROSE_POLICY);
+    let output = scan_text(&root, b"Arguably the count is right.\n", EXAMPLE_HOME);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no-empty-hedge"),
+        "{}",
+        stderr(&output)
+    );
+
+    let clean = scan_text(&root, b"The count is taken once.\n", EXAMPLE_HOME);
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+}
+
+#[test]
+fn a_prose_rule_in_front_of_a_command_is_consulted_by_guard_text() {
+    let root = workspace(PROSE_POLICY);
+    let output = guard_text(&root, b"Arguably the count is right.\n", EXAMPLE_HOME, None);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("guard refused: no-empty-hedge"), "{text}");
+    assert!(text.contains("line 1:"), "{text}");
+}
+
+/// The waiver, and it is the reason a refusal over prose is acceptable at all:
+/// the rule is wrong about one sentence, and the person standing there says so
+/// where a shell history records it.
+#[test]
+fn upholds_allow_lets_one_piece_of_text_past_a_prose_rule() {
+    let root = workspace(PROSE_POLICY);
+    let output = guard_text(
+        &root,
+        b"Arguably the count is right.\n",
+        EXAMPLE_HOME,
+        Some("no-empty-hedge"),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("bypassed by UPHOLD_ALLOW"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A prose rule that is purely a content rule is not asked about a commit
+/// message.
+///
+/// The argument this module's own docstring makes about pattern rules: a rule
+/// scoped by `files.*` to particular paths says nothing about text that has no
+/// path, and firing it at a commit message would be guesswork. `command.before`
+/// is the field that says otherwise.
+#[test]
+fn a_prose_rule_with_no_command_is_left_out_of_the_text_seam() {
+    let root = workspace(
+        "[rule.no-empty-hedge]\n\
+         message = \"state the claim\"\n\
+         prose_regexp = '(?i)\\barguably\\b'\n\
+         files.include = [\".\"]\n",
+    );
+    let output = scan_text(&root, b"Arguably the count is right.\n", EXAMPLE_HOME);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}

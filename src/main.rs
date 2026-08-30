@@ -90,6 +90,7 @@ mod install;
 mod out;
 mod pins;
 mod probe;
+mod prose;
 mod report;
 mod runner;
 mod scan;
@@ -639,7 +640,19 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
             std::fs::read_to_string(&source)
                 .map_err(|error| Fatal::at(Path::new(&source), error))?
         };
-        let refusals = guard::over_text(&root, &policy, &source, &text)?;
+        let mut refusals = guard::over_text(&root, &policy, &source, &text)?;
+        // And the prose rules standing in front of a command, over the same
+        // text. A rule that refuses a sentence shape in a pull-request body has
+        // nothing different to say about a release note piped in here, and a
+        // seam that consulted one and not the other would be the same rule with
+        // two answers -- which is what `guard::text_refusal` was split out to
+        // prevent for the built-ins.
+        for failure in prose::over_text(&policy, &text)? {
+            refusals.push(guard::Refusal {
+                id: failure.label.clone(),
+                report: failure.report(),
+            });
+        }
         for refusal in &refusals {
             eprintln!("guard refused: {}", guard::refused_by(&policy, refusal));
             eprintln!("{}", refusal.report.trim_end());

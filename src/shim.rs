@@ -1046,8 +1046,31 @@ fn json_bool_field(text: &str, field: &str) -> bool {
 /// subject the pattern is absent from; `regexp` refuses one it is present in.
 /// Both name the kind and the pattern, because the reader's next step is to
 /// fix the text, and "refused" without which-test-failed is a round trip.
+///
+/// `prose_regexp` is the third, and the subject reaches it as whole-text prose:
+/// a pull-request body is a document, so a fenced example in one is skipped
+/// here exactly as it is in a committed document, and a sentence wrapped by
+/// whatever composed the body is unwrapped before the pattern sees it. A rule
+/// that refused a shape in a document and allowed it in the body announcing
+/// that document would be one rule with two answers.
 fn pattern_refusal(rule: &Rule, subject: &Subject) -> Result<Option<String>> {
     let multiline = rule.files().multiline;
+    if let Some(pattern) = rule.prose_regexp.as_deref() {
+        let matcher = crate::prose::compile(pattern, &rule.id)?;
+        let Some(span) = crate::prose::of_text(&subject.value)
+            .into_iter()
+            .find(|span| matcher.is_match(&span.text))
+        else {
+            return Ok(None);
+        };
+        return Ok(Some(format!(
+            "{}: the {} subject matches {pattern:?}: {}\n{}",
+            rule.id,
+            subject.kind,
+            span.text,
+            rule.message()
+        )));
+    }
     if let Some(pattern) = rule.require_regexp.as_deref() {
         let hits = crate::engine::search_text(
             &subject.value,
@@ -1564,20 +1587,22 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
         kind: "text",
         value: text,
     };
-    // The same two kinds `run` consults, and for the reason the dispatch there
+    // The same kinds `run` consults, and for the reason the dispatch there
     // gives: a guard cannot judge a body typed into an editor one way and the
     // same body given with `--body` another under one id. Reading only `exec`
     // here meant a policy whose checker for this command is a BUILT-IN had a
     // checkpoint that opened an editor, read the file back, consulted nobody and
     // exited 0.
+    //
+    // Asked of `stands_in_front_of_a_command` rather than spelled out, which is
+    // the fourth reader of that question and the reason it is one function: this
+    // list and the one in `run` were the same four arms written twice, and a
+    // kind added to one of them is a checker the editor checkpoint does not
+    // consult -- the editor pass then reads the body back and finds nobody
+    // standing at it.
     let named: Vec<&Rule> = policy
         .before_command(name, &opened_for)
-        .filter(|rule| {
-            rule.is(Check::Exec)
-                || rule.is(Check::Builtin)
-                || rule.is(Check::Regexp)
-                || rule.is(Check::RequireRegexp)
-        })
+        .filter(|rule| rule.stands_in_front_of_a_command())
         .collect();
     if named.is_empty() {
         // Nothing to consult, and the text exists now: this is a checkpoint
@@ -1811,14 +1836,13 @@ pub(crate) fn run(
     // wrote `command.before` on the built-in independently and the loader
     // refused all three, on the true-but-unhelpful grounds that a built-in is
     // not an `exec`. The field means what they meant now.
+    //
+    // One predicate, and `validate` refuses `command.before` on every rule it
+    // answers no for -- so filtering here on the same question can drop nothing
+    // a policy was allowed to load, and cannot fall behind a kind added to it.
     let checkers: Vec<&Rule> = policy
         .before_command(name, &words)
-        .filter(|rule| {
-            rule.is(Check::Exec)
-                || rule.is(Check::Builtin)
-                || rule.is(Check::Regexp)
-                || rule.is(Check::RequireRegexp)
-        })
+        .filter(|rule| rule.stands_in_front_of_a_command())
         .collect();
     let mut refusals: Vec<String> = Vec::new();
     // Whether any refusal below is about WHERE this would publish rather than
@@ -1974,7 +1998,10 @@ pub(crate) fn run(
                     if !rule.selects_subject(subject.kind) {
                         continue;
                     }
-                    if rule.is(Check::Regexp) || rule.is(Check::RequireRegexp) {
+                    if rule.is(Check::Regexp)
+                        || rule.is(Check::RequireRegexp)
+                        || rule.is(Check::ProseRegexp)
+                    {
                         if let Some(refusal) = pattern_refusal(rule, subject)? {
                             refusals.push(refusal);
                         }

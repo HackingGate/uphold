@@ -732,5 +732,123 @@
     ],
     "set": "published-text",
     "stages": []
+  },
+  {
+    "commands": [
+      "gh",
+      "git push"
+    ],
+    "rules": [
+      {
+        "command": {
+          "before": [
+            "gh",
+            "git push"
+          ]
+        },
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/testdata/**",
+            "**/fixtures/**",
+            "**/*_test.go",
+            "CHANGELOG*"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-announcing-sentence",
+        "message": "This sentence says what the next one will say. Delete it and let the next\nsentence say it -- a reader who needs the announcement has already read past it.\n",
+        "prose_regexp": "(?i)\\b(?:the (?:next|following) (?:section|paragraph|sentence)s? (?:will|describes?|explains?|shows?|covers?)|as (?:we|you) (?:will|shall) see|in what follows|this (?:section|document) (?:describes|explains|covers|discusses))\\b"
+      },
+      {
+        "command": {
+          "before": [
+            "gh",
+            "git push"
+          ]
+        },
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/testdata/**",
+            "**/fixtures/**",
+            "**/*_test.go",
+            "CHANGELOG*"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-empty-hedge",
+        "message": "This hedge admits no uncertainty -- it softens the claim without qualifying it.\nState the claim, or state what is actually unknown about it.\n",
+        "prose_regexp": "(?i)\\b(?:arguably|it could be (?:said|argued)|in some sense|to some extent|it is worth noting|it should be noted|needless to say|as it were|so to speak)\\b"
+      },
+      {
+        "command": {
+          "before": [
+            "gh",
+            "git push"
+          ]
+        },
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/testdata/**",
+            "**/fixtures/**",
+            "**/*_test.go",
+            "CHANGELOG*"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-restating-clause",
+        "message": "This clause restates the one in front of it. Keep whichever half is clearer and\ndelete the other -- a sentence that needs a second statement of itself needs a\nbetter first one.\n",
+        "prose_regexp": "(?i)(?:--|\\x{2014})[[:space:]]*(?:(?:in other words|which is to say|put differently|to put it (?:another way|differently))\\b|i\\.e\\.)"
+      },
+      {
+        "command": {
+          "before": [
+            "gh",
+            "git push"
+          ]
+        },
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/testdata/**",
+            "**/fixtures/**",
+            "**/*_test.go",
+            "CHANGELOG*"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-unproposed-alternative",
+        "message": "This answers an objection nobody made. Argue with the alternative that was\nactually proposed, or state the position and stop.\n",
+        "prose_regexp": "(?i)\\b(?:one (?:might|could) (?:argue|object)|some (?:would|might|may) (?:argue|object)|it (?:might|could) be (?:argued|objected|tempting)|a (?:skeptic|sceptic|critic) (?:might|would|could))\\b"
+      }
+    ],
+    "set": "prose-shapes",
+    "stages": []
   }
 ]
