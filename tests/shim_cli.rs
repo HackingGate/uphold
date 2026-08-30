@@ -1590,3 +1590,268 @@ fn a_push_with_no_refspec_still_names_the_branch_it_is_publishing() {
     assert_eq!(code(&clean), 0, "{}", stderr(&clean));
     assert!(stdout(&clean).contains("faux ran:"), "{}", stdout(&clean));
 }
+
+// ── the destination, not the text ────────────────────────────────────
+
+/// A checker that judges WHERE an invocation publishes rather than what.
+///
+/// Every other policy in this file asks whether the text is safe. This one asks
+/// whether the destination is a repository this workspace owns, which nothing
+/// at this seam asked until it existed: an invocation carrying blameless prose
+/// and `--repo other-owner/their-repo` satisfied every text checker and
+/// published to a forge repository this workspace does not own.
+///
+/// `owner` is the pin, spelled with a neutral placeholder. `scope = "always"`
+/// on the table, because whether a destination is yours is a fact about the
+/// destination and not about its visibility.
+const TARGET_POLICY: &str = r#"
+[rule.unowned-forge-target]
+builtin = "prevent-unowned-target"
+owner = "example-user"
+command.before = ["faux"]
+
+[[shim]]
+command = "faux"
+match = ["issue:create"]
+text_flags = ["-b", "--body"]
+target_flags = ["-R", "--repo"]
+target = "forge-repo"
+scope = "always"
+"#;
+
+/// `TARGET_POLICY` with extra lines on the rule, or with the pin taken off.
+fn target_policy(fields: &str) -> String {
+    TARGET_POLICY.replace(
+        "owner = \"example-user\"\n",
+        &format!("owner = \"example-user\"\n{fields}"),
+    )
+}
+
+#[test]
+fn a_destination_this_workspace_does_not_own_is_refused_and_the_command_never_runs() {
+    // The gap this closes. The body is ordinary prose -- no marker, no host
+    // name, nothing a text guard would say a word about -- and it was about to
+    // be published on somebody else's repository.
+    let root = workspace(TARGET_POLICY);
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "issue",
+            "create",
+            "--repo",
+            "other-owner/their-repo",
+            "-b",
+            "An ordinary sentence about an ordinary thing.",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("other-owner/their-repo"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("pinned to example-user"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("Nothing was published"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_destination_under_this_workspaces_own_owner_passes_and_the_command_runs() {
+    // The half that is easy to lose: a destination guard that refuses
+    // everything has broken the command it was standing in front of.
+    let root = workspace(TARGET_POLICY);
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "issue",
+            "create",
+            "-R",
+            "example-user/widget",
+            "-b",
+            "An ordinary sentence.",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn allowed_owners_admits_a_named_other_owner() {
+    let root = workspace(&target_policy("allowed_owners = [\"other-owner\"]\n"));
+    let admitted = shim(
+        &root,
+        &[
+            "faux",
+            "issue",
+            "create",
+            "-R",
+            "other-owner/their-repo",
+            "-b",
+            "An ordinary sentence.",
+        ],
+    );
+    assert_eq!(code(&admitted), 0, "{}", stderr(&admitted));
+    assert!(
+        stdout(&admitted).contains("faux ran:"),
+        "{}",
+        stdout(&admitted)
+    );
+
+    // The discriminating half: a list that admitted its one entry and
+    // everything else would be an allow-list only in name.
+    let refused = shim(
+        &root,
+        &[
+            "faux",
+            "issue",
+            "create",
+            "-R",
+            "third-owner/their-repo",
+            "-b",
+            "An ordinary sentence.",
+        ],
+    );
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        !stdout(&refused).contains("faux ran:"),
+        "{}",
+        stdout(&refused)
+    );
+}
+
+#[test]
+fn allowed_repos_admits_one_repository_without_widening_to_its_owner() {
+    // The finer grant. An owner is a blunt unit: allowing one to let a single
+    // repository through allows every repository it will ever have.
+    let root = workspace(&target_policy(
+        "allowed_repos = [\"other-owner/their-repo\"]\n",
+    ));
+    let admitted = shim(
+        &root,
+        &[
+            "faux",
+            "issue",
+            "create",
+            "-R",
+            "other-owner/their-repo",
+            "-b",
+            "An ordinary sentence.",
+        ],
+    );
+    assert_eq!(code(&admitted), 0, "{}", stderr(&admitted));
+
+    let sibling = shim(
+        &root,
+        &[
+            "faux",
+            "issue",
+            "create",
+            "-R",
+            "other-owner/another-repo",
+            "-b",
+            "An ordinary sentence.",
+        ],
+    );
+    assert_eq!(code(&sibling), 1, "{}", stderr(&sibling));
+    assert!(
+        !stdout(&sibling).contains("faux ran:"),
+        "{}",
+        stdout(&sibling)
+    );
+}
+
+#[test]
+fn owner_required_with_nothing_declared_anywhere_is_exit_two_and_not_a_pass() {
+    // Neither a refusal nor a pass. Nothing here says who this workspace is and
+    // there is no origin to guess from, so the question was never answered --
+    // and a run that could not look must not exit 0.
+    let policy = TARGET_POLICY.replace("owner = \"example-user\"\n", "owner_required = true\n");
+    let root = workspace(&policy);
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "issue",
+            "create",
+            "-R",
+            "other-owner/their-repo",
+            "-b",
+            "An ordinary sentence.",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("owner_required"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_destination_that_could_not_be_resolved_is_exit_two_and_not_a_pass() {
+    // The dangerous direction, and the one an unresolvable target invites: no
+    // `--repo` on the command line and no remote to read one off. Reading that
+    // as "nothing to refuse" would put the whole gap back, because an
+    // invocation whose destination this seam could not read is exactly the one
+    // that most needs asking about.
+    let root = workspace(TARGET_POLICY);
+    let output = shim(
+        &root,
+        &["faux", "issue", "create", "-b", "An ordinary sentence."],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("could not look"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_target_rule_whose_own_scope_does_not_hold_is_stood_down_alone() {
+    // The policy answered: this check does not apply to this invocation. The
+    // unowned destination goes through because the ONLY rule for it stood down
+    // -- which is the declared behaviour, not a gap, and it is the same reading
+    // the text path takes.
+    let root = workspace(&target_policy(
+        "command.scope = { command = { command = \"exit 1\" } }\n",
+    ));
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "issue",
+            "create",
+            "-R",
+            "other-owner/their-repo",
+            "-b",
+            "An ordinary sentence.",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran:"), "{}", stdout(&output));
+}

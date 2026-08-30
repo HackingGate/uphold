@@ -375,6 +375,55 @@ command.before = ["gh", "glab", "git push"]
 # `always`, for the reason the rule above gives.
 command.scope = "always"
 
+# The other question this seam has to answer, and the one it did not ask for
+# most of its life. Both rules above judge the TEXT: is there a marker in it, is
+# there a host name in it. Neither judges WHERE the text is going. So an
+# invocation carrying blameless prose and `--repo other-owner/their-repo` passed
+# every checker standing in front of `gh` and published, on a forge repository
+# this workspace does not own -- which is what happened: an agent working in
+# this tree opened text on somebody else's tracker, and nothing here was even
+# asked. The text was fine. The destination was not ours, and no rule was
+# looking at destinations.
+#
+# `prevent-public-push` had been answering exactly this question since the
+# git-guards days -- for a push. A push is one road out of a workspace and a
+# forge API is another, and the gate stood on one of them. This rule is the same
+# gate on the other: `guard::push::unowned` is one predicate, and both seams
+# reach it rather than each carrying a reading of "is this destination ours".
+# A second copy worded for this seam would be two rules answering one question,
+# and the day they disagree is the day one of them is the hole.
+#
+# `owner_required = true` for the reason the set that carries it gives: without
+# it the only owner available is the one read off `origin`, and origin is the
+# remote a destination guard exists to catch being wrong. This file declares
+# `owner` at the top, so the pin is already there and this line is what stops it
+# being quietly optional.
+#
+# `command.scope = "always"`, overriding the `gh` and `glab` tables'
+# `public-target`, and the override is the whole point rather than a
+# convenience. `public-target` asks a forge whether the destination is public
+# and stands the rule down when the forge does not answer -- which is exactly
+# the invocation that most needs asking about, since a lookup that fails is a
+# lookup that told nobody anything. Worse, the question is the wrong one:
+# whether a repository is YOURS is a fact about the destination, not about its
+# visibility. A private repository belonging to somebody else is still not
+# yours, and publishing into it is still publishing into somebody else's tree.
+# So this rule is in scope on every invocation the shims collect, and it costs
+# no round trip to be there -- the destination is read off `--repo` or off the
+# remote, and no forge is asked.
+#
+# Not promoted to a bundled set here, deliberately. Every repository that
+# inherits a set gets whatever the set carries on a version bump, and a rule
+# that can refuse a `gh` invocation outright is not a thing to acquire by
+# inheriting a name -- and it would drag `policy/base/sets.lock.json` and the
+# base-set corpus along with it. Promotion is a separate decision, taken once
+# this rule has been wrong here for a while and has not been.
+[rule.unowned-forge-target]
+builtin = "prevent-unowned-target"
+owner_required = true
+command.before = ["gh", "glab"]
+command.scope = "always"
+
 # ---------------------------------------------------------------------------
 # Shims -- what a command is about to publish.
 #

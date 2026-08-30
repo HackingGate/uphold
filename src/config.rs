@@ -843,6 +843,11 @@ impl Rule {
     ///   commit message at every git hook, which refuses the issue citations a
     ///   repository's own prose is full of, so a repository that wants it over
     ///   a pull-request body and nowhere else has no other field to say it in.
+    /// * a DESTINATION-judging built-in -- one that reads where the invocation
+    ///   was told to publish rather than what. This seam is the only one it
+    ///   belongs at, and in the other direction: a git hook is handed no
+    ///   destination for a command, so `command.before` is the whole of where
+    ///   it can run.
     ///
     /// Anything else reads an index, an identity or a push range, and has
     /// nothing to say about a pull-request body.
@@ -850,9 +855,10 @@ impl Rule {
         matches!(
             self.check(),
             Some(Check::Exec | Check::Regexp | Check::RequireRegexp)
-        ) || self
-            .builtin()
-            .is_some_and(|builtin| crate::guard::TEXT_GUARDS.contains(&builtin))
+        ) || self.builtin().is_some_and(|builtin| {
+            crate::guard::TEXT_GUARDS.contains(&builtin)
+                || crate::guard::TARGET_GUARDS.contains(&builtin)
+        })
     }
 
     // -- the built-in parameters, absent-as-default --------------------------
@@ -1384,10 +1390,12 @@ impl Rule {
         if !self.stands_in_front_of_a_command() && self.command.is_some() {
             let built_in_note = if check == Check::Builtin {
                 format!(
-                    "\nThe built-ins that can judge the text a command publishes are {}; \
-                     any other reads an index, an identity or a push range, and has nothing \
-                     to say about a pull-request body.",
-                    crate::guard::TEXT_GUARDS.join(", ")
+                    "\nThe built-ins that can judge the text a command publishes are {}, \
+                     and the ones that can judge where it publishes are {}; any other reads \
+                     an index, an identity or a push range, and has nothing to say about a \
+                     pull-request body.",
+                    crate::guard::TEXT_GUARDS.join(", "),
+                    crate::guard::TARGET_GUARDS.join(", ")
                 )
             } else {
                 String::new()
@@ -1577,6 +1585,25 @@ impl Rule {
                  at a git hook or in a scan each of those rules runs itself -- this \
                  rule there would report every finding twice. `command.before` is the \
                  seam it exists for; declare that and nothing else",
+                self.id
+            )));
+        }
+        // The same shape for the other direction. A destination-judging
+        // built-in reads the repository an INVOCATION was told to publish to,
+        // and nothing hands it one at a git hook or in a scan: there it would
+        // run over no destination and report clean, which is the shape of
+        // configuration that looks enforced and is not. `prevent-public-push`
+        // is the rule for a push, reached by the same predicate, so nothing is
+        // lost by refusing this one there.
+        if crate::guard::TARGET_GUARDS.contains(&name)
+            && (self.git.is_some() || self.files.is_some())
+        {
+            return Err(Fatal::new(format!(
+                "rule {:?}: {name:?} judges the repository a command was told to publish \
+                 to, and a git hook or a scan is handed no such destination -- there this \
+                 rule would look at nothing and report clean. `command.before` is the seam \
+                 it exists for; declare that and nothing else, and use \
+                 `prevent-public-push` for a push",
                 self.id
             )));
         }

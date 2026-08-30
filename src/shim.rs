@@ -1821,6 +1821,14 @@ pub(crate) fn run(
         })
         .collect();
     let mut refusals: Vec<String> = Vec::new();
+    // Whether any refusal below is about WHERE this would publish rather than
+    // what it would say. The closing line tells the reader what to fix, and
+    // telling someone to fix the text when the text was never the problem
+    // sends them to reread a body that is fine while the destination stays
+    // wrong. Counted rather than flagged, because a single run can refuse at
+    // both seams, and a reader told only one of the two goes and fixes half of
+    // what is holding the command.
+    let mut destination_refusals = 0usize;
 
     let mut collected = Collected::default();
     let mut any_applies = false;
@@ -1884,6 +1892,51 @@ pub(crate) fn run(
                 words.join(" ")
             )));
         }
+        // Where a checker judges the DESTINATION rather than the text.
+        //
+        // This is the seam's other question, and for a long time it had no
+        // asker: `[[shim]]` answered "is this text safe to publish?" and
+        // `prevent-public-push` answered "may this push go to this owner?",
+        // while a forge CLI told to publish clean prose to a repository this
+        // workspace does not own satisfied both and published. An agent did
+        // exactly that. The destination is a property of the INVOCATION and not
+        // of any subject it carries, so it is asked once per run, outside the
+        // subject loop, and asked even where the invocation collected no
+        // subject at all.
+        //
+        // Resolved ONCE, before the loop, and only where some rule judges a
+        // destination. `resolve_target` reads `--repo`/`-R` off argv and
+        // otherwise `git remote get-url origin`; it asks no forge. Only
+        // `Scope::PublicTarget`'s `visibility()` reaches a network, and this
+        // consultation never calls it -- so a repository that adds this rule
+        // pays no round trip on an ordinary invocation. That is worth stating,
+        // because this repository's own argument against a check is that it
+        // makes every invocation wait on somebody else's service, and a seam
+        // that does is a seam somebody takes off PATH.
+        if checkers.iter().any(|rule| {
+            rule.builtin()
+                .is_some_and(|builtin| crate::guard::TARGET_GUARDS.contains(&builtin))
+        }) {
+            let target = shim.resolve_target(root, &collected)?;
+            for rule in &checkers {
+                if crate::guard::bypassed(&rule.id) {
+                    continue;
+                }
+                // The rule's own scope where it wrote one, the table's where it
+                // did not -- the same reading the text path takes, answered
+                // from the same memo.
+                if !scopes.holds(shim, effective_scope(rule, shim), root, &collected, &words)? {
+                    continue;
+                }
+                if let Some(refusal) =
+                    crate::guard::target_refusal(root, policy, rule, target.as_deref())?
+                {
+                    destination_refusals += 1;
+                    refusals.push(refusal.report);
+                }
+            }
+        }
+
         if any_applies {
             for subject in &collected.subjects {
                 // An empty subject is not a subject a checker can read: a
@@ -1957,7 +2010,14 @@ pub(crate) fn run(
         for refusal in &refusals {
             eprintln!("{name}: {refusal}");
         }
-        eprintln!("Nothing was published. Fix the text, or override once with UPHOLD_ALLOW.");
+        let what = if destination_refusals == 0 {
+            "the text"
+        } else if destination_refusals == refusals.len() {
+            "the destination"
+        } else {
+            "the text and the destination"
+        };
+        eprintln!("Nothing was published. Fix {what}, or override once with UPHOLD_ALLOW.");
         return Ok(Exit::Violations);
     }
 
