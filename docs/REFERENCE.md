@@ -456,6 +456,14 @@ line per name and then permitted the commit. They are separate now:
 | forge answers `404` | reported; refused only under `refuse_unknown` |
 | forge could not be asked | **exit `2`** — always, whatever `refuse_unknown` says |
 
+The shim seam asks the same forge the same question, for a different purpose —
+`scope = "public-target"` is "do these checks apply here at all" — and it now
+gives the bottom row the same answer. A scope that could not be *evaluated* is
+neither "in scope" nor "out of scope", and reading it as out of scope stood the
+checkers down exactly where the lookup failed. That is exit `2` before the
+command runs, and `unresolved = "run"` on the `[[shim]]` table is the opt-out —
+see [the shims](#uphold-shim--the-shims).
+
 So **`gh` must be authenticated wherever these rules run**, CI included. In a
 GitHub Actions job that means `GH_TOKEN: ${{ github.token }}`; the job token
 reads this repository and public ones and answers `404` for everything else,
@@ -1384,6 +1392,7 @@ skip_flags = ["--fill"]
 editor_env = "GH_EDITOR"
 target = "forge-repo"
 scope = "public-target"
+unresolved = "refuse"                             # the default; "run" is the opt-out
 ```
 
 `title_flags` is `text_flags` for the subject a forge shows above the body,
@@ -1400,6 +1409,50 @@ be in scope, for a question that is none of the other three. (The doubly
 nested form is the enum's own spelling; the flatter one this page used to show
 never parsed.) `collect = "git-refs"` replaces the argv walk for `git`, whose
 published text is positional.
+
+**A scope that could not be evaluated is not a scope that said no.**
+`public-target` is the one predicate that asks somebody else, and `gh`
+unauthenticated, a rate limit, no network, or a repository with no `origin` all
+answer nothing. That was read as "out of scope", which stood every checker
+behind the table down — including `prevent-unowned-target`, whose own contract
+two sections below is exit `2` on a destination it could not resolve. So the
+predicate has three answers now, and the third is **exit `2` before the command
+runs**, naming what could not be asked. `unresolved = "run"` on the table opts
+back into the old behaviour: the command runs and the shim says on stderr that
+no checker did. The field is refused at load on a table no reading of which can
+reach `public-target` — neither the table's own `scope` nor the `command.scope`
+of any rule naming the command — because a parameter nothing reads is
+configuration that looks like it works.
+
+**An alias is expanded before the `match` list is consulted.** `match` names
+verbs literally, and every one of these commands lets a person rename one:
+`git -c alias.p=push p origin HEAD:refs/heads/x`, a persisted `[alias] p =
+push`, `gh alias set` and `glab alias set` all present a verb no list contains,
+which used to mean a push to a public forge exec'd unexamined at exit `0` with
+nothing printed. Where — and only where — nothing matched, the shim asks the
+real command what the word expands to (`git config --get alias.<word>`,
+`<command> alias list`) and matches again against the expansion, with the global
+options left in front of it. A **shell alias** (`!…`) and a lookup that failed
+are could-not-looks, not absences: exit `2`, since what a shell runs is not an
+invocation any table can read and it may well be a push. An ordinary `git push`
+pays no process for this — a `match` hit is already the answer.
+
+**`git push` reads its refspecs under both readings of the grammar.** The
+matcher tries an unclassifiable option both ways and matches under either; the
+positional collector now does the same, because an option in front of the
+refspecs shifts every one of them by one. Where the two readings disagree about
+which names are being published — `git --attr-source HEAD push origin` reads
+`origin` under one and the current branch under the other — the answer is exit
+`2` and not a guess. This is a *matched* invocation, so nothing here risks the
+warning-on-every-command failure the [stand-downs](#the-stand-downs) exist to
+avoid.
+
+**`--all`, `--mirror` and `--tags` name no refspec and publish many.** They are
+enumerated with `git for-each-ref` and every name is checked; before that the
+collector fell back to `HEAD`, so a mirror push of forty branches was checked as
+one. A leading `+` is the force marker and no part of a name — `+fix/acme-outage`
+was a name no rule recognised, which made the force-push the way past a rule
+standing in front of the branch it names.
 
 **A rule may carry its own scope.** The table's `scope` answers for the
 command — is this push going somewhere public — and one answer cannot fit
@@ -1437,6 +1490,39 @@ neither an option nor an option's *value*, honouring `--`, `--flag=value`, and
 its own `text_flags`/`file_flags`/`skip_flags` as value-taking. `gh --repo
 owner/name issue create` matches `issue:create`; where a release puts its flags
 is not something a policy author should have to track.
+
+### The stand-downs
+
+Two paths through this seam **run the command with nothing checked, exit `0`,
+and say so on stderr**. Both are deliberate, both are stated here so the
+contract is not folded into "the shim passed it", and a reader who sees `This is
+not a pass.` on a terminal is reading one of them.
+
+| what happened | what runs | what is printed |
+|---|---|---|
+| **two or more options nothing can classify sit before the subcommand**, and the readings disagree about which word it even is | the command | which option, that the subcommand could not be established, and that no checker ran |
+| `UPHOLD_ALLOW=all` | the command | that it ran unchecked, every time |
+| `unresolved = "run"` and a scope that could not be evaluated | the command | what could not be asked, and that no checker ran |
+
+The first is bounded on purpose. **One** unclassifiable option is not a doubt —
+the two readings are then the whole space, both are asked, and both missing is a
+conclusion; that case is silent, and making it loud cost nine of sixteen
+ordinary git invocations a refusal line while `git push` itself stayed quiet. A
+warning printed over every command trains its reader to ignore the one where the
+doubt is real.
+
+The second is asked **before** the policy is read, which is what makes it the
+way out of a policy file that will not parse — see [when the policy itself will
+not load](#when-the-policy-itself-will-not-load). An empty `UPHOLD_ALLOW=`
+switches nothing off, and `UPHOLD_ALLOW=<rule-id>` stands one rule down rather
+than the seam.
+
+Everything else this seam cannot establish is exit `2` and no command at all: a
+non-UTF-8 argument on a matched invocation, a body file that is not there, an
+alias that is a shell command, refspecs two readings disagree about, a
+destination `prevent-unowned-target` could not resolve, a scope that could not
+be evaluated under the default `unresolved = "refuse"`, and a `current_exe()`
+the editor re-entry cannot be installed from.
 
 ### The checker contract
 

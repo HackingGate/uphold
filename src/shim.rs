@@ -78,6 +78,43 @@ pub(crate) enum Scope {
     Command { command: String },
 }
 
+/// Whether one scope predicate holds, or could not be asked at all.
+///
+/// The third answer is the whole of this type. `PublicTarget` asks a forge, and
+/// a forge that cannot be reached -- no `gh`, no credentials, a rate limit, a
+/// repository with no `origin` -- answers nothing. That was folded into "does
+/// not hold", which reads at every call site as "the policy decided these
+/// checks do not apply here", and the caller then skips the checkers. One of
+/// those checkers is [`crate::guard::target_refusal`], whose own contract is
+/// exit `2` on a destination it could not resolve, so the fold turned a
+/// documented refusal into a silent exec.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Standing {
+    /// The predicate was asked and said yes.
+    Holds,
+    /// The predicate was asked and said no. A decision, not a gap.
+    DoesNotHold,
+    /// Nothing here could say, and the sentence explaining why.
+    CouldNotTell(String),
+}
+
+/// What a shim does with a scope predicate that could not be asked.
+///
+/// `refuse` is the default and the reading the rest of this tool takes: an
+/// unobserved property must not resolve to success. `run` is the older
+/// behaviour, kept as an opt-in for a workspace whose forge is routinely
+/// unreachable and who would rather have the command than the answer -- it
+/// still says on stderr that no checker ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Unresolved {
+    /// Refuse the invocation with exit 2, having published nothing.
+    #[default]
+    Refuse,
+    /// Run the command, saying on stderr that this is not a pass.
+    Run,
+}
+
 /// How this command's subjects are found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -180,6 +217,15 @@ pub(crate) struct Shim {
     pub target: Target,
     #[serde(default)]
     pub scope: Scope,
+    /// What to do where `scope` could not be evaluated at all.
+    ///
+    /// `refuse` (the default) or `run`. Only `public-target` can reach this: it
+    /// is the one predicate that asks somebody else, and a forge that cannot be
+    /// asked has said nothing. Refused at load beside a table no reading of
+    /// which can produce that answer, because a parameter nothing reads is
+    /// configuration that looks like it works.
+    #[serde(default)]
+    pub unresolved: Unresolved,
     #[serde(default)]
     pub collect: Collect,
     /// Flag vocabularies for verbs whose grammar differs from the table's.
@@ -207,6 +253,77 @@ fn in_list(list: &[String], needle: &str) -> bool {
     list.iter().any(|item| item == needle)
 }
 
+/// Commands whose verb may be a name the command itself expands.
+///
+/// Grammar rather than policy, beside [`VALUE_OPTIONS`] and for the same
+/// reason: nothing in a `[[shim]]` says that `git` reads `alias.*` out of its
+/// config, and no policy author should have to write it there to be guarded.
+const ALIAS_COMMANDS: &[&str] = &["git", "gh", "glab"];
+
+/// An `alias.<name>` set with `-c` on the command line, which outranks config.
+fn command_line_alias(argv: &[String], word: &str) -> Option<String> {
+    let wanted = format!("alias.{word}=");
+    let mut index = 0;
+    while let Some(argument) = argv.get(index) {
+        index += 1;
+        // `-c` takes the word after it. `git` accepts no `-c=<setting>`, so
+        // the pair is the only spelling there is.
+        if argument != "-c" {
+            continue;
+        }
+        if let Some(setting) = argv.get(index) {
+            index += 1;
+            if let Some(value) = setting.strip_prefix(&wanted) {
+                return Some(value.to_owned());
+            }
+        }
+    }
+    None
+}
+
+/// One alias out of what `gh alias list` or `glab alias list` printed.
+///
+/// Both print one alias per line as a name and an expansion, and neither
+/// promises which separator: `co: pr checkout`, `co\tpr checkout` and
+/// `co=pr checkout` have all been shipped. Splitting on the first of the three
+/// reads every one of them, and a line that carries none is not an alias.
+fn alias_in_list(text: &str, word: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let (name, expansion) = line.split_once([':', '\t', '='])?;
+        (name.trim() == word).then(|| expansion.trim().to_owned())
+    })
+}
+
+/// A ref as a person reads it: `refs/heads/` off, and nothing where the name
+/// was empty.
+fn shortened(refname: &str) -> Option<&str> {
+    let name = refname
+        .strip_prefix("refs/heads/")
+        .or_else(|| refname.strip_prefix("refs/tags/"))
+        .unwrap_or(refname);
+    (!name.is_empty()).then_some(name)
+}
+
+/// The names one reading of a `git push` command line would publish.
+///
+/// The subcommand, then the remote, then the refspecs: both leading words are
+/// positions rather than names, since `push` is the verb the shim matched on
+/// and a remote is a local nickname that is not itself published.
+fn refspec_names(positional: &[&str]) -> Vec<String> {
+    let mut names = Vec::new();
+    for argument in positional.iter().skip(2) {
+        // `+topic:topic` is `topic:topic`, forced. The `+` is grammar and no
+        // part of any name, and leaving it on is a name no rule recognises: a
+        // pattern standing in front of `fix/acme-outage` saw `+fix/acme-outage`
+        // and reported clean, so the force-push was the way past it.
+        let spec = argument.strip_prefix('+').unwrap_or(argument);
+        // A refspec is `src:dst`; both halves are published, and `refs/heads/`
+        // is noise rather than name.
+        names.extend(spec.split(':').filter_map(shortened).map(str::to_owned));
+    }
+    names
+}
+
 /// Global options that take the word AFTER them, per command.
 ///
 /// Grammar rather than policy, which is why it lives here and not in a
@@ -220,6 +337,14 @@ fn in_list(list: &[String], needle: &str) -> bool {
 /// `--git-dir`, `--work-tree`, `--namespace` and `--config-env` are documented
 /// with an `=` and accepted both ways by `git.c`, so both spellings are here:
 /// the `=` form is split off before this table is consulted.
+///
+/// The `push` half of git's vocabulary is here for a second reason, and it is
+/// the collector's rather than the matcher's: `collect_git_refs` reads the
+/// refspecs out of the POSITIONS, and an option between `push` and its refspecs
+/// that nothing can classify shifts every one of them by one. The two readings
+/// then disagree about which words are being published, which is a
+/// could-not-look and is reported as one -- so `git push -f origin topic`,
+/// which nobody would call ambiguous, has to be a word this table knows.
 const VALUE_OPTIONS: &[(&str, &[&str])] = &[
     (
         "git",
@@ -231,6 +356,18 @@ const VALUE_OPTIONS: &[(&str, &[&str])] = &[
             "--namespace",
             "--config-env",
             "--super-prefix",
+            // Value-taking globals git documents with a following word. Their
+            // absence was not theoretical: `git --attr-source HEAD push origin`
+            // read `origin` as the refspec and the branch actually going out
+            // was checked nowhere.
+            "--attr-source",
+            "--list-cmds",
+            // `git push`'s own value-taking options.
+            "--repo",
+            "-o",
+            "--push-option",
+            "--receive-pack",
+            "--exec",
         ],
     ),
     ("gh", &["-R", "--repo"]),
@@ -274,6 +411,50 @@ const BARE_OPTIONS: &[(&str, &[&str])] = &[
             "--noglob-pathspecs",
             "--icase-pathspecs",
             "--no-icase-pathspecs",
+            // `git push`'s own options that take nothing, for the reason the
+            // table above gives: a refspec whose position an unclassified
+            // option shifted is a refspec two readings disagree about, and
+            // `git push -f origin topic` is not an invocation anybody should
+            // have to hear a doubt about. Where one of these words means
+            // something else under another verb -- `-n` takes a count on `git
+            // log` -- the pair both readings land on is unnamed either way, so
+            // the collision costs nothing this shim reads.
+            "--all",
+            "--mirror",
+            "--tags",
+            "--follow-tags",
+            "-f",
+            "--force",
+            "--force-with-lease",
+            "--no-force-with-lease",
+            "--force-if-includes",
+            "--no-force-if-includes",
+            "-u",
+            "--set-upstream",
+            "-d",
+            "--delete",
+            "-n",
+            "--dry-run",
+            "--porcelain",
+            "--prune",
+            "--atomic",
+            "--no-atomic",
+            "--thin",
+            "--no-thin",
+            "--signed",
+            "--no-signed",
+            "--verify",
+            "--no-verify",
+            "--recurse-submodules",
+            "--progress",
+            "--no-progress",
+            "-q",
+            "--quiet",
+            "--verbose",
+            "-4",
+            "--ipv4",
+            "-6",
+            "--ipv6",
         ],
     ),
     ("gh", &["--help", "--version"]),
@@ -322,6 +503,11 @@ struct Words {
 #[derive(Debug)]
 struct Scanned<'a> {
     positional: Vec<&'a str>,
+    /// Where in argv the first positional word was, which is the one an alias
+    /// mechanism expands. A name is not enough to put an expansion back: the
+    /// words before it are the command's global options and have to stay in
+    /// front of whatever the alias turns out to be.
+    first: Option<usize>,
     unclear: Option<String>,
     unclear_count: usize,
 }
@@ -394,32 +580,6 @@ impl Shim {
         }
     }
 
-    /// Every positional word of an invocation, in order: the subcommand, and
-    /// what follows it that is neither an option nor an option's value.
-    ///
-    /// `words` asks the same question and stops at two, because naming the
-    /// invocation is all a `match` list needs. A collector that reads its
-    /// subjects out of the POSITIONS -- `git push <remote> <refspec>...` --
-    /// needs the rest of them, and needs them read with the grammar the matcher
-    /// used. Reading them by skipping every word that begins with `-` is the
-    /// same mistake [`VALUE_OPTIONS`] exists to refuse one question earlier:
-    /// `git -c user.name=x push` then yields remote `user.name=x` and refspec
-    /// `push`, so the branch actually being published is collected nowhere --
-    /// and the fallback that reads it off `HEAD` does not run either, because a
-    /// name was collected.
-    ///
-    /// The bare reading, which is the one `reading` tries first. An option this
-    /// grammar cannot classify shifts the positions by one; the words after it
-    /// are still read, and a shift that leaves no refspec at all falls back to
-    /// `HEAD` rather than to nothing.
-    fn positional(&self, argv: &[String]) -> Vec<String> {
-        self.scan(argv, false, usize::MAX)
-            .positional
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
-    }
-
     /// One walk of argv, stopping once `stop_after` positional words are found.
     fn scan<'a>(
         &self,
@@ -428,6 +588,7 @@ impl Shim {
         stop_after: usize,
     ) -> Scanned<'a> {
         let mut found: Vec<&str> = Vec::new();
+        let mut first: Option<usize> = None;
         let mut unclear: Option<String> = None;
         let mut unclear_count = 0usize;
         let mut index = 0;
@@ -436,6 +597,9 @@ impl Shim {
             // `--` ends the options. Everything after it is positional however
             // it is spelt.
             if argument == "--" {
+                if first.is_none() && argv.get(index).is_some() {
+                    first = Some(index);
+                }
                 found.extend(
                     argv.get(index..)
                         .unwrap_or_default()
@@ -478,6 +642,9 @@ impl Shim {
                 }
                 continue;
             }
+            if first.is_none() {
+                first = Some(index - 1);
+            }
             found.push(argument);
             if found.len() >= stop_after {
                 break;
@@ -485,6 +652,7 @@ impl Shim {
         }
         Scanned {
             positional: found,
+            first,
             unclear,
             unclear_count,
         }
@@ -536,6 +704,125 @@ impl Shim {
             return Reading::Absent;
         }
         Reading::Unclear(flag)
+    }
+
+    /// argv as the command itself will read it, with an alias in the verb
+    /// position expanded once.
+    ///
+    /// `Ok(None)` where the word is not an alias, or where this command has no
+    /// alias mechanism at all. `Err` where the word MIGHT be one and nothing
+    /// here could say -- a `!shell` alias, an alias list that could not be
+    /// read -- because "could not look" is not "no alias", and the difference
+    /// is a push.
+    ///
+    /// The gap this closes. A `match` list names verbs literally, and every one
+    /// of these commands lets a person rename a verb: `git -c alias.p=push p
+    /// origin HEAD:refs/heads/x` and a persisted `[alias] p = push` both
+    /// present the verb `p`, which no list contains -- so the shim decided a
+    /// push to a public forge was none of its business, printed nothing, and
+    /// exited 0. Reproduced against the built binary on PATH.
+    ///
+    /// Asked only where nothing matched, so an ordinary `git push` pays no
+    /// process for it, and the expansion is asked of the REAL command rather
+    /// than of whatever PATH resolves: the shim is what PATH resolves, and
+    /// asking it would be this function calling itself without bound.
+    fn expand_alias(&self, root: &Path, argv: &[String]) -> Result<Option<Vec<String>>> {
+        if !ALIAS_COMMANDS.contains(&self.command.as_str()) {
+            return Ok(None);
+        }
+        let scanned = self.scan(argv, false, 1);
+        let (Some(index), Some(word)) = (scanned.first, scanned.positional.first().copied()) else {
+            return Ok(None);
+        };
+        let Some(expansion) = self.alias_expansion(root, argv, word)? else {
+            return Ok(None);
+        };
+        // `!` is git's and gh's spelling for "run this through a shell", and
+        // what the shell then runs is not a verb any table can match. It may
+        // well be a push. Naming it as unreadable is the only honest answer.
+        if expansion.starts_with('!') {
+            return Err(Fatal::new(format!(
+                "{}: {word:?} is an alias for a shell command ({expansion:?}), and what a shell \
+                 runs is not an invocation this shim can read. Nothing was published; run the \
+                 command the alias stands for, or take the alias off",
+                self.command
+            )));
+        }
+        let mut words: Vec<String> = argv.get(..index).unwrap_or_default().to_vec();
+        let expanded: Vec<String> = expansion
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<String>>();
+        if expanded.is_empty() {
+            return Err(Fatal::new(format!(
+                "{}: {word:?} is an alias for nothing, so which invocation this is could not be \
+                 established. Nothing was published",
+                self.command
+            )));
+        }
+        words.extend(expanded);
+        words.extend(argv.get(index + 1..).unwrap_or_default().iter().cloned());
+        Ok(Some(words))
+    }
+
+    /// What this command says one word expands to, asked of the real command.
+    fn alias_expansion(&self, root: &Path, argv: &[String], word: &str) -> Result<Option<String>> {
+        // A `-c alias.p=push` on the command line outranks the config file,
+        // and reading it costs no process. The persisted alias below is the
+        // case that needs one.
+        if self.command == "git" {
+            if let Some(value) = command_line_alias(argv, word) {
+                return Ok(Some(value));
+            }
+        }
+        let own = std::env::current_exe().ok();
+        let Some(real) = real_command(&self.command, own.as_deref()) else {
+            return Err(Fatal::new(format!(
+                "{0}: {word:?} names no subcommand this shim stands in front of, and whether it \
+                 is an alias for one could not be asked -- there is no {0} on PATH but this \
+                 shim. Nothing was published",
+                self.command
+            )));
+        };
+        let query: &[&str] = if self.command == "git" {
+            &["config", "--get"]
+        } else {
+            &["alias", "list"]
+        };
+        let mut command = Command::new(&real);
+        command.args(query).current_dir(root);
+        if self.command == "git" {
+            command.arg(format!("alias.{word}"));
+        }
+        let output = command.output().map_err(|error| {
+            Fatal::new(format!(
+                "{}: could not ask whether {word:?} is an alias ({error}). Nothing was published",
+                self.command
+            ))
+        })?;
+        let text = String::from_utf8_lossy(&output.stdout).into_owned();
+        if self.command == "git" {
+            // `--get` exits 1 for a key that is not set, which is an answer:
+            // this word is not an alias. Anything else is git failing to look.
+            return match output.status.code() {
+                Some(0) => Ok(Some(text.trim().to_owned())),
+                Some(1) => Ok(None),
+                _ => Err(Fatal::new(format!(
+                    "{}: `git config --get alias.{word}` failed, so whether {word:?} is an alias \
+                     for a subcommand this shim checks could not be established. Nothing was \
+                     published",
+                    self.command
+                ))),
+            };
+        }
+        if !output.status.success() {
+            return Err(Fatal::new(format!(
+                "{0}: `{0} alias list` failed, so whether {word:?} is an alias for a subcommand \
+                 this shim checks could not be established. Nothing was published",
+                self.command
+            )));
+        }
+        Ok(alias_in_list(&text, word))
     }
 
     /// This table, with the flag lists of whichever `[[shim.verbs]]` entry
@@ -685,32 +972,68 @@ impl Shim {
 
     /// Branch and tag names, which appear nowhere as a flag value.
     ///
-    /// Read off the POSITIONS, and off the ones `positional` finds rather than
-    /// off argv's own indices: the subcommand is not always the first word --
+    /// Read off the POSITIONS, and off the ones [`Shim::scan`] finds rather
+    /// than off argv's own indices: the subcommand is not always the first word
+    /// --
     /// `git -c user.name=x push` and `git -C elsewhere push` both put two
     /// before it -- and a collector that assumed it was read the option's value
     /// as the remote and `push` itself as the branch being published. That is
     /// the same reading [`VALUE_OPTIONS`] was written to end, arriving one
     /// question later: the shim MATCHED those invocations and then checked a
     /// name nobody was publishing, while the branch that was went out unread.
+    ///
+    /// Under BOTH readings, the way `reading` asks for both: an option this
+    /// grammar cannot classify shifts every position after it by one, so
+    /// reading only the bare one picks an answer where there are two. `git
+    /// --attr-source HEAD push origin` reads `origin` as the refspec under one
+    /// and the current branch under the other, and this collector used to
+    /// publish the first without knowing there was a second.
     fn collect_git_refs(&self, root: &Path, argv: &[String]) -> Result<Vec<Subject>> {
-        let mut names = Vec::new();
-        // The subcommand, then the remote, then the refspecs. Both leading
-        // words are positions rather than names here: `push` is the verb this
-        // shim matched on, and a remote is a local nickname that is not itself
-        // published.
-        for argument in self.positional(argv).iter().skip(2) {
-            // A refspec is `src:dst`; both halves are published, and
-            // `refs/heads/` is noise rather than name.
-            for half in argument.split(':') {
-                let name = half
-                    .strip_prefix("refs/heads/")
-                    .or_else(|| half.strip_prefix("refs/tags/"))
-                    .unwrap_or(half);
-                if !name.is_empty() {
-                    names.push(name.to_owned());
-                }
+        let bare = self.scan(argv, false, usize::MAX);
+        let valued = self.scan(argv, true, usize::MAX);
+        let mut names = refspec_names(&bare.positional);
+        // The same question `reading` asks about the subcommand, asked one
+        // question later about the refspecs. Where the two readings agree the
+        // doubt is not about anything this collector reads; where they disagree
+        // the words being published are one thing under one reading and another
+        // under the other, and picking one is a guess about what is going onto
+        // a public forge. Not `Unclear`-and-run either: this invocation IS one
+        // the shim matched, so nothing here is at risk of a warning printed
+        // over every ordinary command -- the whole reason that arm runs the
+        // command. A matched push whose subjects could not be established is
+        // the non-UTF-8 argv case in a different spelling.
+        if names != refspec_names(&valued.positional) {
+            let flag = bare.unclear.as_deref().unwrap_or("an option");
+            return Err(Fatal::new(format!(
+                "{}: {flag} sits in front of the refspecs and nothing here says whether it \
+                 takes the word after it, so which names this push would publish could not be \
+                 established. Nothing was published; spell the refspec after `--`, or name the \
+                 option in the shim's own flag lists",
+                self.command
+            )));
+        }
+        // `--all`, `--mirror` and `--tags` name no refspec and publish many.
+        // The fallback below reads HEAD, so a mirror push of forty branches was
+        // checked as one -- the current one -- and the other thirty-nine went
+        // out unread. What they would push is a question git itself answers.
+        for (flag, pattern) in [
+            ("--all", "refs/heads"),
+            ("--tags", "refs/tags"),
+            ("--mirror", "refs/"),
+        ] {
+            if !argv.iter().any(|argument| argument == flag) {
+                continue;
             }
+            let listed = git::try_run(root, &["for-each-ref", "--format=%(refname)", pattern])?
+                .ok_or_else(|| {
+                    Fatal::new(format!(
+                        "{}: {flag} publishes every ref under {pattern} and they could not be \
+                         listed, so nothing here could read the names going out. Nothing was \
+                         published",
+                        self.command
+                    ))
+                })?;
+            names.extend(listed.lines().filter_map(shortened).map(str::to_owned));
         }
         if names.is_empty() {
             // With no refspec, git pushes the current branch, so that is the
@@ -817,42 +1140,33 @@ impl Shim {
         root: &Path,
         collected: &Collected,
         argv: &[String],
-    ) -> Result<bool> {
+    ) -> Result<Standing> {
         match scope {
-            Scope::Always => Ok(true),
+            Scope::Always => Ok(Standing::Holds),
             Scope::PublicTarget => {
                 let Some(target) = self.resolve_target(root, collected)? else {
-                    // No answer is not "public". Refusing a push because a
-                    // lookup was unavailable would make the guard the reason
-                    // work stops.
-                    //
-                    // Said out loud, though. The decision to fall open here is
-                    // deliberate; doing it in silence was not, and it looked
-                    // exactly like a checker that ran and approved. `gh`
-                    // unauthenticated, rate-limited, offline, or a repository
-                    // with no `origin` all land here.
-                    eprintln!(
-                        "uphold shim: no target could be resolved, so the \
-                         `public-target` checks did not run. This is not a pass."
-                    );
-                    return Ok(false);
+                    // No answer is not "public", and it is not "not public"
+                    // either. `gh` unauthenticated, rate-limited, offline, or a
+                    // repository with no `origin` all land here, and what the
+                    // caller does about it is the caller's decision -- see
+                    // [`Unresolved`].
+                    return Ok(Standing::CouldNotTell(String::from(
+                        "no target could be resolved, so whether the `public-target` checks \
+                         apply here could not be established",
+                    )));
                 };
                 match self.visibility(root, &target).as_deref() {
-                    Some("public") => Ok(true),
-                    Some(_) => Ok(false),
-                    None => {
-                        eprintln!(
-                            "uphold shim: the forge did not say whether {target} is \
-                             public, so the `public-target` checks did not run. This is \
-                             not a pass."
-                        );
-                        Ok(false)
-                    }
+                    Some("public") => Ok(Standing::Holds),
+                    Some(_) => Ok(Standing::DoesNotHold),
+                    None => Ok(Standing::CouldNotTell(format!(
+                        "the forge did not say whether {target} is public, so whether the \
+                         `public-target` checks apply here could not be established"
+                    ))),
                 }
             }
             Scope::PublicRegistry => {
                 if argv.iter().any(|argument| argument == "--dry-run") {
-                    return Ok(false);
+                    return Ok(Standing::DoesNotHold);
                 }
                 // Two independent reasons this is nobody's business, and either
                 // one is enough: a package marked private cannot be published
@@ -860,14 +1174,18 @@ impl Shim {
                 // somebody's internal infrastructure.
                 if let Ok(text) = std::fs::read_to_string(root.join("package.json")) {
                     if text.contains("\"private\"") && json_bool_field(&text, "private") {
-                        return Ok(false);
+                        return Ok(Standing::DoesNotHold);
                     }
                 }
                 let registry = collected
                     .target
                     .clone()
                     .unwrap_or_else(|| String::from("https://registry.npmjs.org"));
-                Ok(registry.contains("registry.npmjs.org"))
+                Ok(if registry.contains("registry.npmjs.org") {
+                    Standing::Holds
+                } else {
+                    Standing::DoesNotHold
+                })
             }
             Scope::Command { command } => {
                 let status = Command::new("sh")
@@ -878,7 +1196,11 @@ impl Shim {
                     .map_err(|error| {
                         Fatal::new(format!("{}: scope command: {error}", self.command))
                     })?;
-                Ok(status.success())
+                Ok(if status.success() {
+                    Standing::Holds
+                } else {
+                    Standing::DoesNotHold
+                })
             }
         }
     }
@@ -1507,10 +1829,17 @@ fn effective_scope<'a>(rule: &'a Rule, shim: &'a Shim) -> &'a Scope {
 /// reads as three failures.
 #[derive(Default)]
 struct ScopeMemo {
-    answers: BTreeMap<String, bool>,
+    answers: BTreeMap<String, Standing>,
 }
 
 impl ScopeMemo {
+    /// Whether this scope holds, with a predicate that could not be asked
+    /// answered by the table's `unresolved`.
+    ///
+    /// The conversion lives here rather than at each call site because there
+    /// are six of them and one of them forgetting is the whole defect: a
+    /// could-not-tell read as "does not hold" skips the checkers, and the
+    /// destination guard behind them promises exit 2 on exactly that.
     fn holds(
         &mut self,
         shim: &Shim,
@@ -1519,17 +1848,50 @@ impl ScopeMemo {
         collected: &Collected,
         argv: &[String],
     ) -> Result<bool> {
+        match self.standing(shim, scope, root, collected, argv)? {
+            Standing::Holds => Ok(true),
+            Standing::DoesNotHold => Ok(false),
+            Standing::CouldNotTell(why) => match shim.unresolved {
+                Unresolved::Refuse => Err(Fatal::new(format!(
+                    "{}: {why}. A check that could not look is not a check that passed, so \
+                     nothing was published. Name the destination explicitly, run this where \
+                     the repository has a remote and the forge can be reached, or write \
+                     `unresolved = \"run\"` on this `[[shim]]` table to run the command \
+                     unchecked instead",
+                    shim.command
+                ))),
+                Unresolved::Run => Ok(false),
+            },
+        }
+    }
+
+    /// The predicate's own answer, asked once per invocation.
+    ///
+    /// The `run` half of `unresolved` says its piece here rather than in
+    /// `holds`, so a table that stands three rules down over one unreachable
+    /// forge prints one line and not three.
+    fn standing(
+        &mut self,
+        shim: &Shim,
+        scope: &Scope,
+        root: &Path,
+        collected: &Collected,
+        argv: &[String],
+    ) -> Result<Standing> {
         let key = match scope {
-            Scope::Always => return Ok(true),
+            Scope::Always => return Ok(Standing::Holds),
             Scope::PublicTarget => String::from("public-target"),
             Scope::PublicRegistry => String::from("public-registry"),
             Scope::Command { command } => format!("command:{command}"),
         };
         if let Some(answer) = self.answers.get(&key) {
-            return Ok(*answer);
+            return Ok(answer.clone());
         }
         let answer = shim.scope_holds(scope, root, collected, argv)?;
-        self.answers.insert(key, answer);
+        if let (Standing::CouldNotTell(why), Unresolved::Run) = (&answer, shim.unresolved) {
+            eprintln!("uphold shim: {why}, and the command ran anyway. This is not a pass.");
+        }
+        self.answers.insert(key, answer.clone());
         Ok(answer)
     }
 }
@@ -1839,6 +2201,15 @@ pub(crate) fn run(
         };
     };
 
+    // An alias is a word the command expands before it decides anything, so a
+    // shim that reads argv without expanding it is reading a different command
+    // line from the one that runs. Asked only where nothing matched: a `match`
+    // hit is already the answer, and the lookup is a process.
+    let words = match shim.reading(&words) {
+        Reading::Absent => shim.expand_alias(root, &words)?.unwrap_or(words),
+        _ => words,
+    };
+
     // Only the rules that name THIS command line. Selecting a checker by
     // anything coarser -- a `kind` saying it stands in front of some command,
     // without saying which -- asks a check written for a pull-request body
@@ -2126,6 +2497,8 @@ mod tests {
             editor_env: Some(String::from("GH_EDITOR")),
             target: Target::ForgeRepo,
             scope: Scope::PublicTarget,
+            // The default, which is what the shipped policy leaves it at.
+            unresolved: Unresolved::Refuse,
             collect: Collect::Flags,
             // No verb differs from the table here; every shim written
             // before `[[shim.verbs]]` existed is this case.
@@ -2150,6 +2523,8 @@ mod tests {
             editor_env: None,
             target: Target::GitRemote,
             scope: Scope::PublicTarget,
+            // The default, which is what the shipped policy leaves it at.
+            unresolved: Unresolved::Refuse,
             collect: Collect::GitRefs,
             // No verb differs from the table here; every shim written
             // before `[[shim.verbs]]` existed is this case.
@@ -2355,14 +2730,16 @@ mod tests {
         let mut npm = gh();
         npm.command = String::from("npm");
         npm.scope = Scope::PublicRegistry;
-        assert!(!npm
-            .scope_holds(
+        assert_eq!(
+            npm.scope_holds(
                 &Scope::PublicRegistry,
                 &dir,
                 &Collected::default(),
                 &argv("publish")
             )
-            .unwrap());
+            .unwrap(),
+            Standing::DoesNotHold
+        );
     }
 
     #[test]
@@ -2371,14 +2748,16 @@ mod tests {
         // what they are about to publish.
         let mut npm = gh();
         npm.scope = Scope::PublicRegistry;
-        assert!(!npm
-            .scope_holds(
+        assert_eq!(
+            npm.scope_holds(
                 &Scope::PublicRegistry,
                 Path::new("."),
                 &Collected::default(),
                 &argv("publish --dry-run")
             )
-            .unwrap());
+            .unwrap(),
+            Standing::DoesNotHold
+        );
     }
 
     #[test]
@@ -2666,14 +3045,16 @@ mod tests {
         // The right default for a command with no destination. Asked directly,
         // because every other caller reaches it through the memo, which
         // answers `always` before the predicate is consulted at all.
-        assert!(gh()
-            .scope_holds(
+        assert_eq!(
+            gh().scope_holds(
                 &Scope::Always,
                 Path::new("."),
                 &Collected::default(),
                 &argv("pr create")
             )
-            .unwrap());
+            .unwrap(),
+            Standing::Holds
+        );
     }
 
     #[test]
@@ -2686,14 +3067,17 @@ mod tests {
         // Neither forge CLI, so nothing here reaches a network.
         nowhere.command = String::from("faux");
         nowhere.target = Target::None;
-        assert!(!nowhere
-            .scope_holds(
-                &Scope::PublicTarget,
-                Path::new("."),
-                &Collected::default(),
-                &argv("pr create")
-            )
-            .unwrap());
+        assert!(matches!(
+            nowhere
+                .scope_holds(
+                    &Scope::PublicTarget,
+                    Path::new("."),
+                    &Collected::default(),
+                    &argv("pr create")
+                )
+                .unwrap(),
+            Standing::CouldNotTell(why) if why.contains("no target could be resolved")
+        ));
     }
 
     #[test]
@@ -2713,9 +3097,12 @@ mod tests {
             ..Collected::default()
         };
         assert_eq!(unknown_host.forge(&dir), None);
-        assert!(!unknown_host
-            .scope_holds(&Scope::PublicTarget, &dir, &collected, &argv("pr create"))
-            .unwrap());
+        assert!(matches!(
+            unknown_host
+                .scope_holds(&Scope::PublicTarget, &dir, &collected, &argv("pr create"))
+                .unwrap(),
+            Standing::CouldNotTell(why) if why.contains("did not say whether acme/widget is public")
+        ));
     }
 
     #[test]
@@ -2731,23 +3118,29 @@ mod tests {
             r#"{"name": "widget", "private": false}"#,
         )
         .unwrap();
-        assert!(npm()
-            .scope_holds(
-                &Scope::PublicRegistry,
-                &dir,
-                &Collected::default(),
-                &argv("publish")
-            )
-            .unwrap());
+        assert_eq!(
+            npm()
+                .scope_holds(
+                    &Scope::PublicRegistry,
+                    &dir,
+                    &Collected::default(),
+                    &argv("publish")
+                )
+                .unwrap(),
+            Standing::Holds
+        );
         // A registry that is not the public one is somebody's internal
         // infrastructure, whatever the package says about itself.
         let internal = Collected {
             target: Some(String::from("https://npm.acme.example/")),
             ..Collected::default()
         };
-        assert!(!npm()
-            .scope_holds(&Scope::PublicRegistry, &dir, &internal, &argv("publish"))
-            .unwrap());
+        assert_eq!(
+            npm()
+                .scope_holds(&Scope::PublicRegistry, &dir, &internal, &argv("publish"))
+                .unwrap(),
+            Standing::DoesNotHold
+        );
     }
 
     #[test]
