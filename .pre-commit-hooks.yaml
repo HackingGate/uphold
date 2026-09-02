@@ -210,31 +210,53 @@
 # is a name a Go repository has very likely used already. The two files have to
 # publish one id list, so the prefix is on both.
 #
-# `files:` rather than `always_run:`, and that is the whole of "fires in no
-# repository without Go in it". The same list is spelled as a `glob:` in
-# hooks/lefthook.yml, and the two are meant to be read side by side:
-#
-#   files: '(\.go|go\.mod|go\.sum)$'   <->   glob: "{*.go,*go.mod,*go.sum}"
-#
-# They select the same paths, nested ones included, because lefthook's `*`
-# crosses a path separator -- and they OVER-select the same way, since a file
-# named `cargo.mod` satisfies both. Identical over-selection is the property
-# worth having here: two triggers that disagree are the forked copy this whole
-# section exists to end, one level up.
-#
 # `pass_filenames: false` on all four, because not one of these commands takes a
 # file list. `./...` is a package pattern and `gofmt -l .` is a walk; handing
 # either the staged subset would ask a narrower question than the id names.
 #
-# `stages: [pre-commit]` and not the `[pre-commit, manual]` every other id here
-# carries, which is the one place these four are deliberately narrower than they
-# look. Measured against lefthook v2.1.9: `glob` is applied to the files a GIT
-# HOOK is running over, and `lefthook run <group>` -- the only manual stage that
-# runner has -- has no such set, so every job in the group runs whatever its
-# glob says. A Go job reachable that way fires in a repository with no Go in it
-# and fails for want of a module. Declaring `manual` here anyway would buy a
-# sweep on two runners out of three and make the two published id lists disagree
-# about what a pinned id does, which is the failure these ids exist to end.
+# And a command that reads the whole module cannot be TRIGGERED by a subset of
+# it either, which is why three of the four carry no `files:` at all. The regex
+# they used to carry -- '(\.go|go\.mod|go\.sum)$' -- is applied to the staged
+# set, so a commit staging only a testdata fixture, a `//go:embed` asset or a
+# golden file skipped all three, measured in a consumer as
+#
+#   prek run --files testdata/x.json   ->   (no files to check)Skipped
+#
+# while the module those files are compiled and tested WITH is what changed. CI
+# running --all-files finds it afterwards, which makes the local gate a green
+# the later red contradicts, at the seam that promised to catch it first. The
+# hand-copied declarations these ids replaced carried no filter, so the filter
+# was a regression handed to every repository that adopted the published id.
+#
+# Nothing takes its place, and `always_run: true` in particular does not. With
+# no `files:` a runner filters the staged set by nothing: the list is non-empty
+# on any commit and empty only where nothing was staged at all. pre-commit and
+# prek agree on that, and it is exactly what these three want -- the whole
+# module on any change, nothing on an empty file set. `always_run` would run
+# `go test ./...` where a runner was handed no files.
+#
+# `uphold-gofmt` keeps the regex, because formatting is the one question here
+# whose answer a file that is not Go cannot change.
+#
+# This is the one place the two published files stop matching token for token,
+# and the asymmetry is between the two DISTRIBUTION shapes rather than between
+# the checks. A pre-commit or prek consumer NAMES the id, so an id with no
+# trigger fires only in a repository that asked for it. A lefthook remote config
+# is merged into the consumer's own wholesale, so the same three jobs would
+# arrive in every consuming repository on a `ref:` bump, Go or not.
+# hooks/lefthook.yml therefore conditions them on `go.mod` existing -- a fact
+# about the repository rather than about the staged set, which is what the
+# regex was standing in for and doing worse.
+#
+# `stages:` reaches every stage a runner has a file set at: pre-commit,
+# pre-merge-commit, pre-push and manual. It was `[pre-commit]` alone for a
+# lefthook reason -- measured against lefthook v2.1.9, `glob` is applied to the
+# files a GIT HOOK is running over and `lefthook run <group>` has no such set,
+# so a Go job in a named group fires in a repository with no Go in it -- and
+# that reason was never about pre-commit or prek, which have a file set at each
+# of the four. The merge stage is where the strongest version of the defect
+# above lives: git runs `pre-merge-commit` for a merge and `pre-commit` for a
+# commit, so a merge bringing in a module change ran none of these four.
 
 # The broken copy, written once. `gofmt -l` is a REPORT and not a gate, so the
 # EMPTINESS of its output is the verdict and emptiness is what is tested. The
@@ -245,7 +267,7 @@
   description: refuse a tree gofmt would reformat -- the check `gofmt -l` alone cannot make
   entry: sh -c 'unformatted="$(gofmt -l .)"; [ -z "$unformatted" ] || { echo "gofmt would reformat these files; run gofmt -w ."; echo "$unformatted"; exit 1; }'
   language: system
-  stages: [pre-commit]
+  stages: [pre-commit, pre-merge-commit, pre-push, manual]
   pass_filenames: false
   files: '(\.go|go\.mod|go\.sum)$'
 
@@ -254,31 +276,41 @@
   description: run go vet over every package in the module
   entry: go vet ./...
   language: system
-  stages: [pre-commit]
+  stages: [pre-commit, pre-merge-commit, pre-push, manual]
   pass_filenames: false
-  files: '(\.go|go\.mod|go\.sum)$'
 
-# `-o` into a throwaway directory rather than a bare `go build ./...`, and it is
-# not tidiness. Where `./...` resolves to several packages go discards what it
-# built, but where it resolves to a SINGLE main package go writes the executable
-# into the working directory -- so the hook that checks the tree compiles leaves
-# an untracked binary in the tree it just checked, named after the module, in
-# exactly the repositories small enough to have one package. The status is
-# carried across the cleanup because `rm` succeeding must not become the answer.
+# Two shapes of module, one command, and `-o` is right for exactly one of them.
+# Where `./...` resolves to several packages go discards what it built, but
+# where it resolves to a SINGLE main package go writes the executable into the
+# working directory -- so a bare `go build ./...` leaves an untracked binary in
+# the tree the hook has just finished pronouncing clean, named after the module,
+# in exactly the repositories small enough to have one package.
+#
+# And `-o` is a refusal where there is no main package at all: `go: no main
+# packages to build`, exit 1, on every library-only module, which is most of a
+# Go fleet -- a refusal whose message says nothing about whether the module
+# compiles. So the packages are asked about first and the shape chooses the
+# command: into the throwaway directory where a `main` exists, and the bare
+# `go build ./...`, which compiles every package and writes nothing, where none
+# does. The status is carried across the cleanup because `rm` succeeding must
+# not become the answer.
+#
+# `go list` is silenced because a module too broken to enumerate is a module
+# `go build` is about to report on properly: the empty answer sends it down the
+# bare branch, which prints the compiler's own error rather than a listing
+# failure standing in for one.
 - id: uphold-go-build
   name: go build
   description: refuse a module that does not compile, without leaving a binary behind
-  entry: sh -c 'out="$(mktemp -d)"; go build -o "$out" ./...; status=$?; rm -rf "$out"; exit $status'
+  entry: sh -c 'if go list -f {{.Name}} ./... 2>/dev/null | grep -qx main; then out="$(mktemp -d)"; go build -o "$out" ./...; status=$?; rm -rf "$out"; exit $status; else go build ./...; fi'
   language: system
-  stages: [pre-commit]
+  stages: [pre-commit, pre-merge-commit, pre-push, manual]
   pass_filenames: false
-  files: '(\.go|go\.mod|go\.sum)$'
 
 - id: uphold-go-test
   name: go test
   description: run the module's tests
   entry: go test ./...
   language: system
-  stages: [pre-commit]
+  stages: [pre-commit, pre-merge-commit, pre-push, manual]
   pass_filenames: false
-  files: '(\.go|go\.mod|go\.sum)$'
