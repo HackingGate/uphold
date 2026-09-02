@@ -462,35 +462,44 @@ a run with no token used to report every name as unresolved and pass, so a job
 without one was running the family and reaching a verdict on nothing.
 
 `private-names` does not turn `refuse_unknown` on. What is left fail-open under
-that default is the `404` alone. Every other way of not knowing exits `2`,
-a name on a host `gh` does not answer for included.
-A `404` is what every invented name in every document produces: measured on the
-tree that ships the set, fifteen names answer `404` and every one is a
-documentation or test fixture. Turn it on per repository after naming those in
-`public_repos`.
+that default is the `404` alone, and a `404` is what every invented name in
+every document produces: measured on the tree that ships the set, fifteen names
+answer `404` and every one is a documentation or test fixture. Turn it on per
+repository after naming those in `public_repos`.
 
 **A name on a host that is not GitHub.** `gh` answers for github.com and for
-nothing else — a GitHub Enterprise host is a different forge that happens to
+nothing else -- a GitHub Enterprise host is a different forge that happens to
 share the software, and asking github.com about a name seen on
-`github.acme.com` answers about somebody else's repository. So every
-`host.tld/owner/repo` on any other host is could-not-look, exit `2`, and the
-declaration that quiets one is `foreign_hosts`:
+`github.acme.com` answers about somebody else's repository. Every other
+`host.tld/owner/repo` is therefore a name this tool has no answer for, and which
+of two answers it gets depends on **whose name it is**:
+
+| the owner segment | outcome |
+|---|---|
+| a declared `private_owners` owner, or the policy's own `owner` | **exit `2`** -- could-not-look, printed beside any finding |
+| anybody else | reported as unresolved; refused only under `refuse_unknown` |
+
+The split is the whole of it. A repository under an owner this policy has named
+is the case the rule exists for, and silence about it is not a pass. Every other
+`host.tld/a/b` is a DOI, a licence URL or an encyclopaedia article -- the shape
+of a repository name and not one -- and calling those could-not-look would make
+the cure "enumerate every host you cite" in every consuming repository, which is
+`parameterize-do-not-enumerate` with the enumeration moved out of the binary and
+into every policy file.
+
+`foreign_hosts` is how a repository says a host is not a forge at all, which
+quiets both rows:
 
 ```toml
-foreign_hosts = ["doi.org", "*.apache.org", "*.wikipedia.org"]
+foreign_hosts = ["git.acme-internal.example", "*.sr.ht"]
 ```
 
-Host globs, matched case-insensitively, saying *these hosts carry no repository
-this guard needs an answer about* — which is what a bibliography is, since
-`doi.org/10.1109/PROC.1975.9939` is `host.tld/a/b` and is not a repository at
-all. It is a top-level policy field for the reason `private_owners_from` is
-one, and a rule may write its own list, which **replaces** the policy's for
-that rule rather than extending it.
-
-Nothing is quieted by default, and that is the change: which hosts a
-repository's own documents cite is a fact about the repository, and a list of
-forges compiled into this binary decided it for every host in the world by
-leaving the rest out.
+Host globs, matched case-insensitively. It is a top-level policy field for the
+reason `private_owners_from` is one -- a rule arriving from a bundled set cannot
+be handed a parameter -- and a rule may write its own list, which **replaces**
+the policy's for that rule rather than extending it. Nothing is quieted by
+default: which hosts carry a repository worth an answer is a fact about the
+repository, not about this tool.
 
 `doc-claims` is the one set whose rule needs the author to write something
 beside the prose, so its grammar is here rather than only in the set. A

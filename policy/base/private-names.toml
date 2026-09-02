@@ -111,17 +111,21 @@
 #   that an unresolved name is still PRINTED: this is a reported unknown rather
 #   than a silent pass, which is the distinction `explicit-unknown` is about.
 #
-# * `foreign_hosts`. `gh` answers for github.com and for nothing else, so every
-#   `host.tld/owner/repo` written against any other host is a repository whose
-#   visibility this tool cannot establish -- exit 2, not a refusal and not a
-#   pass. What quiets one is a declaration naming the host, and the set ships
-#   none, because which hosts a repository's own documents cite is a fact about
-#   that repository: a bibliography is `doi.org/10.1109/PROC.1975.9939` and
-#   `apache.org/licenses/LICENSE-2.0`, which are that shape and are not
-#   repositories at all. Write the list once, at the top of the policy file
-#   beside `visibility`:
+# * `foreign_hosts`. `gh` answers for github.com and for nothing else, so a
+#   `host.tld/owner/repo` written against any other host is a name this tool has
+#   no answer for. Whose name it is decides what that means: under a declared
+#   `private_owners` owner, or under the `owner` this policy says the workspace
+#   is, it is could-not-look and exit 2, because that is the name the rule
+#   exists to keep off a public target. Under anybody else it is the
+#   inconclusive answer it always was -- reported, and refused only where the
+#   repository sets `refuse_unknown` -- because every `host.tld/a/b` in a
+#   document has that shape and most of them are a DOI or a licence URL.
 #
-#     foreign_hosts = ["doi.org", "*.apache.org", "*.wikipedia.org"]
+#   What quiets a host entirely is a declaration, and the set ships none: which
+#   hosts carry a repository worth an answer is a fact about the repository.
+#   Write it at the top of the policy file beside `visibility`:
+#
+#     foreign_hosts = ["git.acme-internal.example", "*.sr.ht"]
 #
 #   Host globs, matched case-insensitively. A rule may write its own list, which
 #   replaces this one for that rule rather than extending it.
