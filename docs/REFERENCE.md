@@ -93,8 +93,9 @@ command.scope = "always"     # a format is a fact about the text, not the destin
 
 The same shape reaches a branch- or tag-naming convention through
 `subjects = ["ref"]` on `git push`. These rules run at the shim seam only —
-`uphold hook` hands a harness's call to the text guards and literal rules, and
-a pattern scoped to one command's subjects has no flag vocabulary there.
+`uphold hook` hands a harness's call to the text guards, the literal rules and
+the prose rules, and a pattern scoped to one command's subjects has no flag
+vocabulary there.
 
 `text-guards` and `text-literals` are the same dispatches `uphold guard
 --text` and `uphold scan --text` run, as built-ins: every text-capable guard
@@ -879,7 +880,11 @@ too. A prose rule standing in front of a command is **also consulted by
 `--text`**: both `uphold scan --text` and `uphold guard --text` ask it about the
 text they were handed, so a shape refused in the pull-request body announcing a
 commit is refused in the commit message that `uphold-scan-text` reads at
-`commit-msg`. A prose rule with no `command.before` is left out of `--text`, for
+`commit-msg`. [`uphold hook`](#uphold-hook--the-caller-that-spawns-no-process)
+asks it too, over the strings a pending tool call was about to send: an agent
+posting through an MCP server is publishing what `gh` would have published, and
+the rule that stands in front of `gh` is the rule that stands there.
+A prose rule with no `command.before` is left out of `--text`, for
 the reason every other pattern rule is: it is scoped by `files.*` to particular
 paths, and firing it at prose that has no path would be guesswork.
 
@@ -1557,12 +1562,15 @@ name in front of, so `prevent-ai-author`, the `private-names` guards and the
 of them are reached from a seam that needs a process to have been spawned.
 
 `hook` is that seam without the process. The harness hands over the pending call
-and reads a verdict back, and the rules it consults are the literal rules and
-the text-capable guards — the same two dispatches `scan --text` and `guard
---text` reach, through the same functions. The `prose_regexp` rules are
-deliberately not among them: what a tool call carries is a list of argument
-strings joined together rather than a paragraph anybody wrote, and a rule about
-how a sentence is written would be reading a sentence that is not there.
+and reads a verdict back, and the rules it consults are the literal rules, the
+text-capable guards **and the `prose_regexp` rules that stand in front of a
+command** — the same dispatches `scan --text` and `guard --text` reach, through
+the same functions. A prose rule naming `gh` is asked here for the reason it is
+asked at `commit-msg`: this seam is what an agent uses *instead of* `gh`, so a
+sentence shape refused when a person publishes it and allowed when an agent
+publishes it would be the same rule with two answers. A prose rule that names no
+command is left out, as it is at every `--text` seam — it is scoped by `files.*`
+to particular paths, and a tool call has none.
 
 ### Configuring it
 
@@ -1599,8 +1607,9 @@ means is load-bearing:
 So the halves are split by what each needs. The **host-identity rules run
 anyway**, carrying the fallback `scan --text` documents for this case, because a
 seam that stood down here would be absent in exactly the places nobody thought
-to configure it. The **guards do not run**, and their absence is printed to
-stderr: partial coverage, said out loud, rather than a pass.
+to configure it. The **guards and the prose rules do not run** — both are
+declarations, and there is no file declaring them — and their absence is printed
+to stderr: partial coverage, said out loud, rather than a pass.
 
 ### The exit code is the harness's, not uphold's
 

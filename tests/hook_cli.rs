@@ -33,6 +33,37 @@ builtin = \"prevent-ai-author\"
 git.hooks = [\"commit-msg\"]
 ";
 
+/// The shim tables a prose rule needs beside it.
+///
+/// A rule standing in front of a command is refused at load in a repository
+/// that has not put a program in front of that command, which is the design and
+/// not a gap -- so a fixture declaring `command.before` writes the tables a
+/// consuming repository writes. The hook seam spawns no process and reads no
+/// `argv[0]`, and it consults these rules anyway: what an MCP server posts is
+/// the body `gh` would have posted.
+const SHIMS: &str = "\n[[shim]]
+command = \"gh\"
+match = [\"pr:create\"]
+text_flags = [\"-b\", \"--body\"]
+
+[[shim]]
+command = \"git\"
+match = [\"push:*\"]
+scope = \"always\"
+";
+
+/// One prose rule, declared the way a repository declares its own.
+const PROSE_POLICY: &str = "\
+[rule.no-empty-hedge-here]
+message = \"State the claim, or state what is unknown about it.\"
+prose_regexp = '(?i)\\barguably\\b'
+files.include = [\".\"]
+command.before = [\"gh\", \"git push\"]
+";
+
+/// The bundled set, inherited the way a repository inherits it.
+const PROSE_SET: &str = "[inherit]\nsets = [\"prose-shapes\"]\n";
+
 fn workspace(name: &str, policy: Option<&str>) -> PathBuf {
     let root = support::scratch(name);
     let _ = std::fs::remove_dir_all(&root);
@@ -142,6 +173,115 @@ fn a_clean_call_is_silent() {
     );
     assert_eq!(code(&output), 0);
     assert_eq!(stdout(&output), "");
+}
+
+// -- the prose rules reach this seam ---------------------------------------
+
+/// A `prose_regexp` rule standing in front of a command refuses here too.
+///
+/// The rule names `gh`, and this seam is what an agent uses INSTEAD of `gh`: it
+/// posts the body over HTTPS from inside its own process, where there is no
+/// `argv[0]` for the shim to read. A sentence shape refused when `gh pr create`
+/// publishes it and allowed when an MCP server publishes it would be the same
+/// rule with two answers, and the seam that has to hold is this one -- an agent
+/// publishes more often than a person does.
+#[test]
+fn a_prose_rule_refuses_what_a_tool_call_was_about_to_publish() {
+    let root = workspace("hook-prose", Some(&format!("{PROSE_POLICY}{SHIMS}")));
+    let output = hook(
+        &root,
+        "claude-code",
+        &event(
+            "mcp__github__create_pull_request",
+            "This change is arguably an improvement.",
+        ),
+    );
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let document: Value = serde_json::from_str(stdout(&output).trim()).unwrap();
+    assert_eq!(
+        document
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny"),
+        "{}",
+        stdout(&output)
+    );
+    let reason = document
+        .pointer("/hookSpecificOutput/permissionDecisionReason")
+        .and_then(Value::as_str)
+        .unwrap();
+    assert!(reason.contains("no-empty-hedge-here"), "{reason}");
+    // The sentence, unwrapped, so the agent is told which one to fix rather
+    // than only that something was wrong.
+    assert!(
+        reason.contains("This change is arguably an improvement."),
+        "{reason}"
+    );
+}
+
+/// And the bundled set does, which is the half that was dark.
+///
+/// `prose-shapes` declares `command.before = ["gh", "git push"]` on every rule
+/// in it -- the whole set is written for text a forge publishes. A repository
+/// that inherits it and installs the hook has said it wants these shapes
+/// refused wherever they are published, and a set that covered the terminal and
+/// not the agent would cover the caller that publishes less.
+#[test]
+fn a_bundled_prose_shapes_rule_refuses_through_the_hook() {
+    let root = workspace("hook-prose-set", Some(&format!("{PROSE_SET}{SHIMS}")));
+    let output = hook(
+        &root,
+        "claude-code",
+        &event(
+            "mcp__github__create_pull_request",
+            "In what follows we describe the change.",
+        ),
+    );
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let document: Value = serde_json::from_str(stdout(&output).trim()).unwrap();
+    assert_eq!(
+        document
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny"),
+        "{}",
+        stdout(&output)
+    );
+    let reason = document
+        .pointer("/hookSpecificOutput/permissionDecisionReason")
+        .and_then(Value::as_str)
+        .unwrap();
+    assert!(reason.contains("no-announcing-sentence"), "{reason}");
+}
+
+/// A prose rule scoped only by `files.*` is left out, here as everywhere.
+///
+/// The other half of the same decision. A rule that names no command is scoped
+/// to particular paths and file types, and a tool call has no path -- firing it
+/// here would be the guesswork `text` refuses for the pattern rules generally.
+#[test]
+fn a_prose_rule_naming_no_command_is_not_asked_about_a_tool_call() {
+    let root = workspace(
+        "hook-prose-unscoped",
+        Some(
+            "[rule.no-empty-hedge-here]\n\
+             message = \"State the claim.\"\n\
+             prose_regexp = '(?i)\\barguably\\b'\n\
+             files.include = [\".\"]\n",
+        ),
+    );
+    let output = hook(
+        &root,
+        "claude-code",
+        &event(
+            "mcp__github__create_pull_request",
+            "This change is arguably an improvement.",
+        ),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "", "{}", stderr(&output));
 }
 
 // -- the case this seam is usually in --------------------------------------
