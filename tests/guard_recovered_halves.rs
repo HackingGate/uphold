@@ -51,6 +51,24 @@ fn write(root: &Path, relative: &str, contents: &str) {
     std::fs::write(path, contents).unwrap();
 }
 
+fn write_bytes(root: &Path, relative: &str, contents: &[u8]) {
+    let path = root.join(relative);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(path, contents).unwrap();
+}
+
+/// A UTF-16 document, byte-order mark and all, as an editor on Windows writes
+/// one.
+fn utf16(text: &str) -> Vec<u8> {
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in text.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    bytes
+}
+
 fn guard(root: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_uphold"))
         .arg("guard")
@@ -100,6 +118,23 @@ private_owners = ["acme-private"]
 
 [rule.no-private-repo-names-in-files.git]
 hooks = ["pre-push", "manual"]
+"#;
+
+/// The tracked rule under a policy that says who this workspace is.
+///
+/// `owner` rather than `private_owners` for the case below, because a declared
+/// PRIVATE owner is already refused outright wherever it is written -- host or
+/// no host -- and the question here is what happens to the owner a repository
+/// says it is, whose siblings are not refusals.
+const OWNED: &str = r#"
+owner = "acme-private"
+
+[rule.no-private-repo-names-in-files]
+builtin = "no-private-repo-names-in-files"
+visibility = "public"
+
+[rule.no-private-repo-names-in-files.git]
+hooks = ["manual"]
 "#;
 
 const IN_FILES: &str = r#"
@@ -238,6 +273,153 @@ fn a_path_names_a_private_repository_with_no_help_from_its_content() {
         "{}",
         stderr(&output)
     );
+}
+
+/// A DECLARED owner's repository on a host `gh` cannot be asked about.
+///
+/// The one name in this shape that cannot be reported clean on silence: the
+/// policy has said whose repositories these are, and a forge nobody can query
+/// has said nothing about this one. Exit 2, not a refusal -- nothing here is
+/// known to be wrong, and nothing here is known to be right either.
+#[test]
+fn a_declared_owner_on_a_host_gh_cannot_ask_about_is_could_not_look() {
+    let root = repository(OWNED);
+    write(
+        &root,
+        "docs/note.md",
+        "moved to https://gitlab.com/acme-private/secret\n",
+    );
+    git(&root, &["add", "docs/note.md"]);
+
+    let output = guard(&root, &["--stage", "manual"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 2, "{text}");
+    assert!(text.contains("gitlab.com/acme-private/secret"), "{text}");
+    assert!(text.contains("declared owner"), "{text}");
+}
+
+/// And naming the host is what quiets it.
+#[test]
+fn a_declared_host_quiets_the_owner_it_carries() {
+    let root = repository(&format!("foreign_hosts = [\"gitlab.com\"]\n{OWNED}"));
+    write(
+        &root,
+        "docs/note.md",
+        "moved to https://gitlab.com/acme-private/secret\n",
+    );
+    git(&root, &["add", "docs/note.md"]);
+
+    let output = guard(&root, &["--stage", "manual"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+/// Anybody else's `host.tld/a/b` is the inconclusive answer it always was.
+///
+/// A DOI, a licence URL and an encyclopaedia article all have the shape of a
+/// repository name and are not one. Reporting each as could-not-look would make
+/// the cure "enumerate every host you cite" in every consuming repository, which
+/// is the enumeration ADR 0001 refuses, moved out of the binary and into eighty
+/// policy files. It is reported and it is exit 0, and `refuse_unknown` is how a
+/// repository says otherwise.
+#[test]
+fn a_citation_on_an_unaskable_host_is_reported_and_is_not_exit_2() {
+    let root = repository(
+        "[rule.no-private-repo-names-in-files]\n\
+         builtin = \"no-private-repo-names-in-files\"\n\
+         visibility = \"public\"\n\n\
+         [rule.no-private-repo-names-in-files.git]\nhooks = [\"manual\"]\n",
+    );
+    write(
+        &root,
+        "docs/note.md",
+        "see https://doi.org/10.1109/PROC.1975.9939 and \
+         https://en.wikipedia.org/wiki/Anti-pattern\n",
+    );
+    git(&root, &["add", "docs/note.md"]);
+
+    let output = guard(&root, &["--stage", "manual"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 0, "{text}");
+    assert!(text.contains("doi.org/10.1109/PROC.1975.9939"), "{text}");
+    assert!(text.contains("cannot query"), "{text}");
+}
+
+#[test]
+fn a_utf16_file_naming_a_private_repository_is_read_rather_than_lossily_skipped() {
+    // `String::from_utf8_lossy` stood between this blob and the search, so the
+    // name inside it was a run of replacement characters with NULs between
+    // them and matched nothing. The sibling guard over the same blobs had been
+    // decoding the byte-order mark properly since it was written: two guards,
+    // one blob, two answers about whether there was text in it.
+    let root = repository(TRACKED);
+    write_bytes(
+        &root,
+        "docs/note.txt",
+        &utf16("we hit this in acme-private/secret\n"),
+    );
+    git(&root, &["add", "docs/note.txt"]);
+
+    let output = guard(&root, &["--stage", "manual"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("docs/note.txt"), "{text}");
+    assert!(text.contains("acme-private/secret"), "{text}");
+}
+
+#[test]
+fn a_staged_utf16_file_naming_a_private_repository_is_read_too() {
+    // The other half, blind for the opposite reason: the staged scan tested
+    // for a NUL in the first 8000 bytes and skipped what it found, which is
+    // git's binary test and is true of every UTF-16 file ever committed.
+    let root = repository(STAGED);
+    write_bytes(
+        &root,
+        "docs/note.txt",
+        &utf16("we hit this in acme-private/secret\n"),
+    );
+    git(&root, &["add", "docs/note.txt"]);
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("acme-private/secret"), "{text}");
+}
+
+#[test]
+fn a_blob_no_charset_can_decode_is_could_not_look_and_not_a_clean_tree() {
+    // Neither UTF-8 nor binary: a file that is text except for the bytes
+    // nobody declared. Skipping it buys the whole file a pass on the strength
+    // of the very byte that should have stopped the run.
+    let root = repository(TRACKED);
+    write_bytes(&root, "docs/note.txt", b"caf\xe9 au lait\n");
+    git(&root, &["add", "docs/note.txt"]);
+
+    let output = guard(&root, &["--stage", "manual"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 2, "{text}");
+    assert!(text.contains("docs/note.txt"), "{text}");
+    assert!(text.contains("could not be read"), "{text}");
+}
+
+#[test]
+fn a_commit_message_that_is_not_utf8_is_not_reported_as_a_message_that_is_clean() {
+    // The message readers decoded lossily too, and a message file is text by
+    // construction: there is no honest skip here, only a message nobody read.
+    let root = repository(
+        "[rule.no-private-repo-names]\n\
+         builtin = \"no-private-repo-names\"\n\
+         visibility = \"public\"\n\
+         private_owners = [\"acme-private\"]\n\n\
+         [rule.no-private-repo-names.git]\nhooks = [\"commit-msg\"]\n",
+    );
+    write_bytes(&root, "message.txt", b"caf\xe9 au lait\n");
+    let output = guard(
+        &root,
+        &["--stage", "commit-msg", "--message", "message.txt"],
+    );
+    let text = stderr(&output);
+    assert_eq!(code(&output), 2, "{text}");
+    assert!(text.contains("message.txt"), "{text}");
 }
 
 #[test]

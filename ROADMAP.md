@@ -11,18 +11,34 @@
 
 ## Enforcement tool
 
-`uphold_check.py` ships the reconcile step. It:
+`uphold check` is the reconcile step. It:
 
-1. loads and validates the catalog;
-2. reads a repository's `[[enforce]]` claims;
+1. reads a repository's `[[enforce]]` claims;
+2. resolves each claimed principle id against the catalog, refusing an unknown
+   one and a deprecated one alike;
 3. resolves each claimed rule id against every seam this repository runs -- the
    content policy and the guards, the command shims, the local hooks -- and
    names the seams that enforce it;
 4. distinguishes `refused` (1) from `could not look` (2), and neither from `0`;
 5. fires only when the declaration or a config it reads changes;
-6. carries no record prose into any runtime.
+6. carries no record prose into any runtime;
+7. answers `--coverage` from the same reading: which rules here carry a
+   principle at all, and which seams it could not establish -- because a
+   coverage number computed over a seam nobody could inspect is a number nobody
+   measured.
 
-What it deliberately does **not** do, and why:
+It is in the binary because answering it means knowing which rules this
+repository resolves to, and `uphold_check.py` had to re-implement `config::load`
+to know: the bundled sets, `inherit.paths`, `inherit.disabled_rules`, and a
+repository's own rule shadowing an inherited id -- five interacting fields, read
+twice, by two programs free to disagree. They did, about the seam a hookless
+rule runs at, and reconciled green a claim on a checker standing in front of
+`gh` in a repository where nothing ran it. The loader answers now and the
+reconcile asks. What stayed in the script is what never reads the policy --
+`--explain`, `--list`, `--review`, `--oscal`, `--init` -- and a mode that cannot
+read the policy cannot disagree with the loader about which rules run.
+
+What the reconcile deliberately does **not** do, and why:
 
 - **Turn `enforcement.checks` into checks.** Those fields are English written
   for a person: `"Reject wildcard permissions where a narrower scope exists"`
@@ -78,6 +94,13 @@ zero variation: `prevent-ai-author`, `prevent-unusual-unicode`,
 `no-merge-commit`, `no-local-merge` and `prevent-public-push`. That is one
 decision and sixty-four transcriptions, and it is the same argument that
 promoted the content rules into `policy/base/`.
+
+`prevent-author-mismatch` is the sixth, found later and by the same method: 8
+policy files in one superproject and its submodules declare it byte for byte,
+with no parameters and one stage. It ships as `mismatched-author`, its own set
+rather than a rule inside an existing one, because who is writing a commit is a
+different question from where a ref is going, what a message says, or what the
+tree holds.
 
 Shipped, and the order was the design -- these had to exist **before** any set
 carries a guard, not alongside:

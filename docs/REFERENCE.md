@@ -93,8 +93,9 @@ command.scope = "always"     # a format is a fact about the text, not the destin
 
 The same shape reaches a branch- or tag-naming convention through
 `subjects = ["ref"]` on `git push`. These rules run at the shim seam only —
-`uphold hook` hands a harness's call to the text guards and literal rules, and
-a pattern scoped to one command's subjects has no flag vocabulary there.
+`uphold hook` hands a harness's call to the text guards, the literal rules and
+the prose rules, and a pattern scoped to one command's subjects has no flag
+vocabulary there.
 
 `text-guards` and `text-literals` are the same dispatches `uphold guard
 --text` and `uphold scan --text` run, as built-ins: every text-capable guard
@@ -352,7 +353,7 @@ files.glob = ["*.yml", "*.yaml"]
 
 `inherit.sets` names bundled sets to inherit; it does not add settings. There
 is no `true` shorthand — naming the sets is cheap, and what a repository
-inherits should be written in the repository. Eighteen are compiled into the
+inherits should be written in the repository. Nineteen are compiled into the
 binary and mirrored in [`policy/base/`](../policy/base), each **named by what
 it refuses** so the name predicts the rule list:
 
@@ -369,6 +370,7 @@ it refuses** so the name predicts the rule list:
 | `hand-rolled-toolchain` | a host tool installed by hand where a version manager was available — a `curl \| tar` download-and-unpack, and the `$HOME/.local` symlink that puts its output on PATH. Deliberately silent on `curl \| sh` (a version manager's own bootstrap has nowhere else to live), on a host-prerequisite manifest beside it (a resolver provisions, a doctor verifies), and on distro packages |
 | `commit-message-residue` | authorship markers and unusual characters in the message a commit records — **installs `commit-msg`** |
 | `unreviewed-history` | a merge made locally rather than through a pull request — **installs `pre-commit` and `pre-merge-commit`** |
+| `mismatched-author` | a commit whose author or committer identity disagrees with the global one on the machine making it — **installs `pre-commit`**, and declines with a note where no global identity is configured |
 | `invisible-characters` | characters that draw nothing, in committed content and in the paths that carry it — **installs four stages**, and reads the whole tree at each |
 | `stale-pins` | a hook pinned at a revision its upstream has left, or at none — **installs `pre-push` and `manual`**, and reaches the network |
 | `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |
@@ -377,7 +379,7 @@ it refuses** so the name predicts the rule list:
 | `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push. **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [ADR 0006](adr/0006-what-a-bundled-set-may-attach-to-a-command.md) |
 | `prose-shapes` | four sentence shapes that carry nothing — a sentence announcing what the next one will say, a clause behind a dash restating the one in front of it, a hedge admitting no uncertainty, an objection nobody raised being answered. **Installs no git hook**: its rules run in `uphold scan` and at the shim seam (`gh`, `git push`), and like `published-text` it refuses to load until the repository has declared the `[[shim]]` tables itself. `UPHOLD_ALLOW=<rule-id>` is the waiver for the sentence a rule is wrong about |
 
-The seven before it install git hooks. Taking one is a decision about what will be
+The eight before it install git hooks. Taking one is a decision about what will be
 refused and when, so each is named and argued separately: `stale-pins` reaches
 the network and cannot answer on a train, `invisible-characters` reads the tree
 at four stages and is the slowest thing in a hook, `unreviewed-history` stands
@@ -471,9 +473,43 @@ without one was running the family and reaching a verdict on nothing.
 
 `private-names` does not turn `refuse_unknown` on. What is left fail-open under
 that default is the `404` alone, and a `404` is what every invented name in
-every document produces — measured on the tree that ships the set, fifteen names
+every document produces: measured on the tree that ships the set, fifteen names
 answer `404` and every one is a documentation or test fixture. Turn it on per
 repository after naming those in `public_repos`.
+
+**A name on a host that is not GitHub.** `gh` answers for github.com and for
+nothing else -- a GitHub Enterprise host is a different forge that happens to
+share the software, and asking github.com about a name seen on
+`github.acme.com` answers about somebody else's repository. Every other
+`host.tld/owner/repo` is therefore a name this tool has no answer for, and which
+of two answers it gets depends on **whose name it is**:
+
+| the owner segment | outcome |
+|---|---|
+| a declared `private_owners` owner, or the policy's own `owner` | **exit `2`** -- could-not-look, printed beside any finding |
+| anybody else | reported as unresolved; refused only under `refuse_unknown` |
+
+The split is the whole of it. A repository under an owner this policy has named
+is the case the rule exists for, and silence about it is not a pass. Every other
+`host.tld/a/b` is a DOI, a licence URL or an encyclopaedia article -- the shape
+of a repository name and not one -- and calling those could-not-look would make
+the cure "enumerate every host you cite" in every consuming repository, which is
+`parameterize-do-not-enumerate` with the enumeration moved out of the binary and
+into every policy file.
+
+`foreign_hosts` is how a repository says a host is not a forge at all, which
+quiets both rows:
+
+```toml
+foreign_hosts = ["git.acme-internal.example", "*.sr.ht"]
+```
+
+Host globs, matched case-insensitively. It is a top-level policy field for the
+reason `private_owners_from` is one -- a rule arriving from a bundled set cannot
+be handed a parameter -- and a rule may write its own list, which **replaces**
+the policy's for that rule rather than extending it. Nothing is quieted by
+default: which hosts carry a repository worth an answer is a fact about the
+repository, not about this tool.
 
 `doc-claims` is the one set whose rule needs the author to write something
 beside the prose, so its grammar is here rather than only in the set. A
@@ -792,6 +828,31 @@ file containing Japanese" and "Shift-JIS file containing Japanese" apart —
 and they compose, so a Shift-JIS file covered by both is decoded under its
 declared charset and then script-checked as text.
 
+**Every check reads the declaration, not only `allowed_scripts`.** A selected
+file is decoded once — as UTF-8 where it is UTF-8, under a covering `encoding`
+rule where one selects it, by its byte-order mark otherwise — and the text is
+what `regexp`, `forbidden_literals`, `require_regexp`, `comment_regexp`,
+`prose_regexp` and the script check all read. A file whose bytes nothing can
+decode goes into the unreadable list: reported beside the findings, exit `2`,
+and never a pass. A binary file is the one skip, because it has no lines for a
+pattern to be found on.
+
+### `redact_matches` — the finding without the text
+
+```toml
+redact_matches = true    # at the top of the policy file
+```
+
+Prints the rule and the location of every hit and **not the matched text**. For
+the tree where the finding is itself the secret: a `forbidden_literals` rule
+refusing a hostname writes that hostname into a CI log every time it fires, and
+the log is read by more people than the file was.
+
+Off by default, because a finding whose text a reader cannot see is one they
+have to reproduce locally before they can act on it. It is a policy field
+rather than a rule one: what may be printed is a property of where the output
+goes, not of any one rule.
+
 ### `max_lines` and `max_bytes`, and the baseline that ratchets them
 
 A language's own linter caps the length of the files its parser opens. These run
@@ -886,7 +947,11 @@ too. A prose rule standing in front of a command is **also consulted by
 `--text`**: both `uphold scan --text` and `uphold guard --text` ask it about the
 text they were handed, so a shape refused in the pull-request body announcing a
 commit is refused in the commit message that `uphold-scan-text` reads at
-`commit-msg`. A prose rule with no `command.before` is left out of `--text`, for
+`commit-msg`. [`uphold hook`](#uphold-hook--the-caller-that-spawns-no-process)
+asks it too, over the strings a pending tool call was about to send: an agent
+posting through an MCP server is publishing what `gh` would have published, and
+the rule that stands in front of `gh` is the rule that stands there.
+A prose rule with no `command.before` is left out of `--text`, for
 the reason every other pattern rule is: it is scoped by `files.*` to particular
 paths, and firing it at prose that has no path would be guesswork.
 
@@ -1148,6 +1213,7 @@ enforced and is not.
 | `private_owners_from` | the `no-private-repo-names` family | a command whose stdout is one private owner per line |
 | `public_repos` | the `no-private-repo-names` family | names treated as public without asking a forge |
 | `refuse_unknown` | the `no-private-repo-names` family | treat a name whose visibility could not be determined as private |
+| `foreign_hosts` | the `no-private-repo-names` family | host globs carrying no repository this rule needs resolved — replaces the top-level list for this rule |
 | `allow` | `prevent-unusual-unicode-in-files` | codepoints admitted, optionally under one glob — `"U+00A0:docs/captured/**"` |
 
 The "family" is `no-private-repo-names`, `-staged` and `-in-files`. No other
@@ -1158,7 +1224,7 @@ two seams, and who this workspace is means the same thing whether a push or a
 nothing else — everything else in that row is about judging names in text, which
 the falsifier never does.
 
-**Three of these are also top-level policy fields**, and that is not a
+**Four of these are also top-level policy fields**, and that is not a
 convenience. A rule arriving from a bundled set cannot be handed a parameter —
 the only way to give it one is to write the rule out again, which is the
 transcription `no-hand-copied-base-rule` refuses — so the facts that belong to
@@ -1170,6 +1236,7 @@ owner = "your-org"          # read by prevent-public-push and prevent-unowned-ta
 visibility = "public"       # read by the no-private-repo-names family
 private_owners_from = "cat ~/.config/private-owners"
 private_owners_optional = true    # only where this policy is cloned; see below
+foreign_hosts = ["doi.org"]       # hosts that are not forges this repository cites
 ```
 
 A rule's own field wins where both are written.
@@ -1686,12 +1753,15 @@ name in front of, so `prevent-ai-author`, the `private-names` guards and the
 of them are reached from a seam that needs a process to have been spawned.
 
 `hook` is that seam without the process. The harness hands over the pending call
-and reads a verdict back, and the rules it consults are the literal rules and
-the text-capable guards — the same two dispatches `scan --text` and `guard
---text` reach, through the same functions. The `prose_regexp` rules are
-deliberately not among them: what a tool call carries is a list of argument
-strings joined together rather than a paragraph anybody wrote, and a rule about
-how a sentence is written would be reading a sentence that is not there.
+and reads a verdict back, and the rules it consults are the literal rules, the
+text-capable guards **and the `prose_regexp` rules that stand in front of a
+command** — the same dispatches `scan --text` and `guard --text` reach, through
+the same functions. A prose rule naming `gh` is asked here for the reason it is
+asked at `commit-msg`: this seam is what an agent uses *instead of* `gh`, so a
+sentence shape refused when a person publishes it and allowed when an agent
+publishes it would be the same rule with two answers. A prose rule that names no
+command is left out, as it is at every `--text` seam — it is scoped by `files.*`
+to particular paths, and a tool call has none.
 
 ### Configuring it
 
@@ -1728,8 +1798,9 @@ means is load-bearing:
 So the halves are split by what each needs. The **host-identity rules run
 anyway**, carrying the fallback `scan --text` documents for this case, because a
 seam that stood down here would be absent in exactly the places nobody thought
-to configure it. The **guards do not run**, and their absence is printed to
-stderr: partial coverage, said out loud, rather than a pass.
+to configure it. The **guards and the prose rules do not run** — both are
+declarations, and there is no file declaring them — and their absence is printed
+to stderr: partial coverage, said out loud, rather than a pass.
 
 ### The exit code is the harness's, not uphold's
 

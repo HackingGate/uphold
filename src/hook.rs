@@ -49,10 +49,9 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use crate::config::{self, Policy};
 use crate::error::{Exit, Fatal, Result};
 use crate::guard;
-use crate::text;
+use crate::text::{self, Verdict};
 
 /// What one harness calls the three things every harness has.
 struct Shape {
@@ -228,43 +227,45 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
 
     let mut report = String::new();
 
-    // The host-identity rules run wherever the call was made from, policy or
-    // no policy: `text::failures` carries its own fallback for exactly this
-    // case, and it is the case a tool call is usually in. A session starts in
-    // a workspace superproject, a scratch directory, or a checkout that has no
-    // policy of its own, and a seam that stood down there would be absent in
-    // precisely the places nobody thought to configure it.
-    for failure in text::failures(found, &text)? {
-        writeln!(
-            report,
-            "policy check failed: {}\n{}\n",
-            failure.label,
-            failure.body.trim_end()
-        )
+    // Everything a piece of published text is judged by, from the one place
+    // that knows what that is. The host-identity rules run wherever the call
+    // was made from, policy or no policy: `text::load_for` carries an empty
+    // policy for exactly that case, and it is the case a tool call is usually
+    // in. A session starts in a workspace superproject, a scratch directory, or
+    // a checkout that has no policy of its own, and a seam that stood down
+    // there would be absent in precisely the places nobody thought to configure
+    // it. The guards and the prose rules are declarations, so an empty policy
+    // is an empty list of them rather than a fallback -- which is the same
+    // sentence as "they did not run", said below.
+    let (root, policy) = text::load_for(found)?;
+    for verdict in text::judged(text::Seam::Hook, &root, &policy, label, &text)? {
+        match verdict {
+            Verdict::Rule(failure) => writeln!(
+                report,
+                "policy check failed: {}\n{}\n",
+                failure.label,
+                failure.body.trim_end()
+            ),
+            Verdict::Guard(refusal) => writeln!(
+                report,
+                "guard refused: {}\n{}\n",
+                guard::refused_by(&policy, &refusal),
+                refusal.report.trim_end()
+            ),
+        }
         .ok();
     }
 
-    // The guards need a policy, because which guards a repository runs is that
-    // repository's own answer and an enclosing superproject's is not borrowed.
-    // Where there is none they do not run, and saying so on stderr is the
-    // difference between a check that passed and a check that did not happen.
-    match found {
-        Some((root, policy_path)) => {
-            let policy: Policy = config::load(root, policy_path)?;
-            for refusal in guard::over_text(root, &policy, label, &text)? {
-                writeln!(
-                    report,
-                    "guard refused: {}\n{}\n",
-                    guard::refused_by(&policy, &refusal),
-                    refusal.report.trim_end()
-                )
-                .ok();
-            }
-        }
-        None => eprintln!(
+    // Which guards a repository runs is that repository's own answer, and an
+    // enclosing superproject's is not borrowed. Where there is no policy the
+    // guards and the prose rules have nothing to run, and saying so on stderr
+    // is the difference between a check that passed and a check that did not
+    // happen.
+    if found.is_none() {
+        eprintln!(
             "uphold hook: no policy where this call was made, so the guards did not run \
              and only the host-identity rules did. That is partial coverage, not a pass."
-        ),
+        );
     }
 
     if report.is_empty() {

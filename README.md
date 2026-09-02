@@ -79,12 +79,25 @@ and need no uphold binary; pin them instead of transcribing them.
 ```
 
 `language: system`, so they use the `go` a Go repository already has on PATH and
-add no toolchain and no build, and a `files:` regex keeps all four silent in a
-repository with no Go in it. A lefthook consumer gets the same four ids from
-`hooks/lefthook.yml` with nothing extra to write. They are `pre-commit` only,
-and not `manual` as the uphold ids are: lefthook applies a job's `glob` to what
-a git hook is running over, and a named group has no such set, so a Go job
-reachable that way would fire in a repository with no Go in it.
+add no toolchain and no build. A lefthook consumer gets the same four ids from
+`hooks/lefthook.yml` with nothing extra to write.
+
+Three of the four carry no `files:` filter, and that is deliberate: `go vet`,
+`go build` and `go test` read the whole module, so a commit staging only a
+testdata fixture or a `//go:embed` asset changes what the module is tested
+against and must run them. A filter on Go paths skipped exactly that commit and
+left the finding to CI, which is a green the later red contradicts.
+`uphold-gofmt` keeps the filter, because formatting is the one question here
+whose answer a file that is not Go can never change. They run at every stage a
+runner has a file set at — `pre-commit`, `pre-merge-commit`, `pre-push` and
+`manual` — since git runs `pre-merge-commit` and not `pre-commit` for a merge,
+and a merge is as able to break a build as a commit is.
+
+The lefthook half conditions its three on `go.mod` existing instead. A
+`.pre-commit-config.yaml` consumer *names* the id, so an unconditional id fires
+only where it was asked for; a lefthook remote config is merged wholesale, so
+the condition has to be a fact about the repository rather than about the id
+list.
 
 They exist because 24 sibling repositories declared these four by hand, and two
 of the `gofmt` copies could never fail — `gofmt -l` prints the files it would
@@ -294,7 +307,7 @@ Individual steps:
 uv run --no-project scripts/validate.py        # schema and relationship validation
 uv run --no-project scripts/build_reference.py # rebuild the generated files after edits
 uv run --no-project python -m unittest discover -s tests
-./uphold_check.py                 # this repo's own declaration
+cargo run --quiet -- check                  # this repo's own claims, reconciled
 cargo run --quiet -- guard --stage manual   # every pin still names a ref
 ```
 
@@ -304,7 +317,7 @@ QUICK_REFERENCE.md      generated human index
 REVIEW.md, AGENTS.md    generated review tier: the judgment no rule decides
 review-controls.json    generated: the change each controlled record must be found by
 name-index.json         generated lookup index: every name -> a record id
-uphold_check.py     reconciler; the hook other repos install
+uphold_check.py         catalog prose: --explain, --list, --review, --oscal, --init
 scripts/                analysis, catalog loading, validation, generation
 ```
 

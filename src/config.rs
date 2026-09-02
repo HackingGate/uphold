@@ -94,6 +94,16 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
         "unreviewed-history",
         include_str!("../policy/base/unreviewed-history.toml"),
     ),
+    // The identity half of the same moment `unreviewed-history` guards. Its own
+    // name because the question is different -- who is writing, read off the
+    // machine, rather than where a ref is going or what a message says -- and
+    // because it is the one guard here that refuses the deliberate act as
+    // readily as the accidental one, which a repository applying mailed patches
+    // has a reason to decline.
+    (
+        "mismatched-author",
+        include_str!("../policy/base/mismatched-author.toml"),
+    ),
     (
         "invisible-characters",
         include_str!("../policy/base/invisible-characters.toml"),
@@ -712,6 +722,15 @@ pub(crate) struct Rule {
     /// Treat a name whose visibility could not be determined as private.
     #[serde(default)]
     pub refuse_unknown: Option<bool>,
+    /// This rule's own `foreign_hosts`, replacing the policy's for this rule.
+    ///
+    /// Written where one rule reads a corner of the tree with its own citation
+    /// habits -- a bibliography under `docs/` that the tree-wide rule need not
+    /// quiet everywhere. Replaces rather than extends, for the reason a scoped
+    /// `allowed_scripts` list does: what is declared beside the rule is the
+    /// whole truth for that rule, and nothing invisible reaches in.
+    #[serde(default)]
+    pub foreign_hosts: Option<Vec<String>>,
     /// This repository's visibility, when it should not be looked up.
     #[serde(default)]
     pub visibility: Option<String>,
@@ -800,6 +819,7 @@ impl Rule {
             private_owners_from: None,
             public_repos: None,
             refuse_unknown: None,
+            foreign_hosts: None,
             visibility: None,
             visibility_required: None,
             owner: None,
@@ -991,6 +1011,7 @@ impl Rule {
                 .then_some("private_owners_from"),
             self.public_repos.is_some().then_some("public_repos"),
             self.refuse_unknown.is_some().then_some("refuse_unknown"),
+            self.foreign_hosts.is_some().then_some("foreign_hosts"),
             self.visibility.is_some().then_some("visibility"),
             self.visibility_required
                 .is_some()
@@ -1346,6 +1367,37 @@ impl Rule {
                     "rule {:?}: {label:?} names no encoding the WHATWG registry carries. \
                      Labels are the ones browsers accept -- \"UTF-8\", \"Shift_JIS\", \
                      \"EUC-JP\", \"windows-1252\"",
+                    self.id
+                )));
+            }
+        }
+
+        // Every declared private owner becomes a pattern, and a pattern that
+        // will not compile is a declaration this policy cannot honour. Refused
+        // at load rather than dropped mid-search: an owner the search silently
+        // omits is an operator's list saying one thing while the guard looks
+        // for another, with nothing printed either way. The owner is escaped
+        // before it is a pattern, so a failure here is a name no regex can
+        // hold.
+        for owner in self.private_owners() {
+            if let Err(error) = regex::Regex::new(&regex::escape(owner)) {
+                return Err(Fatal::new(format!(
+                    "rule {:?}: private owner {owner:?} is a name no pattern can be built \
+                     for ({error}), so the guard would run without it",
+                    self.id
+                )));
+            }
+        }
+
+        // The same argument for the host globs: a glob nobody could compile is
+        // a host nobody quieted, and the run that drops it looks exactly like
+        // the run where the declaration worked.
+        for host in self.foreign_hosts.iter().flatten() {
+            if let Err(error) = globset::Glob::new(&host.to_lowercase()) {
+                return Err(Fatal::new(format!(
+                    "rule {:?}: `foreign_hosts` entry {host:?} is not a host glob \
+                     ({error}). Entries are hostnames, optionally globbed -- \
+                     \"doi.org\", \"*.sr.ht\"",
                     self.id
                 )));
             }
@@ -1814,8 +1866,29 @@ pub(crate) struct PolicyFile {
     /// checked without it.
     #[serde(default)]
     pub private_owners_optional: bool,
+    /// The hosts this repository's documents cite that carry no repository the
+    /// private-name guards need an answer about.
+    ///
+    /// A policy field rather than a rule one for the reason
+    /// `private_owners_from` is: a rule arriving from a bundled set cannot be
+    /// handed a parameter, and which hosts a repository's own bibliography
+    /// names is a property of the repository rather than of one rule in it.
+    ///
+    /// Host globs, matched case-insensitively -- `"doi.org"`, `"*.sr.ht"`. What
+    /// is NOT named here and is not GitHub is could-not-look and exits 2,
+    /// because the tool cannot tell whether `git.acme.example/acme/secret` is
+    /// private and silence would read as clean.
+    #[serde(default)]
+    pub foreign_hosts: Vec<String>,
     #[serde(default)]
     pub inherit: Option<Inherit>,
+    /// Print the RULE and the location of each hit without the matched text.
+    ///
+    /// For the tree where a finding is itself the secret: a `forbidden_literals`
+    /// rule refusing a hostname prints that hostname into a CI log every time it
+    /// fires, and the log is read by more people than the file was. Off by
+    /// default, because a finding a reader cannot see the text of is one they
+    /// have to reproduce locally before they can act on it.
     #[serde(default)]
     pub redact_matches: bool,
     /// The default script constraint for every file no scoped rule selects.
@@ -1944,6 +2017,10 @@ pub(crate) struct Policy {
     /// Whether an unreadable private-owner source is a reported gap rather than
     /// exit 2. See [`PolicyFile::private_owners_optional`].
     pub private_owners_optional: bool,
+    /// The hosts no name lookup is owed for. See [`PolicyFile::foreign_hosts`].
+    pub foreign_hosts: Vec<String>,
+    /// Whether a finding prints its matched text. See
+    /// [`PolicyFile::redact_matches`].
     pub redact_matches: bool,
     /// Whether every path-baseline entry must be signed. See
     /// [`PolicyFile::baselines_signed`].
@@ -2429,6 +2506,22 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         }));
     }
 
+    // The policy-level host globs, held to the same spelling the rule-level
+    // ones are held to and at the same moment. A glob that will not compile is
+    // a host nobody quieted, and finding that out at a pre-push is finding it
+    // out from the wrong seam.
+    for host in &file.foreign_hosts {
+        if let Err(error) = globset::Glob::new(&host.to_lowercase()) {
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "`foreign_hosts` entry {host:?} is not a host glob ({error}). Entries \
+                     are hostnames, optionally globbed -- \"doi.org\", \"*.sr.ht\""
+                ),
+            ));
+        }
+    }
+
     let own_ids: Vec<&str> = file.rules.keys().map(String::as_str).collect();
     let disabled = &inherit.disabled_rules;
 
@@ -2516,6 +2609,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         resolved_visibility: OnceLock::new(),
         private_owners_from: file.private_owners_from.clone(),
         private_owners_optional: file.private_owners_optional,
+        foreign_hosts: file.foreign_hosts.clone(),
         redact_matches: file.redact_matches,
         baselines_signed: file.baselines_signed,
         allowed_scripts: file.allowed_scripts,
