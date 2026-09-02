@@ -29,6 +29,8 @@
 #      in a zero-width space is refused
 #   8. the manual-stage entry point runs and passes
 #   9. each of the four published Go ids runs, and each one can refuse
+#  10. a commit that stages no Go file at all still runs the module-wide ids
+#  11. a module with no main package in it compiles
 #
 # Question 4 is the one that matters for the runners. A guard that cannot see
 # the push does not fail loudly by default; it falls back to some other tree and
@@ -48,11 +50,21 @@
 # looks complete, and does nothing in the consumer that copies it.
 #
 # Question 9 is the same lesson applied before it can be learned twice. The four
-# Go ids are published for repositories with Go in them and are triggered by a
-# `files:`/`glob:` on Go paths, so in a consumer like this one -- which has none
-# until question 9 makes some -- all four skip, silently and correctly, through
-# every question above. Four more ids pinned and never driven is exactly the
-# hole questions 6 to 8 were added to close.
+# Go ids are published for repositories with Go in them, and this consumer is
+# not one until question 9 makes it one -- which is also when it pins them. Four
+# more ids pinned and never driven is exactly the hole questions 6 to 8 were
+# added to close.
+#
+# Questions 10 and 11 ask what question 9 cannot, because question 9 edits a Go
+# file for every fault it plants. Three of these commands read the whole module
+# and are not asking about the file that changed, so the commit that must run
+# them is the one carrying NO Go file -- a fixture, an embedded asset, a golden
+# file. That commit skipped all three while a `files:` regex was what triggered
+# them, and skipped it silently, which is the shape of every bug this script
+# exists to catch. And a module with no `package main` in it is most of a Go
+# fleet and was none of question 9's fixture: `go build -o <dir> ./...` refuses
+# it outright, so the id that answers "does this compile" answered "no main
+# packages to build" instead.
 
 set -euo pipefail
 
@@ -169,6 +181,15 @@ DECLARATION
 
 printf 'A consuming repository.\n' > "$CONSUMER/README.md"
 
+# The four Go ids are NOT pinned here. They are pinned at question 9, at the
+# moment this consumer becomes a repository with Go in it, because that is the
+# moment a consumer pins them -- and because three of the four now run on every
+# commit rather than on a Go path appearing in the staged set. A module-wide
+# check pinned by a repository with no module is a check that fails on every
+# commit, loudly and correctly, and this consumer has no module until question 9
+# makes one. lefthook has no per-id pin to defer, so hooks/lefthook.yml conditions
+# its Go jobs on `go.mod` existing instead; both spellings come to the same thing
+# here, which is what questions 9 to 11 then ask of all three runners.
 case "$RUNNER" in
 pre-commit | prek)
     cat > "$CONSUMER/.pre-commit-config.yaml" <<CONFIG
@@ -185,10 +206,6 @@ repos:
       - id: uphold-guard-merge
       - id: uphold-guard-push
       - id: uphold-guard-manual
-      - id: uphold-gofmt
-      - id: uphold-go-vet
-      - id: uphold-go-build
-      - id: uphold-go-test
 CONFIG
     raw_commit "seed"
     (cd "$CONSUMER" && "$RUNNER" install --install-hooks >/dev/null)
@@ -388,11 +405,24 @@ lefthook)
 esac
 
 say "9. each of the four published Go ids runs, and each one can refuse"
-# Every question above ran in a consumer with no Go in it, which is where these
-# four are supposed to be silent -- and silence is also what a broken id sounds
-# like. So Go arrives here, and each id is then driven by a fault that ONLY it
-# can see: a build that does not compile fails all four at once and would prove
-# nothing about which of them ran.
+# Pinned now, for the reason written where the config was: these four are for a
+# repository with Go in it, and this one is about to become one.
+case "$RUNNER" in
+pre-commit | prek)
+    cat >> "$CONSUMER/.pre-commit-config.yaml" <<'CONFIG'
+      - id: uphold-gofmt
+      - id: uphold-go-vet
+      - id: uphold-go-build
+      - id: uphold-go-test
+CONFIG
+    ;;
+esac
+# Every question above ran in a consumer with no Go in it and with none of these
+# four pinned, so nothing above establishes anything about them -- and an id
+# that never ran and an id that ran and found nothing look identical from out
+# here. So Go arrives with the pins, and each id is then driven by a fault that
+# ONLY it can see: a build that does not compile fails all four at once and
+# would prove nothing about which of them ran.
 cat > "$CONSUMER/go.mod" <<'GOMOD'
 module example.test/consumerapp
 
@@ -462,4 +492,42 @@ func greet() string { return "hello" }
 GO
 commit "Restore the Go module" || fail "a clean Go tree was refused after the faults"
 
-say "$RUNNER: all nine passed"
+say "10. a commit that stages no Go file still runs the module-wide ids"
+# The false green these three ids were published with. `go vet`, `go build` and
+# `go test` read the whole module, and a module is compiled and tested against
+# its fixtures -- so a commit that stages only testdata is a commit that can
+# turn the suite red while touching no Go path at all. Triggered by a file list
+# they never read, all three skipped it and left the finding to CI.
+#
+# The fault is planted with hooks off, so what is staged when the question is
+# asked is one JSON file and nothing else.
+cat > "$CONSUMER/fixture_test.go" <<'GO'
+package main
+
+import "testing"
+
+func TestFixture(t *testing.T) { t.Fatal("this test reads a fixture that changed") }
+GO
+raw_commit "Plant a test that fails"
+mkdir -p "$CONSUMER/testdata"
+printf '{"changed": true}
+' > "$CONSUMER/testdata/x.json"
+refuses uphold-go-test "this test reads a fixture that changed" "Change a fixture only"
+rm -f "$CONSUMER/fixture_test.go"
+raw_commit "Remove the planted test and keep the fixture"
+
+say "11. a module with no main package compiles"
+# `go build -o <dir> ./...` is how uphold-go-build avoids leaving an
+# executable behind, and it is also a refusal where there is no main package to
+# write: `go: no main packages to build`, exit 1, on every library-only module.
+# Question 9's fixture is a single main package, which is the one shape that
+# cannot see it -- so a library, which is what most of a Go module fleet is.
+rm -f "$CONSUMER/main.go" "$CONSUMER/greet.go"
+cat > "$CONSUMER/lib.go" <<'GO'
+package consumerapp
+
+func Greet() string { return "hello" }
+GO
+commit "Make the module a library" || fail "a library-only module was refused"
+
+say "$RUNNER: all eleven passed"
