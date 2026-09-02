@@ -418,7 +418,7 @@ pub(crate) fn lookup(cache: &mut BTreeMap<String, Resolved>, owner: &str, repo: 
 /// is correctly allowed at write time, and nothing re-examines that decision
 /// when the repository later goes public.
 fn target_is_public(root: &Path, policy: &Policy, rule: &Rule) -> Result<Option<bool>> {
-    if let Some(declared) = rule.visibility.as_deref() {
+    if let Some(declared) = rule.visibility() {
         return crate::config::visibility_is_public(declared)
             .map(Some)
             .ok_or_else(|| {
@@ -494,8 +494,7 @@ pub(crate) fn declared_owners(root: &Path, policy: &Policy, rule: &Rule) -> Resu
     // what a rule arriving from a set can reach, and a rule that names its own
     // source is saying something narrower on purpose.
     if let Some(command) = rule
-        .private_owners_from
-        .as_deref()
+        .private_owners_from()
         .or(policy.private_owners_from.as_deref())
     {
         let output = Command::new("sh")
@@ -712,8 +711,8 @@ fn decide(
     // the forge's view of a visibility that is about to change, and the answer
     // it gives on the day of the change is the one that decides whether the
     // whole family runs at all.
-    if request.rule.visibility_required.unwrap_or(false)
-        && request.rule.visibility.is_none()
+    if request.rule.visibility_required()
+        && request.rule.visibility().is_none()
         && request.policy.declared_visibility(request.root)?.is_none()
     {
         return Err(Fatal::new(format!(
@@ -750,8 +749,7 @@ fn decide(
     let quiet = ForeignHosts::new(
         request
             .rule
-            .foreign_hosts
-            .as_deref()
+            .foreign_hosts()
             .unwrap_or(&request.policy.foreign_hosts),
     )?;
     // The owners a name on an unaskable host is could-not-look for. The

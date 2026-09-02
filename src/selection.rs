@@ -552,7 +552,7 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use crate::config::{Check, Files};
+    use crate::config::{Check, CheckKind, Files};
 
     /// A directory of this test's own, named for what the test is about so a
     /// leftover on a failure says which one left it.
@@ -595,7 +595,7 @@ mod tests {
     }
 
     fn rule(files: Files) -> Rule {
-        let mut rule = Rule::synthetic("selection-test", Check::Regexp);
+        let mut rule = Rule::synthetic("selection-test", Check::empty(CheckKind::Regexp));
         rule.files = Some(files);
         rule
     }

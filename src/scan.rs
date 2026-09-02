@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use unicode_script::{Script, UnicodeScript};
 
-use crate::config::{Check, Files, Policy, Rule};
+use crate::config::{Check, CheckKind, Files, Policy, Rule};
 use crate::engine::{self, Hit, Query};
 use crate::error::{Fatal, Result};
 use crate::report::{body_for, Failure};
@@ -220,10 +220,10 @@ impl<'a> Scan<'a> {
     /// say. It says it by writing `[rule.files]` and no `[rule.git]`.
     pub(crate) fn run(&self) -> Result<Vec<Failure>> {
         let mut failures = Vec::new();
-        for check in Check::ALL {
+        for check in CheckKind::ALL {
             // A built-in with `[rule.files]` reads the tree; one without reads
             // a message or a push, and belongs to `guard`. The table decides.
-            if check == Check::Builtin {
+            if check == CheckKind::Builtin {
                 for rule in self.policy.of_check(check) {
                     if !rule.reads_files() {
                         continue;
@@ -265,7 +265,7 @@ impl<'a> Scan<'a> {
             if !check.requires_files() {
                 continue;
             }
-            if check == Check::AllowedScripts {
+            if check == CheckKind::AllowedScripts {
                 // Script rules interact -- a scoped list replaces the global
                 // one for its files, and an exclusive rule speaks about files
                 // it does not select -- so they are evaluated once as a
@@ -280,17 +280,17 @@ impl<'a> Scan<'a> {
                     continue;
                 }
                 let found = match check {
-                    Check::Regexp => self.pattern_failures(rule)?,
-                    Check::CommentRegexp => self.comment_pattern_failures(rule)?,
-                    Check::ProseRegexp => self.prose_pattern_failures(rule)?,
-                    Check::TrivialComments => self.trivial_comment_failures(rule)?,
-                    Check::ForbiddenLiterals => self.literal_failures(rule)?,
-                    Check::MaxLines => self.size_failures(rule, Measure::Lines)?,
-                    Check::MaxBytes => self.size_failures(rule, Measure::Bytes)?,
-                    Check::PathRegexp => self.path_failures(rule)?,
-                    Check::RequireRegexp => self.require_failures(rule)?,
-                    Check::Encoding => self.encoding_failures(rule)?,
-                    Check::AllowedScripts | Check::Builtin | Check::Exec => {
+                    CheckKind::Regexp => self.pattern_failures(rule)?,
+                    CheckKind::CommentRegexp => self.comment_pattern_failures(rule)?,
+                    CheckKind::ProseRegexp => self.prose_pattern_failures(rule)?,
+                    CheckKind::TrivialComments => self.trivial_comment_failures(rule)?,
+                    CheckKind::ForbiddenLiterals => self.literal_failures(rule)?,
+                    CheckKind::MaxLines => self.size_failures(rule, Measure::Lines)?,
+                    CheckKind::MaxBytes => self.size_failures(rule, Measure::Bytes)?,
+                    CheckKind::PathRegexp => self.path_failures(rule)?,
+                    CheckKind::RequireRegexp => self.require_failures(rule)?,
+                    CheckKind::Encoding => self.encoding_failures(rule)?,
+                    CheckKind::AllowedScripts | CheckKind::Builtin | CheckKind::Exec => {
                         unreachable!("filtered above")
                     }
                 };
@@ -305,8 +305,8 @@ impl<'a> Scan<'a> {
     fn declared_encoding(&self, relative: &str) -> Result<Option<&'static encoding_rs::Encoding>> {
         if self.declared_encodings.borrow().is_none() {
             let mut declared: Vec<Declared> = Vec::new();
-            for rule in self.policy.of_check(Check::Encoding) {
-                let label = rule.encoding.as_deref().unwrap_or_default();
+            for rule in self.policy.of_check(CheckKind::Encoding) {
+                let label = rule.encoding().unwrap_or_default();
                 // A label the registry does not carry is refused at load and
                 // again in `encoding_failures`. Here it is simply not a
                 // declaration, so the file it selects stays undeclared rather
@@ -571,8 +571,7 @@ impl<'a> Scan<'a> {
     /// captured artifact as text to discover it has no sentences in it would
     /// make every binary in a tree an unreadable-path finding.
     fn prose_pattern_failures(&self, rule: &Rule) -> Result<Vec<Failure>> {
-        let matcher =
-            crate::prose::compile(rule.prose_regexp.as_deref().unwrap_or_default(), &rule.id)?;
+        let matcher = crate::prose::compile(rule.prose_regexp().unwrap_or_default(), &rule.id)?;
         let mut hits: Vec<Hit> = Vec::new();
         for file in self.select(rule)? {
             if !crate::prose::reads(&file) {
@@ -638,18 +637,18 @@ impl<'a> Scan<'a> {
         // `source = "command"` beside `run`, which made the pair say one thing
         // twice and let them disagree; the field carrying the command is the
         // whole declaration now.
-        let source = if rule.forbidden_literals_from.is_some() {
+        let source = if rule.forbidden_literals_from().is_some() {
             "command"
         } else {
-            rule.forbidden_literals.as_deref().unwrap_or_default()
+            rule.forbidden_literals().unwrap_or_default()
         };
         let needles = crate::sources::resolve(
             source,
-            rule.forbidden_literals_from.as_deref(),
+            rule.forbidden_literals_from(),
             self.root,
             rule.files().word,
             &rule.id,
-            rule.ignore_literals.as_deref().unwrap_or(&[]),
+            rule.ignore_literals(),
         )?;
 
         // The file loop is outside the needle loop, which is the other way
@@ -702,8 +701,8 @@ impl<'a> Scan<'a> {
 
     fn size_failures(&self, rule: &Rule, measure: Measure) -> Result<Vec<Failure>> {
         let limit = match measure {
-            Measure::Lines => rule.max_lines,
-            Measure::Bytes => rule.max_bytes,
+            Measure::Lines => rule.max_lines(),
+            Measure::Bytes => rule.max_bytes(),
         }
         .unwrap_or_default();
         let unit = measure.unit();
@@ -982,7 +981,7 @@ impl<'a> Scan<'a> {
             // rather than reimplemented so a source file is found under the
             // same ignore rules, the same symlink policy and the same
             // unreadable-path accounting as every other file this scan reads.
-            let mut probe = Rule::synthetic(&rule.id, Check::Builtin);
+            let mut probe = Rule::synthetic(&rule.id, Check::empty(CheckKind::Builtin));
             probe.files = Some(Files {
                 glob: vec![format!("{before}*{after}")],
                 ..Files::default()
@@ -1195,7 +1194,7 @@ impl<'a> Scan<'a> {
     /// "UTF-8 file containing Japanese" and "Shift-JIS file containing
     /// Japanese" as the two different declarations they are.
     fn encoding_failures(&self, rule: &Rule) -> Result<Vec<Failure>> {
-        let label = rule.encoding.as_deref().unwrap_or_default();
+        let label = rule.encoding().unwrap_or_default();
         // Validated at load; refused again here rather than defaulted, so a
         // synthetic rule that skipped validation cannot decode as the wrong
         // thing.
@@ -1234,7 +1233,7 @@ impl<'a> Scan<'a> {
 
     fn script_failures(&self) -> Result<Vec<Failure>> {
         let global_names: Vec<String> = self.policy.allowed_scripts.clone();
-        let scoped: Vec<&Rule> = self.policy.of_check(Check::AllowedScripts).collect();
+        let scoped: Vec<&Rule> = self.policy.of_check(CheckKind::AllowedScripts).collect();
         if global_names.is_empty() && scoped.is_empty() {
             return Ok(Vec::new());
         }
@@ -1243,13 +1242,13 @@ impl<'a> Scan<'a> {
 
         let mut resolved: Vec<Scoped> = Vec::new();
         for rule in &scoped {
-            let scripts = resolve_scripts(&rule.allowed_scripts, &format!("rule {:?}", rule.id))?;
+            let scripts = resolve_scripts(rule.allowed_scripts(), &format!("rule {:?}", rule.id))?;
             resolved.push(Scoped {
                 id: rule.id.clone(),
                 files: self.select(rule)?.into_iter().collect(),
-                names: rule.allowed_scripts.clone(),
+                names: rule.allowed_scripts().to_vec(),
                 scripts,
-                exclusive: rule.exclusive.unwrap_or(false),
+                exclusive: rule.exclusive(),
             });
         }
         let any_exclusive = resolved.iter().any(|scope| scope.exclusive);
@@ -1260,7 +1259,7 @@ impl<'a> Scan<'a> {
         // A forward-only scoped configuration constrains only what it selects.
         let mut every: BTreeSet<String> = BTreeSet::new();
         if !global_names.is_empty() || any_exclusive {
-            let all = Rule::synthetic("<allowed_scripts>", Check::AllowedScripts);
+            let all = Rule::synthetic("<allowed_scripts>", Check::empty(CheckKind::AllowedScripts));
             every.extend(self.select(&all)?);
         }
         for scope in &resolved {

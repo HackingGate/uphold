@@ -91,7 +91,7 @@ impl Seam {
 /// stage and no remote to build one from. Narrowing the parameters is what let
 /// the one body serve both.
 fn workspace_owner(root: &Path, policy: &Policy, rule: &Rule) -> Result<(Option<String>, bool)> {
-    if let Some(owner) = rule.owner.as_deref() {
+    if let Some(owner) = rule.owner() {
         return Ok((Some(owner.to_owned()), true));
     }
     // The policy's own `owner`, which is the pin a rule arriving from a bundled
@@ -142,7 +142,7 @@ pub(crate) fn unowned(
     // written down where its publications may go has answered, in the only form
     // the guard needed, and demanding a second declaration of the same fact
     // would be ceremony.
-    if rule.owner_required.unwrap_or(false)
+    if rule.owner_required()
         && !pinned
         && rule.allowed_owners().is_empty()
         && rule.allowed_repos().is_empty()

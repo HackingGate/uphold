@@ -47,7 +47,7 @@ pub(crate) fn no_stale_visibility(request: &Request<'_>) -> Result<Option<Refusa
     // world needs a claim, and with none there is nothing to falsify -- so this
     // says so rather than passing, which would be a check that looked like it
     // ran and examined nothing.
-    let declared = match request.rule.visibility.as_deref() {
+    let declared = match request.rule.visibility() {
         Some(word) => word.to_owned(),
         None => match request.policy.declared_visibility(request.root)? {
             Some(word) => word,

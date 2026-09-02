@@ -20,7 +20,7 @@
 use std::io::Read;
 use std::path::PathBuf;
 
-use crate::config::{self, Check, Policy, Rule};
+use crate::config::{self, Check, CheckKind, Literals, Policy, Rule};
 use crate::engine::{self, Query};
 use crate::error::{Exit, Fatal, Result};
 use crate::report::Failure;
@@ -40,7 +40,15 @@ const RUNNING_OS_IDENTITY: &str = "running-os-identity";
 /// there would leave the guard absent in exactly the places nobody thought to
 /// configure it, which is how identity gets published.
 fn fallback_rule() -> Rule {
-    let mut rule = Rule::synthetic("no-running-os-identity-metadata", Check::ForbiddenLiterals);
+    let mut rule = Rule::synthetic(
+        "no-running-os-identity-metadata",
+        Check::ForbiddenLiterals {
+            literals: Literals::Named {
+                forbidden_literals: String::from(RUNNING_OS_IDENTITY),
+            },
+            ignore_literals: None,
+        },
+    );
     rule.message = Some(String::from(
         "Do not put identity metadata from the running OS into text that gets published. \
          The policy checker reads the current username, home path, and hostname (including \
@@ -48,7 +56,6 @@ fn fallback_rule() -> Rule {
          send. Use neutral placeholders such as example-user, example-host, example.test, \
          and /srv/example instead.",
     ));
-    rule.forbidden_literals = Some(String::from(RUNNING_OS_IDENTITY));
     rule
 }
 
@@ -149,11 +156,11 @@ impl Judged {
                 .contains(&builtin)
                 .then_some(Self::Guards);
         }
-        Some(match rule.check()? {
-            Check::ForbiddenLiterals => Self::Literals,
-            Check::ProseRegexp => Self::Prose,
-            Check::Regexp | Check::RequireRegexp => Self::Patterns,
-            Check::Exec => Self::Consultation,
+        Some(match rule.kind() {
+            CheckKind::ForbiddenLiterals => Self::Literals,
+            CheckKind::ProseRegexp => Self::Prose,
+            CheckKind::Regexp | CheckKind::RequireRegexp => Self::Patterns,
+            CheckKind::Exec => Self::Consultation,
             _ => return None,
         })
     }
@@ -341,10 +348,13 @@ pub(crate) fn failures_in(
     // Declaring a rule about something else is not a decision to stop checking
     // this, so both run: the declared rules, and the fallback when nothing
     // among them reads the running host's identity.
-    let mut owned: Vec<Rule> = policy.of_check(Check::ForbiddenLiterals).cloned().collect();
+    let mut owned: Vec<Rule> = policy
+        .of_check(CheckKind::ForbiddenLiterals)
+        .cloned()
+        .collect();
     if !owned
         .iter()
-        .any(|rule| rule.forbidden_literals.as_deref() == Some(RUNNING_OS_IDENTITY))
+        .any(|rule| rule.forbidden_literals() == Some(RUNNING_OS_IDENTITY))
     {
         owned.push(fallback_rule());
     }
@@ -353,16 +363,16 @@ pub(crate) fn failures_in(
     for rule in &owned {
         let needles = sources::resolve(
             // `forbidden_literals_from` IS the command source; v2 said it twice.
-            if rule.forbidden_literals_from.is_some() {
+            if rule.forbidden_literals_from().is_some() {
                 "command"
             } else {
-                rule.forbidden_literals.as_deref().unwrap_or_default()
+                rule.forbidden_literals().unwrap_or_default()
             },
-            rule.forbidden_literals_from.as_deref(),
+            rule.forbidden_literals_from(),
             root,
             rule.files().word,
             &rule.id,
-            rule.ignore_literals.as_deref().unwrap_or(&[]),
+            rule.ignore_literals(),
         )?;
         for needle in needles {
             let label = format!("{} ({})", rule.id, needle.label);
@@ -425,21 +435,31 @@ mod tests {
         }
     }
 
+    /// A built-in rule carrying no parameter, which is every one below.
+    fn named_builtin(name: &str) -> Check {
+        Check::Builtin {
+            builtin: String::from(name),
+            parameters: Box::default(),
+        }
+    }
+
     /// A rule is classified by what it declares, and a built-in that judges
     /// something other than text is classified as nothing at all.
     #[test]
     fn a_rule_is_the_kind_it_declares_and_a_non_text_builtin_is_no_kind() {
-        let mut prose = Rule::synthetic("shape", Check::ProseRegexp);
-        prose.prose_regexp = Some(String::from("x"));
+        let prose = Rule::synthetic(
+            "shape",
+            Check::ProseRegexp {
+                prose_regexp: String::from("x"),
+            },
+        );
         assert_eq!(Judged::of(&prose), Some(Judged::Prose));
 
-        let mut guard = Rule::synthetic("names", Check::Builtin);
-        guard.builtin = Some(String::from("no-private-repo-names"));
+        let guard = Rule::synthetic("names", named_builtin("no-private-repo-names"));
         assert_eq!(Judged::of(&guard), Some(Judged::Guards));
 
         // Reads a push range, not a piece of text, so it is not asked about one.
-        let mut push = Rule::synthetic("push", Check::Builtin);
-        push.builtin = Some(String::from("prevent-public-push"));
+        let push = Rule::synthetic("push", named_builtin("prevent-public-push"));
         assert_eq!(Judged::of(&push), None);
     }
 }

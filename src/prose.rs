@@ -25,7 +25,7 @@
 use regex::Regex;
 
 use crate::comments::{self, Language};
-use crate::config::{Check, Policy};
+use crate::config::{CheckKind, Policy};
 use crate::error::{Fatal, Result};
 use crate::report::Failure;
 
@@ -276,7 +276,7 @@ pub(crate) fn compile(pattern: &str, id: &str) -> Result<Regex> {
 /// pattern rules generally, and it holds here.
 pub(crate) fn over_text(policy: &Policy, text: &str) -> Result<Vec<Failure>> {
     let mut failures = Vec::new();
-    for rule in policy.of_check(Check::ProseRegexp) {
+    for rule in policy.of_check(CheckKind::ProseRegexp) {
         if rule
             .command
             .as_ref()
@@ -292,7 +292,7 @@ pub(crate) fn over_text(policy: &Policy, text: &str) -> Result<Vec<Failure>> {
             eprintln!("uphold: {} bypassed by UPHOLD_ALLOW", rule.id);
             continue;
         }
-        let matcher = compile(rule.prose_regexp.as_deref().unwrap_or_default(), &rule.id)?;
+        let matcher = compile(rule.prose_regexp().unwrap_or_default(), &rule.id)?;
         let body = of_text(text)
             .into_iter()
             .filter(|span| matcher.is_match(&span.text))

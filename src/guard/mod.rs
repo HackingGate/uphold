@@ -25,7 +25,7 @@ pub(crate) mod visibility;
 
 use std::path::Path;
 
-use crate::config::{Check, Policy, Rule};
+use crate::config::{CheckKind, Policy, Rule};
 use crate::error::{Exit, Fatal, Result};
 
 /// Every built-in check this binary carries, and the only list of them.
@@ -333,7 +333,7 @@ pub(crate) fn over_text(
     text: &str,
 ) -> Result<Vec<Refusal>> {
     let mut refusals = Vec::new();
-    for rule in policy.of_check(Check::Builtin) {
+    for rule in policy.of_check(CheckKind::Builtin) {
         if rule
             .builtin()
             .is_some_and(|builtin| META_TEXT_GUARDS.contains(&builtin))

@@ -1747,7 +1747,7 @@ fn json_bool_field(text: &str, field: &str) -> bool {
 /// that document would be one rule with two answers.
 fn pattern_refusal(rule: &Rule, subject: &Subject) -> Result<Option<String>> {
     let multiline = rule.files().multiline;
-    if let Some(pattern) = rule.prose_regexp.as_deref() {
+    if let Some(pattern) = rule.prose_regexp() {
         let matcher = crate::prose::compile(pattern, &rule.id)?;
         let Some(span) = crate::prose::of_text(&subject.value)
             .into_iter()
@@ -1763,7 +1763,7 @@ fn pattern_refusal(rule: &Rule, subject: &Subject) -> Result<Option<String>> {
             rule.message()
         )));
     }
-    if let Some(pattern) = rule.require_regexp.as_deref() {
+    if let Some(pattern) = rule.require_regexp() {
         let hits = crate::engine::search_text(
             &subject.value,
             &crate::engine::Query::regex(pattern, multiline),
@@ -1779,7 +1779,7 @@ fn pattern_refusal(rule: &Rule, subject: &Subject) -> Result<Option<String>> {
         }
         return Ok(None);
     }
-    let Some(pattern) = rule.regexp.as_deref() else {
+    let Some(pattern) = rule.regexp() else {
         return Ok(None);
     };
     let hits = crate::engine::search_text(
@@ -1819,11 +1819,7 @@ fn consult(root: &Path, rule: &Rule, subject: &Subject) -> Result<Option<String>
     // default: a rule mis-dispatched to this function once ran `sh -c ""`,
     // approved everything, and the pass was indistinguishable from a checker
     // that looked.
-    let Some(run) = rule
-        .exec
-        .as_deref()
-        .filter(|command| !command.trim().is_empty())
-    else {
+    let Some(run) = rule.exec().filter(|command| !command.trim().is_empty()) else {
         return Err(Fatal::new(format!(
             "{}: consulted as an `exec` checker while declaring no `exec` command, so \
              nothing could have been asked -- a dispatch hole, not a pass",
@@ -2856,7 +2852,7 @@ pub(crate) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Check;
+    use crate::config::{Check, CheckKind};
 
     fn gh() -> Shim {
         Shim {
@@ -3592,13 +3588,17 @@ mod tests {
     }
 
     /// A pattern rule the config would accept, in whichever direction.
-    fn pattern_rule(check: Check, pattern: &str) -> Rule {
-        let mut rule = Rule::synthetic("pattern-rule", check);
-        if check == Check::RequireRegexp {
-            rule.require_regexp = Some(pattern.to_owned());
+    fn pattern_rule(check: CheckKind, pattern: &str) -> Rule {
+        let selected = if check == CheckKind::RequireRegexp {
+            Check::RequireRegexp {
+                require_regexp: pattern.to_owned(),
+            }
         } else {
-            rule.regexp = Some(pattern.to_owned());
-        }
+            Check::Regexp {
+                regexp: pattern.to_owned(),
+            }
+        };
+        let mut rule = Rule::synthetic("pattern-rule", selected);
         rule.message = Some(String::from("fix the text"));
         rule
     }
@@ -3611,7 +3611,7 @@ mod tests {
             kind: "title",
             value: String::from("Generated with Claude Code"),
         };
-        let refusal = pattern_refusal(&pattern_rule(Check::Regexp, "Claude Code"), &title)
+        let refusal = pattern_refusal(&pattern_rule(CheckKind::Regexp, "Claude Code"), &title)
             .unwrap()
             .unwrap();
         for wanted in [
@@ -3638,23 +3638,24 @@ mod tests {
             value: String::from("v2.0.0"),
         };
         assert!(
-            pattern_refusal(&pattern_rule(Check::Regexp, "Claude Code"), &ordinary)
+            pattern_refusal(&pattern_rule(CheckKind::Regexp, "Claude Code"), &ordinary)
                 .unwrap()
                 .is_none()
         );
         assert!(pattern_refusal(
-            &pattern_rule(Check::RequireRegexp, r"^v[0-9]+\.[0-9]+\.[0-9]+$"),
+            &pattern_rule(CheckKind::RequireRegexp, r"^v[0-9]+\.[0-9]+\.[0-9]+$"),
             &ordinary
         )
         .unwrap()
         .is_none());
         // And a rule carrying neither pattern says nothing rather than
         // refusing a subject no pattern was ever written for.
-        assert!(
-            pattern_refusal(&Rule::synthetic("no-pattern", Check::Builtin), &ordinary)
-                .unwrap()
-                .is_none()
-        );
+        assert!(pattern_refusal(
+            &Rule::synthetic("no-pattern", Check::empty(CheckKind::Builtin)),
+            &ordinary
+        )
+        .unwrap()
+        .is_none());
     }
 
     #[test]
@@ -3667,9 +3668,16 @@ mod tests {
             kind: "text",
             value: String::from("anything at all"),
         };
-        let mut blank = Rule::synthetic("blank-exec", Check::Exec);
-        blank.exec = Some(String::from("   "));
-        for rule in [Rule::synthetic("no-exec", Check::Builtin), blank] {
+        let blank = Rule::synthetic(
+            "blank-exec",
+            Check::Exec {
+                exec: String::from("   "),
+            },
+        );
+        for rule in [
+            Rule::synthetic("no-exec", Check::empty(CheckKind::Builtin)),
+            blank,
+        ] {
             let report = consult(Path::new("."), &rule, &subject)
                 .unwrap_err()
                 .to_string();
@@ -3683,8 +3691,12 @@ mod tests {
         // whatever part of the subject got through, and that is not what this
         // invocation is about to publish. Well past a pipe's 64 KiB, because
         // inside one the write completes and the question never arises.
-        let mut deaf = Rule::synthetic("reads-nothing", Check::Exec);
-        deaf.exec = Some(String::from("exit 0"));
+        let deaf = Rule::synthetic(
+            "reads-nothing",
+            Check::Exec {
+                exec: String::from("exit 0"),
+            },
+        );
         let subject = Subject {
             kind: "text",
             value: "ordinary text\n".repeat(80_000),

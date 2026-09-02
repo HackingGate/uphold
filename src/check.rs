@@ -959,8 +959,12 @@ mod tests {
         // no scan, and the honest answer is that nothing supplies them --
         // reported as unestablished rather than credited to a seam that is not
         // there.
-        let mut rule = crate::config::Rule::synthetic("no-shouting", crate::config::Check::Regexp);
-        rule.regexp = Some(String::from("SHOUTING"));
+        let mut rule = crate::config::Rule::synthetic(
+            "no-shouting",
+            crate::config::Check::Regexp {
+                regexp: String::from("SHOUTING"),
+            },
+        );
         rule.files = Some(crate::config::Files::default());
         let policy = Policy {
             rules: vec![rule],
