@@ -40,7 +40,7 @@ use std::process::{Command, Stdio};
 
 use serde::Deserialize;
 
-use crate::config::{Check, Policy, Rule};
+use crate::config::{Policy, Rule};
 use crate::error::{Exit, Fatal, Result};
 use crate::git;
 
@@ -1655,22 +1655,39 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
         if !rule.selects_subject(subject.kind) {
             continue;
         }
-        if rule.is(Check::Regexp) || rule.is(Check::RequireRegexp) {
-            if let Some(refusal) = pattern_refusal(rule, &subject)? {
-                refusals.push(refusal);
-            }
+        // The same dispatch the argv pass runs, off the same table. It was two
+        // hand-written chains, and they had already drifted: this one tested
+        // `regexp` and `require_regexp` and left a `prose_regexp` rule to fall
+        // through to the `exec` consultation, which refused it as a dispatch
+        // hole -- a body that reached an editor and was then read by nobody.
+        let Some(kind) = crate::text::Judged::of(rule) else {
+            continue;
+        };
+        if !crate::text::Seam::Command.consults(kind) {
             continue;
         }
-        if rule.is(Check::Builtin) {
-            if let Some(refusal) =
-                crate::guard::text_refusal(root, policy, rule, subject.kind, &subject.value)?
-            {
-                refusals.push(refusal.report);
+        match kind {
+            crate::text::Judged::Prose | crate::text::Judged::Patterns => {
+                if let Some(refusal) = pattern_refusal(rule, &subject)? {
+                    refusals.push(refusal);
+                }
             }
-            continue;
-        }
-        if let Some(refusal) = consult(root, rule, &subject)? {
-            refusals.push(format!("{refusal}\n{}", rule.message()));
+            crate::text::Judged::Guards => {
+                if let Some(refusal) =
+                    crate::guard::text_refusal(root, policy, rule, subject.kind, &subject.value)?
+                {
+                    refusals.push(refusal.report);
+                }
+            }
+            crate::text::Judged::Consultation => {
+                if let Some(refusal) = consult(root, rule, &subject)? {
+                    refusals.push(format!("{refusal}\n{}", rule.message()));
+                }
+            }
+            // Not consulted here, and skipped above: a policy reaches the
+            // literal rules from this seam through the `text-literals`
+            // built-in, which arrives as `Guards`.
+            crate::text::Judged::Literals => {}
         }
     }
     if refusals.is_empty() {
@@ -1998,35 +2015,49 @@ pub(crate) fn run(
                     if !rule.selects_subject(subject.kind) {
                         continue;
                     }
-                    if rule.is(Check::Regexp)
-                        || rule.is(Check::RequireRegexp)
-                        || rule.is(Check::ProseRegexp)
-                    {
-                        if let Some(refusal) = pattern_refusal(rule, subject)? {
-                            refusals.push(refusal);
+                    // What kind of rule this is, and whether this seam consults
+                    // it, both answered from the one table in `text` -- so a
+                    // rule kind cannot be added to three seams and left dark in
+                    // the fourth, which is how the prose rules missed `hook`.
+                    let Some(kind) = crate::text::Judged::of(rule) else {
+                        continue;
+                    };
+                    if !crate::text::Seam::Command.consults(kind) {
+                        continue;
+                    }
+                    match kind {
+                        crate::text::Judged::Prose | crate::text::Judged::Patterns => {
+                            if let Some(refusal) = pattern_refusal(rule, subject)? {
+                                refusals.push(refusal);
+                            }
                         }
-                        continue;
-                    }
-                    if empty {
-                        continue;
-                    }
-                    if rule.is(Check::Builtin) {
+                        // A subject that was named and left empty is still a
+                        // published subject, and a pattern rule judges it above
+                        // -- `require_regexp` is about what is NOT there. There
+                        // is nothing in it for a guard or a checker to read.
+                        _ if empty => {}
                         // The same dispatch `uphold guard --text` runs, so a
                         // guard cannot judge a commit message one way and a
                         // pull-request body another under one id.
-                        if let Some(refusal) = crate::guard::text_refusal(
-                            root,
-                            policy,
-                            rule,
-                            subject.kind,
-                            &subject.value,
-                        )? {
-                            refusals.push(refusal.report);
+                        crate::text::Judged::Guards => {
+                            if let Some(refusal) = crate::guard::text_refusal(
+                                root,
+                                policy,
+                                rule,
+                                subject.kind,
+                                &subject.value,
+                            )? {
+                                refusals.push(refusal.report);
+                            }
                         }
-                        continue;
-                    }
-                    if let Some(refusal) = consult(root, rule, subject)? {
-                        refusals.push(format!("{refusal}\n{}", rule.message()));
+                        crate::text::Judged::Consultation => {
+                            if let Some(refusal) = consult(root, rule, subject)? {
+                                refusals.push(format!("{refusal}\n{}", rule.message()));
+                            }
+                        }
+                        // See the editor pass: reached from here through the
+                        // `text-literals` built-in, which arrives as `Guards`.
+                        crate::text::Judged::Literals => {}
                     }
                 }
             }
@@ -2078,6 +2109,7 @@ pub(crate) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Check;
 
     fn gh() -> Shim {
         Shim {
