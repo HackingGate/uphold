@@ -120,6 +120,23 @@ private_owners = ["acme-private"]
 hooks = ["pre-push", "manual"]
 "#;
 
+/// The tracked rule under a policy that says who this workspace is.
+///
+/// `owner` rather than `private_owners` for the case below, because a declared
+/// PRIVATE owner is already refused outright wherever it is written -- host or
+/// no host -- and the question here is what happens to the owner a repository
+/// says it is, whose siblings are not refusals.
+const OWNED: &str = r#"
+owner = "acme-private"
+
+[rule.no-private-repo-names-in-files]
+builtin = "no-private-repo-names-in-files"
+visibility = "public"
+
+[rule.no-private-repo-names-in-files.git]
+hooks = ["manual"]
+"#;
+
 const IN_FILES: &str = r#"
 [rule.prevent-unusual-unicode-in-files]
 builtin = "prevent-unusual-unicode-in-files"
@@ -256,6 +273,75 @@ fn a_path_names_a_private_repository_with_no_help_from_its_content() {
         "{}",
         stderr(&output)
     );
+}
+
+/// A DECLARED owner's repository on a host `gh` cannot be asked about.
+///
+/// The one name in this shape that cannot be reported clean on silence: the
+/// policy has said whose repositories these are, and a forge nobody can query
+/// has said nothing about this one. Exit 2, not a refusal -- nothing here is
+/// known to be wrong, and nothing here is known to be right either.
+#[test]
+fn a_declared_owner_on_a_host_gh_cannot_ask_about_is_could_not_look() {
+    let root = repository(OWNED);
+    write(
+        &root,
+        "docs/note.md",
+        "moved to https://gitlab.com/acme-private/secret\n",
+    );
+    git(&root, &["add", "docs/note.md"]);
+
+    let output = guard(&root, &["--stage", "manual"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 2, "{text}");
+    assert!(text.contains("gitlab.com/acme-private/secret"), "{text}");
+    assert!(text.contains("declared owner"), "{text}");
+}
+
+/// And naming the host is what quiets it.
+#[test]
+fn a_declared_host_quiets_the_owner_it_carries() {
+    let root = repository(&format!("foreign_hosts = [\"gitlab.com\"]\n{OWNED}"));
+    write(
+        &root,
+        "docs/note.md",
+        "moved to https://gitlab.com/acme-private/secret\n",
+    );
+    git(&root, &["add", "docs/note.md"]);
+
+    let output = guard(&root, &["--stage", "manual"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+/// Anybody else's `host.tld/a/b` is the inconclusive answer it always was.
+///
+/// A DOI, a licence URL and an encyclopaedia article all have the shape of a
+/// repository name and are not one. Reporting each as could-not-look would make
+/// the cure "enumerate every host you cite" in every consuming repository, which
+/// is the enumeration ADR 0001 refuses, moved out of the binary and into eighty
+/// policy files. It is reported and it is exit 0, and `refuse_unknown` is how a
+/// repository says otherwise.
+#[test]
+fn a_citation_on_an_unaskable_host_is_reported_and_is_not_exit_2() {
+    let root = repository(
+        "[rule.no-private-repo-names-in-files]\n\
+         builtin = \"no-private-repo-names-in-files\"\n\
+         visibility = \"public\"\n\n\
+         [rule.no-private-repo-names-in-files.git]\nhooks = [\"manual\"]\n",
+    );
+    write(
+        &root,
+        "docs/note.md",
+        "see https://doi.org/10.1109/PROC.1975.9939 and \
+         https://en.wikipedia.org/wiki/Anti-pattern\n",
+    );
+    git(&root, &["add", "docs/note.md"]);
+
+    let output = guard(&root, &["--stage", "manual"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 0, "{text}");
+    assert!(text.contains("doi.org/10.1109/PROC.1975.9939"), "{text}");
+    assert!(text.contains("cannot query"), "{text}");
 }
 
 #[test]

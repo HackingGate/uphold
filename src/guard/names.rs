@@ -575,10 +575,16 @@ fn is_ourselves(resolved: &Resolved, ours: Option<&str>) -> bool {
     }
 }
 
+/// `watched` is the set of owners whose names on an unaskable host are
+/// could-not-look rather than merely unresolved: the private owners this policy
+/// declares, plus the owner it says this workspace is. Kept apart from `owners`
+/// because that list also drives the bare-owner search, where the workspace's
+/// own name is deliberately not a finding.
 fn judge(
     root: &Path,
     rule: &Rule,
     owners: &[String],
+    watched: &BTreeSet<String>,
     quiet: &ForeignHosts,
     sources: &[(String, String)],
 ) -> Result<Verdict> {
@@ -643,19 +649,40 @@ fn judge(
             }
         }
 
-        // Named on a host this tool cannot ask. NOT a finding and not a pass:
-        // it is the check not happening, which is the `unavailable` bucket and
-        // exit 2, exactly where a `gh` that could not be reached lands. It used
-        // to be `unresolved` for six hand-listed forges and nothing at all for
-        // every other host, so a private repository on a self-hosted forge --
-        // the likeliest place for one -- was dropped without a line.
+        // Named on a host this tool cannot ask, which is two different
+        // sentences depending on WHOSE name it is.
+        //
+        // Under a declared owner it is could-not-look: the operator has said
+        // that owner's repositories are private, `gh` cannot say whether this
+        // one is, and a name this rule exists to keep off a public target
+        // cannot be reported clean on silence. That is the `unavailable`
+        // bucket, exit 2, where a `gh` that could not be reached lands.
+        //
+        // Under any other owner it is the inconclusive answer it always was.
+        // Every `host.tld/a/b` in a document has this shape -- a DOI, a licence
+        // URL, an encyclopaedia article -- and treating all of them as
+        // could-not-look makes the fix "enumerate every host you cite" in every
+        // consuming repository, which is `parameterize-do-not-enumerate` with
+        // the enumeration moved out of the binary and into eighty policy files.
+        // Reported on the way past, and refused only where the repository has
+        // said with `refuse_unknown` that an unresolved name is not acceptable.
         for (host, owner, repo) in unanswerable_names(text, quiet) {
             let name = format!("{owner}/{repo}");
             if public.contains(&name.to_lowercase()) {
                 continue;
             }
-            if seen.insert(format!("{where_found}\u{0}{host}/{name}")) {
-                unavailable.push(format!("{where_found}: {host}/{name}"));
+            if !seen.insert(format!("{where_found}\u{0}{host}/{name}")) {
+                continue;
+            }
+            if watched.contains(&owner.to_lowercase()) {
+                unavailable.push(format!(
+                    "{where_found}: {host}/{name} (a declared owner, on a host `gh` cannot \
+                     be asked about)"
+                ));
+            } else {
+                unresolved.push(format!(
+                    "{where_found}: {host}/{name} is on a host this tool cannot query"
+                ));
             }
         }
     }
@@ -727,7 +754,27 @@ fn decide(
             .as_deref()
             .unwrap_or(&request.policy.foreign_hosts),
     )?;
-    let verdict = judge(request.root, request.rule, &owners, &quiet, sources)?;
+    // The owners a name on an unaskable host is could-not-look for. The
+    // declared private ones, and the owner this workspace says it is -- a
+    // repository of ours on a forge we cannot query is the case where silence
+    // is least affordable, and it is the one form a private-owner list often
+    // leaves out because nobody thinks of their own login as private.
+    //
+    // The policy's `owner` and not the rule's: `owner` is a parameter of the
+    // push guards and is refused on a rule in this family, so the top of the
+    // policy file is the only place this family can read it from.
+    let mut watched: BTreeSet<String> = owners.iter().map(|owner| owner.to_lowercase()).collect();
+    if let Some(owner) = request.policy.declared_owner(request.root)? {
+        watched.insert(owner.to_lowercase());
+    }
+    let verdict = judge(
+        request.root,
+        request.rule,
+        &owners,
+        &watched,
+        &quiet,
+        sources,
+    )?;
 
     // The forge could not be asked about some names, so for THOSE this guard
     // did not run. Exit 2 and not a refusal, and NOT governed by
@@ -751,10 +798,11 @@ fn decide(
              unestablished and this guard did not run over them:\n{}\n\n`gh` must be \
              installed and authenticated for this rule -- `gh auth status` says which. A \
              rate limit, a missing token and no network all land here, and so does a name \
-             on a host `gh` does not answer for: name that host in `foreign_hosts` if it \
-             carries no repository this rule needs resolved. Names it ANSWERED for are \
-             judged normally; this is the absence of an answer, which is exit 2 rather \
-             than a refusal because nothing here is known to be wrong.",
+             under a DECLARED owner written against a host `gh` cannot be asked about: if \
+             that host carries no repository this rule needs resolved, name it in \
+             `foreign_hosts`. Names it ANSWERED for are judged normally; this is the \
+             absence of an answer, which is exit 2 rather than a refusal because nothing \
+             here is known to be wrong.",
             request.rule.id,
             verdict.unavailable.len(),
             verdict.unavailable.join("\n")
@@ -1322,10 +1370,11 @@ mod tests {
 
     #[test]
     fn a_host_gh_cannot_answer_for_is_reported_rather_than_dropped() {
-        // Cannot be resolved with `gh`, and may well be private. Silence would
-        // read as clean -- and the host this used to drop in silence is the
-        // self-hosted one, which is the likeliest place for a private
-        // repository to be.
+        // Extracted whatever the host is, so `judge` can decide which of the
+        // two things it is: a declared owner's repository on a forge nobody can
+        // ask about, or a citation. Both were dropped in silence for every host
+        // outside a six-entry list, the self-hosted one included -- which is
+        // the likeliest place of all for a private repository to be.
         let quiet = ForeignHosts::new(&[]).unwrap();
         let found = unanswerable_names("moved to https://gitlab.com/acme/secret", &quiet);
         assert!(
@@ -1341,10 +1390,11 @@ mod tests {
     }
 
     #[test]
-    fn a_declared_host_is_the_only_thing_that_quiets_one() {
-        // The citation case, which is why the field exists: a bibliography is
-        // `host.tld/a/b` and is not a list of repositories. It is quieted by
-        // the policy naming the host, not by the binary knowing it.
+    fn a_declared_host_stops_a_name_being_extracted_at_all() {
+        // What `foreign_hosts` is for: a host that carries no repository this
+        // rule needs an answer about, said by the policy rather than known by
+        // the binary. It quiets both halves -- the declared owner's could-not-
+        // look and the citation's report -- because the host is not a forge.
         let text = "https://doi.org/10.1109/PROC.1975.9939 and https://www.apache.org/l/L-2.0";
         assert_eq!(
             unanswerable_names(text, &ForeignHosts::new(&[]).unwrap()).len(),
