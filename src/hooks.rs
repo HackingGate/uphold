@@ -576,7 +576,7 @@ pub(crate) fn install(root: &Path, runner: Option<&str>, directory: &str) -> Res
     }
 
     if existing.is_none() {
-        let output = std::process::Command::new("git")
+        let output = crate::shim::inner_tool("git")
             .args(["config", "core.hooksPath", directory])
             .current_dir(root)
             .output()
@@ -599,7 +599,7 @@ pub(crate) fn install(root: &Path, runner: Option<&str>, directory: &str) -> Res
 }
 
 fn git_config(root: &Path, key: &str) -> Result<Option<String>> {
-    let output = std::process::Command::new("git")
+    let output = crate::shim::inner_tool("git")
         .args(["config", "--get", key])
         .current_dir(root)
         .output()

@@ -90,6 +90,7 @@ fn shim(root: &Path, args: &[&str]) -> Output {
         .current_dir(root)
         .env("PATH", path)
         .env_remove("UPHOLD_ALLOW")
+        .env_remove("UPHOLD_SHIM_INNER")
         .output()
         .unwrap()
 }
@@ -2502,4 +2503,173 @@ fn a_gitlab_project_id_is_the_same_destination_with_its_separator_escaped() {
         "{}",
         stderr(&output)
     );
+}
+
+// A shim that can be handed its own probe.
+//
+// On 2026-09-02 the released binary fork-bombed a workstation from inside this
+// repository's own checkout: `git push` reached a `public-target` scope, the
+// scope asked the forge what the target's visibility was, the question was
+// asked by running `gh`, and PATH answers `gh` with the shim. The tree's policy
+// listed `api:*` for `gh` by then, so the probe matched itself and asked again
+// -- around two hundred and fifty processes a second, a load average of three
+// thousand, and nothing short of `kill -9` on the process group stopped it.
+//
+// The `api:*` trigger is closed (a bodyless GET is exempt), so these cases go
+// at the shape rather than at that entry: a `match` list of `*` over `git`,
+// which is a policy anyone may write and which puts the shim in front of the
+// `git remote get-url` the target resolver runs. Nothing about the released
+// binary would have stopped that one either.
+const OWN_PROBE_POLICY: &str = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+exec = "uphold guard --text -"
+
+[rule.no-published-markers.command]
+before = ["git"]
+
+[[shim]]
+command = "git"
+match = ["*"]
+target = "git-remote"
+scope = "public-target"
+"#;
+
+/// Run the shim with a wall-clock bound, and with extra environment.
+///
+/// Bounded because the defect under test is not a wrong answer: it is an
+/// unbounded chain of processes, and a test that merely calls `output()` on one
+/// hangs the suite and takes the machine with it. The bound is generous --
+/// nothing here is meant to take a second -- so a failure is the shape rather
+/// than a slow runner.
+fn bounded(root: &Path, args: &[&str], environment: &[(&str, &str)]) -> (i32, String, String) {
+    let path = format!(
+        "{}:{}",
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = root.join("bounded.out");
+    let err = root.join("bounded.err");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command
+        .arg("shim")
+        .args(args)
+        .current_dir(root)
+        .env("PATH", path)
+        .env_remove("UPHOLD_ALLOW")
+        .env_remove("UPHOLD_SHIM_INNER")
+        .stdout(Stdio::from(std::fs::File::create(&out).unwrap()))
+        .stderr(Stdio::from(std::fs::File::create(&err).unwrap()));
+    for (name, value) in environment {
+        command.env(name, value);
+    }
+    let mut child = command.spawn().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the shim did not finish within the bound, which is what an invocation that stands \
+             in front of its own probe looks like"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    (
+        status.code().unwrap_or(-1),
+        std::fs::read_to_string(&out).unwrap(),
+        std::fs::read_to_string(&err).unwrap(),
+    )
+}
+
+/// The workspace above, with `git` on PATH being this binary and a real one
+/// behind it.
+fn own_probe_workspace() -> PathBuf {
+    let root = workspace(OWN_PROBE_POLICY);
+    // The shim, installed the way `uphold shim --install` installs one: a link
+    // named for the command, landing on this binary. Every `git` the run spawns
+    // for its own purposes resolves to this first.
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_uphold"), root.join("bin/git")).unwrap();
+    // The forge answer, so no case here needs a network or a token. `gh api
+    // ... --jq .visibility` prints one word -- and records the marker it was
+    // handed, which is the only place a probe's environment is visible from
+    // outside: every internal spawn is read with `output()`, so what the inner
+    // pass prints on stderr is captured by the outer one and goes nowhere.
+    stub(
+        &root,
+        "gh",
+        "#!/bin/sh\nprintf '%s' \"$UPHOLD_SHIM_INNER\" > \"$(dirname \"$0\")/../probe.depth\"\necho public\n",
+    );
+    Command::new(support::real_git())
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ])
+        .current_dir(&root)
+        .status()
+        .unwrap();
+    root
+}
+
+#[test]
+fn a_shim_handed_its_own_probe_answers_it_once_rather_than_forever() {
+    let root = own_probe_workspace();
+    // `status` rather than `push`: the match list is `*`, so this is a matched
+    // invocation like any other, and the command that runs at the end of it
+    // touches no network.
+    let (code, stdout, stderr) = bounded(&root, &["git", "status", "--short"], &[]);
+    // Finishing at all is the assertion. Under the released binary this
+    // invocation resolves `git remote get-url origin` to the shim, which
+    // resolves it again, and the run ends when the machine does.
+    assert_eq!(code, 0, "{stderr}");
+    // The probes carried the marker, which is what made the pass through them
+    // transparent rather than another round of the same question.
+    assert_eq!(
+        std::fs::read_to_string(root.join("probe.depth")).unwrap(),
+        "1",
+        "the forge probe was not marked as uphold's own"
+    );
+    // And the outer invocation still reached the real command afterwards: this
+    // repository has an untracked `policy/` in it and `git status --short`
+    // says so.
+    assert!(stdout.contains("?? policy/"), "{stdout}");
+}
+
+#[test]
+fn the_marker_exported_by_hand_says_the_command_ran_unchecked() {
+    // Not a bypass anybody gains anything by: it is `UPHOLD_ALLOW=all` under
+    // another name, and it is printed the way that one is, every time, so a
+    // habit of it shows up in a shell history and in a CI log.
+    let root = workspace(POLICY);
+    let (code, stdout, stderr) = bounded(
+        &root,
+        &["faux", "pr", "create", "-t", "An ordinary title"],
+        &[("UPHOLD_SHIM_INNER", "1")],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stderr.contains("faux ran unchecked, by UPHOLD_SHIM_INNER=1"),
+        "{stderr}"
+    );
+    assert!(stdout.contains("faux ran:"), "{stdout}");
+}
+
+#[test]
+fn a_marker_past_the_depth_a_probe_needs_is_the_loop_and_refuses() {
+    // The second layer, which only matters if the first has been undone: a
+    // marker deeper than any real chain reaches means something is calling
+    // itself, and the honest answer is to name it and run nothing.
+    let root = workspace(POLICY);
+    let (code, stdout, stderr) = bounded(
+        &root,
+        &["faux", "pr", "create", "-t", "An ordinary title"],
+        &[("UPHOLD_SHIM_INNER", "3")],
+    );
+    assert_eq!(code, 2, "{stderr}");
+    assert!(!stdout.contains("faux ran:"), "{stdout}");
+    assert!(stderr.contains("UPHOLD_SHIM_INNER=3"), "{stderr}");
+    assert!(stderr.contains("Nothing was published"), "{stderr}");
 }

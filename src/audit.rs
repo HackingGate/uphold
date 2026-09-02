@@ -43,7 +43,6 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::Command;
 
 use crate::config::{CheckKind, Policy, Rule};
 use crate::error::{verdict, Exit, Fatal, Result};
@@ -85,7 +84,7 @@ fn as_published(rule: &Rule) -> Rule {
 }
 
 fn git_lines(root: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new("git")
+    let output = crate::shim::inner_tool("git")
         .args(args)
         .current_dir(root)
         .output()
@@ -134,7 +133,7 @@ fn refresh_origin(root: &Path) -> Option<String> {
              serves."
         ))
     };
-    match Command::new("git")
+    match crate::shim::inner_tool("git")
         .args(["fetch", "-q", "--prune", "origin"])
         .current_dir(root)
         .output()
@@ -210,7 +209,7 @@ fn history(root: &Path) -> Result<Vec<Surface>> {
 fn retained_pull_refs(root: &Path) -> Result<(Vec<Surface>, Vec<String>)> {
     let mut surfaces = Vec::new();
     let mut unreadable = Vec::new();
-    let fetched = Command::new("git")
+    let fetched = crate::shim::inner_tool("git")
         .args([
             "fetch",
             "-q",
@@ -278,7 +277,7 @@ fn no_pull_refs(root: &Path) -> Option<String> {
              that is empty."
         ))
     };
-    match Command::new("git")
+    match crate::shim::inner_tool("git")
         .args(["ls-remote", "origin", "refs/pull/*/head"])
         .current_dir(root)
         .output()
@@ -316,7 +315,7 @@ const FORGE_LIMIT: usize = 5000;
 /// repository, rate limited -- because "could not be read" with nothing beside
 /// it is a line nobody can do anything about.
 fn gh(root: &Path, args: &[&str]) -> std::result::Result<String, String> {
-    let output = Command::new("gh")
+    let output = crate::shim::inner_tool("gh")
         .args(args)
         .current_dir(root)
         .output()
@@ -748,6 +747,7 @@ pub(crate) fn for_publication(root: &Path, policy: &Policy) -> Result<Exit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn the_audit_rule_is_the_repositorys_own_with_one_field_moved() {

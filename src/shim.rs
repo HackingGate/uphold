@@ -1680,7 +1680,7 @@ enum Forge {
 /// `field` names a JSON key to pull out where the CLI cannot be asked to do it;
 /// `None` means the whole of stdout is the answer.
 fn forge_field(program: &str, args: &[&str], field: Option<&str>) -> Option<String> {
-    let output = Command::new(program).args(args).output().ok()?;
+    let output = inner_tool(program).args(args).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1958,6 +1958,97 @@ pub(crate) enum Invoked {
     /// `gh pr create` and every process on it. A process is re-entered as an
     /// editor because it was invoked as one, and only argv can say that.
     AsEditor,
+}
+
+/// The marker one uphold process sets on the `git`, `gh` and `glab` children it
+/// spawns to answer its own questions.
+///
+/// The shim resolves the command it stands in front of through PATH, and PATH
+/// is where the shim itself is installed -- so every probe this tool makes on
+/// the way to a verdict is a command that resolves back to this binary. On
+/// 2026-09-02 that closed: `visibility` ran `gh api repos/<owner>/<repo> --jq
+/// .visibility` to answer a `public-target` scope, the tree's policy listed
+/// `api:*` in the `gh` shim's match table, and the probe matched itself. Each
+/// pass asked the question again, roughly two hundred and fifty processes a
+/// second, and the run ended at a load average of three thousand under
+/// `kill -9` on the process group.
+///
+/// The trigger of that particular round is gone -- a bodyless GET is exempt
+/// from the api match now -- but nothing about the shape was fixed by that: any
+/// match entry, any binary and policy that disagree about which entries exist,
+/// reopens it. So the loop is closed at the seam rather than at one entry. A
+/// child that carries this marker is uphold asking uphold a question, and the
+/// entry point hands it straight to the real command instead of judging it.
+///
+/// It is NOT a bypass anyone should reach for: see the notice
+/// `inner_passthrough` prints, and the reference documentation beside
+/// `UPHOLD_ALLOW`.
+pub(crate) const INNER: &str = "UPHOLD_SHIM_INNER";
+
+/// How many probes deep this process already is, where it is inside one at all.
+///
+/// The value is a depth rather than a flag, so the second layer of the fix has
+/// something to count. A value that is set but is not a number is read as depth
+/// one: a person exporting `UPHOLD_SHIM_INNER=1` and a person exporting
+/// `UPHOLD_SHIM_INNER=yes` mean the same thing and are told the same thing.
+fn inner_depth() -> Option<u32> {
+    let value = nonempty_env(INNER)?;
+    Some(value.trim().parse().unwrap_or(1))
+}
+
+/// How deep a probe may go before the depth itself is the finding.
+///
+/// Two is one more than any legitimate chain needs. A shim probes, the probe
+/// execs the real command, and the real command does not probe -- so depth one
+/// is the whole of the ordinary case, and depth two is the margin for a hook
+/// that re-enters this tool. Past that, something is calling itself.
+const INNER_LIMIT: u32 = 2;
+
+/// A `git`, `gh` or `glab` this process is about to run to answer its OWN
+/// question, marked as such.
+///
+/// Every internal spawn of those three goes through here, because the marker
+/// has to be on the child rather than in this process's environment: setting it
+/// on ourselves would hand it to the real command at the exec too, and a `git
+/// push` that runs a hook that runs this tool would arrive already excused.
+pub(crate) fn inner_tool(name: &str) -> Command {
+    let mut command = Command::new(name);
+    command.env(
+        INNER,
+        (inner_depth().unwrap_or(0).saturating_add(1)).to_string(),
+    );
+    command
+}
+
+/// The answer for an invocation that is uphold's own probe rather than a user's
+/// command, where it is one.
+///
+/// `Ok(None)` means the marker is not set and the ordinary path applies.
+///
+/// Two layers, and the second is only ever reached if the first has been
+/// undone. The first is the passthrough: the command runs with nothing standing
+/// in front of it, which is the whole point -- a probe that is checked is a
+/// probe that probes. The second is the depth: if the marker says this process
+/// is further inside itself than any real chain reaches, the loop is named and
+/// nothing runs, because a probe that got that far is not answering a question.
+pub(crate) fn inner_passthrough(name: &str, argv: &[OsString]) -> Result<Option<Exit>> {
+    let Some(depth) = inner_depth() else {
+        return Ok(None);
+    };
+    if depth > INNER_LIMIT {
+        return Err(Fatal::new(format!(
+            "{name}: {INNER}={depth}, which is uphold standing in front of a command uphold \
+             itself ran, {depth} levels down. A shim probes the forge through PATH and PATH is \
+             where the shim lives, so a probe that reaches its own shim asks the same question \
+             forever; past {INNER_LIMIT} that is what this is. Nothing was published"
+        )));
+    }
+    eprintln!(
+        "uphold shim: {name} ran unchecked, by {INNER}={depth}. Nothing here looked at what it \
+         publishes. uphold sets this on the {name} it runs for its own probes; exported by hand \
+         it is UPHOLD_ALLOW=all under another name."
+    );
+    exec_through(name, argv).map(Some)
 }
 
 /// Run the command with nothing standing in front of it.
