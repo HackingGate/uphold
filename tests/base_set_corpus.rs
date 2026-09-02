@@ -77,8 +77,23 @@ const CORPUS: &[Case] = &[
             "cp /home/alice/keys .\n",
             "open /Users/alice/Desktop\n",
             "copy C:\\Users\\alice\\file .\n",
+            // The boundary the pattern grew is a LEADING one, so the two ways a
+            // real home path opens a match have to stay refused: at the start
+            // of a line, and after something that is not an identifier
+            // character.
+            "/home/alice/keys\n",
+            "PREFIX=(/home/alice)\n",
         ],
-        allows: &["cp \"$HOME/keys\" .\n", "open ~/Desktop\n"],
+        allows: &[
+            "cp \"$HOME/keys\" .\n",
+            "open ~/Desktop\n",
+            // What the leading boundary bought. `/home` five characters into a
+            // longer token is not a home path, and each of these was a finding
+            // on a file holding none: a URL whose route is called `home`, and a
+            // repository-relative directory of the same name.
+            "curl https://example.test/home/dashboard\n",
+            "root=\"$deploy/home/config\"\n",
+        ],
     },
     Case {
         set: "process-residue",

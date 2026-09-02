@@ -94,6 +94,16 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
         "unreviewed-history",
         include_str!("../policy/base/unreviewed-history.toml"),
     ),
+    // The identity half of the same moment `unreviewed-history` guards. Its own
+    // name because the question is different -- who is writing, read off the
+    // machine, rather than where a ref is going or what a message says -- and
+    // because it is the one guard here that refuses the deliberate act as
+    // readily as the accidental one, which a repository applying mailed patches
+    // has a reason to decline.
+    (
+        "mismatched-author",
+        include_str!("../policy/base/mismatched-author.toml"),
+    ),
     (
         "invisible-characters",
         include_str!("../policy/base/invisible-characters.toml"),

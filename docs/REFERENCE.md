@@ -352,7 +352,7 @@ files.glob = ["*.yml", "*.yaml"]
 
 `inherit.sets` names bundled sets to inherit; it does not add settings. There
 is no `true` shorthand — naming the sets is cheap, and what a repository
-inherits should be written in the repository. Eighteen are compiled into the
+inherits should be written in the repository. Nineteen are compiled into the
 binary and mirrored in [`policy/base/`](../policy/base), each **named by what
 it refuses** so the name predicts the rule list:
 
@@ -369,6 +369,7 @@ it refuses** so the name predicts the rule list:
 | `hand-rolled-toolchain` | a host tool installed by hand where a version manager was available — a `curl \| tar` download-and-unpack, and the `$HOME/.local` symlink that puts its output on PATH. Deliberately silent on `curl \| sh` (a version manager's own bootstrap has nowhere else to live), on a host-prerequisite manifest beside it (a resolver provisions, a doctor verifies), and on distro packages |
 | `commit-message-residue` | authorship markers and unusual characters in the message a commit records — **installs `commit-msg`** |
 | `unreviewed-history` | a merge made locally rather than through a pull request — **installs `pre-commit` and `pre-merge-commit`** |
+| `mismatched-author` | a commit whose author or committer identity disagrees with the global one on the machine making it — **installs `pre-commit`**, and declines with a note where no global identity is configured |
 | `invisible-characters` | characters that draw nothing, in committed content and in the paths that carry it — **installs four stages**, and reads the whole tree at each |
 | `stale-pins` | a hook pinned at a revision its upstream has left, or at none — **installs `pre-push` and `manual`**, and reaches the network |
 | `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |
@@ -377,7 +378,7 @@ it refuses** so the name predicts the rule list:
 | `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push. **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [ADR 0006](adr/0006-what-a-bundled-set-may-attach-to-a-command.md) |
 | `prose-shapes` | four sentence shapes that carry nothing — a sentence announcing what the next one will say, a clause behind a dash restating the one in front of it, a hedge admitting no uncertainty, an objection nobody raised being answered. **Installs no git hook**: its rules run in `uphold scan` and at the shim seam (`gh`, `git push`), and like `published-text` it refuses to load until the repository has declared the `[[shim]]` tables itself. `UPHOLD_ALLOW=<rule-id>` is the waiver for the sentence a rule is wrong about |
 
-The seven before it install git hooks. Taking one is a decision about what will be
+The eight before it install git hooks. Taking one is a decision about what will be
 refused and when, so each is named and argued separately: `stale-pins` reaches
 the network and cannot answer on a train, `invisible-characters` reads the tree
 at four stages and is the slowest thing in a hook, `unreviewed-history` stands

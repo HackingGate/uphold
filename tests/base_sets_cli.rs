@@ -847,6 +847,7 @@ fn every_guard_set_declares_the_stages_its_rules_install() {
     for name in [
         "commit-message-residue",
         "unreviewed-history",
+        "mismatched-author",
         "invisible-characters",
         "stale-pins",
         "unowned-push",

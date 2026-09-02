@@ -79,6 +79,13 @@ zero variation: `prevent-ai-author`, `prevent-unusual-unicode`,
 decision and sixty-four transcriptions, and it is the same argument that
 promoted the content rules into `policy/base/`.
 
+`prevent-author-mismatch` is the sixth, found later and by the same method: 8
+policy files in one superproject and its submodules declare it byte for byte,
+with no parameters and one stage. It ships as `mismatched-author`, its own set
+rather than a rule inside an existing one, because who is writing a commit is a
+different question from where a ref is going, what a message says, or what the
+tree holds.
+
 Shipped, and the order was the design -- these had to exist **before** any set
 carries a guard, not alongside:
 
