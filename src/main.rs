@@ -1062,6 +1062,22 @@ fn link_names(from_argv: Vec<String>) -> Result<Vec<String>> {
 }
 
 fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result<Exit> {
+    // Asked before the working directory, before the policy, before anything.
+    // This invocation is uphold's own probe reaching its own shim -- the shim
+    // asks the forge a question by running `gh`, PATH answers with this binary,
+    // and judging that probe means making it again. Run the real command and
+    // say so; see `shim::INNER` for the run that ended at a load average of
+    // three thousand.
+    //
+    // Not asked on the editor pass: argv there is an editor's -- one file
+    // path -- so handing it to the real command would give `gh` a path where a
+    // subcommand goes, and the editor re-entry is installed by a pass that had
+    // no marker on it in the first place.
+    if invoked != shim::Invoked::AsEditor {
+        if let Some(exit) = shim::inner_passthrough(name, argv)? {
+            return Ok(exit);
+        }
+    }
     let working = std::env::current_dir()?;
     // No policy where the command was typed means no repository here declares
     // anything to stand in front of it. Run as the command, that is the command

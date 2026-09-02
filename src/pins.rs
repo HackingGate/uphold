@@ -46,7 +46,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use ignore::WalkBuilder;
 use serde::Deserialize;
@@ -628,7 +627,7 @@ struct Refs {
 }
 
 fn remote_refs(repo: &str) -> Result<Option<Refs>> {
-    let output = Command::new("git")
+    let output = crate::shim::inner_tool("git")
         .args(["ls-remote", "--refs", repo])
         .output()
         .map_err(|error| Fatal::new(format!("git ls-remote {repo}: {error}")))?;

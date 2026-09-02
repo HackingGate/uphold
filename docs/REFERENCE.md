@@ -1598,16 +1598,17 @@ and most of it would reach no checker at all.
 
 ### The stand-downs
 
-Two paths through this seam **run the command with nothing checked, exit `0`,
-and say so on stderr**. Both are deliberate, both are stated here so the
-contract is not folded into "the shim passed it", and a reader who sees `This is
-not a pass.` on a terminal is reading one of them.
+Four paths through this seam **run the command with nothing checked, exit `0`,
+and say so on stderr**. All are deliberate, all are stated here so the contract
+is not folded into "the shim passed it", and a reader who sees `This is not a
+pass.` on a terminal is reading one of them.
 
 | what happened | what runs | what is printed |
 |---|---|---|
 | **two or more options nothing can classify sit before the subcommand**, and the readings disagree about which word it even is | the command | which option, that the subcommand could not be established, and that no checker ran |
 | `UPHOLD_ALLOW=all` | the command | that it ran unchecked, every time |
 | `unresolved = "run"` and a scope that could not be evaluated | the command | what could not be asked, and that no checker ran |
+| `UPHOLD_SHIM_INNER` is set | the command | that it ran unchecked, and by which marker, every time |
 
 The first is bounded on purpose. **One** unclassifiable option is not a doubt —
 the two readings are then the whole space, both are asked, and both missing is a
@@ -1622,12 +1623,50 @@ not load](#when-the-policy-itself-will-not-load). An empty `UPHOLD_ALLOW=`
 switches nothing off, and `UPHOLD_ALLOW=<rule-id>` stands one rule down rather
 than the seam.
 
+The fourth is uphold getting out of its own way, and it is documented here
+rather than left implicit because a reader who meets the line deserves to know
+what set it. A `public-target` scope asks the forge whether the destination is
+public, and it asks by running `gh api repos/<owner>/<repo> --jq .visibility`;
+a `git-remote` target asks by running `git remote get-url origin`. PATH answers
+`gh` and `git` with the shim, so **every question this tool asks on the way to a
+verdict is a command it stands in front of**. On 2026-09-02 that closed into a
+loop against the released binary inside this repository's own checkout: the
+`gh` table listed `api:*`, the visibility probe matched itself, and asking the
+question was asking the question -- around two hundred and fifty processes a
+second, a load average of three thousand, and nothing under `kill -9` on the
+process group stopped it. A bodyless `GET` is exempt from `api:*` now, so that
+particular trigger is gone; the marker is what stops the next one, because any
+`match` entry, or a binary and a policy that disagree about which entries exist,
+reopens the same shape.
+
+So uphold sets `UPHOLD_SHIM_INNER=<depth>` on every `git`, `gh` and `glab` it
+spawns for its own probes, and a shim that sees it resolves the real command --
+walking PATH past its own file, the same walk the final exec does -- and hands
+over without judging.
+
+It is **not a bypass**, and the reason is not that it is hidden. It is set only
+by uphold's own processes, on the children they spawn for their own questions,
+and never on the exec that runs the command a person typed -- so a `git push`
+that fires a hook that re-enters this tool arrives unmarked and is checked.
+Exported by hand it is `UPHOLD_ALLOW=all` under another name, it buys nothing
+that one does not, and it is printed on stderr exactly the way that one is,
+every time, so a habit of it is visible in a shell history and in a CI log.
+Every probe uphold makes reads its child with `output()`, which captures that
+line, so the notice a person sees on a terminal is one they set themselves.
+
+The value is a depth rather than a flag, and past `2` the seam refuses with exit
+`2` and names the loop instead of running anything. Nothing legitimate goes that
+deep -- a shim probes, the probe execs the real command, and the real command
+does not probe -- so a marker deeper than that is a chain calling itself, and
+the honest answer to it is not to publish.
+
 Everything else this seam cannot establish is exit `2` and no command at all: a
 non-UTF-8 argument on a matched invocation, a body file that is not there, an
 alias that is a shell command, refspecs two readings disagree about, a
 destination `prevent-unowned-target` could not resolve, a scope that could not
-be evaluated under the default `unresolved = "refuse"`, and a `current_exe()`
-the editor re-entry cannot be installed from.
+be evaluated under the default `unresolved = "refuse"`, a `current_exe()` the
+editor re-entry cannot be installed from, and a `UPHOLD_SHIM_INNER` deeper than
+`2`.
 
 ### The checker contract
 

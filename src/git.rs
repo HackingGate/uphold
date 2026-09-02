@@ -7,14 +7,13 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::error::{Fatal, Result};
 
 /// Run git, returning stdout. `Ok(None)` where git itself said no -- a ref that
 /// does not exist, a config key that is unset -- which is an answer.
 pub(crate) fn try_run(root: &Path, args: &[&str]) -> Result<Option<String>> {
-    let output = Command::new("git")
+    let output = crate::shim::inner_tool("git")
         .args(args)
         .current_dir(root)
         .output()
@@ -59,7 +58,7 @@ pub(crate) fn blob_shas(root: &Path, shas: &[String]) -> Result<BTreeSet<String>
         return Ok(blobs);
     }
 
-    let mut child = Command::new("git")
+    let mut child = crate::shim::inner_tool("git")
         .args(["cat-file", "--batch-check=%(objectname) %(objecttype)"])
         .current_dir(root)
         .stdin(Stdio::piped())
@@ -174,7 +173,7 @@ where
     }
     let asked = shas.len();
 
-    let mut child = Command::new("git")
+    let mut child = crate::shim::inner_tool("git")
         .args(["cat-file", "--batch"])
         .current_dir(root)
         .stdin(Stdio::piped())
@@ -302,7 +301,7 @@ pub(crate) fn dir(root: &Path) -> Result<PathBuf> {
 }
 
 pub(crate) fn config_global(key: &str) -> Option<String> {
-    let output = Command::new("git")
+    let output = crate::shim::inner_tool("git")
         .args(["config", "--global", key])
         .output()
         .ok()?;
@@ -358,6 +357,7 @@ pub(crate) fn owner_repo(url: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn owner_and_repo_come_out_of_every_url_spelling() {

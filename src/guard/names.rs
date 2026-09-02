@@ -356,7 +356,7 @@ pub(crate) fn lookup(cache: &mut BTreeMap<String, Resolved>, owner: &str, repo: 
     if let Some(known) = cache.get(&key) {
         return known.clone();
     }
-    let resolved = match Command::new("gh")
+    let resolved = match crate::shim::inner_tool("gh")
         .args([
             "api",
             &format!("repos/{key}"),

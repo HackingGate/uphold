@@ -588,7 +588,7 @@ pub(crate) fn read(root: &Path, blob: &Blob) -> Result<Vec<u8>> {
 /// The staged-blob reader needs this: what it holds is a path and the oid the
 /// INDEX has at it, which is not one of the entries any scope enumerated.
 pub(crate) fn read_object(root: &Path, sha: &str, path: &str) -> Result<Vec<u8>> {
-    let output = std::process::Command::new("git")
+    let output = crate::shim::inner_tool("git")
         .args(["cat-file", "blob", sha])
         .current_dir(root)
         .output()

@@ -27,7 +27,7 @@
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Once;
 
 use ignore::overrides::{Override, OverrideBuilder};
@@ -75,7 +75,7 @@ pub(crate) fn not_text_paths(root: &Path) -> (Vec<String>, Option<String>) {
         )
     };
 
-    let Ok(mut child) = Command::new("git")
+    let Ok(mut child) = crate::shim::inner_tool("git")
         .args(["check-attr", "--stdin", "-z", "text"])
         .current_dir(root)
         .stdin(Stdio::piped())
@@ -148,7 +148,7 @@ pub(crate) fn not_text_paths(root: &Path) -> (Vec<String>, Option<String>) {
 /// list, which is a repository tracking nothing -- and the two must not fold
 /// together, because one of them means this tool could not ask the question.
 fn index_bytes(root: &Path) -> Option<Vec<u8>> {
-    let listed = Command::new("git")
+    let listed = crate::shim::inner_tool("git")
         .args(["ls-files", "-z"])
         .current_dir(root)
         .stderr(Stdio::null())
@@ -547,6 +547,7 @@ pub(crate) fn normalize_rel(path: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
