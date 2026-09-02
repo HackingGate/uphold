@@ -331,7 +331,8 @@ pub(crate) struct Files {
     pub min_selected: Option<u64>,
 }
 
-/// git's own hook names, as written in githooks(5).
+/// The five stage names a rule may run at: four of git's own, spelled as
+/// githooks(5) spells them, and `manual`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Git {
@@ -2495,6 +2496,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     }
     validate_shim_commands(policy_path, &file.shims)?;
     validate_shim_verbs(policy_path, &file.shims)?;
+    validate_shim_unresolved(policy_path, &rules, &file.shims)?;
     validate_shims(policy_path, &rules, &file.shims)?;
     // Last, and after `rule.validate`, because this one reads a rule as the
     // author meant it. A rule naming two checks or carrying a parameter its
@@ -2898,6 +2900,59 @@ fn validate_shim_verbs(policy_path: &Path, shims: &[crate::shim::Shim]) -> Resul
                     ));
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// `unresolved` is read by one predicate, and only where that predicate runs.
+///
+/// It says what to do when a scope could not be evaluated at all, and
+/// `public-target` is the only scope that can answer that way -- it is the one
+/// that asks somebody else. On a table scoped `always`, or `public-registry`,
+/// or to a command of its own, the field is a decision that looks made and is
+/// read by nothing: the same shape a `[[shim.verbs]]` for an unmatched verb is
+/// refused for, and the same shape as a `files.*` key on a check that searches
+/// no files.
+///
+/// A rule's own `command.scope` counts, because it overrides the table's for
+/// that rule and can bring `public-target` to a table that is not scoped that
+/// way. So the question is whether ANY reading of this policy can reach the
+/// predicate for this command, not whether the table alone does.
+fn validate_shim_unresolved(
+    policy_path: &Path,
+    rules: &[Rule],
+    shims: &[crate::shim::Shim],
+) -> Result<()> {
+    for shim in shims {
+        if shim.unresolved == crate::shim::Unresolved::default()
+            || matches!(shim.scope, crate::shim::Scope::PublicTarget)
+        {
+            continue;
+        }
+        let by_a_rule = rules
+            .iter()
+            .filter(|rule| rule.stands_in_front_of_a_command())
+            .any(|rule| {
+                rule.command.as_ref().is_some_and(|where_| {
+                    matches!(where_.scope, Some(crate::shim::Scope::PublicTarget))
+                        && where_.before.iter().any(|line| {
+                            line.split_whitespace().next() == Some(shim.command.as_str())
+                        })
+                })
+            });
+        if !by_a_rule {
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "the `[[shim]]` for {:?} writes `unresolved`, which says what to do when a \
+                     scope could not be evaluated -- and no scope this invocation can reach \
+                     answers that way. Only `public-target` asks somebody else, so only it can \
+                     fail to answer. Scope the table (or a rule that names this command) \
+                     `public-target`, or take the field off.",
+                    shim.command
+                ),
+            ));
         }
     }
     Ok(())

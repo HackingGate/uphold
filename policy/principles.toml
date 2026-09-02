@@ -345,7 +345,7 @@ builtin = "text-literals"
 # rather than passing it in silence, so `npm pack` was exit 2. Widening the
 # checker keeps both subcommands checked; narrowing the shim would have bought
 # the same green by looking at less.
-command.before = ["gh", "glab", "git push", "npm"]
+command.before = ["gh", "glab", "git push", "git send-pack", "npm"]
 # `always`, overriding the tables' `public-target` and `public-registry`: host
 # identity in text bound for a PRIVATE destination is still text on somebody
 # else's infrastructure, with its own retention. The private-name rule keeps
@@ -371,7 +371,7 @@ builtin = "text-guards"
 # other two guards passing over a branch name is not a wasted answer; it is the
 # check, and `git push origin main:refs/heads/PrivateOrg-probe` walked straight
 # through this seam while the field said otherwise.
-command.before = ["gh", "glab", "git push"]
+command.before = ["gh", "glab", "git push", "git send-pack"]
 # `always`, for the reason the rule above gives.
 command.scope = "always"
 
@@ -521,9 +521,15 @@ scope = "public-target"
 # pre-push is handed the refs but the guards that read them judge the
 # DESTINATION and never the name. Its text is positional, so it needs its own
 # collector rather than a fork of the shim.
+#
+# `send-pack:*` beside it because it is the same act one layer down: the
+# plumbing `push` is built on takes a destination and a ref list in the same
+# positions, publishes the same names, and was named by nothing here. A `match`
+# list that stands in front of the porcelain alone is a list with a documented
+# way round it.
 [[shim]]
 command = "git"
-match = ["push:*"]
+match = ["push:*", "send-pack:*"]
 target = "git-remote"
 scope = "public-target"
 collect = "git-refs"
