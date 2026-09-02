@@ -2266,3 +2266,240 @@ fn unresolved_beside_a_scope_that_always_answers_is_refused_at_load() {
         stderr(&output)
     );
 }
+
+/// The `gh` table as this repository ships it, narrowed to the verb under test.
+///
+/// The command is `gh` and not `faux` because the `api` grammar belongs to the
+/// forge CLIs rather than to a table: `-F` is `--body-file` on `gh pr create`
+/// and `--field` on `gh api`, and which of the two a word means is a fact about
+/// `gh`.
+const API_POLICY: &str = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+exec = "uphold guard --text -"
+
+[rule.no-published-markers.command]
+before = ["gh"]
+
+[rule.prevent-ai-author]
+builtin = "prevent-ai-author"
+
+[rule.prevent-ai-author.git]
+hooks = ["commit-msg"]
+
+[[shim]]
+command = "gh"
+match = ["pr:create", "api:*"]
+text_flags = ["-b", "--body"]
+file_flags = ["-F", "--body-file"]
+target_flags = ["-R", "--repo"]
+target = "forge-repo"
+scope = "always"
+"#;
+
+/// A `gh` that reports the call instead of making one.
+fn stub_gh(root: &Path) {
+    stub(root, "gh", "#!/bin/sh\necho \"gh ran: $*\"\n");
+}
+
+#[test]
+fn a_field_read_from_a_file_is_checked_before_the_api_call_is_made() {
+    // The gap this closes, as it happened. `gh pr edit` was unavailable to an
+    // agent whose token lacked read:org, so it ran the same edit through
+    // `gh api -X PATCH ... -F body=@file` -- and no `match` list named `api`,
+    // so the shim exec'd it with nothing printed and exit 0.
+    let root = workspace(API_POLICY);
+    stub_gh(&root);
+    std::fs::write(root.join("body.md"), "Generated with Claude Code\n").unwrap();
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "PATCH",
+            "repos/example-user/example-repo/pulls/1",
+            "-F",
+            "body=@body.md",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("Nothing was published"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_get_with_no_fields_publishes_nothing_and_is_not_this_shims_business() {
+    // The half that is easy to lose, and here it is load-bearing twice over:
+    // `api` is one verb over both halves of a forge, and the read half is what
+    // the `public-target` lookup itself runs. A shim standing in front of its
+    // own lookup is a loop.
+    let root = workspace(API_POLICY);
+    stub_gh(&root);
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "repos/example-user/example-repo",
+            "--jq",
+            ".visibility",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn an_input_file_of_json_is_judged_one_string_value_at_a_time() {
+    // A body that is JSON hides its text behind the encoding: read whole, the
+    // document is escapes and punctuation, and the sentence a rule stands in
+    // front of is inside one string.
+    let root = workspace(API_POLICY);
+    stub_gh(&root);
+    std::fs::write(
+        root.join("payload.json"),
+        "{\"title\": \"an ordinary title\", \"body\": \"Generated with Claude Code\"}\n",
+    )
+    .unwrap();
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/example-user/example-repo/issues",
+            "--input",
+            "payload.json",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+
+    // And it is the value being read rather than the verb being refused
+    // wholesale: an ordinary payload goes through.
+    std::fs::write(
+        root.join("payload.json"),
+        "{\"title\": \"an ordinary title\", \"body\": \"an ordinary sentence\"}\n",
+    )
+    .unwrap();
+    let clean = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/example-user/example-repo/issues",
+            "--input",
+            "payload.json",
+        ],
+    );
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert!(stdout(&clean).contains("gh ran:"), "{}", stdout(&clean));
+}
+
+/// The destination guard standing in front of the same verb.
+const API_TARGET_POLICY: &str = r#"
+[rule.unowned-forge-target]
+builtin = "prevent-unowned-target"
+owner = "example-user"
+command.before = ["gh"]
+
+[[shim]]
+command = "gh"
+match = ["api:*"]
+target_flags = ["-R", "--repo"]
+target = "forge-repo"
+scope = "always"
+"#;
+
+#[test]
+fn a_body_bound_for_a_repository_this_workspace_does_not_own_is_refused() {
+    // The text is ordinary prose. What is wrong with this call is where it is
+    // going, and the path is the only place `gh api` says so -- there is no
+    // `--repo` on this verb to read.
+    let root = workspace(API_TARGET_POLICY);
+    stub_gh(&root);
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/other-owner/their-repo/issues",
+            "-f",
+            "title=An ordinary title",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("other-owner/their-repo"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("Fix the destination"),
+        "{}",
+        stderr(&output)
+    );
+
+    // The same call under this workspace's own owner runs, which is what says
+    // the guard read the path rather than refused the verb.
+    let ours = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/example-user/example-repo/issues",
+            "-f",
+            "title=An ordinary title",
+        ],
+    );
+    assert_eq!(code(&ours), 0, "{}", stderr(&ours));
+    assert!(stdout(&ours).contains("gh ran:"), "{}", stdout(&ours));
+}
+
+#[test]
+fn a_gitlab_project_id_is_the_same_destination_with_its_separator_escaped() {
+    let root = workspace(
+        API_TARGET_POLICY
+            .replace("before = [\"gh\"]", "before = [\"glab\"]")
+            .replace("command.before = [\"gh\"]", "command.before = [\"glab\"]")
+            .replace("command = \"gh\"", "command = \"glab\"")
+            .as_str(),
+    );
+    stub(&root, "glab", "#!/bin/sh\necho \"glab ran: $*\"\n");
+    let output = shim(
+        &root,
+        &[
+            "glab",
+            "api",
+            "--method",
+            "POST",
+            "projects/other-owner%2Ftheir-repo/issues",
+            "-f",
+            "title=An ordinary title",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("glab ran:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("other-owner/their-repo"),
+        "{}",
+        stderr(&output)
+    );
+}

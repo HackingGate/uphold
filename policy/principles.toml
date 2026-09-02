@@ -472,6 +472,16 @@ match = [
   # name here -- see the `[[shim.verbs]]` below.
   "pr:merge",
   "issue:close", "pr:close", "issue:reopen", "pr:reopen",
+  # The verb that is every other verb. `gh pr edit` was unavailable to an agent
+  # whose token lacked `read:org`, so it ran `gh api -X PATCH
+  # repos/OWNER/REPO/pulls/N -F body=@file` -- the same body, the same account,
+  # the same public tracker -- and nothing above named it, so the shim exec'd it
+  # with nothing printed. `api:*` is matched with the verb's own grammar rather
+  # than this table's flag lists, because `-F` is `--body-file` above and
+  # `--field` here, and only a call that CARRIES a body is checked: a bodyless
+  # GET is what the `public-target` lookup itself runs, and a shim standing in
+  # front of its own lookup is a loop.
+  "api:*",
 ]
 text_flags = ["-b", "--body", "-n", "--notes", "-d", "--description"]
 # A title is a subject of its own kind, so a format rule about titles is never
@@ -506,7 +516,13 @@ scope = "public-target"
 
 [[shim]]
 command = "glab"
-match = ["mr:create", "mr:update", "mr:note", "issue:create", "issue:update", "issue:note"]
+# `api:*` for the reason the `gh` table above gives, in GitLab's spelling: a
+# project is addressed as `projects/OWNER%2FREPO`, which is the same two names
+# with the separator escaped, and the destination predicate reads it as one.
+match = [
+  "mr:create", "mr:update", "mr:note", "issue:create", "issue:update", "issue:note",
+  "api:*",
+]
 text_flags = ["-d", "--description", "-m", "--message"]
 title_flags = ["-t", "--title"]
 file_flags = ["--description-file"]
