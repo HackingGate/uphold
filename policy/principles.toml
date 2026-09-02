@@ -43,6 +43,57 @@ owner = "HackingGate"
 # not. The remaining copy is the forge's to remove, not a rewrite's.
 visibility = "public"
 
+# The hosts this repository's own text cites that carry no repository the
+# private-name guards need an answer about. Everything NOT named here and not
+# github.com is could-not-look and exits 2, because `gh` answers for github.com
+# and for nothing else -- a GitHub Enterprise host is a different forge that
+# happens to share the software, and a public answer from the wrong forge passes
+# a private repository here.
+#
+# The list is long because this repository's text is: a bibliography, a
+# standards reference and a licence URL are all `host.tld/a/b`, which is the
+# shape a repository name has and is not one. Which of those a repository cites
+# is a fact about the repository rather than about this tool, which is why the
+# list is here and not in the binary -- it was six forge hostnames compiled in,
+# and every other host in the world fell through them without a line.
+#
+# Four entries are documentation rather than citation, and each is a worked
+# example this repository has to be able to write: `host.tld`, `github.acme.com`
+# and `gitlab.com` are how the reference and this guard's own tests show what a
+# name on another forge and on an enterprise host look like, and the
+# `*.example.*` family is what every fixture publishes to. A repository that
+# cites none of them should not copy those lines.
+foreign_hosts = [
+    "*.acme.example",
+    "*.apache.org",
+    "*.example.com",
+    "*.wikipedia.org",
+    "apache.org",
+    "astral.sh",
+    "csrc.nist.gov",
+    "datatracker.ietf.org",
+    "docs.google.com",
+    "docs.oasis-open.org",
+    "doi.org",
+    "example.com",
+    "example.test",
+    "fsharpforfunandprofit.com",
+    "github.acme.com",
+    "gitlab.com",
+    "host.tld",
+    "refactoring.com",
+    "ridgelinecyber.com",
+    "sre.google",
+    "web.mit.edu",
+    "www.aboutamazon.com",
+    "www.catb.org",
+    "www.computer.org",
+    "www.martinfowler.com",
+    "www.microsoft.com",
+    "www.nngroup.com",
+    "www.rfc-editor.org",
+]
+
 # Where the private-owner list comes from. Declared, not looked up: a forge
 # lookup answers for `owner/repo`, and these are organisations -- the form that
 # got past a hand audit of this repository was an organisation named on its own,

@@ -129,34 +129,82 @@ fn is_github_host(host: &str) -> bool {
     )
 }
 
-/// A forge this tool cannot query, but which hosts repositories that can be
-/// private.
+/// The hosts a policy has said carry no repository this guard must resolve.
 ///
-/// Kept apart from an arbitrary host because the two deserve different answers.
-/// A name on one of these is a repository whose visibility is genuinely unknown,
-/// and unknown is reported. A name on `doi.org` is not a repository at all.
-fn is_foreign_forge_host(host: &str) -> bool {
-    let host = host.to_lowercase();
-    ["gitlab.com", "bitbucket.org", "codeberg.org", "gitea.com"].contains(&host.as_str())
-        || host.ends_with(".sr.ht")
-        || host == "git.sr.ht"
+/// The field this replaces was a list of six forge hostnames written into the
+/// binary, and it decided the answer for every host in the world by leaving the
+/// rest out: a name on gitlab.com was reported, and a name on
+/// `github.acme.com` or on any other forge nobody had thought of produced
+/// NOTHING -- no finding, no report, no exit code. A silent third answer, in a
+/// guard whose whole subject is that "could not look" and "looked and found
+/// nothing" are different sentences.
+///
+/// So the polarity is the other way round now. Every `host.tld/owner/repo` this
+/// tool cannot ask about is could-not-look, and what a declaration quiets is
+/// the host, not the name: a bibliography is `doi.org/10.1109/PROC.1975.9939`
+/// and `apache.org/licenses/LICENSE-2.0`, which are that shape and are not
+/// repositories at all. Which hosts a repository's own documents cite is a fact
+/// about that repository, so it is policy and lives in the policy file --
+/// `parameterize-do-not-enumerate`, which the hand list was the standing
+/// violation of.
+///
+/// Globs rather than literal hostnames because globs are the selection language
+/// this config already speaks: `*.sr.ht` is one line where the enumeration
+/// needed a special case.
+pub(crate) struct ForeignHosts {
+    matcher: Option<globset::GlobSet>,
 }
 
-/// Repositories named on a forge whose visibility `gh` cannot answer for.
+impl ForeignHosts {
+    /// Compile the declared host globs, refusing one that will not parse.
+    ///
+    /// Refused rather than skipped, because a glob nobody could compile is a
+    /// host nobody quieted, and the run that drops it looks exactly like the
+    /// run where the declaration worked.
+    pub(crate) fn new(patterns: &[String]) -> Result<Self> {
+        if patterns.is_empty() {
+            return Ok(Self { matcher: None });
+        }
+        let mut builder = globset::GlobSetBuilder::new();
+        for pattern in patterns {
+            let glob = globset::Glob::new(&pattern.to_lowercase()).map_err(|error| {
+                Fatal::new(format!("foreign_hosts: {pattern:?} is not a glob: {error}"))
+            })?;
+            builder.add(glob);
+        }
+        let matcher = builder
+            .build()
+            .map_err(|error| Fatal::new(format!("foreign_hosts: {error}")))?;
+        Ok(Self {
+            matcher: Some(matcher),
+        })
+    }
+
+    fn quiets(&self, host: &str) -> bool {
+        self.matcher
+            .as_ref()
+            .is_some_and(|matcher| matcher.is_match(host.to_lowercase()))
+    }
+}
+
+/// Repositories named on a host `gh` cannot be asked about.
 ///
-/// Reported as unresolved rather than dropped: the tool cannot tell whether
-/// `gitlab.com/acme/secret` is private, and silence would read as clean.
-fn foreign_forge_names(text: &str) -> BTreeSet<(String, String)> {
+/// The host travels with the name here, and it is not decoration: `acme/widget`
+/// on `github.acme.com` is a different repository from `acme/widget` on
+/// github.com, and a reader told only the second half cannot tell which one the
+/// line is about.
+fn unanswerable_names(text: &str, quiet: &ForeignHosts) -> BTreeSet<(String, String, String)> {
     let mut found = BTreeSet::new();
     for capture in url_pattern().captures_iter(text) {
-        if !is_foreign_forge_host(&capture[1]) {
+        let host = capture[1].to_lowercase();
+        if is_github_host(&host) || quiet.quiets(&host) {
             continue;
         }
         let repo = clean_repo(&capture[3]);
         if repo.is_empty() {
             continue;
         }
-        found.insert((capture[2].to_string(), repo));
+        found.insert((host, capture[2].to_string(), repo));
     }
     found
 }
@@ -218,7 +266,16 @@ struct OwnerMatchers {
 }
 
 impl OwnerMatchers {
-    fn new(private_owners: &[String], own_owner: Option<&str>) -> Self {
+    /// Compiled here, and REFUSED here where one will not compile.
+    ///
+    /// Both arms used to be `let Ok(matcher) = ... else { continue; }`, which
+    /// accepted a declared owner, dropped it, and ran the guard without it: the
+    /// operator's list said one thing and the search did another, with nothing
+    /// printed either way. An owner is escaped before it becomes a pattern, so
+    /// a failure here is a name no regex can hold rather than a typo in a
+    /// regex -- and either way it is a declaration this run cannot honour,
+    /// which is a config error and not a silent narrowing.
+    fn new(private_owners: &[String], own_owner: Option<&str>) -> Result<Self> {
         // The repository's OWN owner, treated as though it had been declared.
         //
         // `acme/widget` written with no host is the spelling a README uses for
@@ -252,9 +309,11 @@ impl OwnerMatchers {
                 r"(?i)\b{}/([A-Za-z0-9][A-Za-z0-9._-]*)",
                 regex::escape(&owner)
             );
-            let Ok(matcher) = Regex::new(&pattern) else {
-                continue;
-            };
+            let matcher = Regex::new(&pattern).map_err(|error| {
+                Fatal::new(format!(
+                    "private owner {owner:?}: no pattern can be built for that name ({error})"
+                ))
+            })?;
 
             // The owner ON ITS OWN, with no repository after it. Every form
             // above needs an `owner/repo`, and this is the one that got past a
@@ -266,13 +325,19 @@ impl OwnerMatchers {
             // deliberately not in this half: its name is published by the
             // repository existing.
             if private_owners.contains(&owner) {
-                if let Ok(alone) = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(&owner))) {
-                    bare.push((owner.clone(), alone));
-                }
+                let alone = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(&owner))).map_err(
+                    |error| {
+                        Fatal::new(format!(
+                            "private owner {owner:?}: no pattern can be built for that name \
+                             on its own ({error})"
+                        ))
+                    },
+                )?;
+                bare.push((owner.clone(), alone));
             }
             named.push((owner, matcher));
         }
-        Self { named, bare }
+        Ok(Self { named, bare })
     }
 }
 
@@ -510,7 +575,13 @@ fn is_ourselves(resolved: &Resolved, ours: Option<&str>) -> bool {
     }
 }
 
-fn judge(root: &Path, rule: &Rule, owners: &[String], sources: &[(String, String)]) -> Verdict {
+fn judge(
+    root: &Path,
+    rule: &Rule,
+    owners: &[String],
+    quiet: &ForeignHosts,
+    sources: &[(String, String)],
+) -> Result<Verdict> {
     let ours = own_name(root);
     let our_owner = own_owner(root);
     let public: BTreeSet<String> = rule
@@ -526,7 +597,7 @@ fn judge(root: &Path, rule: &Rule, owners: &[String], sources: &[(String, String
     let mut unresolved = Vec::new();
     let mut unavailable = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    let matchers = OwnerMatchers::new(owners, our_owner.as_deref());
+    let matchers = OwnerMatchers::new(owners, our_owner.as_deref())?;
 
     for (where_found, text) in sources {
         for (owner, repo) in candidates(text, &matchers) {
@@ -572,28 +643,42 @@ fn judge(root: &Path, rule: &Rule, owners: &[String], sources: &[(String, String
             }
         }
 
-        // Named on a forge this tool cannot query. Not refused -- it may well be
-        // public -- but not passed over either.
-        for (owner, repo) in foreign_forge_names(text) {
+        // Named on a host this tool cannot ask. NOT a finding and not a pass:
+        // it is the check not happening, which is the `unavailable` bucket and
+        // exit 2, exactly where a `gh` that could not be reached lands. It used
+        // to be `unresolved` for six hand-listed forges and nothing at all for
+        // every other host, so a private repository on a self-hosted forge --
+        // the likeliest place for one -- was dropped without a line.
+        for (host, owner, repo) in unanswerable_names(text, quiet) {
             let name = format!("{owner}/{repo}");
             if public.contains(&name.to_lowercase()) {
                 continue;
             }
-            if seen.insert(format!("{where_found}\u{0}{name}")) {
-                unresolved.push(format!(
-                    "{where_found}: {name} is on a forge this tool cannot query"
-                ));
+            if seen.insert(format!("{where_found}\u{0}{host}/{name}")) {
+                unavailable.push(format!("{where_found}: {host}/{name}"));
             }
         }
     }
-    Verdict {
+    Ok(Verdict {
         refused,
         unresolved,
         unavailable,
-    }
+    })
 }
 
-fn decide(request: &Request<'_>, sources: &[(String, String)]) -> Result<Option<Refusal>> {
+/// The judgement, over what was read AND what could not be.
+///
+/// `unread` is the second list because the two halves of could-not-look arrive
+/// from different places and must not be able to cancel each other out: a text
+/// whose bytes no charset would decode is as much a gap as a name the forge
+/// would not answer for, and both are outranked by a name that WAS found. Every
+/// caller that opens a blob hands its failures here rather than skipping them,
+/// which is the difference between "this file is clean" and "nobody read it".
+fn decide(
+    request: &Request<'_>,
+    sources: &[(String, String)],
+    unread: &[String],
+) -> Result<Option<Refusal>> {
     // A rule that says it will not guess, in a repository that has not said
     // whether it is published. Asked BEFORE the lookup rather than after it
     // fails, because the lookup succeeding is the worse case: it answers from
@@ -630,7 +715,19 @@ fn decide(request: &Request<'_>, sources: &[(String, String)]) -> Result<Option<
     }
 
     let owners = declared_owners(request.root, request.policy, request.rule)?;
-    let verdict = judge(request.root, request.rule, &owners, sources);
+    // The hosts this policy has declared are not forges it needs an answer
+    // about. The rule's own list first and the policy's second, the same
+    // precedence `private_owners_from` and `visibility` have and for the same
+    // reason: a rule arriving from a bundled set cannot be handed a parameter,
+    // so the policy is where a repository writes the fact once.
+    let quiet = ForeignHosts::new(
+        request
+            .rule
+            .foreign_hosts
+            .as_deref()
+            .unwrap_or(&request.policy.foreign_hosts),
+    )?;
+    let verdict = judge(request.root, request.rule, &owners, &quiet, sources)?;
 
     // The forge could not be asked about some names, so for THOSE this guard
     // did not run. Exit 2 and not a refusal, and NOT governed by
@@ -647,19 +744,34 @@ fn decide(request: &Request<'_>, sources: &[(String, String)]) -> Result<Option<
     // was discarded, unprinted, because some unrelated name in the same text
     // had no answer. The name the guard exists to catch is the one that must
     // survive.
-    let unavailable = (!verdict.unavailable.is_empty()).then(|| {
-        Fatal::new(format!(
+    let mut gaps: Vec<String> = Vec::new();
+    if !verdict.unavailable.is_empty() {
+        gaps.push(format!(
             "{}: the forge could not be asked about {} name(s), so their visibility is \
              unestablished and this guard did not run over them:\n{}\n\n`gh` must be \
              installed and authenticated for this rule -- `gh auth status` says which. A \
-             rate limit, a missing token and no network all land here. Names it ANSWERED \
-             for are judged normally; this is the absence of an answer, which is exit 2 \
-             rather than a refusal because nothing here is known to be wrong.",
+             rate limit, a missing token and no network all land here, and so does a name \
+             on a host `gh` does not answer for: name that host in `foreign_hosts` if it \
+             carries no repository this rule needs resolved. Names it ANSWERED for are \
+             judged normally; this is the absence of an answer, which is exit 2 rather \
+             than a refusal because nothing here is known to be wrong.",
             request.rule.id,
             verdict.unavailable.len(),
             verdict.unavailable.join("\n")
-        ))
-    });
+        ));
+    }
+    if !unread.is_empty() {
+        gaps.push(format!(
+            "{}: {} of the texts this operation carries could not be read, so no name in \
+             them was looked for:\n{}\n\nDeclare the file not text in .gitattributes, or \
+             exclude it from this rule. A file nobody could decode is not a file with \
+             nothing in it.",
+            request.rule.id,
+            unread.len(),
+            unread.join("\n")
+        ));
+    }
+    let unavailable = (!gaps.is_empty()).then(|| Fatal::new(gaps.join("\n\n")));
 
     let mut report = String::new();
     if !verdict.refused.is_empty() {
@@ -691,8 +803,8 @@ fn decide(request: &Request<'_>, sources: &[(String, String)]) -> Result<Option<
     // said alongside it rather than instead of it. A reader who is shown only
     // the exit code still sees the name; a reader who is shown only the names
     // still learns that the list is incomplete.
-    if let Some(unread) = unavailable {
-        eprintln!("{unread}");
+    if let Some(gap) = unavailable {
+        eprintln!("{gap}");
     }
     Ok(Some(Refusal {
         id: request.rule.id.clone(),
@@ -722,9 +834,8 @@ pub(crate) fn in_message(request: &Request<'_>) -> Result<Option<Refusal>> {
         Some(path) => path.to_path_buf(),
         None => git::dir(request.root)?.join("COMMIT_EDITMSG"),
     };
-    let bytes = std::fs::read(&path).map_err(|error| Fatal::at(&path, error))?;
-    let text = String::from_utf8_lossy(&bytes).into_owned();
-    decide(request, &[(String::from("commit message"), text)])
+    let text = scope::read_message(&request.rule.id, &path)?;
+    decide(request, &[(String::from("commit message"), text)], &[])
 }
 
 /// Git's own answer to "was this path diffed as text", per `--numstat`.
@@ -951,6 +1062,7 @@ fn introduced_paths(root: &Path) -> Result<Vec<String>> {
 /// open. A path answers the scope; the line is what a reader opens.
 pub(crate) fn in_staged(request: &Request<'_>) -> Result<Option<Refusal>> {
     let mut sources: Vec<(String, String)> = Vec::new();
+    let mut unread: Vec<String> = Vec::new();
 
     for path in introduced_paths(request.root)? {
         if !scope::in_file_scope(request.rule, &path)? {
@@ -1004,18 +1116,35 @@ pub(crate) fn in_staged(request: &Request<'_>) -> Result<Option<Refusal>> {
         // it, so failing to read the object is could-not-look -- the one thing
         // this guard must never report as a clean commit.
         let bytes = scope::read_object(request.root, oid, &staged.path)?;
-        // git's own binary test, asked of the content this time: a NUL in the
-        // first 8000 bytes. A file that really is binary holds no repository
-        // name a reader could act on.
-        if bytes.iter().take(8000).any(|byte| *byte == 0) {
+        // What the bytes turned out to be, asked of the content this time and
+        // through the one decoder. A NUL test alone stood here, which is git's
+        // binary test and is also true of every UTF-16 file ever committed: a
+        // staged UTF-16 document naming a private repository was skipped as an
+        // image, with nothing printed.
+        if std::str::from_utf8(&bytes).is_ok() {
+            // Valid UTF-8, so the diff git prints is text a reader can be
+            // pointed at line by line.
+            for (line, text) in added_lines(request.root, &staged.path, true)? {
+                sources.push((located(&staged.path, line), text));
+            }
             continue;
         }
-        for (line, text) in added_lines(request.root, &staged.path, true)? {
-            sources.push((located(&staged.path, line), text));
+        match scope::decode(&bytes) {
+            // Text, but not in this diff's encoding: `git diff --text` hands
+            // back the same bytes it would not render, and a line number read
+            // off them points nowhere. The whole decoded blob is judged
+            // instead -- wider than the diff on purpose, because what is lost
+            // is the line and what is kept is the name.
+            scope::Decoded::Text(text) => sources.push((staged.path.clone(), text)),
+            // No lines for a name to be written on.
+            scope::Decoded::Binary => {}
+            scope::Decoded::Unreadable(why) => {
+                unread.push(format!("{}: {why}", staged.path));
+            }
         }
     }
 
-    decide(request, &sources)
+    decide(request, &sources, &unread)
 }
 
 /// Every blob the operation is introducing, every path it arrives under, and --
@@ -1033,6 +1162,7 @@ pub(crate) fn in_tracked(request: &Request<'_>) -> Result<Option<Refusal>> {
         request.remote_name,
     )?;
     let mut sources = Vec::with_capacity(blobs.len() * 2);
+    let mut unread: Vec<String> = Vec::new();
     for blob in &blobs {
         if !scope::in_file_scope(request.rule, &blob.path)? {
             continue;
@@ -1050,10 +1180,20 @@ pub(crate) fn in_tracked(request: &Request<'_>) -> Result<Option<Refusal>> {
             continue;
         }
         let bytes = scope::read(request.root, blob)?;
-        sources.push((
-            blob.path.clone(),
-            String::from_utf8_lossy(&bytes).into_owned(),
-        ));
+        // Through the one decoder rather than `String::from_utf8_lossy`, which
+        // is what stood here: a UTF-16 file arrived as replacement characters
+        // with NULs between them, `github.com/acme/secret` inside it matched
+        // nothing, and the blob was reported as read. The sibling guard over
+        // the same blobs had been decoding properly since it was written, so
+        // the two disagreed about whether a file had text in it at all.
+        match scope::decode(&bytes) {
+            scope::Decoded::Text(text) => sources.push((blob.path.clone(), text)),
+            // The one honest skip: no lines for a name to be written on.
+            scope::Decoded::Binary => {}
+            scope::Decoded::Unreadable(why) => {
+                unread.push(format!("{}: {why}", blob.path));
+            }
+        }
     }
 
     // The messages of the commits this push publishes. `commit-msg` fires only
@@ -1072,7 +1212,7 @@ pub(crate) fn in_tracked(request: &Request<'_>) -> Result<Option<Refusal>> {
         sources.push((format!("commit {short} (its MESSAGE)"), body));
     }
 
-    decide(request, &sources)
+    decide(request, &sources, &unread)
 }
 
 /// Text mode, for what never becomes a commit: a pull-request body typed into a
@@ -1096,7 +1236,7 @@ pub(crate) fn in_text(
         remote_name: None,
         remote_url: None,
     };
-    decide(&request, &[(label.to_owned(), text.to_owned())])
+    decide(&request, &[(label.to_owned(), text.to_owned())], &[])
 }
 
 #[cfg(test)]
@@ -1110,7 +1250,10 @@ mod tests {
         private_owners: &[String],
         own_owner: Option<&str>,
     ) -> BTreeSet<(String, String)> {
-        candidates(text, &OwnerMatchers::new(private_owners, own_owner))
+        candidates(
+            text,
+            &OwnerMatchers::new(private_owners, own_owner).expect("an owner a pattern can hold"),
+        )
     }
 
     fn resolved(visibility: Visibility, canonical: Option<&str>) -> Resolved {
@@ -1178,15 +1321,43 @@ mod tests {
     }
 
     #[test]
-    fn another_forge_is_reported_rather_than_dropped() {
+    fn a_host_gh_cannot_answer_for_is_reported_rather_than_dropped() {
         // Cannot be resolved with `gh`, and may well be private. Silence would
-        // read as clean.
-        let found = foreign_forge_names("moved to https://gitlab.com/acme/secret");
+        // read as clean -- and the host this used to drop in silence is the
+        // self-hosted one, which is the likeliest place for a private
+        // repository to be.
+        let quiet = ForeignHosts::new(&[]).unwrap();
+        let found = unanswerable_names("moved to https://gitlab.com/acme/secret", &quiet);
         assert!(
-            found.contains(&("acme".to_owned(), "secret".to_owned())),
+            found.contains(&(
+                "gitlab.com".to_owned(),
+                "acme".to_owned(),
+                "secret".to_owned()
+            )),
             "{found:?}"
         );
-        assert!(foreign_forge_names("https://doi.org/10.1109/PROC.1975.9939").is_empty());
+        let enterprise = unanswerable_names("https://github.acme.com/acme/widget", &quiet);
+        assert_eq!(enterprise.len(), 1, "{enterprise:?}");
+    }
+
+    #[test]
+    fn a_declared_host_is_the_only_thing_that_quiets_one() {
+        // The citation case, which is why the field exists: a bibliography is
+        // `host.tld/a/b` and is not a list of repositories. It is quieted by
+        // the policy naming the host, not by the binary knowing it.
+        let text = "https://doi.org/10.1109/PROC.1975.9939 and https://www.apache.org/l/L-2.0";
+        assert_eq!(
+            unanswerable_names(text, &ForeignHosts::new(&[]).unwrap()).len(),
+            2
+        );
+        let quiet = ForeignHosts::new(&["doi.org".to_owned(), "*.apache.org".to_owned()]).unwrap();
+        assert!(unanswerable_names(text, &quiet).is_empty());
+    }
+
+    #[test]
+    fn a_host_glob_that_will_not_compile_is_refused_rather_than_dropped() {
+        assert!(ForeignHosts::new(&["doi.org".to_owned()]).is_ok());
+        assert!(ForeignHosts::new(&["{".to_owned()]).is_err());
     }
 
     #[test]

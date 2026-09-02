@@ -49,8 +49,12 @@ fn message_text(request: &Request<'_>) -> Result<(PathBuf, String)> {
         }
         fallback
     };
-    let bytes = std::fs::read(&path).map_err(|error| Fatal::at(&path, error))?;
-    Ok((path, String::from_utf8_lossy(&bytes).into_owned()))
+    // Decoded through the one reader, which refuses bytes that are not text
+    // rather than lossily pretending they are. A message in UTF-16 used to
+    // arrive here as replacement characters with NULs between them, and every
+    // guard over it passed.
+    let text = super::scope::read_message(&request.rule.id, &path)?;
+    Ok((path, text))
 }
 
 /// Every message this run is actually about, labelled.

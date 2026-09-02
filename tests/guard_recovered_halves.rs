@@ -51,6 +51,24 @@ fn write(root: &Path, relative: &str, contents: &str) {
     std::fs::write(path, contents).unwrap();
 }
 
+fn write_bytes(root: &Path, relative: &str, contents: &[u8]) {
+    let path = root.join(relative);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(path, contents).unwrap();
+}
+
+/// A UTF-16 document, byte-order mark and all, as an editor on Windows writes
+/// one.
+fn utf16(text: &str) -> Vec<u8> {
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in text.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    bytes
+}
+
 fn guard(root: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_uphold"))
         .arg("guard")
@@ -238,6 +256,84 @@ fn a_path_names_a_private_repository_with_no_help_from_its_content() {
         "{}",
         stderr(&output)
     );
+}
+
+#[test]
+fn a_utf16_file_naming_a_private_repository_is_read_rather_than_lossily_skipped() {
+    // `String::from_utf8_lossy` stood between this blob and the search, so the
+    // name inside it was a run of replacement characters with NULs between
+    // them and matched nothing. The sibling guard over the same blobs had been
+    // decoding the byte-order mark properly since it was written: two guards,
+    // one blob, two answers about whether there was text in it.
+    let root = repository(TRACKED);
+    write_bytes(
+        &root,
+        "docs/note.txt",
+        &utf16("we hit this in acme-private/secret\n"),
+    );
+    git(&root, &["add", "docs/note.txt"]);
+
+    let output = guard(&root, &["--stage", "manual"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("docs/note.txt"), "{text}");
+    assert!(text.contains("acme-private/secret"), "{text}");
+}
+
+#[test]
+fn a_staged_utf16_file_naming_a_private_repository_is_read_too() {
+    // The other half, blind for the opposite reason: the staged scan tested
+    // for a NUL in the first 8000 bytes and skipped what it found, which is
+    // git's binary test and is true of every UTF-16 file ever committed.
+    let root = repository(STAGED);
+    write_bytes(
+        &root,
+        "docs/note.txt",
+        &utf16("we hit this in acme-private/secret\n"),
+    );
+    git(&root, &["add", "docs/note.txt"]);
+
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("acme-private/secret"), "{text}");
+}
+
+#[test]
+fn a_blob_no_charset_can_decode_is_could_not_look_and_not_a_clean_tree() {
+    // Neither UTF-8 nor binary: a file that is text except for the bytes
+    // nobody declared. Skipping it buys the whole file a pass on the strength
+    // of the very byte that should have stopped the run.
+    let root = repository(TRACKED);
+    write_bytes(&root, "docs/note.txt", b"caf\xe9 au lait\n");
+    git(&root, &["add", "docs/note.txt"]);
+
+    let output = guard(&root, &["--stage", "manual"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 2, "{text}");
+    assert!(text.contains("docs/note.txt"), "{text}");
+    assert!(text.contains("could not be read"), "{text}");
+}
+
+#[test]
+fn a_commit_message_that_is_not_utf8_is_not_reported_as_a_message_that_is_clean() {
+    // The message readers decoded lossily too, and a message file is text by
+    // construction: there is no honest skip here, only a message nobody read.
+    let root = repository(
+        "[rule.no-private-repo-names]\n\
+         builtin = \"no-private-repo-names\"\n\
+         visibility = \"public\"\n\
+         private_owners = [\"acme-private\"]\n\n\
+         [rule.no-private-repo-names.git]\nhooks = [\"commit-msg\"]\n",
+    );
+    write_bytes(&root, "message.txt", b"caf\xe9 au lait\n");
+    let output = guard(
+        &root,
+        &["--stage", "commit-msg", "--message", "message.txt"],
+    );
+    let text = stderr(&output);
+    assert_eq!(code(&output), 2, "{text}");
+    assert!(text.contains("message.txt"), "{text}");
 }
 
 #[test]

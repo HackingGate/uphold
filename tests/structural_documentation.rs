@@ -44,7 +44,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use support::syntax::{declarations, unparsed, Declaration};
+use support::syntax::{declarations, public_fields, unparsed, Declaration};
 
 /// The shared declarations that carry no documentation today.
 ///
@@ -248,5 +248,99 @@ fn the_material_a_writer_would_be_handed() {
         !callers.is_empty(),
         "a shared declaration that no other module calls: either the selection is broken \
          or `{subject}` is not shared at all"
+    );
+}
+
+/// The structs a policy file is deserialized into. Every `pub` field of one of
+/// these is a key somebody writes in `policy/principles.toml`.
+const SERDE_FACING: &[&str] = &[
+    "Files",
+    "Git",
+    "CommandWhere",
+    "Inherit",
+    "Rule",
+    "PolicyFile",
+    "SetHeader",
+];
+
+/// A field a policy file may write is a field REFERENCE.md names.
+///
+/// The rule above is about the surface one module offers another; this is the
+/// surface the tool offers a stranger, and it had a hole of exactly one field.
+/// `redact_matches` was accepted by the deserializer, read in three places, and
+/// written in no document -- so the only way to find out it existed was to read
+/// `src/config.rs`, which is the thing ADR 0001 says no field may require.
+///
+/// A doc comment on the field is not enough and is checked by nothing here: a
+/// comment is read by somebody who already found the field. What the acceptance
+/// test in ADR 0001 asks -- browse the repository for one minute and predict
+/// what a rule does -- is answered out of REFERENCE.md or not at all.
+///
+/// The name must appear inside a code span, because a field named only in prose
+/// is a field named by accident: `word` and `visibility` are ordinary English,
+/// and a test satisfied by their appearing anywhere would be satisfied by every
+/// document that never mentioned them.
+#[test]
+fn every_field_a_policy_file_may_write_is_named_in_the_reference() {
+    let source = std::fs::read_to_string(PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/config.rs"
+    )))
+    .expect("src/config.rs");
+    assert_eq!(unparsed(&source), None, "src/config.rs is Rust");
+
+    let reference = std::fs::read_to_string(PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/docs/REFERENCE.md"
+    )))
+    .expect("docs/REFERENCE.md");
+    // Code, and only code: a fenced block is code line for line, and outside
+    // one it is the span between two backticks. Splitting the whole document on
+    // backticks would have the fences themselves flip the parity, so every
+    // other paragraph would be read as code and the test would pass on prose.
+    let mut spans: Vec<&str> = Vec::new();
+    let mut fenced = false;
+    for line in reference.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            spans.push(line);
+        } else {
+            spans.extend(line.split('`').skip(1).step_by(2));
+        }
+    }
+
+    let mut missing: Vec<String> = Vec::new();
+    let mut checked = 0_usize;
+    for name in SERDE_FACING {
+        let fields = public_fields(&source, name);
+        assert!(
+            !fields.is_empty(),
+            "{name} has no public fields, so this test is reading a struct that has been \
+             renamed or moved and is asserting about nothing"
+        );
+        for field in fields {
+            checked += 1;
+            let named = spans.iter().any(|span| {
+                span.split(|character: char| !character.is_alphanumeric() && character != '_')
+                    .any(|word| word == field)
+            });
+            if !named {
+                missing.push(format!("{name}::{field}"));
+            }
+        }
+    }
+
+    assert!(
+        checked > 50,
+        "only {checked} fields were read, which is fewer than the config surface has -- \
+         the reader is broken rather than the documentation"
+    );
+    assert!(
+        missing.is_empty(),
+        "a policy file may write these and no document says so, which leaves reading \
+         src/config.rs as the only way to find out they exist: {missing:?}"
     );
 }

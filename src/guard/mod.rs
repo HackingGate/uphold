@@ -496,6 +496,7 @@ pub(crate) fn parameters(builtin: &str) -> &'static [&'static str] {
             "private_owners_from",
             "public_repos",
             "refuse_unknown",
+            "foreign_hosts",
         ],
         // `visibility` and nothing else: the rule reads the declaration and
         // compares it to the forge, and every other field in the family is

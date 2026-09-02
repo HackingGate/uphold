@@ -235,6 +235,14 @@ covers the other: the tree catches what arrived before this range, the range
 catches a blob added in one pushed commit and deleted in the next, which is in
 the remote's history permanently and in no tip tree.
 
+The range's commit *messages* are read there as well, and they are a carrier of
+their own rather than part of either half. `commit-msg` fires only when `git
+commit` writes a message: `git commit-tree`, a rebase, a cherry-pick, `git am`,
+`--no-verify` and a fast-forward carrying somebody else's commit in from a
+hookless clone all record a message no hook ever read — and everything else at
+pre-push reads the tree. So a subject line naming a private repository reached a
+remote with every hook green and no override of any kind.
+
 ### One override spelling
 
 `UPHOLD_ALLOW` replaced five differently-named variables. The id is in it,

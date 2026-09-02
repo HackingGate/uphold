@@ -183,3 +183,46 @@ fn shared(node: Node<'_>) -> bool {
         .any(|child| child.kind() == "visibility_modifier");
     found
 }
+
+/// Every `pub` field of one named struct, in source order.
+///
+/// Reads the parse rather than the text because a field list holds doc
+/// comments, attributes and nested generics, and a regex over `pub \w+:` finds
+/// the ones inside a `#[serde(...)]` argument and inside a comment as readily
+/// as the real ones.
+pub fn public_fields(source: &str, struct_name: &str) -> Vec<String> {
+    let tree = parse(source);
+    let mut cursor = tree.walk();
+    let mut found = Vec::new();
+    for node in tree.root_node().children(&mut cursor) {
+        if node.kind() != "struct_item" {
+            continue;
+        }
+        let named = node
+            .child_by_field_name("name")
+            .is_some_and(|name| source[name.byte_range()] == *struct_name);
+        if !named {
+            continue;
+        }
+        let Some(body) = node.child_by_field_name("body") else {
+            continue;
+        };
+        let mut fields = body.walk();
+        for field in body.children(&mut fields) {
+            if field.kind() != "field_declaration" {
+                continue;
+            }
+            let mut parts = field.walk();
+            let public = field
+                .children(&mut parts)
+                .any(|child| child.kind() == "visibility_modifier");
+            if !public {
+                continue;
+            }
+            if let Some(name) = field.child_by_field_name("name") {
+                found.push(source[name.byte_range()].to_owned());
+            }
+        }
+    }
+    found
+}
