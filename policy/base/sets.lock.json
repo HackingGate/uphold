@@ -55,7 +55,7 @@
         },
         "id": "no-hardcoded-home-paths",
         "message": "Do not commit hardcoded user home paths. Use neutral paths such as\n/srv/example/... or discover runtime paths from configuration and system state.\n",
-        "regexp": "(?:/home|/Users)/[A-Za-z0-9._-]+|[A-Za-z]:\\\\Users\\\\[A-Za-z0-9._-]+"
+        "regexp": "(?:^|[^A-Za-z0-9_.-])(?:/home|/Users)/[A-Za-z0-9._-]+|[A-Za-z]:\\\\Users\\\\[A-Za-z0-9._-]+"
       },
       {
         "files": {
@@ -558,6 +558,24 @@
     "stages": [
       "pre-commit",
       "pre-merge-commit"
+    ]
+  },
+  {
+    "commands": [],
+    "rules": [
+      {
+        "builtin": "prevent-author-mismatch",
+        "git": {
+          "hooks": [
+            "pre-commit"
+          ]
+        },
+        "id": "prevent-author-mismatch"
+      }
+    ],
+    "set": "mismatched-author",
+    "stages": [
+      "pre-commit"
     ]
   },
   {

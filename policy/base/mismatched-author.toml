@@ -1,0 +1,77 @@
+# Base rule set: mismatched-author (a commit stamped with an identity that is
+# not yours)
+#
+# The guard that refuses a commit whose author or committer identity disagrees
+# with the global one on the machine performing it. Pull in with:
+#
+#   [inherit]
+#   sets = ["process-residue", "mismatched-author"]
+#
+# WHAT IT REFUSES. The identity git is about to record, resolved through `git
+# var GIT_AUTHOR_IDENT` and `git var GIT_COMMITTER_IDENT`, compared against
+# `user.name` and `user.email` in the global config. That resolution is the
+# whole point of the check: it reflects `--author`, a repository-local
+# `user.email`, and any `GIT_AUTHOR_*` or `GIT_COMMITTER_*` in the environment,
+# so every route a stray identity arrives by is read at the one moment it is
+# observable. Afterwards the commit looks exactly like a commit you made.
+#
+# The case it was installed for is an agent or a container that ran `git init`,
+# set whatever local identity was to hand, and committed under it. That commit
+# is not attributed to anybody on the forge, it is not covered by whatever
+# signing the author's real identity carries, and rewriting it later rewrites
+# every commit after it.
+#
+# WHY IT IS ITS OWN SET rather than a rule inside one already here. Three
+# neighbours could have taken it and each would have been a different claim:
+#
+# * `unowned-push` asks where a ref is going and answers from a destination the
+#   repository has named. This asks who is writing and answers from the machine.
+#   Nothing in this rule reads a remote, and nothing in that one reads a commit.
+# * `host-identity` also reads the running machine -- and then searches
+#   committed CONTENT for what it read. It ships `stages = []` and is a scan
+#   rule by construction. A guard joining it would push its ceiling off zero,
+#   which is the one property that set's header argues for.
+# * `commit-message-residue` is about the text a commit records. An identity is
+#   not in that text, it is in the commit's own headers, and the guard reads it
+#   before a message exists.
+#
+# Taking a set is a decision about what will be refused and when, which is why
+# every guard set here is named and argued separately. This one has its own
+# cost, below, and it should be possible to decline it while keeping the rest.
+#
+# WHAT INHERITING THIS COSTS. One `pre-commit` hook that runs two `git var`
+# calls, no network and no tree read. It refuses the deliberate `--author` as
+# readily as the accidental one, so a repository that commits on somebody's
+# behalf -- applying a mailed patch, importing a history -- gets a refusal it
+# has to waive with `UPHOLD_ALLOW=prevent-author-mismatch` for that commit.
+#
+# AND WHAT IT CANNOT DO. A machine with no global `user.email` has no
+# expectation to compare against, and the guard says so on stderr and declines
+# rather than refusing. That is the container case verbatim, so the note is not
+# decoration: a guard that quietly does not run in its own scenario reads
+# exactly like a guard that ran and found nothing. There is no field to pin the
+# expected identity on -- the global config IS the expectation -- so a
+# repository that wants the check to bite must have an identity configured for
+# the person sitting at it.
+#
+# PROVENANCE. Promoted after being found declared by hand in 8 policy files
+# across one consuming superproject and its submodules, byte for byte in every
+# one: the same id, the same built-in, the same single `pre-commit` stage, no
+# parameters and no variation anywhere. Eight copies of a three-line
+# declaration is one decision and seven transcriptions, and the transcriptions
+# are what `no-hand-copied-base-rule` reports on.
+#
+# The id is the one those copies already carry, so a repository that still
+# holds its own copy shadows this rule rather than colliding with it, and
+# deleting the copy is a subtraction with nothing to rewrite.
+
+# WHAT THIS SET MAY INSTALL. `stages` is the ceiling the loader holds the rules
+# to: a rule reaching past it is refused at load, so the set cannot grow a
+# second stage without editing this line, which is a diff a reader sees. One
+# stage, because there is one moment the identity is still a decision.
+[set]
+stages = ["pre-commit"]
+
+[rule.prevent-author-mismatch]
+builtin = "prevent-author-mismatch"
+git.hooks = ["pre-commit"]

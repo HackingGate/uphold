@@ -71,7 +71,16 @@ message = """
 Do not commit hardcoded user home paths. Use neutral paths such as
 /srv/example/... or discover runtime paths from configuration and system state.
 """
-regexp = '(?:/home|/Users)/[A-Za-z0-9._-]+|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+'
+# THE LEADING BOUNDARY IS NOT DECORATION. Without it the alternation matches
+# `/home` wherever those five characters land inside a longer token, and the
+# tokens are ordinary: `$XDG_DATA_HOME/foo`, a `SOME/home/relative` path in a
+# fixture id, an identifier ending in `/home` that a template joined. Every one
+# of those is a report on a file that holds no home path at all, and a rule
+# whose findings are mostly wrong is the rule that gets excluded wholesale.
+# `(?:^|[^A-Za-z0-9_.-])` says the match starts a path rather than continuing an
+# identifier; the Windows alternative needs no such guard because a drive letter
+# and a colon already are the boundary.
+regexp = '(?:^|[^A-Za-z0-9_.-])(?:/home|/Users)/[A-Za-z0-9._-]+|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+'
 files.include = ["."]
 files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md"]
 
