@@ -1378,7 +1378,8 @@ standing in front of anything and the caller asked.
 ```toml
 [[shim]]
 command = "gh"
-match = ["pr:create", "pr:edit", "issue:create"]   # named, never guessed
+match = ["pr:create", "pr:edit", "issue:create",  # named, never guessed
+         "api:*"]                                 # the write half only — see below
 text_flags = ["-b", "--body"]
 title_flags = ["-t", "--title"]
 file_flags = ["-F", "--body-file"]
@@ -1484,6 +1485,49 @@ neither an option nor an option's *value*, honouring `--`, `--flag=value`, and
 its own `text_flags`/`file_flags`/`skip_flags` as value-taking. `gh --repo
 owner/name issue create` matches `issue:create`; where a release puts its flags
 is not something a policy author should have to track.
+
+**`gh api` and `glab api` are matched when the call carries a body.** `gh pr
+edit` was unavailable to an agent whose token lacked `read:org`, so it ran
+
+```
+gh api -X PATCH repos/OWNER/REPO/pulls/N -F body=@file
+```
+
+— the same body, the same account, the same public tracker — and no `match`
+list named `api`, so the shim exec'd it with nothing printed. The tables ship
+`api:*` now, on both `gh` and `glab`.
+
+The verb is not a verb like the others, and the two ways it differs are both in
+the table above's `match` list only by name. **It is read with its own
+grammar**: `-F` is `--body-file` on `gh pr create` and `--field` on `gh api`, so
+the table's flag lists answer for neither and the `api` walk reads `-X`/`--method`,
+`-f`/`-F`/`--field`/`--raw-field`, `--input`, and the value-taking options
+around them. **And only the write half is checked**: a call carries a body when
+`-X`/`--method` names something other than `GET`, or when any field or `--input`
+is present — which is when `gh` switches to POST anyway. A GET with no fields is
+left exactly where it was, unmatched and unexamined, because that is also the
+call `public-target` makes to ask a forge about visibility, and a shim standing
+in front of its own lookup is a loop.
+
+| what it reads | what becomes a subject |
+|---|---|
+| `-f`/`-F`/`--field`/`--raw-field` | the value after `key=`, with `@file` read from the file and `@-` from stdin |
+| `--input FILE` | the whole file — each **string value** where it is JSON, the raw text where it is not |
+| the endpoint path | `repos/OWNER/REPO/…`, or GitLab's `projects/OWNER%2FREPO`, as the **destination** |
+
+The destination is the same `owner/repo` a `--repo` resolves to on every other
+verb, so `prevent-unowned-target` and a `public-target` scope read a `gh api`
+call exactly as they read a `gh pr create` one — `gh api -X POST
+repos/other-owner/their-repo/issues -f title=…` is refused by the destination
+guard on ordinary prose. A path naming no repository (`gh api graphql`, `gh api
+user`) falls through to the table's own `target` resolver, which is the honest
+bound: the destination of a GraphQL mutation is inside its query, and nothing in
+a path can say. A JSON body is judged one string value at a time because the
+encoding otherwise hides the text — a prose rule reading the raw document reads
+the escapes rather than the sentence — and "JSON" means a document that starts
+with `{` or `[` and parses as one, not YAML's superset reading, under which an
+ordinary Markdown body with a `Note: something` line would parse as a mapping
+and most of it would reach no checker at all.
 
 ### The stand-downs
 
