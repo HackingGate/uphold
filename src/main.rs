@@ -733,9 +733,7 @@ fn rules_command(name: &str) -> Result<Exit> {
         println!("  may install at: {}", set.stages.join(", "));
     }
     for rule in set.rules {
-        let check = rule
-            .check()
-            .map_or_else(|| String::from("?"), |check| check.to_string());
+        let check = rule.kind();
         println!("  {}  ({check})", rule.id);
         let message = rule.message();
         if let Some(first) = message.lines().find(|line| !line.trim().is_empty()) {

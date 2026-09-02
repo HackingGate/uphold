@@ -45,7 +45,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
-use crate::config::{Check, Policy, Rule};
+use crate::config::{CheckKind, Policy, Rule};
 use crate::error::{verdict, Exit, Fatal, Result};
 use crate::git;
 use crate::guard::{names, Refusal};
@@ -78,7 +78,9 @@ struct Surface {
 /// a second definition of the same rule.
 fn as_published(rule: &Rule) -> Rule {
     let mut published = rule.clone();
-    published.visibility = Some(String::from("public"));
+    if let Some(parameters) = published.parameters_mut() {
+        parameters.visibility = Some(String::from("public"));
+    }
     published
 }
 
@@ -584,7 +586,7 @@ pub(crate) fn for_publication(root: &Path, policy: &Policy) -> Result<Exit> {
     // a private name would be a second definition of a rule that already
     // exists, disagreeing with the first exactly when it mattered.
     let rules: Vec<&Rule> = policy
-        .of_check(Check::Builtin)
+        .of_check(CheckKind::Builtin)
         .filter(|rule| rule.id.starts_with("no-private-repo-names"))
         .collect();
     let Some(rule) = rules.first() else {
@@ -612,8 +614,10 @@ pub(crate) fn for_publication(root: &Path, policy: &Policy) -> Result<Exit> {
     let mut published = as_published(rule);
     // Already resolved above, across every variant. Left in place it would run
     // again and answer for one rule only.
-    published.private_owners = Some(owners);
-    published.private_owners_from = None;
+    if let Some(parameters) = published.parameters_mut() {
+        parameters.private_owners = Some(owners);
+        parameters.private_owners_from = None;
+    }
 
     println!("audit --for-publication in {}", root.display());
     println!(
@@ -747,15 +751,21 @@ mod tests {
 
     #[test]
     fn the_audit_rule_is_the_repositorys_own_with_one_field_moved() {
-        let mut rule = Rule::synthetic("no-private-repo-names", Check::Builtin);
-        rule.private_owners = Some(vec!["acme".to_owned()]);
-        rule.visibility = Some(String::from("private"));
+        // Through the real deserializer, so this cannot assert about a rule
+        // the config would have refused.
+        let rule = Rule::from_toml(
+            "no-private-repo-names",
+            "builtin = \"no-private-repo-names\"\n\
+             private_owners = [\"acme\"]\n\
+             visibility = \"private\"\n",
+        )
+        .expect("a rule the config would accept");
 
         let published = as_published(&rule);
-        assert_eq!(published.visibility.as_deref(), Some("public"));
+        assert_eq!(published.visibility(), Some("public"));
         // Everything that decides what a private name IS travels unchanged, so
         // the audit cannot become a second definition of the same rule.
-        assert_eq!(published.private_owners, rule.private_owners);
+        assert_eq!(published.private_owners(), rule.private_owners());
         assert_eq!(published.id, rule.id);
     }
 

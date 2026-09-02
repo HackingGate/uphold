@@ -630,10 +630,9 @@ mod tests {
              visibility = \"private\"\n{files_table}"
         );
         // The id is the section header in a policy file and has no spelling in
-        // a bare rule body, so it is set the way `parse` sets it.
-        let mut rule: Rule = toml::from_str(&text).expect("a rule the config would accept");
-        rule.id = String::from("no-private-repo-names-in-files");
-        rule
+        // a bare rule body, so it is handed in the way `parse` hands it in.
+        Rule::from_toml("no-private-repo-names-in-files", &text)
+            .expect("a rule the config would accept")
     }
 
     #[test]

@@ -59,7 +59,6 @@ const KNOWN: &[&str] = &[
     "check.rs::Supply",
     "check.rs::installed",
     "config.rs::PolicyFile",
-    "config.rs::Rule",
     "git.rs::config_global",
     "git.rs::dir",
     "git.rs::run",
@@ -253,12 +252,18 @@ fn the_material_a_writer_would_be_handed() {
 
 /// The structs a policy file is deserialized into. Every `pub` field of one of
 /// these is a key somebody writes in `policy/principles.toml`.
+///
+/// `Written` rather than `Rule`: a rule is deserialized flat and then READ as
+/// one check, so the flat struct is the one a file's keys land in. `Rule` after
+/// that conversion is an enum, and its variants' fields are the same names --
+/// which is why holding the deserialized shape to the documentation is still
+/// holding every key a policy file may write.
 const SERDE_FACING: &[&str] = &[
     "Files",
     "Git",
     "CommandWhere",
     "Inherit",
-    "Rule",
+    "Written",
     "PolicyFile",
     "SetHeader",
 ];
@@ -282,12 +287,21 @@ const SERDE_FACING: &[&str] = &[
 /// document that never mentioned them.
 #[test]
 fn every_field_a_policy_file_may_write_is_named_in_the_reference() {
-    let source = std::fs::read_to_string(PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/config.rs"
-    )))
-    .expect("src/config.rs");
-    assert_eq!(unparsed(&source), None, "src/config.rs is Rust");
+    // Both files, because the schema is in two: `src/config.rs` holds the
+    // policy-file shapes and `src/config/rule.rs` holds the rule a section
+    // writes. A reader of one alone would report every field of the other as
+    // undocumented, or -- worse, and the way this would have failed silently --
+    // find none of them and assert about nothing.
+    let source = ["/src/config.rs", "/src/config/rule.rs"]
+        .into_iter()
+        .map(|file| {
+            let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"))).join(&file[1..]);
+            let text = std::fs::read_to_string(&path).expect("a schema file under src/");
+            assert_eq!(unparsed(&text), None, "{} is Rust", path.display());
+            text
+        })
+        .collect::<Vec<String>>()
+        .join("\n");
 
     let reference = std::fs::read_to_string(PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
