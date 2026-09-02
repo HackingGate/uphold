@@ -161,7 +161,10 @@ The rest of the surface borrows standard vocabularies on purpose and adds
 nothing to them: `regexp` / `path_regexp` / `require_regexp` are regex, with
 the require/forbid split legible from the names; `max_lines` takes a
 `baseline`, the standard ratchet term; `files.*` selection is ripgrep's own
-scoping; `git.hooks` takes githooks(5) names; the `exec` contract is one
+scoping; `git.hooks` takes four githooks(5) names -- `pre-commit`,
+`commit-msg`, `pre-merge-commit`, `pre-push` -- and `manual`, which is not
+git's and is where a check too slow to sit in front of a commit goes; the
+`exec` contract is one
 contract for any language — subject on stdin, kind in `UPHOLD_KIND`,
 0 pass / 1 refuse / 2 could-not-look.
 

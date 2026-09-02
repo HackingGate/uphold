@@ -1174,11 +1174,13 @@ scope = "public-target"
 }
 
 #[test]
-fn a_forge_that_could_not_answer_is_not_a_pass() {
-    // Unauthenticated, rate-limited, offline, or a host no resolver knows: the
-    // decision to fall open is deliberate, and making it in SILENCE is not
-    // available. Silence here looks exactly like a checker that ran and
-    // approved, which is the shape this whole seam exists to refuse.
+fn a_forge_that_could_not_answer_is_refused_before_the_command_runs() {
+    // Unauthenticated, rate-limited, offline, or a host no resolver knows. The
+    // scope predicate was not answered, so which checks apply here was never
+    // established -- and a scope that could not be evaluated is neither "in
+    // scope" nor "out of scope". Reading it as out of scope stood every checker
+    // behind the table down exactly where the lookup failed, which is the
+    // invocation that most needs asking about.
     let policy = format!(
         r#"{REMOTE_TARGET_RULES}
 [[shim]]
@@ -1187,6 +1189,59 @@ match = ["pr:create"]
 text_flags = ["-t", "--title"]
 target = "forge-repo"
 scope = "public-target"
+"#
+    );
+    for (url, fails) in [
+        ("https://github.com/acme/widget.git", "1"),
+        ("https://git.example.com/acme/widget.git", ""),
+    ] {
+        let root = workspace(
+            &policy,
+            &[
+                ("faux", "#!/bin/sh\necho \"faux ran: $*\"\n"),
+                ("gh", GITHUB_COMMAND),
+            ],
+        );
+        origin(&root, url);
+        let calls = root.join("gh-calls.log");
+        let output = Run {
+            args: &["faux", "pr", "create", "-t", "An ordinary title"],
+            envs: &[
+                ("GH_CALLS", &calls.to_string_lossy()),
+                ("FAKE_FAILS", fails),
+            ],
+            ..Run::default()
+        }
+        .go(&root);
+        assert_eq!(code(&output), 2, "{url}: {}", stderr(&output));
+        assert!(
+            !stdout(&output).contains("faux ran:"),
+            "{url}: {}",
+            stdout(&output)
+        );
+        assert!(
+            stderr(&output).contains("could not look"),
+            "{url}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn unresolved_run_keeps_the_command_and_says_no_checker_ran() {
+    // The opt-out, for a workspace whose forge is routinely unreachable and
+    // that would rather have the command than the answer. It is not a pass and
+    // does not read like one: the rule whose own scope holds everywhere still
+    // refuses, and the stderr line says what could not be asked.
+    let policy = format!(
+        r#"{REMOTE_TARGET_RULES}
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-t", "--title"]
+target = "forge-repo"
+scope = "public-target"
+unresolved = "run"
 "#
     );
     for (url, fails) in [

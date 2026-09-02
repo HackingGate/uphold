@@ -1975,3 +1975,294 @@ fn a_target_rule_whose_own_scope_does_not_hold_is_stood_down_alone() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(stdout(&output).contains("faux ran:"), "{}", stdout(&output));
 }
+
+// ── an alias is a verb the match list never sees ─────────────────────
+
+/// A `git` that reports a push instead of making one, and answers the plumbing
+/// questions the shim asks -- aliases, refs, HEAD -- out of the real git.
+///
+/// `forwarding_git` cannot serve here: it forwards anything that is not a
+/// push, and a push spelled as an alias IS one, so the real git would try to
+/// reach a remote that does not exist.
+fn plumbing_git(root: &Path) {
+    stub(
+        root,
+        "git",
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n  config|for-each-ref|symbolic-ref|rev-parse) exec {} \
+             \"$@\" ;;\nesac\necho \"git ran: $*\"\n",
+            support::real_git().display()
+        ),
+    );
+}
+
+fn git_in(root: &Path, args: &[&str]) {
+    Command::new(support::real_git())
+        .args(args)
+        .current_dir(root)
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+}
+
+#[test]
+fn an_alias_for_a_push_is_expanded_before_the_match_list_is_read() {
+    // The gap this closes, reproduced against the built binary on PATH: a
+    // `match` list names verbs literally, and `[alias] p = push` presents the
+    // verb `p`. No entry contains it, so the shim decided a push to a public
+    // forge was none of its business, printed nothing, and exited 0 -- with the
+    // branch name it exists to read going out unexamined.
+    let root = workspace(GIT_REFS_POLICY);
+    plumbing_git(&root);
+    git_in(&root, &["config", "alias.p", "push"]);
+
+    // The persisted alias, and the one written on the command line. `-c`
+    // outranks the config file and costs no process to read.
+    for form in [
+        vec!["git", "p", "origin", "fix/acme-outage"],
+        vec![
+            "git",
+            "-c",
+            "alias.q=push",
+            "q",
+            "origin",
+            "fix/acme-outage",
+        ],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("git ran:"), "{form:?}");
+    }
+
+    // And the half that is easy to lose: an alias whose expansion nothing
+    // refuses still reaches the command, spelled the way it was typed.
+    let clean = shim(&root, &["git", "p", "origin", "fix/ordinary"]);
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert!(stdout(&clean).contains("git ran: p"), "{}", stdout(&clean));
+}
+
+#[test]
+fn a_shell_alias_is_a_could_not_look_rather_than_an_absence() {
+    // What a shell runs is not an invocation any table can read, and it may
+    // well be a push. Reading it as "no alias" is the silence this seam exists
+    // to refuse.
+    let root = workspace(GIT_REFS_POLICY);
+    plumbing_git(&root);
+    git_in(&root, &["config", "alias.deploy", "!echo deploying"]);
+
+    let output = shim(&root, &["git", "deploy"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("git ran:"), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("shell command"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+// ── which words the refspecs are ─────────────────────────────────────
+
+#[test]
+fn a_value_taking_global_this_grammar_now_knows_does_not_shift_the_refspec() {
+    // `--attr-source` takes the word after it and was in neither table, so the
+    // collector read `origin` as the refspec and checked the remote's nickname
+    // while the branch going onto the forge went out unread.
+    let root = workspace(GIT_REFS_POLICY);
+    plumbing_git(&root);
+
+    let refused = shim(
+        &root,
+        &[
+            "git",
+            "--attr-source",
+            "HEAD",
+            "push",
+            "origin",
+            "fix/acme-outage",
+        ],
+    );
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        !stdout(&refused).contains("git ran:"),
+        "{}",
+        stdout(&refused)
+    );
+
+    let clean = shim(
+        &root,
+        &[
+            "git",
+            "--attr-source",
+            "HEAD",
+            "push",
+            "origin",
+            "fix/ordinary",
+        ],
+    );
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert!(stdout(&clean).contains("git ran:"), "{}", stdout(&clean));
+}
+
+#[test]
+fn refspecs_two_readings_disagree_about_are_not_guessed_at() {
+    // An option nothing here can classify shifts every position after it by
+    // one, so the words being published are one set under one reading and
+    // another under the other. This invocation IS one the shim matched, so
+    // picking one is a guess about what goes onto a public forge -- and the
+    // answer is the same one a non-UTF-8 argument gets.
+    let root = workspace(GIT_REFS_POLICY);
+    plumbing_git(&root);
+
+    let output = shim(
+        &root,
+        &[
+            "git",
+            "--fictional-option",
+            "value",
+            "push",
+            "origin",
+            "fix/ordinary",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("git ran:"), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("could not be established"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A rule that names the whole ref, so a marker left on the front of one is
+/// the difference between a refusal and a pass.
+const FORCE_POLICY: &str = r#"
+[rule.no-customer-in-a-branch-name]
+message = "name a branch for the work, not the customer"
+regexp = '^acme-outage$'
+subjects = ["ref"]
+command.before = ["git"]
+files.exclude = ["policy/**"]
+
+[[shim]]
+command = "git"
+match = ["push:*"]
+collect = "git-refs"
+scope = "always"
+"#;
+
+#[test]
+fn the_force_marker_is_grammar_and_no_part_of_a_name() {
+    // `+acme-outage` is `acme-outage`, forced. Left on, it is a name no rule
+    // recognises -- which made the force-push the documented way past a rule
+    // standing in front of the branch it names.
+    let root = workspace(FORCE_POLICY);
+    plumbing_git(&root);
+
+    let output = shim(&root, &["git", "push", "origin", "+acme-outage"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("git ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_push_of_every_branch_checks_every_branch() {
+    // `--all` names no refspec and publishes many. The fallback read HEAD, so a
+    // push of forty branches was checked as one -- the current one -- and the
+    // other thirty-nine went out unread.
+    let root = workspace(GIT_REFS_POLICY);
+    plumbing_git(&root);
+    git_in(
+        &root,
+        &[
+            "-c",
+            "user.email=example@example.test",
+            "-c",
+            "user.name=Example",
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            "a commit to hang a branch on",
+        ],
+    );
+    git_in(&root, &["branch", "fix/acme-outage"]);
+
+    // Standing on `main`, so the name that would be refused appears nowhere in
+    // argv and nowhere in HEAD.
+    let refused = shim(&root, &["git", "push", "--all", "origin"]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        !stdout(&refused).contains("git ran:"),
+        "{}",
+        stdout(&refused)
+    );
+
+    // And the same push without `--all` publishes `main` alone, which nothing
+    // here refuses.
+    let clean = shim(&root, &["git", "push", "origin"]);
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert!(stdout(&clean).contains("git ran:"), "{}", stdout(&clean));
+}
+
+/// The plumbing `push` is built on, which publishes the same names from the
+/// same positions and was named by no `match` list.
+const SEND_PACK_POLICY: &str = r#"
+[rule.no-customer-in-a-branch-name]
+message = "name a branch for the work, not the customer"
+regexp = "acme-outage"
+subjects = ["ref"]
+command.before = ["git"]
+files.exclude = ["policy/**"]
+
+[[shim]]
+command = "git"
+match = ["push:*", "send-pack:*"]
+collect = "git-refs"
+scope = "always"
+"#;
+
+#[test]
+fn the_plumbing_a_push_is_built_on_is_named_too() {
+    let root = workspace(SEND_PACK_POLICY);
+    plumbing_git(&root);
+
+    let output = shim(&root, &["git", "send-pack", "origin", "fix/acme-outage"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("git ran:"), "{}", stdout(&output));
+}
+
+// ── a scope that could not be evaluated ──────────────────────────────
+
+/// `unresolved` on a table no reading of which can reach `public-target`.
+const UNREAD_UNRESOLVED: &str = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+exec = "uphold guard --text -"
+command.before = ["faux"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-t", "--title"]
+scope = "always"
+unresolved = "run"
+"#;
+
+#[test]
+fn unresolved_beside_a_scope_that_always_answers_is_refused_at_load() {
+    // `public-target` is the one predicate that asks somebody else, so it is
+    // the only one that can fail to answer. Beside any other scope the field is
+    // read by nothing, which is configuration that looks like it works.
+    let root = workspace(UNREAD_UNRESOLVED);
+    let output = shim(&root, &["faux", "pr", "create", "-t", "An ordinary title"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("unresolved"),
+        "{}",
+        stderr(&output)
+    );
+}
