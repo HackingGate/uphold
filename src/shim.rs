@@ -260,6 +260,245 @@ fn in_list(list: &[String], needle: &str) -> bool {
 /// config, and no policy author should have to write it there to be guarded.
 const ALIAS_COMMANDS: &[&str] = &["git", "gh", "glab"];
 
+/// Commands whose `api` verb is the whole forge behind one word.
+///
+/// Grammar rather than policy, beside [`ALIAS_COMMANDS`] and for the same
+/// reason. `gh pr edit --body ...` is a verb a `match` list can name; `gh api
+/// -X PATCH repos/OWNER/REPO/pulls/N -F body=@file` publishes the same body
+/// through the same account, and every table this tool ships named the first
+/// and not the second -- so an agent whose token could not run `gh pr edit`
+/// reached for `gh api` and the shim exec'd it with nothing printed. The hole
+/// is not that `api` was forgotten: it is that ONE verb is both the read side
+/// and the write side of a forge, so naming it in a `match` list the way
+/// `pr:create` is named would stand in front of every `gh api` GET on the
+/// machine -- including [`Shim::visibility`], which is this shim asking a forge
+/// a question. Which half an invocation is, is a question about its argv, and
+/// that is what [`ApiCall`] reads.
+const FORGE_API_COMMANDS: &[&str] = &["gh", "glab"];
+
+/// The `api` options that name the HTTP method.
+const API_METHOD_FLAGS: &[&str] = &["-X", "--method"];
+
+/// The `api` options that carry one `key=value` of a body.
+///
+/// Both commands spell the typed field and the raw one differently -- `gh` has
+/// `-F/--field` typed and `-f/--raw-field` raw, `glab` has `-f/--field` -- and
+/// this list deliberately does not try to tell them apart. A field is a field:
+/// its value is published either way, and reading all four spellings the same
+/// way costs a subject nobody minds being asked about, while telling them apart
+/// wrongly costs a body nobody read.
+const API_FIELD_FLAGS: &[&str] = &["-f", "--field", "-F", "--raw-field"];
+
+/// The `api` option that names a file holding the whole body.
+const API_INPUT_FLAGS: &[&str] = &["--input"];
+
+/// Every other `api` option that takes the word after it.
+///
+/// Listed for the sake of the words they would otherwise leave loose: the
+/// endpoint path is positional, and an option whose value nothing here
+/// classifies would be read as the path -- which is the destination this seam
+/// resolves the repository from.
+const API_OTHER_VALUE_FLAGS: &[&str] = &[
+    "-H",
+    "--header",
+    "-q",
+    "--jq",
+    "-t",
+    "--template",
+    "--cache",
+    "--hostname",
+    "-p",
+    "--preview",
+];
+
+/// One `gh api` or `glab api` invocation, read off the words after the verb.
+///
+/// Read with the `api` verb's own grammar rather than through the table's flag
+/// lists, and the two cannot be merged: `-F` is `--body-file` on `gh pr create`
+/// and `--field` on `gh api`, so one vocabulary answering for both would read a
+/// `key=@file` pair as a path or a body file as a field. `[[shim.verbs]]` is
+/// the policy-level shape of the same fact; this is the shape it takes when the
+/// grammar belongs to the command rather than to a repository's reading of it.
+#[derive(Debug, Default)]
+struct ApiCall {
+    /// Every word that is neither an option nor an option's value. The endpoint
+    /// path is the first of them.
+    positional: Vec<String>,
+    /// What `-X` named, where it was given.
+    method: Option<String>,
+    /// The flag and the `key=value` of every field, in the order they were
+    /// given. The flag is kept because a refusal names the flag a reader has to
+    /// go and fix.
+    fields: Vec<(String, String)>,
+    /// The file `--input` named.
+    input: Option<String>,
+}
+
+impl ApiCall {
+    /// The words after `api`, read as that verb's grammar.
+    fn of(rest: &[String]) -> Self {
+        let mut call = Self::default();
+        let mut index = 0;
+        while let Some(argument) = rest.get(index) {
+            index += 1;
+            // `--` ends the options; what follows is positional however it is
+            // spelt.
+            if argument == "--" {
+                call.positional
+                    .extend(rest.get(index..).unwrap_or_default().iter().cloned());
+                break;
+            }
+            if !argument.starts_with('-') || argument == "-" {
+                call.positional.push(argument.clone());
+                continue;
+            }
+            let (flag, inline) = match argument.split_once('=') {
+                Some((flag, value)) if argument.starts_with("--") => {
+                    (flag.to_owned(), Some(value.to_owned()))
+                }
+                _ => (argument.clone(), None),
+            };
+            let name = flag.as_str();
+            if !(API_METHOD_FLAGS.contains(&name)
+                || API_FIELD_FLAGS.contains(&name)
+                || API_INPUT_FLAGS.contains(&name)
+                || API_OTHER_VALUE_FLAGS.contains(&name))
+            {
+                // `--paginate`, `--silent`, `-i`, `--slurp`: options that take
+                // nothing, and the word after one of them is the next word.
+                continue;
+            }
+            let Some(value) = inline.or_else(|| {
+                // The word after it, where there is one. An option at the end
+                // of argv took nothing whatever its grammar says.
+                let next = rest.get(index).cloned();
+                index += usize::from(next.is_some());
+                next
+            }) else {
+                continue;
+            };
+            if API_METHOD_FLAGS.contains(&name) {
+                call.method = Some(value);
+            } else if API_FIELD_FLAGS.contains(&name) {
+                call.fields.push((flag, value));
+            } else if API_INPUT_FLAGS.contains(&name) {
+                call.input = Some(value);
+            }
+        }
+        call
+    }
+
+    /// Whether this call carries a body at all.
+    ///
+    /// The read half of the verb is left alone deliberately. `gh api
+    /// repos/OWNER/REPO` fetches, publishes nothing, and is what
+    /// [`Shim::visibility`] runs to answer the `public-target` question -- so a
+    /// shim that stood in front of it would be a shim standing in front of its
+    /// own lookup. A method other than GET is the explicit half; a field or an
+    /// `--input` is the implicit one, because `gh` switches to POST the moment
+    /// either is given.
+    fn publishes(&self) -> bool {
+        if !self.fields.is_empty() || self.input.is_some() {
+            return true;
+        }
+        self.method
+            .as_deref()
+            .is_some_and(|method| !method.eq_ignore_ascii_case("GET"))
+    }
+
+    /// The repository this call is aimed at, where the path names one.
+    ///
+    /// The same `owner/repo` the `--repo` of every other verb resolves to, so
+    /// `prevent-unowned-target` and a `public-target` scope read a `gh api`
+    /// destination exactly as they read a `gh pr create` one. A path that names
+    /// no repository -- `gh api graphql`, `gh api user` -- resolves to nothing
+    /// here and falls through to the table's own resolver, which is the bound
+    /// on this: the destination of a GraphQL mutation is inside its query, and
+    /// nothing in a path can say.
+    fn target(&self) -> Option<String> {
+        self.positional
+            .iter()
+            .find_map(|word| repo_in_api_path(word))
+    }
+}
+
+/// `OWNER/REPO` out of a forge API path, in either forge's spelling.
+///
+/// GitHub puts it in the path (`repos/OWNER/REPO/pulls/1`); GitLab addresses a
+/// project by one url-encoded id (`projects/OWNER%2FREPO`), which is the same
+/// two names with the separator escaped.
+fn repo_in_api_path(path: &str) -> Option<String> {
+    // A whole URL is a legal endpoint, and a query string is no part of any
+    // name: `repos/o/r/issues?state=open` names the same repository as
+    // `https://api.github.com/repos/o/r`.
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    let path = match path.split_once("://") {
+        Some((_, rest)) => rest.split_once('/').map_or("", |(_, rest)| rest),
+        None => path,
+    };
+    let segments: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    for (index, segment) in segments.iter().enumerate() {
+        if *segment == "repos" {
+            if let (Some(owner), Some(repo)) = (segments.get(index + 1), segments.get(index + 2)) {
+                return Some(format!("{owner}/{repo}"));
+            }
+        }
+        if *segment == "projects" {
+            if let Some(id) = segments.get(index + 1) {
+                let decoded = id.replace("%2F", "/").replace("%2f", "/");
+                // A numeric project id names a project this cannot resolve to
+                // an owner, and guessing one would be a destination nobody
+                // wrote.
+                if decoded.contains('/') {
+                    return Some(decoded);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Every string in a JSON document, or nothing where the text is not one.
+///
+/// An `--input` file is a body, and a body that happens to be JSON hides its
+/// text from a checker behind the encoding: `"body": "Generated with X\n"` is
+/// one escaped string, and a prose rule reading the raw document reads the
+/// escapes rather than the sentence. So the values are judged one at a time,
+/// the way a `--field` value is. A file that is NOT JSON is judged whole, which
+/// is what it is.
+fn json_strings(text: &str) -> Option<Vec<String>> {
+    // Deliberately strict, and deliberately not the YAML reader the rest of
+    // this file uses on forge responses: YAML 1.2 is a superset of JSON, so an
+    // ordinary Markdown body with a `Note: something` line parses as a mapping
+    // and would be read for its "values" -- most of the body then reaching no
+    // checker at all. A body is JSON when somebody wrote JSON.
+    let trimmed = text.trim_start();
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return None;
+    }
+    let parsed = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    let mut found = Vec::new();
+    push_json_strings(&parsed, &mut found);
+    Some(found)
+}
+
+fn push_json_strings(value: &serde_json::Value, into: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(text) => into.push(text.clone()),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                push_json_strings(item, into);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values() {
+                push_json_strings(item, into);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// An `alias.<name>` set with `-c` on the command line, which outranks config.
 fn command_line_alias(argv: &[String], word: &str) -> Option<String> {
     let wanted = format!("alias.{word}=");
@@ -1084,7 +1323,138 @@ impl Shim {
         Ok(subjects)
     }
 
+    /// The words after the `api` verb, where this invocation is one.
+    ///
+    /// `None` for every other command and every other verb, which is what makes
+    /// the whole of the `api` reading below opt-in on one word.
+    ///
+    /// Both readings are tried, the way [`Shim::reading`] tries both: an option
+    /// in front of the verb that nothing here can classify shifts the first
+    /// positional word by one, and a reading that missed `api` under one arity
+    /// would silently hand this invocation back to the flag collector -- whose
+    /// vocabulary means something else on this verb.
+    fn api_rest<'a>(&self, argv: &'a [String]) -> Option<&'a [String]> {
+        if !FORGE_API_COMMANDS.contains(&self.command.as_str()) {
+            return None;
+        }
+        for unknown_takes_value in [false, true] {
+            let scanned = self.scan(argv, unknown_takes_value, 1);
+            if let (Some(index), Some("api")) = (scanned.first, scanned.positional.first().copied())
+            {
+                return argv.get(index + 1..);
+            }
+        }
+        None
+    }
+
+    /// Whether a matched invocation carries anything to publish at all.
+    ///
+    /// True for every verb but one. `gh api` and `glab api` are the read side
+    /// and the write side of a forge behind a single word, so the `match` list
+    /// names the word and this answers which half was typed -- see
+    /// [`ApiCall::publishes`]. A GET with no fields is left exactly where it was
+    /// before this existed: unmatched, unexamined, exec'd.
+    fn carries_a_body(&self, argv: &[String]) -> bool {
+        self.api_rest(argv)
+            .is_none_or(|rest| ApiCall::of(rest).publishes())
+    }
+
+    /// One `api` call's subjects and its destination.
+    ///
+    /// `body_given` is true whatever was found: `gh api` opens no editor, so
+    /// there is no checkpoint here to keep open and installing one would put
+    /// this shim in front of an editor the command will never run.
+    fn collect_api(&self, call: &ApiCall) -> Result<Collected> {
+        let mut subjects = Vec::new();
+        let mut stdin = None;
+        for (flag, field) in &call.fields {
+            // `key=value`: the key names the field and the value is what
+            // reaches the forge. A field spelt without one is passed whole,
+            // because guessing which half of it was meant is not this shim's to
+            // guess.
+            let value = field
+                .split_once('=')
+                .map_or(field.as_str(), |(_, rest)| rest);
+            subjects.push(Subject {
+                kind: "text",
+                value: self.api_value(flag, value, &mut stdin)?,
+            });
+        }
+        if let Some(file) = &call.input {
+            let text = self.api_file("--input", file, &mut stdin)?;
+            match json_strings(&text) {
+                Some(values) => subjects.extend(values.into_iter().map(|value| Subject {
+                    kind: "text",
+                    value,
+                })),
+                None => subjects.push(Subject {
+                    kind: "text",
+                    value: text,
+                }),
+            }
+        }
+        Ok(Collected {
+            subjects,
+            target: call.target(),
+            body_given: true,
+            web: false,
+            stdin,
+        })
+    }
+
+    /// One field value, with `@` read the way a forge CLI reads it.
+    fn api_value(&self, flag: &str, value: &str, stdin: &mut Option<Vec<u8>>) -> Result<String> {
+        value.strip_prefix('@').map_or_else(
+            || Ok(value.to_owned()),
+            |name| self.api_file(flag, name, stdin),
+        )
+    }
+
+    /// The text of a file a field or `--input` named, `-` being stdin.
+    fn api_file(&self, flag: &str, name: &str, stdin: &mut Option<Vec<u8>>) -> Result<String> {
+        if name == "-" {
+            // Read once however many places name it, and kept whole: the
+            // command still has to be handed the bytes it was submitted, which
+            // is what `replayed` does with them on the way through. A guard
+            // that silently eats the body it approved leaves the invocation
+            // publishing nothing.
+            if stdin.is_none() {
+                let mut buffer = Vec::new();
+                std::io::stdin().read_to_end(&mut buffer)?;
+                *stdin = Some(buffer);
+            }
+            let bytes = stdin.as_deref().unwrap_or_default();
+            return Ok(std::str::from_utf8(bytes)
+                .map_err(|error| {
+                    Fatal::new(format!(
+                        "{}: {flag} named stdin, which is not UTF-8 text ({error}), so no \
+                         checker could read what would be published",
+                        self.command
+                    ))
+                })?
+                .to_owned());
+        }
+        if !Path::new(name).is_file() {
+            // Named and absent is not the same as not named. The invocation
+            // says a body is coming from there, so running it with nothing
+            // checked is the one answer this seam does not have.
+            return Err(Fatal::new(format!(
+                "{}: {flag} names {name:?}, which is not a file. Refusing to run the command \
+                 with nothing checked when a body was named",
+                self.command
+            )));
+        }
+        std::fs::read_to_string(name).map_err(|error| Fatal::at(Path::new(name), error))
+    }
+
     pub(crate) fn collect(&self, root: &Path, argv: &[String]) -> Result<Collected> {
+        // The `api` verb reads its own grammar, and the branch is here rather
+        // than beside the `collect` arms because it is a property of the
+        // INVOCATION and not of the table: one `[[shim]]` stands in front of
+        // `gh pr create` and `gh api` both, and only argv says which this is.
+        if let Some(rest) = self.api_rest(argv) {
+            return self.collect_api(&ApiCall::of(rest));
+        }
         // Every arm walks the flags first: the target flag and any stdin the
         // shim consumed belong to the invocation rather than to one collector,
         // and a collector that dropped the stdin it had already read would
@@ -2260,7 +2630,13 @@ pub(crate) fn run(
              established and no checker ran. This is not a pass."
         );
     }
-    if matches!(reading, Reading::Named) {
+    // A `match` entry names the verb; whether THIS invocation of it publishes
+    // anything is a second question, and exactly one verb has to be asked it --
+    // see [`Shim::carries_a_body`]. Asked here rather than folded into
+    // `reading`, because a matched verb that publishes nothing must stay
+    // `Named`: an `Absent` reading sends the shim off to expand aliases, which
+    // is a process per `gh api` GET and a refusal wherever the lookup fails.
+    if matches!(reading, Reading::Named) && shim.carries_a_body(&words) {
         // The one place the bytes have to be text. This invocation is one the
         // shim reads values out of, and a value that is not UTF-8 cannot be
         // read as text -- checking the lossy copy would report a pass over
