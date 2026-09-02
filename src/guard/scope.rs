@@ -482,6 +482,89 @@ fn keep_blobs(root: &Path, candidates: Vec<Blob>) -> Result<Vec<Blob>> {
         .collect())
 }
 
+/// What a blob's bytes turned out to be.
+///
+/// Three answers rather than two, because "there is no text here" and "the text
+/// here could not be read" are the difference between a skip and a refusal. A
+/// binary file has no lines for a codepoint to hide in and is skipped on
+/// purpose; a file that is text except for one byte is the most literal
+/// could-not-look there is, and treating it as a skip buys the whole file a
+/// pass on the strength of the very byte that should have stopped it.
+#[derive(Debug)]
+pub(crate) enum Decoded {
+    Text(String),
+    Binary,
+    Unreadable(String),
+}
+
+/// A blob's text, or the reason there is none.
+///
+/// Answered HERE, beside `read`, because it is the second half of the one
+/// question this module exists to answer: which bytes is this operation
+/// introducing, and what did they turn out to be. It was written once in the
+/// codepoint guard and not at all in the name guard, which read the same blobs
+/// through `String::from_utf8_lossy` -- so a UTF-16 file was a wall of
+/// replacement characters there and a decoded document here, and the two guards
+/// disagreed about whether the same blob had text in it at all.
+///
+/// The byte-order mark is consulted first because a UTF-16 file is full of NUL
+/// bytes: read as UTF-8 it fails, and the NUL test below would then dismiss a
+/// perfectly ordinary text file as an image, taking its content out of the scan
+/// while looking exactly like a skipped binary.
+///
+/// A UTF-8 mark is deliberately NOT consumed there. It decodes as U+FEFF, which
+/// this guard already refuses by name, and stripping it would quietly grant an
+/// exemption to the one invisible codepoint that turns up in committed files
+/// most often.
+pub(crate) fn decode(bytes: &[u8]) -> Decoded {
+    if let Some((encoding, _)) = encoding_rs::Encoding::for_bom(bytes) {
+        if encoding != encoding_rs::UTF_8 {
+            let (text, _, had_errors) = encoding.decode(bytes);
+            if had_errors {
+                return Decoded::Unreadable(format!(
+                    "declares a {} byte-order mark and does not decode as one",
+                    encoding.name()
+                ));
+            }
+            return Decoded::Text(text.into_owned());
+        }
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Decoded::Text(text.to_owned()),
+        // git's own test for a binary file, and the reason it is applied to the
+        // BYTES rather than to git's verdict: a `diff` or `text` attribute is a
+        // claim about how to render a change, and whether there is readable
+        // text in here is a question about the object.
+        Err(_) if bytes.contains(&0) => Decoded::Binary,
+        Err(_) => Decoded::Unreadable(String::from("not valid UTF-8, and not binary either")),
+    }
+}
+
+/// One commit-message file, as the text it is meant to be.
+///
+/// Both message readers used to do this with `String::from_utf8_lossy`, which
+/// turns a message written in UTF-16 -- what an editor on Windows will produce
+/// if asked -- into replacement characters with NULs between them, and then
+/// reports every guard over it as passed. A message is text by construction, so
+/// unlike a blob there is no honest skip here: bytes that will not decode are a
+/// message nobody read, and that is exit 2.
+pub(crate) fn read_message(rule: &str, path: &Path) -> Result<String> {
+    let bytes = std::fs::read(path).map_err(|error| Fatal::at(path, error))?;
+    match decode(&bytes) {
+        Decoded::Text(text) => Ok(text),
+        Decoded::Binary => Err(Fatal::new(format!(
+            "{rule}: {} holds binary content rather than a commit message, so there is no \
+             text here to judge",
+            path.display()
+        ))),
+        Decoded::Unreadable(why) => Err(Fatal::new(format!(
+            "{rule}: {} cannot be read as text ({why}), so the message it holds was never \
+             examined -- which is not the same as a message with nothing wrong in it",
+            path.display()
+        ))),
+    }
+}
+
 /// The bytes of one blob. Read through git rather than off disk, because the
 /// blob is the artifact and the file beside it may differ or not exist.
 pub(crate) fn read(root: &Path, blob: &Blob) -> Result<Vec<u8>> {
@@ -521,6 +604,23 @@ pub(crate) fn read_object(root: &Path, sha: &str, path: &str) -> Result<Vec<u8>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_blob_that_is_not_text_is_told_apart_from_one_that_is_binary() {
+        // The direction that matters: an undecodable blob is `Unreadable` and
+        // not a skip, because a file nobody read is not a file with nothing in
+        // it. Binary is the one honest skip -- there are no lines in it for a
+        // codepoint to hide in.
+        assert!(matches!(decode(b"plain\n"), Decoded::Text(_)));
+        assert!(matches!(
+            decode(&[0x89, b'P', b'N', b'G', 0x00, 0x1A]),
+            Decoded::Binary
+        ));
+        assert!(matches!(
+            decode(b"caf\xe9 latin1\n"),
+            Decoded::Unreadable(_)
+        ));
+    }
 
     /// Through the real deserializer, so a test cannot assert about a shape the
     /// config would have refused.

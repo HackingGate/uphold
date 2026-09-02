@@ -118,6 +118,10 @@ impl Measure {
     }
 }
 
+/// One `encoding` rule's declaration: the files it selects, and the charset it
+/// says their bytes are in.
+type Declared = (BTreeSet<String>, &'static encoding_rs::Encoding);
+
 /// One scoped `allowed_scripts` rule, resolved: the files it selects, the
 /// scripts it admits there, and whether it claims them exclusively.
 struct Scoped {
@@ -159,6 +163,16 @@ pub(crate) struct Scan<'a> {
     /// builds it again. The emptied key is what stops the second one repeating
     /// the finding under a later check's heading.
     below_floor: RefCell<BTreeMap<String, Option<Failure>>>,
+    /// Which files each `encoding` rule selects, built once on first use.
+    ///
+    /// The declarations are what turn "these bytes are not UTF-8" from a
+    /// could-not-look into a decoding, so every check needs them and none of
+    /// them may build its own answer: two readings of the same selection are
+    /// two rules free to disagree about whether a file is readable. Built
+    /// through `Selection` directly rather than through `select`, because the
+    /// selection floor belongs to the rule whose check is running and not to
+    /// whichever check happened to ask about encodings first.
+    declared_encodings: RefCell<Option<Vec<Declared>>>,
 }
 
 impl<'a> Scan<'a> {
@@ -178,6 +192,7 @@ impl<'a> Scan<'a> {
             not_text,
             unreadable: RefCell::new(unreadable),
             below_floor: RefCell::new(BTreeMap::new()),
+            declared_encodings: RefCell::new(None),
         }
     }
 
@@ -286,6 +301,110 @@ impl<'a> Scan<'a> {
         Ok(failures)
     }
 
+    /// The charset one `encoding` rule declares for this path, if one covers it.
+    fn declared_encoding(&self, relative: &str) -> Result<Option<&'static encoding_rs::Encoding>> {
+        if self.declared_encodings.borrow().is_none() {
+            let mut declared: Vec<Declared> = Vec::new();
+            for rule in self.policy.of_check(Check::Encoding) {
+                let label = rule.encoding.as_deref().unwrap_or_default();
+                // A label the registry does not carry is refused at load and
+                // again in `encoding_failures`. Here it is simply not a
+                // declaration, so the file it selects stays undeclared rather
+                // than being decoded as something nobody wrote.
+                if let Some(encoding) = encoding_rs::Encoding::for_label(label.as_bytes()) {
+                    let selection = Selection::build(self.root, rule, &self.not_text)?;
+                    self.unreadable
+                        .borrow_mut()
+                        .extend(selection.unreadable().iter().cloned());
+                    declared.push((selection.files().into_iter().collect(), encoding));
+                }
+            }
+            *self.declared_encodings.borrow_mut() = Some(declared);
+        }
+        Ok(self
+            .declared_encodings
+            .borrow()
+            .as_ref()
+            .and_then(|declared| {
+                declared
+                    .iter()
+                    .find(|(files, _)| files.contains(relative))
+                    .map(|(_, encoding)| *encoding)
+            }))
+    }
+
+    /// One selected file as the text every check reads, or nothing and why.
+    ///
+    /// The one place in the scan that decides what a file's bytes say, and it
+    /// was three places: `allowed_scripts` decoded under the declared charset
+    /// and stopped the run where nothing declared one, while `regexp`,
+    /// `forbidden_literals` and `require_regexp` handed the raw bytes to a
+    /// lossy sink and reported whatever came out. A UTF-16 file was exit 2 for
+    /// one check and clean for the other three, in the same run, over the same
+    /// bytes.
+    ///
+    /// `None` is "there is no text here", which is the one honest skip: a
+    /// binary file has no lines for a pattern to be found on. A file that is
+    /// text except for the bytes nobody declared is not a skip -- it goes into
+    /// `unreadable`, which is exit 2 beside the findings rather than instead of
+    /// them.
+    ///
+    /// Valid UTF-8 is answered before anything else is consulted, which is the
+    /// whole of the cost this adds to an ordinary tree: one `from_utf8` over
+    /// bytes that were about to be searched anyway.
+    fn text_of(&self, relative: &str) -> Result<Option<String>> {
+        let path = self.root.join(relative);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                // Recorded and carried past, the way every other reader here
+                // does it: one missing path must not hide every finding the
+                // remaining rules had.
+                self.unreadable
+                    .borrow_mut()
+                    .insert(format!("{}: could not be read ({error})", path.display()));
+                return Ok(None);
+            }
+        };
+        if let Ok(text) = std::str::from_utf8(&bytes) {
+            return Ok(Some(text.to_owned()));
+        }
+        // What the policy DECLARED, before any guess about the bytes. A
+        // declaration is not a guess, and where there is one it answers first.
+        if let Some(encoding) = self.declared_encoding(relative)? {
+            let (decoded, _, had_errors) = encoding.decode(&bytes);
+            if had_errors {
+                // Not even its declared encoding. The `encoding` check reports
+                // this file by name in the same run, and there is no text here
+                // for anything else to read.
+                self.unreadable.borrow_mut().insert(format!(
+                    "{relative}: does not decode as the {} its `encoding` rule declares",
+                    encoding.name()
+                ));
+                return Ok(None);
+            }
+            return Ok(Some(decoded.into_owned()));
+        }
+        // The same three-answer reader the guards use, so the two seams cannot
+        // disagree about whether a blob has text in it: a byte-order mark is
+        // consulted before the NUL test, because a UTF-16 file is full of NULs
+        // and dismissing it as an image takes an ordinary document out of the
+        // scan while looking exactly like a skipped binary.
+        match crate::guard::scope::decode(&bytes) {
+            crate::guard::scope::Decoded::Text(text) => Ok(Some(text)),
+            crate::guard::scope::Decoded::Binary => Ok(None),
+            crate::guard::scope::Decoded::Unreadable(why) => {
+                self.unreadable.borrow_mut().insert(format!(
+                    "{relative}: cannot be read as text ({why}), so \"clean\" here would \
+                     mean \"unexamined\". Declare its charset with an `encoding` rule \
+                     selecting it, exclude it from the rules that select it, or mark it \
+                     not text in .gitattributes"
+                ));
+                Ok(None)
+            }
+        }
+    }
+
     fn select(&self, rule: &Rule) -> Result<Vec<String>> {
         let selection = Selection::build(self.root, rule, &self.not_text)?;
         // Gathered here, at the one place every rule's selection passes
@@ -330,12 +449,15 @@ impl<'a> Scan<'a> {
     fn pattern_failures(&self, rule: &Rule) -> Result<Vec<Failure>> {
         let files = self.select(rule)?;
         let pattern = rule.expression().unwrap_or_default();
-        let mut hits = engine::search_files(
-            self.root,
-            &files,
-            &Query::from_files(pattern, rule.files()),
-            &rule.id,
-        )?;
+        let query = Query::from_files(pattern, rule.files());
+        // One file at a time, so a tree the size of a monorepo is one decoded
+        // file in memory rather than all of them.
+        let mut hits: Vec<Hit> = Vec::new();
+        for file in &files {
+            if let Some(text) = self.text_of(file)? {
+                hits.extend(engine::search_in(file, &text, &query, &rule.id)?);
+            }
+        }
         if rule.files().exclude_cfg_test {
             hits = self.drop_cfg_test_hits(hits);
         }
@@ -386,15 +508,10 @@ impl<'a> Scan<'a> {
             let Some(language) = crate::comments::Language::for_path(file) else {
                 continue;
             };
-            let path = self.root.join(file);
-            let Ok(source) = std::fs::read_to_string(&path) else {
-                // Consistent with every other check here: a file that could not
-                // be read is recorded and the scan carries on, because a checker
-                // that skips what it could not open is claiming a tree it never
-                // examined.
-                self.unreadable
-                    .borrow_mut()
-                    .insert(format!("{}: could not be read as text", path.display()));
+            // Through the one reader, so a source file in a declared charset
+            // is parsed rather than recorded as unreadable: `read_to_string`
+            // stood here and knew nothing about the `encoding` rules.
+            let Some(source) = self.text_of(file)? else {
                 continue;
             };
             parsed += 1;
@@ -461,15 +578,12 @@ impl<'a> Scan<'a> {
             if !crate::prose::reads(&file) {
                 continue;
             }
-            let path = self.root.join(&file);
-            let Ok(source) = std::fs::read_to_string(&path) else {
-                // The same accounting every other check here keeps: a file of a
-                // kind that HAS prose and could not be read is recorded, because
-                // a checker that skips what it could not open is claiming a tree
-                // it never examined.
-                self.unreadable
-                    .borrow_mut()
-                    .insert(format!("{}: could not be read as text", path.display()));
+            // The same accounting every other check here keeps, in the one
+            // reader that keeps it: a file of a kind that HAS prose and could
+            // not be decoded is recorded rather than skipped, because a checker
+            // that passes over what it could not open is claiming a tree it
+            // never examined.
+            let Some(source) = self.text_of(&file)? else {
                 continue;
             };
             for span in crate::prose::of(&file, &source) {
@@ -538,15 +652,38 @@ impl<'a> Scan<'a> {
             rule.ignore_literals.as_deref().unwrap_or(&[]),
         )?;
 
+        // The file loop is outside the needle loop, which is the other way
+        // round from how this read before: a file is decoded once and every
+        // needle is asked of the text, rather than the file being opened once
+        // per needle. The findings are still grouped by needle, because the
+        // label a reader acts on is the literal that was found.
+        let mut found: BTreeMap<usize, Vec<Hit>> = BTreeMap::new();
+        let queries: Vec<(String, Query)> = needles
+            .iter()
+            .map(|needle| {
+                (
+                    format!("{} ({})", rule.id, needle.label),
+                    Query::literal(&needle.value, needle.word),
+                )
+            })
+            .collect();
+        for file in &files {
+            let Some(text) = self.text_of(file)? else {
+                continue;
+            };
+            for (index, (label, query)) in queries.iter().enumerate() {
+                let hits = engine::search_in(file, &text, query, label)?;
+                if !hits.is_empty() {
+                    found.entry(index).or_default().extend(hits);
+                }
+            }
+        }
+
         let mut failures = Vec::new();
-        for needle in needles {
-            let label = format!("{} ({})", rule.id, needle.label);
-            let mut hits = engine::search_files(
-                self.root,
-                &files,
-                &Query::literal(&needle.value, needle.word),
-                &label,
-            )?;
+        for (index, (label, _)) in queries.into_iter().enumerate() {
+            let Some(mut hits) = found.remove(&index) else {
+                continue;
+            };
             if rule.files().exclude_cfg_test {
                 hits = self.drop_cfg_test_hits(hits);
             }
@@ -693,7 +830,16 @@ impl<'a> Scan<'a> {
 
         let mut missing: Vec<String> = Vec::new();
         for file in &files {
-            if !engine::file_matches(self.root, file, &query, &rule.id)? {
+            // A file that could not be decoded is NOT a file missing the
+            // marker, and this is the direction where the lossy read was worst:
+            // it turned a file nobody could read into a violation about a
+            // marker that may well be in it. `text_of` has already put the path
+            // in the unreadable list, which is exit 2, and this leaves it out
+            // of the findings.
+            let Some(text) = self.text_of(file)? else {
+                continue;
+            };
+            if !engine::text_matches(&text, &query, &rule.id)? {
                 missing.push(file.clone());
             }
         }
@@ -1108,18 +1254,6 @@ impl<'a> Scan<'a> {
         }
         let any_exclusive = resolved.iter().any(|scope| scope.exclusive);
 
-        // The declared encodings, so a non-UTF-8 file whose bytes ARE declared
-        // can still have its scripts read: the declaration says how to decode
-        // it, and the two checks stay about their own layers.
-        let mut declared_encodings: Vec<(BTreeSet<String>, &'static encoding_rs::Encoding)> =
-            Vec::new();
-        for rule in self.policy.of_check(Check::Encoding) {
-            let label = rule.encoding.as_deref().unwrap_or_default();
-            if let Some(encoding) = encoding_rs::Encoding::for_label(label.as_bytes()) {
-                declared_encodings.push((self.select(rule)?.into_iter().collect(), encoding));
-            }
-        }
-
         // Every file this check speaks about, scanned once. A global
         // declaration constrains every file; so does an `exclusive` rule,
         // whose scripts are refused precisely in the files it does NOT select.
@@ -1148,38 +1282,15 @@ impl<'a> Scan<'a> {
             if selecting.is_empty() && global_names.is_empty() && excluding.is_empty() {
                 continue;
             }
-            let bytes = std::fs::read(self.root.join(relative))
-                .map_err(|error| Fatal::at(&self.root.join(relative), error))?;
-            let text = match String::from_utf8(bytes) {
-                Ok(text) => text,
-                // A non-UTF-8 file is never silently skipped here: a file nobody
-                // read, reported as clean, is the `explicit-unknown` failure by
-                // name. Bytes an `encoding` rule declares are decoded under that
-                // declaration and their scripts read; bytes nothing declares are
-                // a file this check cannot look at, which is exit-2 territory
-                // and never a pass.
-                Err(error) => {
-                    let raw = error.into_bytes();
-                    let covering = declared_encodings
-                        .iter()
-                        .find(|(files, _)| files.contains(relative));
-                    let Some((_, encoding)) = covering else {
-                        return Err(Fatal::new(format!(
-                            "{relative}: is not UTF-8, so its scripts cannot be read and \
-                             \"clean\" would mean \"unexamined\". Declare its charset with \
-                             an `encoding` rule selecting it, exclude it from the script \
-                             declaration, or mark it not text in .gitattributes"
-                        )));
-                    };
-                    let (decoded, _, had_errors) = encoding.decode(&raw);
-                    if had_errors {
-                        // Not even its declared encoding: the encoding rule
-                        // reports this file in the same run, and there is no
-                        // text here for THIS check to judge.
-                        continue;
-                    }
-                    decoded.into_owned()
-                }
+            // The same reader every other check uses. A non-UTF-8 file is
+            // never silently skipped: bytes an `encoding` rule declares are
+            // decoded under that declaration and their scripts read, and bytes
+            // nothing declares are a file this check could not look at, which
+            // `text_of` records as unreadable -- exit 2, beside the findings
+            // rather than instead of them. It used to end the run here, which
+            // meant one undeclared file hid every script finding behind it.
+            let Some(text) = self.text_of(relative)? else {
+                continue;
             };
 
             let declared: String = if selecting.is_empty() {

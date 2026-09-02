@@ -473,9 +473,43 @@ without one was running the family and reaching a verdict on nothing.
 
 `private-names` does not turn `refuse_unknown` on. What is left fail-open under
 that default is the `404` alone, and a `404` is what every invented name in
-every document produces — measured on the tree that ships the set, fifteen names
+every document produces: measured on the tree that ships the set, fifteen names
 answer `404` and every one is a documentation or test fixture. Turn it on per
 repository after naming those in `public_repos`.
+
+**A name on a host that is not GitHub.** `gh` answers for github.com and for
+nothing else -- a GitHub Enterprise host is a different forge that happens to
+share the software, and asking github.com about a name seen on
+`github.acme.com` answers about somebody else's repository. Every other
+`host.tld/owner/repo` is therefore a name this tool has no answer for, and which
+of two answers it gets depends on **whose name it is**:
+
+| the owner segment | outcome |
+|---|---|
+| a declared `private_owners` owner, or the policy's own `owner` | **exit `2`** -- could-not-look, printed beside any finding |
+| anybody else | reported as unresolved; refused only under `refuse_unknown` |
+
+The split is the whole of it. A repository under an owner this policy has named
+is the case the rule exists for, and silence about it is not a pass. Every other
+`host.tld/a/b` is a DOI, a licence URL or an encyclopaedia article -- the shape
+of a repository name and not one -- and calling those could-not-look would make
+the cure "enumerate every host you cite" in every consuming repository, which is
+`parameterize-do-not-enumerate` with the enumeration moved out of the binary and
+into every policy file.
+
+`foreign_hosts` is how a repository says a host is not a forge at all, which
+quiets both rows:
+
+```toml
+foreign_hosts = ["git.acme-internal.example", "*.sr.ht"]
+```
+
+Host globs, matched case-insensitively. It is a top-level policy field for the
+reason `private_owners_from` is one -- a rule arriving from a bundled set cannot
+be handed a parameter -- and a rule may write its own list, which **replaces**
+the policy's for that rule rather than extending it. Nothing is quieted by
+default: which hosts carry a repository worth an answer is a fact about the
+repository, not about this tool.
 
 `doc-claims` is the one set whose rule needs the author to write something
 beside the prose, so its grammar is here rather than only in the set. A
@@ -793,6 +827,31 @@ bytes, script is a property of the decoded text. Two fields can say "UTF-8
 file containing Japanese" and "Shift-JIS file containing Japanese" apart —
 and they compose, so a Shift-JIS file covered by both is decoded under its
 declared charset and then script-checked as text.
+
+**Every check reads the declaration, not only `allowed_scripts`.** A selected
+file is decoded once — as UTF-8 where it is UTF-8, under a covering `encoding`
+rule where one selects it, by its byte-order mark otherwise — and the text is
+what `regexp`, `forbidden_literals`, `require_regexp`, `comment_regexp`,
+`prose_regexp` and the script check all read. A file whose bytes nothing can
+decode goes into the unreadable list: reported beside the findings, exit `2`,
+and never a pass. A binary file is the one skip, because it has no lines for a
+pattern to be found on.
+
+### `redact_matches` — the finding without the text
+
+```toml
+redact_matches = true    # at the top of the policy file
+```
+
+Prints the rule and the location of every hit and **not the matched text**. For
+the tree where the finding is itself the secret: a `forbidden_literals` rule
+refusing a hostname writes that hostname into a CI log every time it fires, and
+the log is read by more people than the file was.
+
+Off by default, because a finding whose text a reader cannot see is one they
+have to reproduce locally before they can act on it. It is a policy field
+rather than a rule one: what may be printed is a property of where the output
+goes, not of any one rule.
 
 ### `max_lines` and `max_bytes`, and the baseline that ratchets them
 
@@ -1154,6 +1213,7 @@ enforced and is not.
 | `private_owners_from` | the `no-private-repo-names` family | a command whose stdout is one private owner per line |
 | `public_repos` | the `no-private-repo-names` family | names treated as public without asking a forge |
 | `refuse_unknown` | the `no-private-repo-names` family | treat a name whose visibility could not be determined as private |
+| `foreign_hosts` | the `no-private-repo-names` family | host globs carrying no repository this rule needs resolved — replaces the top-level list for this rule |
 | `allow` | `prevent-unusual-unicode-in-files` | codepoints admitted, optionally under one glob — `"U+00A0:docs/captured/**"` |
 
 The "family" is `no-private-repo-names`, `-staged` and `-in-files`. No other
@@ -1164,7 +1224,7 @@ two seams, and who this workspace is means the same thing whether a push or a
 nothing else — everything else in that row is about judging names in text, which
 the falsifier never does.
 
-**Three of these are also top-level policy fields**, and that is not a
+**Four of these are also top-level policy fields**, and that is not a
 convenience. A rule arriving from a bundled set cannot be handed a parameter —
 the only way to give it one is to write the rule out again, which is the
 transcription `no-hand-copied-base-rule` refuses — so the facts that belong to
@@ -1176,6 +1236,7 @@ owner = "your-org"          # read by prevent-public-push and prevent-unowned-ta
 visibility = "public"       # read by the no-private-repo-names family
 private_owners_from = "cat ~/.config/private-owners"
 private_owners_optional = true    # only where this policy is cloned; see below
+foreign_hosts = ["doi.org"]       # hosts that are not forges this repository cites
 ```
 
 A rule's own field wins where both are written.

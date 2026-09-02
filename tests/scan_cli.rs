@@ -422,6 +422,122 @@ fn a_declared_encoding_lets_the_script_check_read_the_bytes() {
     assert!(text.contains("Hiragana"), "{text}");
 }
 
+/// The bytes every check reads are decoded, not lossily guessed at.
+///
+/// `regexp`, `forbidden_literals` and `require_regexp` reached the tree through
+/// a searcher with binary detection off and a lossy sink, so a UTF-16 file was
+/// a run of replacement characters by the time a pattern was matched against
+/// it: nothing was ever found, and the file was reported as read. The script
+/// check refused the very same file in the very same run for being unreadable.
+#[test]
+fn a_utf16_file_is_decoded_before_a_pattern_is_asked_about_it() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TODO'
+
+        [rule.no-todo.files]
+        exclude = ["policy/**"]
+"#,
+    );
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in "a note: TODO later\n".encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    write_bytes(&root, "note.txt", &bytes);
+
+    let output = scan(&root);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("note.txt"), "{text}");
+    assert!(text.contains("TODO"), "{text}");
+}
+
+/// And the file nothing can decode is could-not-look rather than clean.
+///
+/// The same stance `allowed_scripts` already took, now taken by every check
+/// that reads a file: Latin-1 bytes are not UTF-8, are not binary, and are not
+/// declared, so nobody read the file -- which is exit 2 with the path named and
+/// the cures beside it.
+#[test]
+fn a_file_no_charset_declares_is_reported_by_the_pattern_checks_too() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TODO'
+
+        [rule.no-todo.files]
+        exclude = ["policy/**"]
+"#,
+    );
+    // Latin-1, which is neither UTF-8 nor binary.
+    write_bytes(&root, "caf\u{e9}.txt", b"caf\xe9 au lait\n");
+
+    let output = scan(&root);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 2, "{text}");
+    assert!(text.contains("cannot be read as text"), "{text}");
+    assert!(!stdout(&output).contains("policy checks passed"), "{text}");
+
+    // Declaring the charset is one of the cures, and it puts the file back in
+    // the scan rather than merely quieting the report.
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TODO'
+
+        [rule.no-todo.files]
+        exclude = ["policy/**"]
+
+        [rule.captures-are-latin1]
+        encoding = "windows-1252"
+        message = "a capture keeps the venue's own encoding"
+        files.glob = ["*.txt"]
+"#,
+    );
+    assert_eq!(code(&scan(&root)), 0, "{}", stderr(&scan(&root)));
+}
+
+/// A file that must contain a marker and cannot be read is not a file missing
+/// the marker.
+///
+/// The worst direction of the lossy read: `require_regexp` searched the
+/// replacement characters, found no marker, and reported a violation about a
+/// marker that may well have been there. It is could-not-look now.
+#[test]
+fn a_required_marker_is_not_declared_missing_from_a_file_nobody_could_read() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.every-doc-has-a-status]
+        message = "every doc says its status"
+        require_regexp = 'Status:'
+        files.glob = ["docs/**"]
+"#,
+    );
+    write_bytes(&root, "docs/one.txt", b"caf\xe9 au lait\n");
+
+    let output = scan(&root);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 2, "{text}");
+    assert!(text.contains("cannot be read as text"), "{text}");
+    // Not reported as a document that is missing the marker.
+    assert!(!text.contains("every doc says its status"), "{text}");
+}
+
 #[test]
 fn a_dynamic_rule_searches_what_its_source_produced() {
     let root = workspace();
