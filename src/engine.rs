@@ -7,8 +7,6 @@
 //! second engine that agreed with it in every case anyone tested would disagree
 //! somewhere nobody did.
 
-use std::path::Path;
-
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::sinks::Lossy;
 use grep_searcher::{BinaryDetection, SearcherBuilder};
@@ -125,63 +123,46 @@ impl Query {
         builder
             .line_number(true)
             .multi_line(self.multiline)
-            // A tracked file that is not UTF-8 must not be able to kill the run.
-            // The old engine hit this from the other side: it decoded ripgrep's
-            // STDOUT strictly, and a match inside a page captured in Shift_JIS
-            // killed the entire run with a decode error that named no rule and
-            // no file, long after the search itself had succeeded.
+            // Everything reaching this searcher is `&str` now, so neither of
+            // these can lose a byte: the decision about bytes that are not
+            // UTF-8 was made before the text got here, by the one reader that
+            // knows what the policy declares about the file's charset. They are
+            // written anyway because a searcher that stopped at a NUL would
+            // silently truncate a text a caller had already decoded, and a
+            // default is not a decision.
             .binary_detection(BinaryDetection::none());
         builder.build()
     }
 }
 
-/// Search a list of repository-relative files.
-pub(crate) fn search_files(
-    root: &Path,
-    files: &[String],
-    query: &Query,
-    label: &str,
-) -> Result<Vec<Hit>> {
-    let matcher = query.matcher(label)?;
-    let mut searcher = query.searcher();
-    let mut hits = Vec::new();
-    for file in files {
-        let path = root.join(file);
-        let mut found: Vec<(u64, String)> = Vec::new();
-        let outcome = searcher.search_path(
-            &matcher,
-            &path,
-            Lossy(|line_number, line| {
-                found.push((line_number, line.trim_end_matches('\n').to_owned()));
-                Ok(true)
-            }),
-        );
-        if let Err(error) = outcome {
-            // An unreadable file is not a clean file. Reporting it as fatal is
-            // the point: a checker that skips what it could not open is claiming
-            // a tree it never examined.
-            return Err(Fatal::new(format!("{label}: {}: {error}", path.display())));
-        }
-        for (line_number, text) in found {
-            hits.push(Hit {
-                path: file.clone(),
-                line: Some(line_number),
-                text,
-            });
-        }
-    }
-    Ok(hits)
+/// Search one file's DECODED text, attributed to its path.
+///
+/// The path is a label here and nothing else: this function does not open it.
+/// It used to, through `search_path`, which handed ripgrep the raw bytes with
+/// `BinaryDetection::none()` and a lossy sink -- so a UTF-16 file was searched
+/// as a run of replacement characters and reported as read and clean, while
+/// `allowed_scripts` refused the very same file in the very same run for being
+/// unreadable. One of those two was wrong and it was not the one that stopped.
+/// Deciding what a file's bytes say is now done once, in `scan`, where the
+/// `encoding` declarations are; the engine is handed text.
+pub(crate) fn search_in(path: &str, text: &str, query: &Query, label: &str) -> Result<Vec<Hit>> {
+    Ok(search_text(text, query, label)?
+        .into_iter()
+        .map(|hit| Hit {
+            path: path.to_owned(),
+            ..hit
+        })
+        .collect())
 }
 
-/// Whether one file matches at all. The must-find kinds need no more than this.
-pub(crate) fn file_matches(root: &Path, file: &str, query: &Query, label: &str) -> Result<bool> {
+/// Whether one text matches at all. The must-find kinds need no more than this.
+pub(crate) fn text_matches(text: &str, query: &Query, label: &str) -> Result<bool> {
     let matcher = query.matcher(label)?;
     let mut searcher = query.searcher();
     let mut hit_found = false;
-    let path = root.join(file);
-    let outcome = searcher.search_path(
+    let outcome = searcher.search_slice(
         &matcher,
-        &path,
+        text.as_bytes(),
         Lossy(|_, _| {
             hit_found = true;
             // Stop at the first hit: the question is whether the pattern is
@@ -191,7 +172,7 @@ pub(crate) fn file_matches(root: &Path, file: &str, query: &Query, label: &str) 
         }),
     );
     if let Err(error) = outcome {
-        return Err(Fatal::new(format!("{label}: {}: {error}", path.display())));
+        return Err(Fatal::new(format!("{label}: {error}")));
     }
     Ok(hit_found)
 }

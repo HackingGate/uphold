@@ -294,7 +294,7 @@ Individual steps:
 uv run --no-project scripts/validate.py        # schema and relationship validation
 uv run --no-project scripts/build_reference.py # rebuild the generated files after edits
 uv run --no-project python -m unittest discover -s tests
-./uphold_check.py                 # this repo's own declaration
+cargo run --quiet -- check                  # this repo's own claims, reconciled
 cargo run --quiet -- guard --stage manual   # every pin still names a ref
 ```
 
@@ -304,7 +304,7 @@ QUICK_REFERENCE.md      generated human index
 REVIEW.md, AGENTS.md    generated review tier: the judgment no rule decides
 review-controls.json    generated: the change each controlled record must be found by
 name-index.json         generated lookup index: every name -> a record id
-uphold_check.py     reconciler; the hook other repos install
+uphold_check.py         catalog prose: --explain, --list, --review, --oscal, --init
 scripts/                analysis, catalog loading, validation, generation
 ```
 
