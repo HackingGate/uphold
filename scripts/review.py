@@ -40,9 +40,9 @@ from __future__ import annotations
 
 import json
 
-#: Against an observed degradation range of roughly 800 to 1,000 lines, below
-#: the bottom of it. A limit set at the top of a range is a limit that reaches
-#: the failure it was measured against.
+#: Below the bottom of the range in which review quality was observed to
+#: degrade. A limit set at the top of a range is a limit that reaches the
+#: failure it was measured against.
 DEFAULT_MAX_LINES = 900
 
 #: The standing asymmetry, and it points one way on purpose: a static rule has

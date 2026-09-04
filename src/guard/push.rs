@@ -319,7 +319,7 @@ pub(crate) fn unowned(
         // The refusal has always named the weaker mode; the pass never did, so
         // a repository running the tautological version of this guard heard
         // nothing for as long as nothing went wrong -- which is exactly as long
-        // as the note is worth reading. Measured across the fleet: 50 of 65
+        // as the note is worth reading. Measured across the fleet: most
         // repositories pin no `owner`.
         //
         // Scoped to `!pinned && !by_repo` on purpose. A pinned owner is the

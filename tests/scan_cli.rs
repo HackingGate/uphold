@@ -601,9 +601,9 @@ fn a_baselined_path_is_allowed_and_a_new_one_is_not() {
 #[test]
 fn a_size_baseline_line_that_does_not_parse_is_refused_rather_than_skipped() {
     // The failure is silent in the direction that matters. A size baseline is a
-    // ratchet -- a file held at 8 lines under a limit of 10 may not grow to 9 --
-    // and dropping the entry checks the file against the LIMIT instead, so it
-    // may now grow to 10 with nothing reported.
+    // ratchet -- a file held at eight lines under a limit of ten may not grow
+    // to nine -- and dropping the entry checks the file against the LIMIT
+    // instead, so it may now grow to ten with nothing reported.
     //
     // The staleness check cannot cover this: a dropped entry is never in the
     // map, so it is not "listed", and the mechanism for noticing a baseline

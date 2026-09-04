@@ -369,8 +369,9 @@ fn a_utf16_file_naming_a_private_repository_is_read_rather_than_lossily_skipped(
 #[test]
 fn a_staged_utf16_file_naming_a_private_repository_is_read_too() {
     // The other half, blind for the opposite reason: the staged scan tested
-    // for a NUL in the first 8000 bytes and skipped what it found, which is
-    // git's binary test and is true of every UTF-16 file ever committed.
+    // for a NUL in a fixed prefix of the file and skipped what it found,
+    // which is git's binary test and is true of every UTF-16 file ever
+    // committed.
     let root = repository(STAGED);
     write_bytes(
         &root,

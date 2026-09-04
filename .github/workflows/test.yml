@@ -62,10 +62,11 @@ jobs:
 
       # The debug target directory this job fills is the same one the three
       # `hooks` legs fill: same toolchain, same lockfile, same profile. Four
-      # caches of it were four ~124MB uploads per commit that evicted each
-      # other, so they share one key and this job is the only writer -- a
-      # reader that also wrote would race the other three for the same slot and
-      # win with whatever subset of the tree its own commands happened to build.
+      # caches of it were four uploads of the same directory per commit that
+      # evicted each other, so they share one key and this job is the only
+      # writer -- a reader that also wrote would race the other three for the
+      # same slot and win with whatever subset of the tree its own commands
+      # happened to build.
       #
       # Written from main only. A pull request restores that cache through the
       # prefix restore-key and builds the delta; letting it write back would
@@ -361,7 +362,7 @@ jobs:
       #
       # Read-only against the release key the `consumer` job writes: both build
       # `--release` from this same tree with this same toolchain, so the second
-      # copy of that cache was a second 72MB upload of a directory that already
+      # copy of that cache was a second upload of a directory that already
       # existed.
       - if: matrix.tool == 'lefthook'
         uses: Swatinem/rust-cache@v2

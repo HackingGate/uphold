@@ -280,6 +280,53 @@ const CORPUS: &[Case] = &[
             "name: ci\non: [push]\n'permissions':\n  contents: read\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
         ],
     },
+    // A measurement stated in a comment. The `allows` here are the whole
+    // argument: the three shapes that put digits in a comment and mean no
+    // quantity at all -- a version, a date, a citation -- plus the line that
+    // proves the opener is the scope and not the file.
+    Case {
+        set: "comment-facts",
+        rule: "no-measurement-in-comment",
+        path: "sample.rs",
+        refuses: &[
+            "# 60 s timeout\n",
+            "// target/ alone is ~127 MB of rlib\n",
+            "# 3 of 5 done\n",
+            "-- 250 ms per query\n",
+            // `line` is on the unit list deliberately: a count of a thing that
+            // changes, stated where nothing recounts it.
+            "# read once per 100 lines\n",
+            // The percentage, and it is here because the obvious spelling of
+            // the pattern cannot refuse it. `\b` is a transition between a word
+            // character and a non-word one, so a `%` followed by `\b` needs a
+            // word character AFTER the percent sign, which is a spelling
+            // nobody writes. There is deliberately no `allows` line
+            // beside this one: every percentage in a comment states a
+            // proportion measured at some moment, and no counter-example was
+            // found that a reader would call anything else.
+            "# 100% of the time\n",
+        ],
+        allows: &[
+            // A version is an identifier; the digits belong to a name, and
+            // a version with a unit welded onto it is not a thing anyone
+            // writes.
+            "# since v1.14.1\n",
+            "# Go 1.25 needed\n",
+            // A date is a point, not an amount.
+            "# reviewed 2026-09-04\n",
+            // An ordinal or a citation numbers a thing rather than measuring
+            // one, and neither is followed by a unit.
+            "# see ADR 0005\n",
+            "# closes issue 101\n",
+            // A hyphen joins a number to a name, and the digits after it are
+            // part of the name. Without that boundary this reads as sixteen
+            // files.
+            "// a UTF-16 file is decoded before it is searched\n",
+            // The opener is the scope. A string literal holding the same
+            // characters is code, and the rule never reads it.
+            "let t = \"60 s\";\n",
+        ],
+    },
     // The prose set. Its `allows` are the near misses each pattern was written
     // to let through, and they are the half worth reading: a shape rule that
     // widened by one alternative refuses the sentence it was written to permit,

@@ -353,7 +353,7 @@ files.glob = ["*.yml", "*.yaml"]
 
 `inherit.sets` names bundled sets to inherit; it does not add settings. There
 is no `true` shorthand — naming the sets is cheap, and what a repository
-inherits should be written in the repository. Nineteen are compiled into the
+inherits should be written in the repository. Twenty are compiled into the
 binary and mirrored in [`policy/base/`](../policy/base), each **named by what
 it refuses** so the name predicts the rule list:
 
@@ -368,6 +368,7 @@ it refuses** so the name predicts the rule list:
 | `doc-claims` | a document whose anchored fact disagrees with the record it names — a value the record does not hold, a key that is not there, a source or captured artifact that is absent |
 | `default-token-grant` | a GitHub Actions workflow with no top-level `permissions:` block, whose `GITHUB_TOKEN` is therefore scoped by a repository setting rather than by the workflow |
 | `hand-rolled-toolchain` | a host tool installed by hand where a version manager was available — a `curl \| tar` download-and-unpack, and the `$HOME/.local` symlink that puts its output on PATH. Deliberately silent on `curl \| sh` (a version manager's own bootstrap has nowhere else to live), on a host-prerequisite manifest beside it (a resolver provisions, a doctor verifies), and on distro packages |
+| `comment-facts` | a measurement stated in a source comment, where no anchor can ever check it — `# 60 s timeout`, `// ~127 MB of rlib`, `# 3 of 5 done`. The other half of `doc-claims`: that one checks a fact somebody anchored, this one refuses the shape of a fact nobody can anchor. Scoped to lines whose first token opens a comment, in source files by extension, so a string literal and a markdown bullet are never read. Lets through a version (`v1.14.1`, `Go 1.25`), a date (`2026-09-04`) and a citation (`ADR 0005`, `issue 101`), none of which is followed by a unit. Installs no git hook; the fix is a constant, the commit or pull-request body, or deletion |
 | `commit-message-residue` | authorship markers and unusual characters in the message a commit records — **installs `commit-msg`** |
 | `unreviewed-history` | a merge made locally rather than through a pull request — **installs `pre-commit` and `pre-merge-commit`** |
 | `mismatched-author` | a commit whose author or committer identity disagrees with the global one on the machine making it — **installs `pre-commit`**, and declines with a note where no global identity is configured |
