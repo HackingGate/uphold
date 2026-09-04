@@ -151,7 +151,7 @@
 # changes is a check that never runs.
 - id: uphold-guard-push
   name: "uphold guard (stage: pre-push)"
-  description: run the guards that fire at pre-push -- push destination, pushed-range content, stale hook pins
+  description: run the guards that fire at pre-push -- push destination, pushed-range content
   entry: uphold guard --stage pre-push
   language: rust
   stages: [pre-push]

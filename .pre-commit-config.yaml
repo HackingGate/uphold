@@ -183,11 +183,11 @@ repos:
       #
       # It stays off pre-commit for the reason the script did: one network round
       # trip per pinned repository in front of every commit is a check that gets
-      # commented out. pre-push is the last local moment before the work is
-      # shared; manual is how CI and a scheduled run reach it, which is what
-      # turns "whoever pushes next finds out" into something a schedule finds
-      # first -- and losing that sweep is why this entry exists rather than
-      # leaving `guards-pre-push` alone.
+      # commented out. It is off pre-push too, since the `stale-pins` set gave
+      # that stage up: an unrelated upstream patch release blocking the next
+      # push is how a gate gets bypassed by reflex. This entry is the whole of
+      # where the pin check runs -- CI and a scheduled run, which turns
+      # "whoever pushes next finds out" into something a schedule finds first.
       - id: guards-manual
         name: "guards (stage: manual)"
         entry: cargo run --quiet -- guard --stage manual

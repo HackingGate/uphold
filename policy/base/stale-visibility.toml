@@ -43,11 +43,14 @@
 # A repository that cannot live with a network-dependent gate should inherit
 # `private-names` and not this.
 #
-# THE STAGES ARE `stale-pins`'s, for the reason written there. `pre-push` is the
-# last local moment before work is shared, and `manual` is the sweep. It is off
-# `pre-commit` on purpose: a guard that adds a network round trip to every
-# commit is one somebody comments out, and a check that gets switched off
-# protects nothing.
+# THE STAGES ARE `pre-push` AND `manual`. `pre-push` is the last local moment
+# before work is shared, and `manual` is the sweep. It is off `pre-commit` for
+# the reason `stale-pins` writes down: a guard that adds a network round trip to
+# every commit is one somebody comments out, and a check that gets switched off
+# protects nothing. It keeps `pre-push` where `stale-pins` has given it up,
+# because the push is the disclosure here -- work reaching a repository the
+# forge serves to everybody -- rather than an unrelated upstream release
+# standing in front of work that has nothing to do with it.
 #
 # WHAT IT CANNOT SEE. It asks about `origin`, so a repository pushed somewhere
 # `origin` does not name is not the repository being checked -- which is the

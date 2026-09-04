@@ -609,7 +609,6 @@
         "builtin": "no-stale-hook-pins",
         "git": {
           "hooks": [
-            "pre-push",
             "manual"
           ]
         },
@@ -618,7 +617,6 @@
     ],
     "set": "stale-pins",
     "stages": [
-      "pre-push",
       "manual"
     ]
   },
