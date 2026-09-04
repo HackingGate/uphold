@@ -325,12 +325,36 @@ pub(crate) fn target_refusal(
     })
 }
 
+/// How a consultation asks whether one inner rule's own scope holds here.
+///
+/// A predicate rather than a scope, because only the caller standing in front
+/// of a command knows the destination: the seams that have none -- `scan
+/// --text`, `guard --text`, the harness hook -- hand over a predicate that
+/// always holds, and the shim hands over its memo.
+///
+/// `Err` is the third answer and not a hidden `false`: a scope that could not
+/// be told is exit 2 for a rule the shim names directly, and a rule reached
+/// through a consultation is judged the same way. What the shim answers for a
+/// rule its `command.before` does NOT name is `true`: no scope was ever
+/// written about that rule here, and reading the table's at it would stand
+/// down a guard nobody scoped.
+pub(crate) type ScopeAsk<'a> = &'a mut dyn FnMut(&Rule) -> Result<bool>;
+
 /// Run every text-capable guard over one piece of text.
+///
+/// `in_scope` is asked about each inner rule, because a rule reached through a
+/// consultation is judged under its own effective scope -- exactly as when the
+/// shim reaches it directly. An outer rule scoped `always` says when the
+/// CONSULTATION applies, and one answer cannot stand for every rule behind it:
+/// a `public-target` rule dragged along to a private destination leaves a
+/// workspace nothing to switch off but the consultation, and with it the
+/// checks it was there for.
 pub(crate) fn over_text(
     root: &Path,
     policy: &Policy,
     label: &str,
     text: &str,
+    in_scope: ScopeAsk<'_>,
 ) -> Result<Vec<Refusal>> {
     let mut refusals = Vec::new();
     for rule in policy.of_check(CheckKind::Builtin) {
@@ -340,7 +364,10 @@ pub(crate) fn over_text(
         {
             continue;
         }
-        if let Some(refusal) = text_refusal(root, policy, rule, label, text)? {
+        if !in_scope(rule)? {
+            continue;
+        }
+        if let Some(refusal) = text_refusal(root, policy, rule, label, text, in_scope)? {
             refusals.push(refusal);
         }
     }
@@ -361,6 +388,7 @@ pub(crate) fn text_refusal(
     rule: &Rule,
     label: &str,
     text: &str,
+    in_scope: ScopeAsk<'_>,
 ) -> Result<Option<Refusal>> {
     let Some(builtin) = rule.builtin() else {
         return Ok(None);
@@ -377,7 +405,7 @@ pub(crate) fn text_refusal(
         // refused and not only that the consultation did. `over_text` skips the
         // meta guards, so the recursion is one level deep by construction.
         "text-guards" => {
-            let inner = over_text(root, policy, label, text)?;
+            let inner = over_text(root, policy, label, text, in_scope)?;
             fold(
                 rule,
                 inner
@@ -385,6 +413,14 @@ pub(crate) fn text_refusal(
                     .map(|refusal| format!("{}: {}", refused_by(policy, &refusal), refusal.report)),
             )
         }
+        // No scope question fans out here. The literal rules are not a kind the
+        // shim ever dispatches directly -- `Seam::Command` does not consult
+        // `Judged::Literals`, it reaches them only through this built-in -- so
+        // an inner literal rule has no "scope it would have been judged under
+        // directly" to keep, and the running-host fallback this assembles is
+        // not a policy rule at all. Gating them on the table's scope would only
+        // stand the identity check down for private destinations, which is the
+        // arrangement `command.scope = "always"` on this rule exists to undo.
         "text-literals" => {
             let failures = crate::text::failures_in(root, policy, text)?;
             fold(

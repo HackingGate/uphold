@@ -1281,3 +1281,147 @@ unresolved = "run"
         );
     }
 }
+
+/// A consultation scoped `always` over a rule that is not.
+///
+/// The reporter's policy, which is the shape `published-text` ships: the
+/// `text-guards` rule reads every egress because host identity in a body is
+/// worth refusing wherever it lands, and the private-name rule behind it is
+/// left on the table's `public-target` on purpose -- a private name bound for a
+/// private repository is not a disclosure.
+const CONSULTED_RULE_POLICY: &str = r#"
+[rule.no-published-markers]
+message = "published text must satisfy the text guards"
+builtin = "text-guards"
+command.before = ["faux"]
+command.scope = "always"
+
+[rule.no-published-private-repo-names]
+builtin = "no-private-repo-names"
+visibility = "public"
+private_owners = ["acme-private"]
+command.before = ["faux"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-t", "--title", "-b", "--body"]
+target = "git-remote"
+scope = "public-target"
+"#;
+
+/// The workspace for the cases below, with the forge stub and a remote.
+fn consulted_rule_workspace() -> PathBuf {
+    let root = workspace(
+        CONSULTED_RULE_POLICY,
+        &[
+            ("faux", "#!/bin/sh\necho \"faux ran: $*\"\n"),
+            ("gh", GITHUB_COMMAND),
+        ],
+    );
+    origin(&root, "https://github.com/acme-private/thing.git");
+    root
+}
+
+#[test]
+fn a_rule_reached_through_a_consultation_keeps_its_own_scope() {
+    // The defect, as reported. `text-guards` ran every text-capable rule in the
+    // policy and asked none of them whose destinations they were about, so a
+    // `public-target` rule scoped by the table was consulted about a PRIVATE
+    // repository -- every `gh issue comment`, `pr create` and `git push` whose
+    // text named the workspace's own organisation was refused, and the only way
+    // out switched the marker check off along with it.
+    let root = consulted_rule_workspace();
+    let calls = root.join("gh-calls.log");
+
+    let private = Run {
+        args: &[
+            "faux",
+            "pr",
+            "create",
+            "-b",
+            "this fixes acme-private/thing",
+        ],
+        envs: &[
+            ("GH_CALLS", &calls.to_string_lossy()),
+            ("FAKE_VISIBILITY", "private"),
+        ],
+        ..Run::default()
+    }
+    .go(&root);
+    assert_eq!(code(&private), 0, "{}", stderr(&private));
+    assert!(
+        stdout(&private).contains("faux ran:"),
+        "{}",
+        stdout(&private)
+    );
+    assert!(
+        !stderr(&private).contains("no-published-private-repo-names"),
+        "a `public-target` rule was consulted about a private repository: {}",
+        stderr(&private)
+    );
+
+    // The other half, unchanged: the same text bound for a public repository
+    // is a disclosure, and the fold names the rule that refused rather than
+    // only the consultation that carried it.
+    let public = Run {
+        args: &[
+            "faux",
+            "pr",
+            "create",
+            "-b",
+            "this fixes acme-private/thing",
+        ],
+        envs: &[
+            ("GH_CALLS", &calls.to_string_lossy()),
+            ("FAKE_VISIBILITY", "public"),
+        ],
+        ..Run::default()
+    }
+    .go(&root);
+    assert_eq!(code(&public), 1, "{}", stderr(&public));
+    assert!(
+        !stdout(&public).contains("faux ran:"),
+        "{}",
+        stdout(&public)
+    );
+    assert!(
+        stderr(&public).contains("no-published-private-repo-names"),
+        "{}",
+        stderr(&public)
+    );
+}
+
+#[test]
+fn a_consulted_scope_that_could_not_be_told_is_not_a_pass() {
+    // The third answer. A forge that cannot say whether the destination is
+    // public leaves "does this rule apply here" unestablished, and the
+    // consultation propagates that the way the shim does for a rule it names
+    // directly: exit 2, nothing published. Reading it as "does not hold" would
+    // stand the inner rule down exactly where the destination is unknown.
+    let root = consulted_rule_workspace();
+    let calls = root.join("gh-calls.log");
+    let output = Run {
+        args: &[
+            "faux",
+            "pr",
+            "create",
+            "-b",
+            "this fixes acme-private/thing",
+        ],
+        envs: &[("GH_CALLS", &calls.to_string_lossy()), ("FAKE_FAILS", "1")],
+        ..Run::default()
+    }
+    .go(&root);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("could not look"),
+        "{}",
+        stderr(&output)
+    );
+}

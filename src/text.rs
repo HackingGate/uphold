@@ -266,7 +266,12 @@ pub(crate) fn judged(
             }
             Judged::Guards => {
                 verdicts.extend(
-                    crate::guard::over_text(root, policy, label, text)?
+                    // Every inner rule is in scope here: the three seams that
+                    // reach this line -- `scan --text`, `guard --text`, the
+                    // harness hook -- are handed text and no destination, so
+                    // there is nothing to ask a `public-target` scope about.
+                    // The shim, which does have one, passes its own memo.
+                    crate::guard::over_text(root, policy, label, text, &mut |_| Ok(true))?
                         .into_iter()
                         .map(Verdict::Guard),
                 );

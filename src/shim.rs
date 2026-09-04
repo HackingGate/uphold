@@ -2441,20 +2441,26 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
     // answered here again, so a rule whose scope is the table's `public-target`
     // is not asked about a body bound for a private repository just because a
     // wider rule kept the checkpoint open.
-    let checkers: Vec<&Rule> = match policy.shims.iter().find(|shim| shim.command == name) {
-        Some(shim) => {
-            let collected = shim.collect(root, &opened_for)?;
-            let mut scopes = ScopeMemo::default();
+    // Kept past the filter below, because the consultations ask it too: a
+    // `text-guards` rule whose own scope held runs other rules, and each of
+    // those is judged under its own scope off this same memo.
+    let mut scoping = match policy.shims.iter().find(|shim| shim.command == name) {
+        Some(shim) => Some((shim, shim.collect(root, &opened_for)?, ScopeMemo::default())),
+        None => None,
+    };
+    let checkers: Vec<&Rule> = match &mut scoping {
+        Some((shim, collected, scopes)) => {
+            let shim = *shim;
             let mut kept: Vec<&Rule> = Vec::new();
-            for rule in named {
+            for rule in &named {
                 if scopes.holds(
                     shim,
                     effective_scope(rule, shim),
                     root,
-                    &collected,
+                    collected,
                     &opened_for,
                 )? {
-                    kept.push(rule);
+                    kept.push(*rule);
                 }
             }
             if kept.is_empty() {
@@ -2464,7 +2470,9 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
             }
             kept
         }
-        None => named,
+        // Cloned rather than moved: `named` is read again below, to tell a
+        // rule this command names from one a consultation merely reaches.
+        None => named.clone(),
     };
     let mut refusals: Vec<String> = Vec::new();
     for rule in checkers {
@@ -2492,9 +2500,32 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
                 }
             }
             crate::text::Judged::Guards => {
-                if let Some(refusal) =
-                    crate::guard::text_refusal(root, policy, rule, subject.kind, &subject.value)?
-                {
+                // As in `run`: a rule this consultation reaches keeps its own
+                // effective scope, answered off the memo the filter above
+                // already used.
+                let mut in_scope = |inner: &Rule| match &mut scoping {
+                    // As in `run`: only a rule this command names carries a
+                    // scope written about it here.
+                    _ if !named.iter().any(|stands| stands.id == inner.id) => Ok(true),
+                    Some((shim, collected, scopes)) => scopes.holds(
+                        shim,
+                        effective_scope(inner, shim),
+                        root,
+                        collected,
+                        &opened_for,
+                    ),
+                    // No `[[shim]]` table names this command, so there is no
+                    // scope to judge under and nothing to stand down for.
+                    None => Ok(true),
+                };
+                if let Some(refusal) = crate::guard::text_refusal(
+                    root,
+                    policy,
+                    rule,
+                    subject.kind,
+                    &subject.value,
+                    &mut in_scope,
+                )? {
                     refusals.push(refusal.report);
                 }
             }
@@ -2874,12 +2905,40 @@ pub(crate) fn run(
                         // guard cannot judge a commit message one way and a
                         // pull-request body another under one id.
                         crate::text::Judged::Guards => {
+                            // The consultation gets the same memo the loop
+                            // above asks: a rule this guard runs on its behalf
+                            // is judged under its own effective scope, exactly
+                            // as if `command.before` had brought the shim to it
+                            // directly. So a `public-target` rule behind an
+                            // `always` consultation is asked about a public
+                            // destination and no other.
+                            let mut inner_in_scope = |inner: &Rule| {
+                                // Only a rule this invocation's own
+                                // `command.before` names has a scope written
+                                // about it here. A guard the consultation
+                                // reaches that stands at a git hook and
+                                // nowhere else -- or that names another
+                                // command -- was never a rule the table's
+                                // scope spoke for, and reading the table at it
+                                // would stand down a check nobody scoped.
+                                if !checkers.iter().any(|named| named.id == inner.id) {
+                                    return Ok(true);
+                                }
+                                scopes.holds(
+                                    shim,
+                                    effective_scope(inner, shim),
+                                    root,
+                                    &collected,
+                                    &words,
+                                )
+                            };
                             if let Some(refusal) = crate::guard::text_refusal(
                                 root,
                                 policy,
                                 rule,
                                 subject.kind,
                                 &subject.value,
+                                &mut inner_in_scope,
                             )? {
                                 refusals.push(refusal.report);
                             }
