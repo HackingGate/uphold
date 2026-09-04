@@ -313,25 +313,23 @@ fn a_push_outside_the_allow_list_is_refused_and_says_how_to_allow_it() {
     write(&root, "a.txt", "one\n");
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    // The forge is asked about a destination the pin refused, so this test says
+    // what it answered. Without that the run is exit 2 for want of an answer,
+    // and the subject here is the answer the allow-list gave.
+    gh_says(&root, GH_SAYS_NO);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
-        .args([
-            "guard",
-            "--stage",
-            "pre-push",
-            "--remote-url",
-            "https://github.com/someone-else/thing.git",
-        ])
-        .current_dir(&root)
-        .env_remove("UPHOLD_ALLOW")
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
+    let output = push_guard(
+        &root,
+        &["--remote-url", "https://github.com/someone-else/thing.git"],
+    );
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     let text = stderr(&output);
     assert!(text.contains("someone-else/thing"), "{text}");
     assert!(text.contains("pinned to acme"), "{text}");
     assert!(text.contains("allowed_repos"), "{text}");
+    // And the refusal says the forge was consulted too, so a reader is not left
+    // looking for a mis-typed owner when the forge disagreed as well.
+    assert!(text.contains("The forge was asked as well"), "{text}");
 }
 
 #[test]
@@ -377,19 +375,13 @@ fn an_unpinned_workspace_says_its_answer_came_from_origin() {
         ],
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
-        .args([
-            "guard",
-            "--stage",
-            "pre-push",
-            "--remote-url",
-            "https://github.com/someone-else/thing.git",
-        ])
-        .current_dir(&root)
-        .env_remove("UPHOLD_ALLOW")
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
+    // With a forge that says no, so the subject stays which mode answered.
+    gh_says(&root, GH_SAYS_NO);
+
+    let output = push_guard(
+        &root,
+        &["--remote-url", "https://github.com/someone-else/thing.git"],
+    );
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(
         stderr(&output).contains("DERIVED FROM ORIGIN"),
@@ -1318,6 +1310,12 @@ fn an_origin_with_no_owner_and_repository_in_it_is_not_a_checked_claim() {
 /// this suite is run from a hook often enough that an inherited
 /// `PRE_COMMIT_REMOTE_NAME` would answer for a fixture that deliberately says
 /// nothing about its destination -- which is the one input these tests vary.
+///
+/// The fixture's own `stub-bin` goes in front of PATH, so a test that wrote a
+/// `gh` there is answered by it. `prevent-public-push` asks the forge about a
+/// destination its allow-list has already refused, and a test that let the
+/// machine's own `gh` answer that would be a test whose result depends on who
+/// is logged in on it.
 fn push_guard(root: &Path, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
     command
@@ -1325,6 +1323,14 @@ fn push_guard(root: &Path, args: &[&str]) -> Output {
         .args(args)
         .current_dir(root)
         .env_remove("UPHOLD_ALLOW")
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                root.join("stub-bin").display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
         .stdin(Stdio::null());
     for name in [
         "PRE_COMMIT_REMOTE_NAME",
@@ -1339,6 +1345,30 @@ fn push_guard(root: &Path, args: &[&str]) -> Output {
         command.env_remove(name);
     }
     command.output().unwrap()
+}
+
+/// A `gh` that answers both ownership questions with a no.
+///
+/// The destination guard asks the forge only about a destination the allow-list
+/// has already refused, and a forge that cannot be asked is exit 2 rather than
+/// a refusal. So a test whose subject is the allow-list's own answer says what
+/// the forge said: a login that is not the destination's owner, and a token
+/// that does not administer it.
+const GH_SAYS_NO: &str = "case \"$*\" in\n\
+                          'api user --jq .login') echo not-the-owner ;;\n\
+                          'api repos/'*' --jq .permissions.admin') echo false ;;\n\
+                          *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
+                          esac\n";
+
+/// Put a `gh` this test wrote where [`push_guard`] will find it first.
+fn gh_says(root: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let bin = root.join("stub-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let gh = bin.join("gh");
+    std::fs::write(&gh, format!("#!/bin/sh\n{body}")).unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 const PINNED_PUSH: &str = r#"
@@ -1379,6 +1409,8 @@ fn a_push_whose_destination_cannot_be_read_is_refused() {
 #[test]
 fn the_remote_named_on_the_command_line_is_the_one_resolved() {
     let root = repository(PINNED_PUSH);
+    // A forge that says no, so the refusal below is the remote that was read.
+    gh_says(&root, GH_SAYS_NO);
     git(
         &root,
         &[
@@ -1424,6 +1456,7 @@ fn a_push_from_a_workspace_with_no_owner_anywhere_says_it_had_nothing_to_judge_a
         "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\n\n\
          [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
     );
+    gh_says(&root, GH_SAYS_NO);
 
     let output = push_guard(
         &root,
@@ -1450,6 +1483,8 @@ fn an_allowed_repo_admits_one_repository_without_the_derived_owner_note() {
          allowed_repos = [\"someone-else/thing\"]\n\n\
          [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
     );
+    // For the sibling at the end, which the written list does not admit.
+    gh_says(&root, GH_SAYS_NO);
     git(
         &root,
         &[
@@ -1495,6 +1530,8 @@ fn a_written_allowed_owners_admits_its_own_and_refuses_the_rest() {
          allowed_owners = [\"friendly-org\"]\n\n\
          [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
     );
+    // For the second push, which the written list does not admit.
+    gh_says(&root, GH_SAYS_NO);
     git(
         &root,
         &[
@@ -1541,6 +1578,8 @@ fn allowed_owners_joins_the_pinned_owner_rather_than_replacing_it() {
          owner = \"acme\"\nallowed_owners = [\"friend\"]\n\n\
          [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
     );
+    // For the third push, which neither the pin nor the list admits.
+    gh_says(&root, GH_SAYS_NO);
 
     let output = push_guard(
         &root,
@@ -1564,4 +1603,97 @@ fn allowed_owners_joins_the_pinned_owner_rather_than_replacing_it() {
         "{}",
         stderr(&output)
     );
+}
+
+/// A destination the forge says the operator owns is not an unowned one.
+///
+/// The pin is the right first answer and stays first. What it could not express
+/// is a public repository the operator owns under another name: a bundled rule
+/// takes no parameter, so the workspace had no lever short of `UPHOLD_ALLOW`,
+/// which switches the guard off rather than answering it. Ownership is a fact
+/// the forge holds and a repointed remote cannot move.
+#[test]
+fn a_destination_the_forge_says_the_operator_owns_is_allowed() {
+    let root = repository(PINNED_PUSH);
+
+    // The login IS the destination's owner, and the case differs because
+    // GitHub logins are case-insensitive.
+    gh_says(
+        &root,
+        "case \"$*\" in\n\
+         'api user --jq .login') echo Someone-Else ;;\n\
+         *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
+         esac\n",
+    );
+    let output = push_guard(
+        &root,
+        &["--remote-url", "https://github.com/someone-else/thing.git"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    // A different login, and a token that administers the repository. An
+    // organisation the operator owns is not a login, so the second question is
+    // the one that answers for most of them.
+    gh_says(
+        &root,
+        "case \"$*\" in\n\
+         'api user --jq .login') echo not-the-owner ;;\n\
+         'api repos/'*' --jq .permissions.admin') echo true ;;\n\
+         *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
+         esac\n",
+    );
+    let output = push_guard(
+        &root,
+        &["--remote-url", "https://github.com/someone-else/thing.git"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+/// A forge that could not be asked is exit 2, not a pass and not a refusal.
+///
+/// The question was never put, and a check that did not happen has never been a
+/// pass anywhere in this binary. The refusal's own text is still there, because
+/// the allow-list did answer and its answer is the one the reader acts on.
+#[test]
+fn a_forge_that_could_not_be_asked_is_the_third_answer() {
+    let root = repository(PINNED_PUSH);
+    gh_says(
+        &root,
+        "echo 'gh: To get started with GitHub CLI, please run:  gh auth login' >&2\nexit 1\n",
+    );
+
+    let output = push_guard(
+        &root,
+        &["--remote-url", "https://github.com/someone-else/thing.git"],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("is not on the allow-list"), "{text}");
+    assert!(text.contains("The forge could not be asked"), "{text}");
+    assert!(text.contains("gh auth login"), "{text}");
+}
+
+/// A destination on a host no client answers for keeps the answer it had.
+///
+/// There is no `gh` question to ask about a GitLab remote, and inventing one
+/// would be this guard reporting a check it did not make. So the allow-list is
+/// the whole answer there, exactly as it was before the forge was consulted at
+/// all -- and no `gh` is spawned, which is what the stub asserts by failing the
+/// test if it is.
+#[test]
+fn a_destination_on_a_host_with_no_client_is_judged_by_the_allow_list_alone() {
+    let root = repository(PINNED_PUSH);
+    gh_says(
+        &root,
+        "echo 'gh: this should never have been run' >&2\nexit 1\n",
+    );
+
+    let output = push_guard(
+        &root,
+        &["--remote-url", "https://gitlab.com/someone-else/thing.git"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("someone-else/thing"), "{text}");
+    assert!(!text.contains("The forge"), "{text}");
 }

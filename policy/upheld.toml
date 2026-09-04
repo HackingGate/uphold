@@ -79,7 +79,9 @@ rule = "prevent-ai-author"
 [[enforce]]
 principle = "fail-safe-defaults"
 rule = "prevent-public-push"
-# Push destinations are permitted by name; anything unnamed is refused.
+# Push destinations are permitted by name, or by the forge saying the operator
+# owns them; anything neither answers for is refused, and a forge that could
+# not be asked is exit 2 rather than a pass.
 
 [[enforce]]
 principle = "least-privilege"

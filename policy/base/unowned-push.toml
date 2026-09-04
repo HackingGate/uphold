@@ -30,6 +30,23 @@
 # rather than of one rule in it, so the policy holds it and every rule that
 # needs it reads it from there.
 #
+# THE FORGE IS ASKED SECOND, and only about a destination the allow-list has
+# already refused. A workspace pinned to one organisation refused a
+# `gh issue create` on a public repository the same operator owns, and had no
+# way to say otherwise: a set cannot be handed a parameter, so the only lever
+# left was UPHOLD_ALLOW, which switches the guard off rather than answering it.
+# So a GitHub destination that is off the list is put to `gh`: is the
+# authenticated login this destination's owner, and failing that does the token
+# administer the repository. Either is ownership and the push goes.
+#
+# That is not the tautology this header argues against. The objection to
+# `origin` is that the guard would read its answer off the very thing it is
+# guarding -- repointing the remote moves the allow-list with it. Ownership is
+# a fact the FORGE holds; no edit in this repository moves it, and the accident
+# this set exists to catch cannot manufacture it. A forge that says no is the
+# refusal it always was; a forge that could not be asked is exit 2, because a
+# question that could not be asked is not a pass.
+#
 # `allowed_owners` and `allowed_repos` also answer the question, on the rule,
 # for a repository whose pushes legitimately go somewhere other than its own
 # owner -- a fork, a mirror, a vendor drop. Naming the destinations IS saying
