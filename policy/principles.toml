@@ -89,6 +89,12 @@ sets = [
     "host-identity",
     "broken-links",
     "doc-claims",
+    # The other half of `doc-claims`: that one checks a fact somebody anchored,
+    # this one refuses a measurement of this tree's own data stated in a source
+    # comment, where no anchor can ever check it. Taken here one release after
+    # it shipped, because the released shim fails closed on a set it cannot
+    # load, and the tree was already clean under it when the set landed.
+    "comment-facts",
     # Not residue in what is committed but how CI is configured, which is why it
     # is a name of its own. Promoted out of this file: the declaration that
     # stood here was byte-identical to nine others across the fleet, which is

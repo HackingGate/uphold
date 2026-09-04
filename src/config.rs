@@ -312,11 +312,10 @@ impl CommandWhere {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Inherit {
-    /// Bundled rule sets, by what they refuse: `process-residue`,
-    /// `credentials`, `unmanaged-pins`, `host-identity`, `broken-links`,
-    /// `captured-fixtures`, `doc-claims`, `default-token-grant`. [`BUNDLED`] is the list; this is a
-    /// reader's copy of it, and the error a wrong name gets is built from the
-    /// array.
+    /// Bundled rule sets, by name. [`BUNDLED`] is the list and the only one:
+    /// a copy of it here named eight sets when the array held twenty, and
+    /// nothing checked the two against each other. `uphold rules --sets`
+    /// prints the array, and the error a wrong name gets is built from it.
     #[serde(default)]
     pub sets: Vec<String>,
     /// Extra policy files, repository-relative. Merged after the bundled sets
