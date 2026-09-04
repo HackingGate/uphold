@@ -545,8 +545,8 @@
           "multiline": false,
           "word": false
         },
-        "id": "no-measurement-in-comment",
-        "message": "This comment states a measurement, and no anchor checks it -- the value was\ntrue when it was written and nothing fails when it stops being. Make it a\nconstant, move it to the commit or pull-request body, or delete it.\n",
+        "id": "no-user-data-measurement",
+        "message": "This comment states a measurement, and no anchor checks it -- the value was\ntrue when it was written and nothing fails when it stops being. If it measures\nyour own data -- a size on disk, a count across a fleet, a duration timed on\none machine -- drop it: delete the number, and the sentence with it if it\ncannot stand alone, or move the figure to the commit or pull-request body. If\nthe number is not yours to measure -- a platform constant, a limit the code\nenforces, a worked example -- give the code the number, as a named constant\nthis comment can point at, or rewrite the example so it needs none. Do not\nspell the digits out as words: that states the same fact and only hides it\nfrom this rule.\n",
         "regexp": "^\\s*(?:#:?|///?|--|/\\*|\\*)(?:[^\\n]*[^\\w.-])?\\d[\\d_,.]*\\s?(?:%|(?:MB|KB|GB|ms|s|sec|seconds?|minutes?|hours?|files?|lines?|bytes?)\\b)|^\\s*(?:#:?|///?|--|/\\*|\\*)[^\\n]*\\b\\d+\\s+of\\s+\\d+\\b"
       }
     ],

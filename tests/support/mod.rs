@@ -6,13 +6,13 @@
 //! defends against a name colliding and frees nothing. The names carry a process
 //! id precisely so that they do not collide, so nothing was ever freed.
 //!
-//! Measured before the fix: one working session left 84,992 directories under
-//! `/tmp`, occupying the whole of the tmpfs they share. It is not a slow leak
-//! -- a mutation run repeats the whole suite once per mutant, so a hundred
-//! suites is an ordinary afternoon -- and what it broke was a `cargo mutants`
-//! run, which died on `No space left on device` and reported 158 mutants
-//! "unviable". A tool reporting a measurement it could not make is the shape
-//! this repository exists to refuse, and the test suite caused it.
+//! Observed before the fix: one working session left enough directories under
+//! `/tmp` to fill the tmpfs they share. It is not a slow leak -- a mutation run
+//! repeats the whole suite once per mutant, so a great many suites is an
+//! ordinary afternoon -- and what it broke was a `cargo mutants` run, which
+//! died on `No space left on device` and reported as "unviable" the mutants it
+//! could not evaluate. A tool reporting a measurement it could not make is the
+//! shape this repository exists to refuse, and the test suite caused it.
 //!
 //! So a fixture lives under `<temp>/uphold-tests/<pid>/`, and the first fixture
 //! in a run SWEEPS every sibling whose process is gone. What a run leaves behind

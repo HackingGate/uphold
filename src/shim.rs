@@ -3144,16 +3144,15 @@ mod tests {
         ));
         // And ONE is the whole space, so both readings missing is a conclusion
         // rather than a doubt. This line asserted `Unclear` until #56, and what
-        // that cost was measured: on a git shim declaring `push:*`, nine of
-        // sixteen ordinary invocations printed the could-not-look refusal --
-        // `git show --stat HEAD`, `git commit -F -`, `git checkout -b <name>`,
-        // `git reset --hard HEAD` among them -- while `git push` itself was
-        // quiet. A warning printed over every command this shim exists to stay
-        // out of the way of trains the reader to ignore the one invocation
-        // where the doubt is real, which is the failure the whole arm was
-        // written to avoid. Nothing about safety moved: `Unclear` runs no
-        // checker and collects nothing, so it and `Absent` differ in the
-        // message alone.
+        // that cost was measured: on a git shim declaring `push:*`, most
+        // ordinary invocations printed the could-not-look refusal -- `git show
+        // --stat HEAD`, `git commit -F -`, `git checkout -b <name>`, `git reset
+        // --hard HEAD` among them -- while `git push` itself was quiet. A
+        // warning printed over every command this shim exists to stay out of
+        // the way of trains the reader to ignore the one invocation where the
+        // doubt is real, which is the failure the whole arm was written to
+        // avoid. Nothing about safety moved: `Unclear` runs no checker and
+        // collects nothing, so it and `Absent` differ in the message alone.
         assert!(matches!(
             git_push().reading(&argv("--fictional-option value status")),
             Reading::Absent

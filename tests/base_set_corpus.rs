@@ -280,13 +280,15 @@ const CORPUS: &[Case] = &[
             "name: ci\non: [push]\n'permissions':\n  contents: read\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
         ],
     },
-    // A measurement stated in a comment. The `allows` here are the whole
-    // argument: the three shapes that put digits in a comment and mean no
-    // quantity at all -- a version, a date, a citation -- plus the line that
-    // proves the opener is the scope and not the file.
+    // A measurement of the author's own data, stated in a comment where nothing
+    // recounts it; the remedy is to drop the number, never to spell it out in
+    // words. The `allows` here are the whole argument: the three shapes that
+    // put digits in a comment and mean no quantity at all -- a version, a date,
+    // a citation -- plus the line that proves the opener is the scope and not
+    // the file.
     Case {
         set: "comment-facts",
-        rule: "no-measurement-in-comment",
+        rule: "no-user-data-measurement",
         path: "sample.rs",
         refuses: &[
             "# 60 s timeout\n",

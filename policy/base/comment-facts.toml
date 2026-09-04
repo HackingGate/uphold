@@ -1,10 +1,16 @@
-# Base rule set: comment-facts (a measurement stated in a comment, where
-# nothing can ever check it)
+# Base rule set: comment-facts (a measurement of the author's own data, stated
+# in a comment where nothing can ever recount it)
 #
 # A comment that states a measurement is a fact with no anchor. Pull in with:
 #
 #   [inherit]
 #   sets = ["comment-facts"]
+#
+# WHAT THE RULE IS ABOUT. A measurement of the author's OWN DATA: a size on
+# disk, a count of repositories in a fleet, a duration timed on one machine, a
+# cache size, a mutant count from one run. Such a number describes one tree,
+# one machine or one day, and nothing in the code recounts it. It was taken
+# once, by somebody, somewhere off the page.
 #
 # WHAT SLIPS THROUGH TODAY. `doc-claims` reads a document that carries a
 # `fact-anchor`, and checks the value against the record the marker names. A
@@ -33,12 +39,20 @@
 # what the prose leaves out. So this refuses the SHAPE, which is recognisable
 # without knowing what the number measures: digits, optional space, a unit.
 #
-# THE REMEDY IS ALWAYS ONE OF THREE, and the rule's message names all three
-# because which one is right is the author's call and not this rule's. Make it a
-# constant, where the value and the thing it governs cannot disagree. Move it to
-# the commit or the pull-request body, where a measurement taken on one day is
-# dated by the record that holds it. Or delete it: a number nobody can check is
-# not carrying the reader anywhere.
+# THE REMEDY FOR A MEASUREMENT OF THE AUTHOR'S OWN DATA IS TO DROP IT. Delete
+# the number; delete the sentence too, if it cannot stand without it. The
+# argument a sentence makes almost always survives the number's removal --
+# `most of the fleet pins no owner` carries the reader as far as a count taken
+# one afternoon does, and it is still true next month. Where the exact figure
+# is the point, it belongs in the commit or the pull-request body, which is a
+# record with a date on it.
+#
+# WHAT IS NEVER THE REMEDY: SPELLING THE DIGITS OUT AS WORDS. A comment that
+# says the same measurement in words states the same unanchored fact and goes
+# stale on the same day; all that changed is that this pattern can no longer
+# read it. That is not a fix, it is an exemption written in prose, and it is
+# worse than an exemption in the policy file because nothing records that it
+# was taken.
 #
 # WHAT IT LETS THROUGH, AND WHY EACH ONE HAD TO BE LET THROUGH. A version
 # (`v1.14.1`, `Go 1.25`) is an identifier, not a quantity -- the digits belong to
@@ -49,13 +63,24 @@
 # writes.
 #
 # WHAT IT CANNOT TELL APART, and this is the cost, stated rather than hedged
-# away. A number in a worked example -- a file held at eight lines under a limit
-# of ten -- measures nothing and can never go stale, and written in digits it
-# reads to this pattern exactly like a measurement. Spelling it out is the fix,
-# as this paragraph spells it out, and it is the right fix: a worked example is
-# prose and reads better as prose. The alternative was a hedge that told the two
-# apart by guessing, and every version of that guess lets a real measurement
-# through, which is the one outcome nothing later can notice.
+# away. Not every number in a comment is the author's data. A platform constant
+# (`the <n> KiB a pipe holds`), a limit the code itself enforces, a number in a
+# worked example -- none of those was measured off a tree, and none of them can
+# go stale the way a directory's size goes stale. Written in digits they read
+# to this pattern exactly like a measurement, because the pattern reads a
+# SHAPE. The alternative was a hedge that told the two apart by guessing, and
+# every version of that guess lets a real measurement through, which is the one
+# outcome nothing later can notice. So the rule refuses the shape and the
+# READER decides which kind of number it is.
+#
+# AND WHEN THE READER DECIDES IT IS NOT THE AUTHOR'S DATA, the fix is to make
+# the code own the number. A named constant the comment can point at puts the
+# value where the code and the sentence cannot disagree; a worked example can
+# usually be rewritten to make its point without a figure at all -- a file held
+# under the limit by its baseline may not grow toward it. What is not available,
+# here as anywhere in this set, is words for digits: the sentence would still
+# carry a number nothing owns, and the only thing the rewrite bought was
+# silence.
 #
 # `line` STAYS ON THE UNIT LIST DELIBERATELY. `# read once per <n> lines` is
 # the same defect as `# <n> s timeout`: a count of a thing that changes,
@@ -78,11 +103,18 @@
 [set]
 stages = []
 
-[rule.no-measurement-in-comment]
+[rule.no-user-data-measurement]
 message = """
 This comment states a measurement, and no anchor checks it -- the value was
-true when it was written and nothing fails when it stops being. Make it a
-constant, move it to the commit or pull-request body, or delete it.
+true when it was written and nothing fails when it stops being. If it measures
+your own data -- a size on disk, a count across a fleet, a duration timed on
+one machine -- drop it: delete the number, and the sentence with it if it
+cannot stand alone, or move the figure to the commit or pull-request body. If
+the number is not yours to measure -- a platform constant, a limit the code
+enforces, a worked example -- give the code the number, as a named constant
+this comment can point at, or rewrite the example so it needs none. Do not
+spell the digits out as words: that states the same fact and only hides it
+from this rule.
 """
 # THE COMMENT OPENER IS THE SCOPE, and the pattern carries it rather than a
 # check kind: `^\s*(?:#:?|///?|--|/\*|\*)` says the line opens a comment, and
