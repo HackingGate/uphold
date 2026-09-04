@@ -81,6 +81,15 @@ coverage:
 # workflow nobody else has.
 uphold-manual:
   commands:
+    # The pin check is not a command of its own any more. It was
+    # `hook-pins-resolve`, a Python script asking whether every `rev:` still
+    # named a ref that exists, beside a `no-stale-hook-pins` guard asking
+    # whether the pin had fallen behind -- two checkers over one answer, free to
+    # disagree, and they did: the guard counted a pin it could not reach as
+    # passed. One `git ls-remote` answers both questions now, inside the guard
+    # this command runs, and a pin it could not check is exit 2. It ran at
+    # pre-push as well until the `stale-pins` set gave that stage up; this group
+    # is the whole of where it runs.
     guards:
       run: cargo run --quiet -- guard --stage manual
 
@@ -96,14 +105,6 @@ pre-merge-commit:
 
 pre-push:
   commands:
-    # The pin check is not a command of its own any more. It was
-    # `hook-pins-resolve`, a Python script asking whether every `rev:` still
-    # named a ref that exists, beside a `no-stale-hook-pins` guard asking
-    # whether the pin had fallen behind -- two checkers over one answer, free to
-    # disagree, and they did: the guard counted a pin it could not reach as
-    # passed. One `git ls-remote` answers both questions now, inside the guard
-    # the `guards` command below runs, and a pin it could not check is exit 2.
-    #
     # `use_stdin: true`, which this was missing. lefthook runs a command under a
     # pseudo-TTY by default and that stdin never closes, so git's ref lines
     # never arrived and the guards that read the pushed range were asked about

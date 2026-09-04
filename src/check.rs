@@ -298,12 +298,15 @@ fn lefthook_seams(root: &Path, guards: &BTreeMap<String, String>) -> Result<Inst
         serde_yaml_ng::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
 
     let mut direct = false;
-    for (stage, body) in &config.stages {
-        // Only a name git knows is a stage; `remotes`, `colors` and the rest of
-        // lefthook's top-level keys are not.
-        if !guards.contains_key(stage.as_str()) {
-            continue;
-        }
+    for (key, body) in &config.stages {
+        // A git hook's stage is its own key. A NAMED GROUP's stage is written
+        // in the command, because lefthook has no `manual` hook for a key to
+        // be -- the sweep is `lefthook run <group>`, and reading only the keys
+        // git knows left that seam unreachable in every lefthook consumer while
+        // the command under it said `--stage manual` in plain sight. Every
+        // other top-level key -- `remotes`, `colors` -- carries no `run:` at
+        // all, so reaching them finds nothing rather than finding a stage.
+        let hook_stage = guards.contains_key(key.as_str()).then(|| key.clone());
         for run in runs_in(body) {
             let words: Vec<&str> = run.split_whitespace().collect();
             // The subcommand, and the word before it. Matched on the
@@ -325,7 +328,18 @@ fn lefthook_seams(root: &Path, guards: &BTreeMap<String, String>) -> Result<Inst
             if subcommand == "scan" && !words.contains(&"--text") {
                 found.scan = true;
             } else if subcommand == "guard" {
-                found.stages.insert(stage.clone());
+                // What the binary was TOLD, ahead of where it was written: the
+                // stage is an argument, and the argument is what decides which
+                // rules the run consults.
+                let named = words
+                    .iter()
+                    .position(|word| *word == "--stage")
+                    .and_then(|at| words.get(at + 1))
+                    .map(|word| (*word).to_owned())
+                    .filter(|word| guards.contains_key(word.as_str()));
+                if let Some(stage) = named.or_else(|| hook_stage.clone()) {
+                    found.stages.insert(stage);
+                }
             }
         }
     }

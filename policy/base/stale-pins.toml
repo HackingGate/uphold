@@ -27,16 +27,30 @@
 # nor missing, and reporting it would make the one form that cannot drift the
 # form that fails.
 #
-# THE STAGES ARE THE STRONGER OF THE TWO SHAPES FOUND IN THE FLEET. Some
-# repositories declare `manual` alone, some `pre-push` and `manual`. Bundling
-# the weaker one would make adoption a silent LOSS of coverage for everybody in
-# the second group, which is the one thing a preset must never do. `pre-push` is
-# the last local moment before work is shared, and it is off `pre-commit` on
-# purpose -- one network round trip per pinned repository in front of every
-# commit is a check that gets commented out.
+# THE STAGE IS `manual` ALONE, AND THE FLEET SETTLED THAT BEFORE THIS FILE DID.
+# A survey on 2026-09-05 of the 85 sibling repositories that carry a
+# `policy/principles.toml` found all 85 inheriting this set, and 79 of them
+# shadowing `[rule.no-stale-hook-pins]` with a body byte-identical to the one
+# below except for `git.hooks = ["manual"]`. The reason they record is the
+# reason here: "At pre-push an unrelated upstream patch release blocks the next
+# push of work that has nothing to do with it, which is how a gate gets bypassed
+# by reflex. At manual, CI says the pin is stale and the push still lands." A
+# default that 79 of its 85 inheritors override with the same line is the wrong
+# default, and the 79 transcriptions it forced are the drift `policy/base/`
+# exists to end.
+#
+# The six repositories that inherited it without shadowing -- VfioPlane/* --
+# move from `pre-push` to `manual` with this change, and lose the refusal that
+# stood in front of a push. What replaces it is the sweep the other 79 have been
+# reading this verdict from all along: a `manual` run in CI, which reports a
+# stale pin without holding the unrelated work that happened to be pushed next.
+#
+# It stays off `pre-commit` for the older reason, unchanged: one network round
+# trip per pinned repository in front of every commit is a check that gets
+# commented out.
 [set]
-stages = ["pre-push", "manual"]
+stages = ["manual"]
 
 [rule.no-stale-hook-pins]
 builtin = "no-stale-hook-pins"
-git.hooks = ["pre-push", "manual"]
+git.hooks = ["manual"]

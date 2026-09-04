@@ -112,8 +112,8 @@ Measured on this repository, on one machine, so the ratios are what matter:
 A claim that names a rule must also name where it runs, because "this rule is
 enforced here" is false when the seam it runs at is one nobody can afford to
 trigger. This repository has already applied that rule to itself three times, in
-the same direction each time: the network-touching pin check runs at pre-push
-and manual rather than at commit; `cargo deny` is documented rather than hooked;
+the same direction each time: the network-touching pin check runs at manual
+rather than at commit or push; `cargo deny` is documented rather than hooked;
 `cargo mutants` and `cargo kani` are manual. The pattern is that anything whose
 cost a contributor would notice belongs at a seam they chose to run, because a
 check somebody disables wholesale enforces nothing at all.

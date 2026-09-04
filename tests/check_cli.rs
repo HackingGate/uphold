@@ -84,6 +84,21 @@ builtin = \"prevent-public-push\"
 git.hooks = [\"pre-push\"]
 ";
 
+/// A guard that fires at the manual stage and nowhere else -- the shape the
+/// bundled `stale-pins` set installs, and the one a lefthook consumer can only
+/// reach through a named group.
+const MANUAL_POLICY: &str = "\
+[rule.no-stale-hook-pins]
+builtin = \"no-stale-hook-pins\"
+git.hooks = [\"manual\"]
+";
+
+const MANUAL_CLAIM: &str = "\
+[[enforce]]
+principle = \"explicit-unknown\"
+rule = \"no-stale-hook-pins\"
+";
+
 // ── the exit-code contract ───────────────────────────────────────────
 
 #[test]
@@ -544,6 +559,45 @@ fn a_lefthook_command_is_a_rule_a_claim_may_name() {
     );
     let output = check(&root, &[]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn a_lefthook_group_driving_the_manual_stage_supplies_it() {
+    // lefthook has no `manual` hook, so the sweep is a NAMED GROUP and the
+    // stage is written in the command under it. Read by the enclosing key
+    // alone, `manual` was a stage no lefthook consumer could ever install --
+    // which made a rule that fires there a rule nothing here supplies, over a
+    // file that says `--stage manual` in plain sight.
+    let root = workspace();
+    write(&root, "policy/principles.toml", MANUAL_POLICY);
+    write(
+        &root,
+        "lefthook.yml",
+        "uphold-manual:\n  commands:\n    guards:\n      run: uphold guard --stage manual\n",
+    );
+    write(&root, "policy/upheld.toml", MANUAL_CLAIM);
+    let output = check(&root, &[]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("uphold guard at manual"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_lefthook_file_that_drives_no_manual_stage_does_not_supply_one() {
+    // The other half of the case above: what establishes the stage is the
+    // argument, and a file carrying no run that names it establishes nothing.
+    let root = workspace();
+    write(&root, "policy/principles.toml", MANUAL_POLICY);
+    write(
+        &root,
+        "lefthook.yml",
+        "pre-commit:\n  commands:\n    guards:\n      run: uphold guard --stage pre-commit\n",
+    );
+    write(&root, "policy/upheld.toml", MANUAL_CLAIM);
+    assert_eq!(code(&check(&root, &[])), 1);
 }
 
 #[test]
