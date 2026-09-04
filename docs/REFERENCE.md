@@ -1541,6 +1541,20 @@ scope is evaluated once per invocation, the editor checkpoint stays open when
 any rule's scope holds, and the editor pass consults only the rules whose
 scope held.
 
+**A rule reached through a consultation is judged under its own effective
+scope**, exactly as when the shim reaches it directly: `text-guards` scoped
+`always` runs the guards the policy declares, and each of those that names
+this command in its own `command.before` is asked under its own
+`command.scope` where it wrote one and the table's where it did not. So a
+`text-guards` rule that reads every egress no longer drags a `public-target`
+rule along with it to a private destination — before this, the only way past
+that was `UPHOLD_ALLOW` on the consultation, which switched off the checks it
+was there for. A guard the consultation reaches that this command does not
+name — one standing at a git hook, say — is consulted as before, because no
+scope was ever written about it here. A scope that could not be told is exit
+`2` on this path too: an inner rule whose destination question the forge could
+not answer is neither in scope nor out of it.
+
 `editor_env` names the variable the command consults for its editor —
 `GH_EDITOR` for `gh`, `GLAB_EDITOR` for `glab`. The shim sets it to itself
 before exec'ing, which is what closes the editor path below; without it there
