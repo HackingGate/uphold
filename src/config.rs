@@ -79,6 +79,17 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
         "hand-rolled-toolchain",
         include_str!("../policy/base/hand-rolled-toolchain.toml"),
     ),
+    // The other half of `doc-claims`, and a separate name because it is a
+    // separate argument. That one checks a fact somebody ANCHORED; this one
+    // refuses the shape of a fact nobody can anchor -- a measurement stated in
+    // a comment, where the record it came from is not written down and never
+    // was. Declining it is a real decision: a repository whose comments quote
+    // benchmark numbers on purpose, beside the benchmark, has an argument for
+    // exactly these lines.
+    (
+        "comment-facts",
+        include_str!("../policy/base/comment-facts.toml"),
+    ),
     // The guard sets. They install git hooks, which the seven above do not, and
     // each is a separate name because taking one is a separate decision: what
     // it costs, when it runs, and what it will refuse are different arguments

@@ -51,9 +51,10 @@
 # it belongs in a base set where adding a RULE would not.
 #
 # PROVENANCE. These three rules were promoted here after being found hand-copied
-# into 36 of 39 consuming repositories, byte-identical in every one. Thirty-six
-# identical copies of a rule is not thirty-six decisions; it is one decision and
-# thirty-five transcriptions, and the transcriptions are where drift lives.
+# into thirty-six of thirty-nine consuming repositories, byte-identical in
+# every one. Thirty-six identical copies of a rule is not thirty-six decisions;
+# it is one decision and thirty-five transcriptions, and the transcriptions are
+# where drift lives.
 #
 # The patterns here are wider than those copies, and wider is the only safe
 # direction to move them. A rule that grows can at worst find something a

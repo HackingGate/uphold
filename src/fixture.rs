@@ -9,7 +9,7 @@
 //! name carries the pid precisely so it cannot collide with a live run, so
 //! `remove_dir_all` before `create_dir_all` never had anything to remove.
 //! Measured before the fix, one working session left 84,992 of them under
-//! `/tmp`, filling 15 GB of a 16 GB tmpfs and killing a `cargo mutants` run with
+//! `/tmp`, filling the tmpfs they share and killing a `cargo mutants` run with
 //! `No space left on device` -- which the run then reported as 158 mutants
 //! "unviable", a measurement it had not made.
 

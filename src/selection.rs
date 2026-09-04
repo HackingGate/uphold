@@ -785,10 +785,10 @@ mod tests {
     #[test]
     fn several_thousand_tracked_paths_are_read_without_deadlocking() {
         // The proof for the pipe, and the numbers are the proof: 3000 paths of
-        // about 50 bytes is 150 KiB written to stdin, and `check-attr` answers
-        // each one as it reads it, which comes to 200 KiB back. Both are
-        // several times the 64 KiB a pipe holds, so a parent that wrote the
-        // whole list before reading a byte stopped here and never came back.
+        // about fifty bytes is 150 KiB written to stdin, and `check-attr`
+        // answers each one as it reads it, which comes to 200 KiB back. Both
+        // are several times the 64 KiB a pipe holds, so a parent that wrote
+        // the whole list before reading a byte stopped here and never came back.
         let root = repository("many");
         write(&root, ".gitattributes", "*.bin -text\n");
         write(&root, "capture.bin", "bytes\n");

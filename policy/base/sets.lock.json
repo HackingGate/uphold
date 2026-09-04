@@ -509,6 +509,54 @@
     "commands": [],
     "rules": [
       {
+        "files": {
+          "exclude_cfg_test": false,
+          "glob": [
+            "*.rs",
+            "*.py",
+            "*.go",
+            "*.js",
+            "*.ts",
+            "*.tsx",
+            "*.jsx",
+            "*.c",
+            "*.h",
+            "*.cpp",
+            "*.hpp",
+            "*.java",
+            "*.kt",
+            "*.swift",
+            "*.rb",
+            "*.sh",
+            "*.bash",
+            "*.zsh",
+            "*.fish",
+            "*.toml",
+            "*.yaml",
+            "*.yml",
+            "*.sql",
+            "*.lua",
+            "*.php",
+            "*.cs"
+          ],
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-measurement-in-comment",
+        "message": "This comment states a measurement, and no anchor checks it -- the value was\ntrue when it was written and nothing fails when it stops being. Make it a\nconstant, move it to the commit or pull-request body, or delete it.\n",
+        "regexp": "^\\s*(?:#:?|///?|--|/\\*|\\*)(?:[^\\n]*[^\\w.-])?\\d[\\d_,.]*\\s?(?:%|(?:MB|KB|GB|ms|s|sec|seconds?|minutes?|hours?|files?|lines?|bytes?)\\b)|^\\s*(?:#:?|///?|--|/\\*|\\*)[^\\n]*\\b\\d+\\s+of\\s+\\d+\\b"
+      }
+    ],
+    "set": "comment-facts",
+    "stages": []
+  },
+  {
+    "commands": [],
+    "rules": [
+      {
         "builtin": "prevent-ai-author",
         "git": {
           "hooks": [

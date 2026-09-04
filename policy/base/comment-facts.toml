@@ -1,0 +1,152 @@
+# Base rule set: comment-facts (a measurement stated in a comment, where
+# nothing can ever check it)
+#
+# A comment that states a measurement is a fact with no anchor. Pull in with:
+#
+#   [inherit]
+#   sets = ["comment-facts"]
+#
+# WHAT SLIPS THROUGH TODAY. `doc-claims` reads a document that carries a
+# `fact-anchor`, and checks the value against the record the marker names. A
+# comment carries no marker and names no record, so `no-stale-anchored-fact`
+# never looks at it -- and `# <n> s timeout` beside a constant that says
+# something else, or `// target/ alone is ~<n> MB` written when the directory
+# was a third that size, is a sentence every reader believes and no check
+# reads. The measurement was true once. Nothing fails on the day it stops
+# being.
+#
+# THE EXAMPLES IN THIS FILE CARRY `<n>` WHERE A COMMENT WOULD CARRY DIGITS,
+# and that is not squeamishness. This file is a `.toml` full of `#` lines, so
+# the rule defined here reads it exactly as it reads any other source file. A
+# set that had to exclude its own definition would be writing the first
+# exemption into the rule it ships. The shape is what the examples are for,
+# and `<n>` shows the shape; digits would be there only to make the file fire
+# on itself. `process-residue` spells its own `Da[t]e` pattern the same way
+# and for the same reason.
+#
+# WHY THE SHAPE AND NOT THE STALENESS. A staleness check needs the record the
+# number came from, and that record is exactly what a comment omits: the number
+# is inline, the source is in somebody's terminal history, and no pattern can
+# recover it. `doc-claims` records the same finding from the other side -- every
+# attempt there to catch the UNANCHORED facts by pattern produced no true
+# findings at any filter strength, because which record a value came from is
+# what the prose leaves out. So this refuses the SHAPE, which is recognisable
+# without knowing what the number measures: digits, optional space, a unit.
+#
+# THE REMEDY IS ALWAYS ONE OF THREE, and the rule's message names all three
+# because which one is right is the author's call and not this rule's. Make it a
+# constant, where the value and the thing it governs cannot disagree. Move it to
+# the commit or the pull-request body, where a measurement taken on one day is
+# dated by the record that holds it. Or delete it: a number nobody can check is
+# not carrying the reader anywhere.
+#
+# WHAT IT LETS THROUGH, AND WHY EACH ONE HAD TO BE LET THROUGH. A version
+# (`v1.14.1`, `Go 1.25`) is an identifier, not a quantity -- the digits belong to
+# a name. A date (`2026-09-04`) is a point, not an amount. An ordinal or a
+# citation (`ADR 0005`, `issue 101`) numbers a thing rather than measuring one.
+# None of the three is followed by a unit, which is what the pattern requires,
+# and a version with a unit welded onto the end of it is not a thing anyone
+# writes.
+#
+# WHAT IT CANNOT TELL APART, and this is the cost, stated rather than hedged
+# away. A number in a worked example -- a file held at eight lines under a limit
+# of ten -- measures nothing and can never go stale, and written in digits it
+# reads to this pattern exactly like a measurement. Spelling it out is the fix,
+# as this paragraph spells it out, and it is the right fix: a worked example is
+# prose and reads better as prose. The alternative was a hedge that told the two
+# apart by guessing, and every version of that guess lets a real measurement
+# through, which is the one outcome nothing later can notice.
+#
+# `line` STAYS ON THE UNIT LIST DELIBERATELY. `# read once per <n> lines` is
+# the same defect as `# <n> s timeout`: a count of a thing that changes,
+# stated where nothing recounts it. It is the unit most likely to look
+# harmless and is the one that goes stale on the next edit to the file it
+# counts.
+#
+# SCOPED TO COMMENT OPENERS IN SOURCE FILES, and both halves of that matter. The
+# line must open with `#`, `#:`, `//`, `///`, `--`, `/*` or `*` as its first
+# non-blank token, so a string literal holding a measurement is code and is
+# left alone. The file must be source, by extension, so a markdown bullet
+# opening with `*` is never read -- prose in a document is the anchored-fact
+# rule's subject, not this one's, and the two would otherwise disagree about
+# the same line.
+
+# WHAT THIS SET MAY INSTALL. Nothing: one pattern over tracked files, read by
+# `uphold scan` and by any stage the inheriting repository already runs. A
+# measurement is wrong slowly, so there is no moment this has to stand in front
+# of.
+[set]
+stages = []
+
+[rule.no-measurement-in-comment]
+message = """
+This comment states a measurement, and no anchor checks it -- the value was
+true when it was written and nothing fails when it stops being. Make it a
+constant, move it to the commit or pull-request body, or delete it.
+"""
+# THE COMMENT OPENER IS THE SCOPE, and the pattern carries it rather than a
+# check kind: `^\s*(?:#:?|///?|--|/\*|\*)` says the line opens a comment, and
+# the lazy run after it walks to the measurement. Read line by line, so `^` is
+# the start of the line and `files.multiline` stays off.
+#
+# `(?:[^\n]*[^\w.-])?` IS THE LOOKBEHIND, WRITTEN FORWARD. The Rust regex crate
+# has no lookaround, so the boundary in front of the digits is spelled as text
+# that ends in a character which is neither a word character, a dot, nor a
+# hyphen -- or as nothing at all, for the digit that follows the opener
+# directly. Without it the `1` in `v1.14.1` and the `14` in it both open a
+# match, and a rule that refuses every version string in every comment is a
+# rule excluded wholesale.
+#
+# THE HYPHEN IS IN THAT CLASS FOR THE SAME REASON THE DOT IS. A hyphen joins a
+# number to a name -- `UTF-8`, `ISO-8601`, `base-64` -- and the digits after it
+# belong to an identifier rather than to a quantity. Without it, `a UTF-16 file`
+# reads as sixteen files: that alone was most of the first run's findings in
+# this repository, on comments holding no measurement at all.
+#
+# `%` SITS OUTSIDE THE `\b`, AND IT HAS TO. `\b` is a transition between a word
+# character and a non-word one, so `%\b` requires a word character AFTER the
+# percent sign: a percentage welded to the next word matches, and one followed
+# by a space does not -- which is every percentage anybody writes. The word
+# units need the boundary, because `s` inside `steps` and `line` inside
+# `linear` are not units; `%` is not a word and needs no boundary to end it.
+# So the tail is a choice between the two kinds rather than one list with one
+# boundary bolted on the end.
+regexp = '^\s*(?:#:?|///?|--|/\*|\*)(?:[^\n]*[^\w.-])?\d[\d_,.]*\s?(?:%|(?:MB|KB|GB|ms|s|sec|seconds?|minutes?|hours?|files?|lines?|bytes?)\b)|^\s*(?:#:?|///?|--|/\*|\*)[^\n]*\b\d+\s+of\s+\d+\b'
+files.include = ["."]
+files.glob = [
+  "*.rs",
+  "*.py",
+  "*.go",
+  "*.js",
+  "*.ts",
+  "*.tsx",
+  "*.jsx",
+  "*.c",
+  "*.h",
+  "*.cpp",
+  "*.hpp",
+  "*.java",
+  "*.kt",
+  "*.swift",
+  "*.rb",
+  "*.sh",
+  "*.bash",
+  "*.zsh",
+  "*.fish",
+  "*.toml",
+  "*.yaml",
+  "*.yml",
+  "*.sql",
+  "*.lua",
+  "*.php",
+  "*.cs",
+]
+# NO TEST EXCLUSION, unlike most of the rules in `process-residue`. The
+# allowance there is earned: a fixture legitimately carries example-bad
+# content, so a credential in a test is a credential the test is ABOUT. Nothing
+# of the kind holds here. A measurement in a test's comment -- how long a
+# fixture took, how many paths the pipe carried -- rots exactly as a
+# measurement in a source comment rots, and it is read by exactly the same
+# person on exactly the same day. A directory a rule silently skips is a
+# directory it says nothing about, and saying nothing is how this whole class
+# of defect survived in the first place.

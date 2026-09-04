@@ -198,8 +198,9 @@ fn a_hand_copied_rule_is_named_with_its_set_and_what_that_set_would_add() {
 #[test]
 fn a_transcription_this_change_adds_is_refused_at_pre_commit() {
     // The whole point of the hook. `manual` reported this and nobody ran it:
-    // 76 of 77 repositories inherited the set carrying the check and roughly
-    // forty carried a transcription it had never once reported.
+    // Seventy-six of seventy-seven repositories inherited the set carrying
+    // the check, and roughly forty carried a transcription it had never once
+    // reported.
     let root = repository("");
     commit_policy(&root, &format!("{AUDIT_SHIPPED}{COPIED}"));
     // Committed above, so the copy that is NEW is the second one.
@@ -363,9 +364,9 @@ fn an_override_that_changes_the_check_is_reported_at_load() {
 
 #[test]
 fn a_push_allowed_by_a_derived_owner_says_the_owner_was_derived() {
-    // 50 of 65 repositories run this guard with no `owner` pinned, and until
-    // now it said so only when refusing -- which is never, for as long as
-    // nothing has gone wrong.
+    // Most repositories run this guard with no `owner` pinned, and until now
+    // it said so only when refusing -- which is never, for as long as nothing
+    // has gone wrong.
     let root = repository(
         "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\n\n\
          [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
