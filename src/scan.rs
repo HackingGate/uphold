@@ -86,7 +86,7 @@ enum Measure {
 
 impl Measure {
     /// The unit as a report spells it, and as a baseline file's own error
-    /// message spells it. A reader who is told "eight lines" over a byte cap
+    /// message spells it. A reader who is told a line count over a byte cap
     /// goes looking for a file that is not there.
     const fn unit(self) -> &'static str {
         match self {
@@ -1520,14 +1520,14 @@ impl<'a> Scan<'a> {
             // either, and skipping it is worse than skipping a file, because
             // the failure is silent in the direction that matters.
             //
-            // A size baseline is a ratchet: a file held at eight lines under a
-            // limit of ten may not grow to nine. Drop the entry and the file is
-            // checked against the limit instead, so it may now grow to ten --
-            // the ratchet is gone and nothing reports it. The staleness check
-            // cannot see it either: a dropped entry is not in the map, so it is
-            // not "listed", and the mechanism that exists to notice a baseline
-            // which stopped describing the tree is blind to one that never
-            // loaded.
+            // A size baseline is a ratchet: a file its entry holds under the
+            // limit may not grow toward it. Drop the entry and the file is
+            // checked against the limit instead, so it may grow all the way up
+            // to it -- the ratchet is gone and nothing reports it. The
+            // staleness check cannot see it either: a dropped entry is not in
+            // the map, so it is not "listed", and the mechanism that exists to
+            // notice a baseline which stopped describing the tree is blind to
+            // one that never loaded.
             //
             // Reproduced before this was written: `src/big.py 8` holds the file
             // at 8 and growing it fails; `src/big.py 8x` passes the same tree.

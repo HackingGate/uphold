@@ -8,10 +8,10 @@
 //! on the way IN and never on the way out -- freed nothing by construction: the
 //! name carries the pid precisely so it cannot collide with a live run, so
 //! `remove_dir_all` before `create_dir_all` never had anything to remove.
-//! Measured before the fix, one working session left 84,992 of them under
-//! `/tmp`, filling the tmpfs they share and killing a `cargo mutants` run with
-//! `No space left on device` -- which the run then reported as 158 mutants
-//! "unviable", a measurement it had not made.
+//! Observed before the fix, one working session left enough of them under
+//! `/tmp` to fill the tmpfs they share, killing a `cargo mutants` run with
+//! `No space left on device` -- which the run then reported as mutants it
+//! found "unviable", a measurement it had not made.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};

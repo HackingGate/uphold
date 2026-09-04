@@ -81,11 +81,11 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
     ),
     // The other half of `doc-claims`, and a separate name because it is a
     // separate argument. That one checks a fact somebody ANCHORED; this one
-    // refuses the shape of a fact nobody can anchor -- a measurement stated in
-    // a comment, where the record it came from is not written down and never
-    // was. Declining it is a real decision: a repository whose comments quote
-    // benchmark numbers on purpose, beside the benchmark, has an argument for
-    // exactly these lines.
+    // refuses the shape of a fact nobody can anchor -- a measurement of the
+    // author's own data stated in a comment, where the record it came from is
+    // not written down and never was. Declining it is a real decision: a
+    // repository whose comments quote benchmark numbers on purpose, beside the
+    // benchmark, has an argument for exactly these lines.
     (
         "comment-facts",
         include_str!("../policy/base/comment-facts.toml"),

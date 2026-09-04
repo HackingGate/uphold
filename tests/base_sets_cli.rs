@@ -198,9 +198,8 @@ fn a_hand_copied_rule_is_named_with_its_set_and_what_that_set_would_add() {
 #[test]
 fn a_transcription_this_change_adds_is_refused_at_pre_commit() {
     // The whole point of the hook. `manual` reported this and nobody ran it:
-    // Seventy-six of seventy-seven repositories inherited the set carrying
-    // the check, and roughly forty carried a transcription it had never once
-    // reported.
+    // nearly every repository inherited the set carrying the check, and a
+    // great many carried a transcription it had never once reported.
     let root = repository("");
     commit_policy(&root, &format!("{AUDIT_SHIPPED}{COPIED}"));
     // Committed above, so the copy that is NEW is the second one.
