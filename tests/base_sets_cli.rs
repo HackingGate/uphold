@@ -61,6 +61,19 @@ fn code(output: &Output) -> i32 {
     output.status.code().unwrap()
 }
 
+/// A `gh` that answers both ownership questions with a no.
+///
+/// `prevent-public-push` asks the forge about a destination the allow-list has
+/// already refused, so a test about the allow-list's own message has to say
+/// what the forge said or it is testing the exit-2 path instead. This is the
+/// forge answering: a login that is not the destination's owner, and a token
+/// that does not administer it.
+const GH_SAYS_NO: &str = "case \"$*\" in\n\
+                          'api user --jq .login') echo not-the-owner ;;\n\
+                          'api repos/'*' --jq .permissions.admin') echo false ;;\n\
+                          *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
+                          esac\n";
+
 /// Run a guard with a stub `gh` ahead of the real one on PATH.
 ///
 /// The two failure modes this distinguishes are only distinguishable by what
@@ -538,8 +551,12 @@ fn an_owner_declared_once_for_the_policy_answers_for_an_inherited_rule() {
     // Declared, so it is the strong mode and has nothing to report.
     assert!(!stderr(&allowed).contains("DERIVED FROM ORIGIN"));
 
-    let refused = guard(
+    // The forge is asked second, so this drives one that says no -- otherwise
+    // the destination the pin refused would be exit 2 for want of an answer,
+    // and this test would be about the probe rather than about the pin.
+    let refused = guard_with_stub_gh(
         &root,
+        GH_SAYS_NO,
         &[
             "--stage",
             "pre-push",
@@ -906,8 +923,11 @@ fn an_owner_read_from_a_command_pins_a_push_the_way_a_written_one_does() {
         stderr(&allowed)
     );
 
-    let refused = guard(
+    // With a forge that says no, so that exit 1 here is the pin refusing a
+    // destination and not the probe failing to reach anything.
+    let refused = guard_with_stub_gh(
         &root,
+        GH_SAYS_NO,
         &[
             "--stage",
             "pre-push",

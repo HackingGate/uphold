@@ -23,6 +23,7 @@ pub(crate) mod sets;
 pub(crate) mod unicode;
 pub(crate) mod visibility;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::config::{CheckKind, Policy, Rule};
@@ -284,11 +285,18 @@ pub(crate) const TARGET_GUARDS: &[&str] = &["prevent-unowned-target"];
 /// `None` where the rule judges no destination, or is bypassed, or found
 /// nothing. `Err` where the rule is in scope and there was no destination to
 /// look at, which is the third answer and never a pass.
+///
+/// `forge` is which forge the invocation publishes to, as the shim already
+/// knows it from the command's own name, and `asked` is the memo for the
+/// question that reaches it -- both passed straight through to [`push::unowned`],
+/// which decides whether either is consulted.
 pub(crate) fn target_refusal(
     root: &Path,
     policy: &Policy,
     rule: &Rule,
     target: Option<&str>,
+    forge: Option<crate::shim::Forge>,
+    asked: &mut BTreeMap<String, push::Owned>,
 ) -> Result<Option<Refusal>> {
     let Some(builtin) = rule.builtin() else {
         return Ok(None);
@@ -318,9 +326,15 @@ pub(crate) fn target_refusal(
         )));
     };
     Ok(match builtin {
-        "prevent-unowned-target" => {
-            push::unowned(root, policy, rule, (&owner, &repo), push::Seam::Command)?
-        }
+        "prevent-unowned-target" => push::unowned(
+            root,
+            policy,
+            rule,
+            (&owner, &repo),
+            forge,
+            asked,
+            push::Seam::Command,
+        )?,
         _ => None,
     })
 }

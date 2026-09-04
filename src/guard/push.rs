@@ -14,7 +14,17 @@
 //! a second copy of this body, worded for the second seam, would be two rules
 //! answering one question, and the day they disagree is the day one of them is
 //! the hole.
+//!
+//! The allow-list is asked first and the forge second. A workspace pinned to
+//! one organisation refused a `gh issue create` on a public repository the
+//! operator owns, and had no way to say so: a bundled rule takes no parameter,
+//! so the only lever left was `UPHOLD_ALLOW`, which switches the guard off rather
+//! than answering it. Ownership is a fact the forge holds and a repointed
+//! remote cannot move, which is what keeps this from being the tautology the
+//! pin exists to refuse -- and it is reached only for a destination already off
+//! the list, so nothing that was going to pass waits on somebody's service.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -22,6 +32,7 @@ use super::{Refusal, Request};
 use crate::config::{Policy, Rule};
 use crate::error::Result;
 use crate::git;
+use crate::shim::Forge;
 
 /// Which seam is asking, for the two phrases that differ between them.
 ///
@@ -107,6 +118,108 @@ fn workspace_owner(root: &Path, policy: &Policy, rule: &Rule) -> Result<(Option<
     Ok((derived, false))
 }
 
+/// What the forge said about who owns one destination.
+///
+/// A third state rather than a boolean, for the reason `names::Visibility`
+/// keeps `Unavailable` apart from `Unknown`: "the forge says you do not
+/// administer this" and "the forge was not asked" are different answers, and
+/// folding them together would make a machine with no `gh` on it report every
+/// destination as somebody else's -- or, worse the other way round, let a check
+/// that never ran stand in for one that passed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Owned {
+    /// The authenticated identity IS the destination's owner, or administers it.
+    Yes,
+    /// The forge answered, and neither is true.
+    No,
+    /// No answer: no `gh` on PATH, no credentials, no network, or output that
+    /// is neither a yes nor a no. Carries the first line of what `gh` said, so
+    /// the reader is told which of those it was.
+    CouldNotAsk(String),
+}
+
+/// The first line of what a failed `gh` wrote, which is the part worth printing.
+fn first_line(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let line = text.lines().next().unwrap_or_default().trim().to_owned();
+    if line.is_empty() {
+        String::from("it said nothing")
+    } else {
+        line
+    }
+}
+
+/// Ask the forge whether the operator owns this destination, once per run.
+///
+/// Only ever reached for a destination the allow-list has already refused, so
+/// the pin stays the first and cheap answer and an ordinary invocation pays no
+/// round trip. Two questions, stopping at the first yes: the authenticated
+/// login IS the owner, or the token administers the repository. Ownership is a
+/// forge fact and cannot be moved by editing a remote, which is what lets it
+/// stand beside the pin rather than under the tautology the pin exists to
+/// refuse.
+///
+/// Spawned through [`crate::shim::inner_tool`] and never `Command::new`: the
+/// `gh` on PATH is this binary, and an unmarked probe re-enters the shim it is
+/// standing behind.
+pub(crate) fn forge_owns(cache: &mut BTreeMap<String, Owned>, owner: &str, repo: &str) -> Owned {
+    let key = format!("{owner}/{repo}");
+    if let Some(known) = cache.get(&key) {
+        return known.clone();
+    }
+    let answer = ask_forge(owner, &key);
+    cache.insert(key, answer.clone());
+    answer
+}
+
+/// The two requests, without the cache in front of them.
+fn ask_forge(owner: &str, key: &str) -> Owned {
+    let login = match crate::shim::inner_tool("gh")
+        .args(["api", "user", "--jq", ".login"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        }
+        Ok(output) => return Owned::CouldNotAsk(first_line(&output.stderr)),
+        Err(error) => return Owned::CouldNotAsk(format!("gh could not be run ({error})")),
+    };
+    if login.is_empty() {
+        return Owned::CouldNotAsk(String::from("`gh api user` printed no login"));
+    }
+    // GitHub logins are case-insensitive, and a pin written in the case the
+    // profile page shows is the same account as one written in the case a url
+    // carries.
+    if login.eq_ignore_ascii_case(owner) {
+        return Owned::Yes;
+    }
+    match crate::shim::inner_tool("gh")
+        .args(["api", &format!("repos/{key}"), "--jq", ".permissions.admin"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            match String::from_utf8_lossy(&output.stdout).trim() {
+                "true" => Owned::Yes,
+                "false" => Owned::No,
+                // `gh api` writes the API's error body to stdout, and a
+                // `permissions` block that is not there answers `null`. Neither
+                // is a no about ownership.
+                other => Owned::CouldNotAsk(format!(
+                    "`gh api repos/{key}` answered {other:?}, which is neither true nor false"
+                )),
+            }
+        }
+        // A 404 here is a definite no, and only because the request above
+        // succeeded: the client works and is authenticated, and a forge that
+        // will not show this repository to that identity is not a forge saying
+        // the identity administers it. Every other failure -- 401, 403, a rate
+        // limit, 5xx -- is the check not happening.
+        Ok(output) if String::from_utf8_lossy(&output.stderr).contains("(HTTP 404)") => Owned::No,
+        Ok(output) => Owned::CouldNotAsk(first_line(&output.stderr)),
+        Err(error) => Owned::CouldNotAsk(format!("gh could not be run ({error})")),
+    }
+}
+
 /// Whether one destination is off the list of destinations this workspace may
 /// publish to -- the one statement of that question in this binary.
 ///
@@ -119,11 +232,21 @@ fn workspace_owner(root: &Path, policy: &Policy, rule: &Rule) -> Result<(Option<
 /// `git::owner_repo` parses a remote url at the hook and a `--repo` value at
 /// the shim, and one parser means the two cannot disagree about what `owner`
 /// means.
+///
+/// `forge` is which forge that destination is on, as the CALLER already knows
+/// it -- the command's own name at the shim, the remote's host at the hook --
+/// rather than a second parse here. It decides only whether there is a client
+/// that can be asked: `Some(Forge::GitHub)` reaches [`forge_owns`] for a
+/// destination the allow-list refused, and everything else keeps the answer the
+/// allow-list gave. `asked` is that question's memo, so one invocation asks at
+/// most once per destination however many rules judge it.
 pub(crate) fn unowned(
     root: &Path,
     policy: &Policy,
     rule: &Rule,
     destination: (&str, &str),
+    forge: Option<Forge>,
+    asked: &mut BTreeMap<String, Owned>,
     seam: Seam,
 ) -> Result<Option<Refusal>> {
     let (owner, repo) = destination;
@@ -221,6 +344,24 @@ pub(crate) fn unowned(
         return Ok(None);
     }
 
+    // Off the list, which used to end it. The list is a DECLARATION, and a
+    // workspace inheriting a bundled rule cannot write a parameter onto it: an
+    // operator who owns two forges had no lever short of UPHOLD_ALLOW, which
+    // switches the whole guard off rather than answering it. So the forge is
+    // asked second, and only here -- ownership is a fact it holds and the
+    // mistake this guard catches, a repointed remote, cannot move it.
+    //
+    // `None` is the question not being put at all: a GitLab destination, or a
+    // host neither client answers for, gets exactly the answer it got before
+    // this branch existed rather than an invented one.
+    let verdict = match forge {
+        Some(Forge::GitHub) => Some(forge_owns(asked, owner, repo)),
+        Some(Forge::GitLab) | None => None,
+    };
+    if verdict == Some(Owned::Yes) {
+        return Ok(None);
+    }
+
     let mut report = format!(
         "{} {name}, which is not on the allow-list.\n\n",
         seam.would()
@@ -252,14 +393,48 @@ pub(crate) fn unowned(
     )
     .ok();
 
+    match verdict {
+        // Asked and answered. The line is the difference between a reader
+        // going to look for a mis-typed owner and one who knows the forge was
+        // consulted and disagreed too.
+        Some(Owned::No) => {
+            write!(
+                report,
+                "\n\nThe forge was asked as well: the identity `gh` is authenticated as is \
+                 neither {owner} nor an administrator of {name}."
+            )
+            .ok();
+        }
+        // Asked and not answered. Not a refusal, because nothing here found
+        // the destination wrong; not a pass, because nothing here found it
+        // right either. Exit 2 is that third answer everywhere in this binary,
+        // and a question that could not be asked has never been a pass.
+        Some(Owned::CouldNotAsk(why)) => {
+            return Err(crate::error::Fatal::new(format!(
+                "rule {:?}: {report}\n\nThe forge could not be asked whether you own {name}, \
+                 so the allow-list is the only answer there is and it is not a whole one: \
+                 {why}. Could not look is not a pass. Authenticate `gh`, or name the \
+                 destination on the rule, or bypass this run deliberately with \
+                 UPHOLD_ALLOW={}.",
+                rule.id, rule.id
+            )));
+        }
+        Some(Owned::Yes) | None => {}
+    }
+
     Ok(Some(Refusal {
         id: rule.id.clone(),
         report,
     }))
 }
 
-/// Where this push is actually going.
-fn destination(request: &Request<'_>) -> Option<(String, String)> {
+/// Where this push is actually going, and which forge that is.
+///
+/// The forge comes off the url this function already read. The host is in it,
+/// and reading it here is what lets [`unowned`] know whether there is a client
+/// that can be asked about the destination -- the same question the shim
+/// answers from the command's own name.
+fn destination(request: &Request<'_>) -> Option<(String, String, Option<Forge>)> {
     let url = request
         .remote_url
         .map(str::to_owned)
@@ -269,7 +444,8 @@ fn destination(request: &Request<'_>) -> Option<(String, String)> {
                 .and_then(|name| git::remote_url(request.root, name))
         })
         .or_else(|| git::remote_url(request.root, "origin"))?;
-    git::owner_repo(&url)
+    let (owner, repo) = git::owner_repo(&url)?;
+    Some((owner, repo, Forge::of_url(&url)))
 }
 
 /// The git-hook seam: resolve where the push is going, then ask [`unowned`].
@@ -278,7 +454,7 @@ fn destination(request: &Request<'_>) -> Option<(String, String)> {
 /// predicate, so the answer a push gets and the answer a `gh` invocation gets
 /// come out of the same lines.
 pub(crate) fn prevent_public_push(request: &Request<'_>) -> Result<Option<Refusal>> {
-    let Some((owner, repo)) = destination(request) else {
+    let Some((owner, repo, forge)) = destination(request) else {
         // A push whose destination could not be read is not a push to an
         // allowed destination.
         return Ok(Some(Refusal {
@@ -289,11 +465,17 @@ pub(crate) fn prevent_public_push(request: &Request<'_>) -> Result<Option<Refusa
             ),
         }));
     };
+    // One push, one destination, so the memo is made here and dies here. The
+    // shim's loop is the seam where several rules judge the same destination,
+    // and it holds its own.
+    let mut asked = BTreeMap::new();
     unowned(
         request.root,
         request.policy,
         request.rule,
         (&owner, &repo),
+        forge,
+        &mut asked,
         Seam::Push,
     )
 }
@@ -312,6 +494,16 @@ mod tests {
     /// Every case gets its own directory. The suite runs in parallel threads of
     /// one process, so a path keyed on the process id is the same path for all
     /// of them.
+    ///
+    /// The forge is `None` throughout, which is a destination on a host no
+    /// client answers for -- the case whose behaviour is exactly what it was
+    /// before the forge branch existed, so these cases keep testing the
+    /// allow-list and its report and nothing else. The forge branch is asked
+    /// about where it can be driven honestly: `tests/guard_cli.rs` and
+    /// `tests/shim_cli.rs` run the binary with a stub `gh` on a PATH they set
+    /// for the child. A unit test cannot do that -- these run as threads of one
+    /// process, and `set_var("PATH")` in one of them is a change to every other
+    /// thread's environment.
     fn verdict(
         name: &str,
         body: &str,
@@ -335,7 +527,15 @@ mod tests {
             .iter()
             .find(|rule| rule.id == "destination")
             .expect("the fixture rule did not survive the load");
-        unowned(&root, &policy, rule, destination, seam)
+        unowned(
+            &root,
+            &policy,
+            rule,
+            destination,
+            None,
+            &mut BTreeMap::new(),
+            seam,
+        )
     }
 
     fn report(answer: Result<Option<Refusal>>) -> String {

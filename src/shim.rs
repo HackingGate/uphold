@@ -1586,17 +1586,7 @@ impl Shim {
         }
         // Otherwise the remote decides, which is what the `git` shim needs:
         // one shim stands in front of a command that pushes to either.
-        let url = git::remote_url(root, "origin")?.to_lowercase();
-        if url.contains("gitlab") {
-            Some(Forge::GitLab)
-        } else if url.contains("github") {
-            Some(Forge::GitHub)
-        } else {
-            // Not a guess. An unrecognised host means no resolver applies, and
-            // the caller says so rather than reporting a pass over a
-            // visibility nobody read.
-            None
-        }
+        Forge::of_url(&git::remote_url(root, "origin")?)
     }
 
     /// What the forge says the target's visibility is, in the forge's own word.
@@ -1668,11 +1658,32 @@ pub(crate) struct Collected {
     pub stdin: Option<Vec<u8>>,
 }
 
-/// The forges whose visibility question this tool knows how to ask.
+/// The forges whose questions this tool knows how to ask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Forge {
+pub(crate) enum Forge {
     GitHub,
     GitLab,
+}
+
+impl Forge {
+    /// Which forge a url is on, where its host says.
+    ///
+    /// Shared with `guard::push`, which asks the same thing about a push's
+    /// destination: whether there is a client that can be asked about it at
+    /// all. One classifier rather than two, because two would be free to
+    /// disagree about the same url and only one of them could be right.
+    pub(crate) fn of_url(url: &str) -> Option<Self> {
+        let url = url.to_lowercase();
+        if url.contains("gitlab") {
+            Some(Self::GitLab)
+        } else if url.contains("github") {
+            Some(Self::GitHub)
+        } else {
+            // Not a guess. An unrecognised host means no client applies, and
+            // the caller says so rather than reporting an answer nobody read.
+            None
+        }
+    }
 }
 
 /// Run a forge CLI and read one word out of what it printed.
@@ -2812,18 +2823,26 @@ pub(crate) fn run(
         //
         // Resolved ONCE, before the loop, and only where some rule judges a
         // destination. `resolve_target` reads `--repo`/`-R` off argv and
-        // otherwise `git remote get-url origin`; it asks no forge. Only
-        // `Scope::PublicTarget`'s `visibility()` reaches a network, and this
-        // consultation never calls it -- so a repository that adds this rule
-        // pays no round trip on an ordinary invocation. That is worth stating,
-        // because this repository's own argument against a check is that it
-        // makes every invocation wait on somebody else's service, and a seam
-        // that does is a seam somebody takes off PATH.
+        // otherwise `git remote get-url origin`; it asks no forge. An ordinary
+        // invocation still pays no round trip: `Scope::PublicTarget`'s
+        // `visibility()` is not called from here at all, and the forge question
+        // inside `target_refusal` is reached only for a destination the
+        // allow-list has ALREADY refused -- a call that was about to be stopped
+        // either way. Nothing that would have run waits on somebody's service.
+        // That is worth stating precisely, because this repository's own
+        // argument against a check is that it makes every invocation wait, and
+        // a seam that does is a seam somebody takes off PATH.
+        //
+        // Which forge, and the memo for what it was asked, are made here rather
+        // than inside the loop: the destination is one destination however many
+        // rules judge it, so it is asked about at most once.
         if checkers.iter().any(|rule| {
             rule.builtin()
                 .is_some_and(|builtin| crate::guard::TARGET_GUARDS.contains(&builtin))
         }) {
             let target = shim.resolve_target(root, &collected)?;
+            let forge = shim.forge(root);
+            let mut asked = BTreeMap::new();
             for rule in &checkers {
                 if crate::guard::bypassed(&rule.id) {
                     continue;
@@ -2834,9 +2853,14 @@ pub(crate) fn run(
                 if !scopes.holds(shim, effective_scope(rule, shim), root, &collected, &words)? {
                     continue;
                 }
-                if let Some(refusal) =
-                    crate::guard::target_refusal(root, policy, rule, target.as_deref())?
-                {
+                if let Some(refusal) = crate::guard::target_refusal(
+                    root,
+                    policy,
+                    rule,
+                    target.as_deref(),
+                    forge,
+                    &mut asked,
+                )? {
                     destination_refusals += 1;
                     refusals.push(refusal.report);
                 }

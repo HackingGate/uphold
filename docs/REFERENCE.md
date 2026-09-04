@@ -1154,7 +1154,7 @@ stamped on it, the range about to be pushed.
 | `no-private-repo-names` | a private repository named in a public one's message |
 | `no-private-repo-names-staged` | the same, in the lines a commit adds |
 | `no-private-repo-names-in-files` | the same, anywhere in what is being introduced — content, **path names**, and at a push the **commit messages** the push publishes |
-| `prevent-public-push` | a push to somewhere off the allow-list |
+| `prevent-public-push` | a push to somewhere off the allow-list **and off the forge's own answer** — a GitHub destination the allow-list refused is put to `gh`, and a forge that could not be asked is exit `2` |
 | `prevent-unowned-target` | a **command** told to publish to a repository this workspace does not own. The same decision as the row above, reached from the shim seam instead of a hook — so it registers with `command.before` and never `git.hooks`, and a destination it could not resolve is exit `2` |
 | `no-local-merge` | a merge that would make a merge commit |
 | `no-merge-commit` | a commit finishing a merge or a squash merge |
@@ -1193,6 +1193,24 @@ uphold guard: prevent-public-push allowed this push to acme/widget, judged
 against acme -- DERIVED FROM ORIGIN, not pinned. […] Pin it with
 `owner = "acme"` on the rule.
 ```
+
+The pin is asked first and the forge second. A destination on the allow-list —
+the pinned owner, `allowed_owners`, `allowed_repos` — passes exactly as before,
+with no network call. Only a destination the list refused, and only on GitHub,
+is put to `gh`: whether `gh api user` is the destination's owner, and failing
+that whether `gh api repos/<owner>/<repo>` reports `permissions.admin`. Either
+is ownership and the run exits `0` with nothing extra printed. This is what a
+pin cannot express — a bundled rule takes no parameter, so an operator who owns
+two forges had no lever short of `UPHOLD_ALLOW`, which switches the guard off
+rather than answering it — and it is not the tautology `owner` exists to refuse,
+because ownership is a fact the forge holds and editing a remote cannot move it.
+
+A forge that answers **no** is today's refusal, exit `1`, with one line saying
+the forge was asked and disagreed too. A forge that **could not be asked** — no
+`gh`, not authenticated, no network, output that is neither a yes nor a no — is
+exit `2` with the same report and a line saying why: a question that could not
+be asked is not a pass. A destination on a host no client answers for keeps the
+allow-list's answer unchanged.
 
 ### Built-in parameters
 

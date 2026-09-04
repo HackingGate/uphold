@@ -2405,6 +2405,27 @@ fn an_input_file_of_json_is_judged_one_string_value_at_a_time() {
     assert!(stdout(&clean).contains("gh ran:"), "{}", stdout(&clean));
 }
 
+/// A `gh` that answers the ownership probe with a no, and reports the rest.
+///
+/// The destination guard asks the forge about a destination its allow-list has
+/// already refused, and a forge that cannot be asked is exit 2 rather than a
+/// refusal -- so a test whose subject is the allow-list has to say what the
+/// forge said. Everything that is not the probe still echoes the way
+/// [`stub_gh`] does, because the other half of these tests is the invocation
+/// actually running.
+fn stub_gh_says_no(root: &Path) {
+    stub(
+        root,
+        "gh",
+        "#!/bin/sh\n\
+         case \"$*\" in\n\
+         'api user --jq .login') echo not-the-owner ;;\n\
+         'api repos/'*' --jq .permissions.admin') echo false ;;\n\
+         *) echo \"gh ran: $*\" ;;\n\
+         esac\n",
+    );
+}
+
 /// The destination guard standing in front of the same verb.
 const API_TARGET_POLICY: &str = r#"
 [rule.unowned-forge-target]
@@ -2426,7 +2447,7 @@ fn a_body_bound_for_a_repository_this_workspace_does_not_own_is_refused() {
     // going, and the path is the only place `gh api` says so -- there is no
     // `--repo` on this verb to read.
     let root = workspace(API_TARGET_POLICY);
-    stub_gh(&root);
+    stub_gh_says_no(&root);
     let output = shim(
         &root,
         &[
@@ -2468,6 +2489,103 @@ fn a_body_bound_for_a_repository_this_workspace_does_not_own_is_refused() {
     );
     assert_eq!(code(&ours), 0, "{}", stderr(&ours));
     assert!(stdout(&ours).contains("gh ran:"), "{}", stdout(&ours));
+}
+
+/// The invocation that started this: a public repository the operator owns.
+///
+/// The workspace is pinned to one organisation, which is the right first
+/// answer and stays first. What the pin could not express is a destination the
+/// same operator owns elsewhere -- a bundled rule takes no parameter, so the
+/// only lever left was `UPHOLD_ALLOW`, which switches the guard off rather than
+/// answering it. Ownership is a fact the forge holds, and a repointed remote
+/// cannot move it, so asking it is not the tautology the pin exists to refuse.
+///
+/// Both questions are driven, because either alone is passed by a wrong guard:
+/// an operator's own login answers for their personal repositories, and the
+/// admin permission is what answers for an organisation they run.
+#[test]
+fn a_destination_the_forge_says_the_operator_owns_is_published_to() {
+    let root = workspace(API_TARGET_POLICY);
+    let publish = |root: &Path| {
+        shim(
+            root,
+            &[
+                "gh",
+                "api",
+                "-X",
+                "POST",
+                "repos/other-owner/their-repo/issues",
+                "-f",
+                "title=An ordinary title",
+            ],
+        )
+    };
+
+    stub(
+        &root,
+        "gh",
+        "#!/bin/sh\n\
+         case \"$*\" in\n\
+         'api user --jq .login') echo Other-Owner ;;\n\
+         *) echo \"gh ran: $*\" ;;\n\
+         esac\n",
+    );
+    let output = publish(&root);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+
+    stub(
+        &root,
+        "gh",
+        "#!/bin/sh\n\
+         case \"$*\" in\n\
+         'api user --jq .login') echo not-the-owner ;;\n\
+         'api repos/'*' --jq .permissions.admin') echo true ;;\n\
+         *) echo \"gh ran: $*\" ;;\n\
+         esac\n",
+    );
+    let output = publish(&root);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+/// A forge that could not be asked is exit 2, and the command does not run.
+///
+/// Not a refusal, because nothing found the destination wrong; not a pass,
+/// because nothing found it right either. A question that could not be asked
+/// has never been a pass anywhere in this binary, and the seam that decides
+/// where an agent publishes is the last place to start.
+#[test]
+fn a_forge_that_could_not_be_asked_stops_the_publication_at_exit_two() {
+    let root = workspace(API_TARGET_POLICY);
+    stub(
+        &root,
+        "gh",
+        "#!/bin/sh\n\
+         case \"$*\" in\n\
+         'api user'*) echo 'gh: To get started with GitHub CLI, please run:  gh auth login' >&2\n\
+         exit 1 ;;\n\
+         *) echo \"gh ran: $*\" ;;\n\
+         esac\n",
+    );
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/other-owner/their-repo/issues",
+            "-f",
+            "title=An ordinary title",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    let text = stderr(&output);
+    assert!(text.contains("is not on the allow-list"), "{text}");
+    assert!(text.contains("The forge could not be asked"), "{text}");
+    assert!(text.contains("gh auth login"), "{text}");
 }
 
 #[test]
