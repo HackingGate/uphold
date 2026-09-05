@@ -1150,7 +1150,7 @@ stamped on it, the range about to be pushed.
 |---|---|
 | `prevent-ai-author` | AI-authorship markers in the message being written — and at a push, in **every commit message the push publishes** |
 | `prevent-author-mismatch` | an identity that is not your global one |
-| `prevent-unusual-unicode` | unusual characters in the same set of messages |
+| `prevent-unusual-unicode` | unusual characters in the same set of messages, judged against the scripts the message is written in |
 | `prevent-unusual-unicode-in-files` | characters that draw nothing, in committed content **and in the paths that carry it** |
 | `no-private-repo-names` | a private repository named in a public one's message |
 | `no-private-repo-names-staged` | the same, in the lines a commit adds |
@@ -1165,6 +1165,19 @@ stamped on it, the range about to be pushed.
 
 Declared like any other rule, in the same file and the same id namespace.
 **`git.hooks` is the whole registration.**
+
+`prevent-unusual-unicode` reads what is ordinary off the message rather than off
+a fixed list. ASCII passes, and so do the letters and digits of every script; a
+script's punctuation passes once that script's **letters are in the same
+message**, which is what makes a Japanese subject line, with the `。`, `、` and
+`「」` that Japanese prose cannot be written without, something somebody can
+actually type. The fullwidth forms (`！`, `（`) name no script in Unicode at all
+and are admitted on the presence of an East Asian one instead.
+The same `。` in an English sentence is still refused, because nothing in that
+message is written in a script that uses it, and that is the paste artefact the
+rule exists for. A character belonging to no script is refused whatever the
+message is written in: an em dash, a curly quote, and everything
+`prevent-unusual-unicode-in-files` bans for drawing nothing.
 
 ```toml
 [rule.prevent-public-push]
