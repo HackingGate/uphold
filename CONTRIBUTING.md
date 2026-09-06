@@ -63,19 +63,41 @@ two forms the note names start being checked as well.
 
 ## Working on the engine
 
-The Rust side has two checks CI runs that the commit stage does not, because
-both are about the host or the whole tree rather than about a staged file:
+The checks sit on three rungs, and which rung one sits on is a statement about
+what it costs to run. The commit stage is what can answer from the tree in front
+of it: `cargo fmt --check`, the catalog gates, the content scan, and the guards
+registered for the stage. Nothing there compiles the test tree and nothing there
+opens a socket.
+
+The push stage is where the crate is built and exercised:
 
 ```sh
-scripts/deps.sh check     # rustup, rustc >= the MSRV, python3, the coverage pair
-scripts/coverage.sh       # line coverage, refused under the floor in the script
+cargo test --quiet                    # the engine suite
+cargo clippy --quiet --all-targets    # the lint profile declared in Cargo.toml
 ```
 
-Both are `manual`-stage hooks under pre-commit and prek, and named groups under
-lefthook (`lefthook run preflight`, `lefthook run coverage`), so whichever runner
-is installed can reach them. The coverage floor lives in `scripts/coverage.sh`
-and nowhere else — the workflow calls the same script, so the number that fails a
-push is the number that fails locally. Raise it in the commit that earns it.
+Both stood in front of every commit until they did not. A full compile and test
+pass at every save point is how a gate teaches `--no-verify` — the cost lands on
+the commits that touch no Rust as well, and a flag learned to skip a slow suite
+skips the guards standing beside it. At `pre-push` the same two still refuse
+before anything leaves the machine, which is the moment refusing is worth the
+wait. `uphold guard --stage pre-push` runs there with them.
+
+The manual rung is the host and the network, which neither a staged file nor a
+pushed range can react to:
+
+```sh
+scripts/deps.sh check          # rustup, rustc >= the MSRV, python3, the coverage pair
+scripts/coverage.sh            # line coverage, refused under the floor in the script
+uphold guard --stage manual    # the guards that ask a remote about a pin or a name
+```
+
+All three are `manual`-stage hooks under pre-commit and prek, and named groups
+under lefthook (`lefthook run preflight`, `lefthook run coverage`, `lefthook run
+uphold-manual`), so whichever runner is installed can reach them. The coverage
+floor lives in `scripts/coverage.sh` and nowhere else — the workflow calls the
+same script, so the number that fails a push is the number that fails locally.
+Raise it in the commit that earns it.
 
 Editing anything under `policy/base/` means regenerating the set lock in the
 same commit, because a bundled set ships inside the binary and its diff exists
