@@ -117,7 +117,10 @@ usage:
   uphold hooks --identity DIR...     do these repositories declare the same hooks
   uphold hooks --install             write the hooks git runs, as tracked files
   uphold supply-chain                origin, advisories, typosquats and workflow
-                                     security -- five scanners, one verdict
+                                     security over the pushed range -- five
+                                     scanners, one verdict
+  uphold supply-chain --all          the same, over every manifest in the tree
+  uphold supply-chain --base REV     the same, over what REV..HEAD changed
   uphold probe [--runner NAME]       can each declared hook actually refuse
                [--timeout SECONDS]   one run's patience, over the file's
   uphold rules --set NAME [--json]   what a bundled rule set refuses, rule by rule
@@ -364,15 +367,50 @@ fn run() -> Result<Exit> {
             ))),
         },
         "supply-chain" => {
-            if !rest.is_empty() {
-                return Err(Fatal::new(format!("usage: uphold supply-chain\n\n{USAGE}")));
+            let usage = || {
+                Fatal::new(format!(
+                    "usage: uphold supply-chain [--all | --base REV]\n\n{USAGE}"
+                ))
+            };
+            let mut whole = false;
+            let mut base: Option<String> = None;
+            let mut index = 0;
+            while let Some(flag) = rest.get(index) {
+                match text_of(flag)? {
+                    "--all" => whole = true,
+                    "--base" => {
+                        index += 1;
+                        base = Some(text_of(rest.get(index).ok_or_else(usage)?)?.to_owned());
+                    }
+                    _ => return Err(usage()),
+                }
+                index += 1;
             }
             let working = std::env::current_dir()?;
             // The root, not the policy: the scanners read manifests and
             // workflows, and a superproject that only tracks submodules is
             // still where its own workflows live.
             let (root, _) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
-            supply::run(&root)
+            let scope = if whole {
+                supply::Scope::Whole
+            } else if let Some(base) = base {
+                supply::scope_for_ranges(&root, &[(base, String::from("HEAD"))])?
+            } else {
+                // The same reader the pre-push guard uses, and the same third
+                // answer: a run that cannot see what is being pushed has not
+                // established anything about it, and scanning the working tree
+                // instead would report on a range nobody asked about.
+                let push = runner::push(&root, None, None)?;
+                if push.source == runner::Source::Absent {
+                    return Err(Fatal::new(
+                        "no push to scan: this was not run from a pre-push hook, and no range \
+                         was named. Pass --base REV to scan what one range changed, or --all \
+                         to scan every manifest in the tree",
+                    ));
+                }
+                supply::scope_for_push(&root, &push.refs)?
+            };
+            supply::run(&root, &scope)
         }
         "probe" => {
             let usage = || {

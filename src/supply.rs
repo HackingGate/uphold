@@ -26,8 +26,19 @@
 //! exit code decides, its output is shown when it refuses, and the one filter
 //! applied (cargo-deny's headline lines) drops classes that describe the
 //! config rather than a dependency. A wrapper that re-judged findings would be
-//! a second opinion nobody asked for, drifting from the tool it wraps.
+//! a second opinion nobody asked for, drifting from the tool it wraps. The one
+//! thing read out of a scanner's OUTPUT is guarddog's own admission that a rule
+//! did not run, which is not a finding and is the opposite of one.
+//!
+//! What the run looks at is a RANGE, not a tree. Every scanner here reaches the
+//! network, and a push that changes no lockfile, manifest or workflow was
+//! paying for all five: the whole-tree form is now `--all`, and the pre-push
+//! form scans what the push actually changed. The range comes from the same
+//! `runner::Source` the pre-push guard reads, so there is one reader of what a
+//! push is; no range and no flag is exit 2 rather than a fall-through to the
+//! working tree, for the reason the guard refuses an absent source.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -57,10 +68,49 @@ enum Section {
 }
 
 /// One section: its banner, and the function that runs it.
-type SectionRun = (&'static str, fn(&Path) -> Result<Section>);
+type SectionRun = (&'static str, fn(&Path, &Scope) -> Result<Section>);
+
+/// The file names a scanner here reads. Everything else in a diff -- source,
+/// documentation, a test fixture -- changes nothing any of these five tools
+/// would answer differently, so a range holding only those is a range with
+/// nothing to scan rather than a range nobody scanned.
+const MANIFEST_NAMES: [&str; 6] = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "uv.lock",
+    "pyproject.toml",
+    "package.json",
+    "package-lock.json",
+];
+
+/// The subset osv-scanner is handed by path. A manifest without a lock beside
+/// it resolves to nothing pinned, and `-L` on one is a scan of a wish list.
+const LOCK_NAMES: [&str; 3] = ["Cargo.lock", "uv.lock", "package-lock.json"];
+
+/// What this run was asked to look at.
+///
+/// `Changed` carries paths relative to the root, submodule members included and
+/// prefixed by their submodule path, because that is how every section names
+/// what it read.
+pub(crate) enum Scope {
+    /// Every manifest in the tree -- `--all`, and what this command did before
+    /// there was a range.
+    Whole,
+    /// What one range changed, filtered to the names above.
+    Changed(Vec<PathBuf>),
+}
 
 /// `uphold supply-chain`
-pub(crate) fn run(root: &Path) -> Result<Exit> {
+pub(crate) fn run(root: &Path, scope: &Scope) -> Result<Exit> {
+    if let Scope::Changed(paths) = scope {
+        if paths.is_empty() {
+            println!(
+                "supply chain: nothing in this range that a scanner reads -- no lockfile, \
+                 manifest or workflow changed"
+            );
+            return Ok(Exit::Clean);
+        }
+    }
     let mut failed = 0_usize;
     let mut unread = 0_usize;
     let sections: [SectionRun; 5] = [
@@ -75,7 +125,7 @@ pub(crate) fn run(root: &Path) -> Result<Exit> {
     ];
     for (title, section) in sections {
         println!("\n== {title}");
-        match section(root)? {
+        match section(root, scope)? {
             Section::Clean => {}
             Section::Failed => {
                 failed += 1;
@@ -173,7 +223,246 @@ fn find_named(root: &Path, name: &str) -> Result<Vec<PathBuf>> {
     Ok(found)
 }
 
-fn osv(root: &Path) -> Result<Section> {
+/// Is this a path one of the five scanners would read?
+///
+/// The two halves are the whole filter: a manifest or lock by name at any
+/// depth, and any file under a `.github/workflows` directory. A path that is
+/// neither changes nothing any scanner here would answer differently.
+fn interesting(path: &Path) -> bool {
+    let named = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| MANIFEST_NAMES.contains(&name));
+    named || is_workflow(path)
+}
+
+/// A file inside a `.github/workflows` directory, at any depth.
+fn is_workflow(path: &Path) -> bool {
+    let parts: Vec<&std::ffi::OsStr> = path.iter().collect();
+    parts.windows(3).any(|window| {
+        window.first() == Some(&".github".as_ref()) && window.get(1) == Some(&"workflows".as_ref())
+    })
+}
+
+/// The scope of one or more ranges, submodule pointers expanded.
+///
+/// A range whose start is the all-zero id is a branch the remote does not have,
+/// and there is no ancestor to diff against: that widens to every manifest and
+/// says so, because the alternative is scanning nothing for the one push that
+/// introduces everything.
+pub(crate) fn scope_for_ranges(root: &Path, ranges: &[(String, String)]) -> Result<Scope> {
+    let mut changed = BTreeSet::new();
+    for (from, to) in ranges {
+        // A deleted ref pushes no content. Nothing arrives, so nothing is
+        // scanned; the range would not even parse.
+        if is_zero(to) {
+            continue;
+        }
+        if is_zero(from) {
+            println!(
+                "   a branch the remote does not have: no ancestor to diff against, so every \
+                 manifest is in scope"
+            );
+            return Ok(Scope::Whole);
+        }
+        collect_range(root, Path::new(""), from, to, &mut changed)?;
+    }
+    Ok(Scope::Changed(changed.into_iter().collect()))
+}
+
+/// The same, from git's pre-push ref lines.
+///
+/// The line is `<local-ref> <local-sha> <remote-ref> <remote-sha>`, and the
+/// range being pushed runs from the remote's sha to the local one. Parsed here
+/// rather than anywhere new because `runner` already reassembles a runner's
+/// environment INTO that shape, so both channels reach one parser.
+pub(crate) fn scope_for_push(root: &Path, refs: &str) -> Result<Scope> {
+    let mut ranges = Vec::new();
+    for line in refs.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if let [_local_ref, local_sha, _remote_ref, remote_sha] = fields[..] {
+            ranges.push(((*remote_sha).to_owned(), (*local_sha).to_owned()));
+        }
+    }
+    scope_for_ranges(root, &ranges)
+}
+
+/// git's all-zero object id, in either of the lengths git writes it in.
+fn is_zero(sha: &str) -> bool {
+    !sha.is_empty() && sha.chars().all(|character| character == '0')
+}
+
+/// What one range changed under `prefix`, recursing through submodule pointers.
+fn collect_range(
+    root: &Path,
+    prefix: &Path,
+    from: &str,
+    to: &str,
+    out: &mut BTreeSet<PathBuf>,
+) -> Result<()> {
+    let directory = root.join(prefix);
+    let range = format!("{from}..{to}");
+    for line in crate::git::run(
+        &directory,
+        &["diff", "--name-only", "--diff-filter=ACMR", &range],
+    )?
+    .lines()
+    {
+        let path = prefix.join(line);
+        if interesting(&path) {
+            out.insert(path);
+        }
+    }
+
+    // A gitlink is a pointer, and the pointer is the only thing the
+    // superproject's diff shows. `--raw` is where the two shas it moved between
+    // are written down; without them a bumped submodule reads as one changed
+    // file called `sub`, which no scanner reads, and a member's new lockfile is
+    // never looked at.
+    for line in crate::git::run(&directory, &["diff", "--raw", &range])?.lines() {
+        let Some((meta, path)) = line.split_once('\t') else {
+            continue;
+        };
+        let fields: Vec<&str> = meta.split_whitespace().collect();
+        let [source_mode, destination_mode, old, new, ..] = fields[..] else {
+            continue;
+        };
+        if source_mode != ":160000" && destination_mode != "160000" {
+            continue;
+        }
+        let submodule = prefix.join(path);
+        expand_gitlink(root, &submodule, old, new, out)?;
+    }
+    Ok(())
+}
+
+/// One moved submodule pointer, read inside the submodule.
+///
+/// Three answers, and the difference between them is the point. The store has
+/// both commits: diff them, and the members' own manifests are in scope. The
+/// store has neither or only one -- a shallow clone, a fetch nobody ran -- and
+/// the range cannot be read, so every manifest under it is, which is the
+/// widening a scan must take when it cannot narrow. Not checked out at all is
+/// neither: there is no tree to widen INTO, and reporting on a submodule whose
+/// files are absent is the "looked at part of it, reported on all of it" shape
+/// this crate exists to refuse.
+fn expand_gitlink(
+    root: &Path,
+    submodule: &Path,
+    old: &str,
+    new: &str,
+    out: &mut BTreeSet<PathBuf>,
+) -> Result<()> {
+    let directory = root.join(submodule);
+    if directory.join(".git").symlink_metadata().is_err() {
+        return Err(Fatal::new(format!(
+            "the submodule {} moved in this range and is not checked out, so its manifests \
+             cannot be read. Run `git submodule update --init {}`, or scan the whole tree \
+             with `uphold supply-chain --all`",
+            submodule.display(),
+            submodule.display()
+        )));
+    }
+    let has = |sha: &str| -> Result<bool> {
+        if is_zero(sha) {
+            return Ok(false);
+        }
+        Ok(crate::git::try_run(
+            &directory,
+            &["cat-file", "-e", &format!("{sha}^{{commit}}")],
+        )?
+        .is_some())
+    };
+    if has(old)? && has(new)? {
+        return collect_range(root, submodule, old, new, out);
+    }
+    println!(
+        "   {} moved to a commit its object store does not have, so every manifest under it \
+         is in scope",
+        submodule.display()
+    );
+    widen_into(root, submodule, out)
+}
+
+/// Every manifest and workflow file under one directory, as root-relative paths.
+fn widen_into(root: &Path, prefix: &Path, out: &mut BTreeSet<PathBuf>) -> Result<()> {
+    let directory = root.join(prefix);
+    let walk = ignore::WalkBuilder::new(&directory)
+        .standard_filters(false)
+        .filter_entry(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_none_or(|file| !PRUNE.contains(&file))
+        })
+        .build();
+    for entry in walk {
+        let entry = entry.map_err(|error| {
+            Fatal::new(format!(
+                "could not enumerate {} for the manifests in scope: {error}. A scan that \
+                 looked at part of the tree must not report on all of it",
+                prefix.display()
+            ))
+        })?;
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let Ok(relative) = entry.path().strip_prefix(root) else {
+            continue;
+        };
+        if interesting(relative) {
+            out.insert(relative.to_path_buf());
+        }
+    }
+    Ok(())
+}
+
+/// The changed paths carrying one of these names, as absolute paths.
+fn selected(root: &Path, paths: &[PathBuf], names: &[&str]) -> Vec<PathBuf> {
+    paths
+        .iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| names.contains(&name))
+        })
+        .map(|path| root.join(path))
+        .collect()
+}
+
+/// The directories those paths sit in, each named once.
+fn directories_of(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = paths
+        .iter()
+        .filter_map(|path| path.parent().map(Path::to_path_buf))
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
+fn osv(root: &Path, scope: &Scope) -> Result<Section> {
+    if let Scope::Changed(paths) = scope {
+        let locks = selected(root, paths, &LOCK_NAMES);
+        if locks.is_empty() {
+            return Ok(Section::Nothing(String::from("no lockfile in this range")));
+        }
+        // By path, and no exclude globs: the globs exist to keep a tree walk out
+        // of somebody else's vendored manifests, and there is no walk here --
+        // every path was named by the diff.
+        let mut args = vec![
+            String::from("scan"),
+            String::from("source"),
+            String::from("--allow-no-lockfiles"),
+        ];
+        for lock in &locks {
+            args.push(String::from("-L"));
+            args.push(lock.display().to_string());
+        }
+        println!("   {} lockfile(s) in this range", locks.len());
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        return tool(root, "osv-scanner", &borrowed);
+    }
     tool(
         root,
         "osv-scanner",
@@ -198,15 +487,31 @@ fn osv(root: &Path) -> Result<Section> {
     )
 }
 
-fn zizmor(root: &Path) -> Result<Section> {
-    let workflows = find_workflow_dirs(root)?;
+fn zizmor(root: &Path, scope: &Scope) -> Result<Section> {
+    let (workflows, unit) = match scope {
+        Scope::Whole => (find_workflow_dirs(root)?, "workflow directories"),
+        // The changed files themselves, not their directory: zizmor reports per
+        // workflow, and handing it the directory would print the whole
+        // directory's backlog for one edited file.
+        Scope::Changed(paths) => (
+            paths
+                .iter()
+                .filter(|path| is_workflow(path))
+                .map(|path| root.join(path))
+                .collect(),
+            "workflow file(s) in this range",
+        ),
+    };
     if workflows.is_empty() {
-        return Ok(Section::Nothing(String::from("no workflows here")));
+        return Ok(Section::Nothing(String::from(match scope {
+            Scope::Whole => "no workflows here",
+            Scope::Changed(_) => "no workflow changed in this range",
+        })));
     }
     if let Some(reason) = on_path("zizmor") {
         return Ok(Section::CouldNotLook(reason));
     }
-    println!("   {} workflow directories", workflows.len());
+    println!("   {} {unit}", workflows.len());
     // `--config` named explicitly: zizmor resolves it relative to a single
     // input path and finds none when handed several, then silently falls back
     // to its hash-pin default and invents a backlog. The repository's own
@@ -255,7 +560,7 @@ fn find_workflow_dirs(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(found)
 }
 
-fn deny(root: &Path) -> Result<Section> {
+fn deny(root: &Path, scope: &Scope) -> Result<Section> {
     let config = root.join("deny.toml");
     if !config.is_file() {
         return Ok(Section::Nothing(String::from(
@@ -265,7 +570,22 @@ fn deny(root: &Path) -> Result<Section> {
     if let Some(reason) = on_path("cargo") {
         return Ok(Section::CouldNotLook(reason));
     }
-    let manifests = find_named(root, "Cargo.toml")?;
+    let manifests = match scope {
+        Scope::Whole => find_named(root, "Cargo.toml")?,
+        // A lock maps to the manifest beside it: cargo-deny is pointed at a
+        // manifest, and a `Cargo.lock` that moved is exactly the dependency
+        // change this section exists to read.
+        Scope::Changed(paths) => {
+            let mut found: Vec<PathBuf> =
+                directories_of(&selected(root, paths, &["Cargo.toml", "Cargo.lock"]))
+                    .into_iter()
+                    .map(|directory| directory.join("Cargo.toml"))
+                    .filter(|manifest| manifest.is_file())
+                    .collect();
+            found.sort();
+            found
+        }
+    };
     let mut checked = 0_usize;
     let mut refused = false;
     for manifest in manifests {
@@ -327,14 +647,15 @@ fn deny(root: &Path) -> Result<Section> {
         return Ok(Section::Failed);
     }
     if checked == 0 {
-        return Ok(Section::Nothing(String::from(
-            "a deny.toml and no crate to hold to it",
-        )));
+        return Ok(Section::Nothing(String::from(match scope {
+            Scope::Whole => "a deny.toml and no crate to hold to it",
+            Scope::Changed(_) => "no crate manifest or lock moved in this range",
+        })));
     }
     Ok(Section::Clean)
 }
 
-fn vet(root: &Path) -> Result<Section> {
+fn vet(root: &Path, scope: &Scope) -> Result<Section> {
     // Conditional on the store existing: a vet store carries an exemption for
     // every dependency present the day it was created, and creating one
     // automatically in every member would produce stores nobody owns.
@@ -343,6 +664,17 @@ fn vet(root: &Path) -> Result<Section> {
         return Ok(Section::Nothing(String::from(
             "no supply-chain/ store here (cargo vet init to opt in)",
         )));
+    }
+    // The store answers one question -- has anyone looked at these dependencies
+    // -- and the answer can only change when the resolved set does. That is a
+    // `Cargo.lock` moving; a manifest edit that did not relock changed nothing
+    // vet reads.
+    if let Scope::Changed(paths) = scope {
+        if selected(root, paths, &["Cargo.lock"]).is_empty() {
+            return Ok(Section::Nothing(String::from(
+                "no Cargo.lock moved in this range",
+            )));
+        }
     }
     tool(root, "cargo", &["vet", "--locked"])
 }
@@ -362,18 +694,84 @@ const GUARDDOG_RULES: [&str; 10] = [
     "metadata_mismatch",
 ];
 
-fn guarddog(root: &Path) -> Result<Section> {
-    let python = find_named(root, "uv.lock")?;
-    let npm = find_named(root, "package.json")?;
+/// guarddog's own report that a rule did not run.
+///
+/// It prints "Some rules failed to run while scanning <package>:" and a bullet
+/// per rule, then EXITS 0 -- the two email-domain rules time out routinely, and
+/// an orchestrator reading only the exit code files that under "clean". A rule
+/// that timed out is a question nobody answered, which is the could-not-look
+/// verdict and not the pass. The one line returned names the packages and how
+/// many rules, because "guarddog was inconclusive" with no subject is a red
+/// nobody can act on.
+fn rules_that_did_not_run(output: &str) -> Option<String> {
+    let mark = "failed to run rule";
+    let scanning = "rules failed to run while scanning ";
+    let mut rules = 0_usize;
+    let mut packages: Vec<String> = Vec::new();
+    for line in output.lines() {
+        if let Some((_, tail)) = line.split_once(scanning) {
+            let package = tail.trim().trim_end_matches(':').trim();
+            if !package.is_empty() && !packages.iter().any(|held| held == package) {
+                packages.push(package.to_owned());
+            }
+        }
+        if line.contains(mark) {
+            rules += 1;
+        }
+    }
+    if rules == 0 {
+        return None;
+    }
+    let named = if packages.is_empty() {
+        String::from("a package it did not name")
+    } else if packages.len() > 3 {
+        format!(
+            "{} and {} more",
+            packages
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<String>>()
+                .join(", "),
+            packages.len() - 3
+        )
+    } else {
+        packages.join(", ")
+    };
+    Some(format!(
+        "guarddog left {rules} rule(s) unrun on {named}, and still exited 0 -- a rule that \
+         did not run answered nothing"
+    ))
+}
+
+fn guarddog(root: &Path, scope: &Scope) -> Result<Section> {
+    let (python, npm) = match scope {
+        Scope::Whole => (
+            find_named(root, "uv.lock")?,
+            find_named(root, "package.json")?,
+        ),
+        // A directory, not a file: guarddog is run with the working directory
+        // set to the manifest's own, and `pyproject.toml` moving is a dependency
+        // change whether or not the lock moved with it.
+        Scope::Changed(paths) => (
+            directories_of(&selected(root, paths, &["uv.lock", "pyproject.toml"]))
+                .into_iter()
+                .map(|directory| directory.join("uv.lock"))
+                .collect(),
+            selected(root, paths, &["package.json"]),
+        ),
+    };
     if python.is_empty() && npm.is_empty() {
-        return Ok(Section::Nothing(String::from(
-            "no Python or npm manifests here",
-        )));
+        return Ok(Section::Nothing(String::from(match scope {
+            Scope::Whole => "no Python or npm manifests here",
+            Scope::Changed(_) => "no Python or npm manifest moved in this range",
+        })));
     }
     if let Some(reason) = on_path("guarddog") {
         return Ok(Section::CouldNotLook(reason));
     }
     let mut refused = false;
+    let mut unrun: Option<String> = None;
     let mut checked = 0_usize;
     for lock in python {
         let directory = lock.parent().unwrap_or(root);
@@ -411,6 +809,7 @@ fn guarddog(root: &Path) -> Result<Section> {
             .current_dir(directory)
             .output()
             .map_err(|error| Fatal::new(format!("could not run guarddog: {error}")))?;
+        unrun = unrun.or_else(|| rules_that_did_not_run(&String::from_utf8_lossy(&status.stdout)));
         if !status.status.success() {
             println!("   FAILED: guarddog pypi: {}", directory.display());
             refused = true;
@@ -425,17 +824,27 @@ fn guarddog(root: &Path) -> Result<Section> {
             .current_dir(directory)
             .output()
             .map_err(|error| Fatal::new(format!("could not run guarddog: {error}")))?;
+        unrun = unrun.or_else(|| rules_that_did_not_run(&String::from_utf8_lossy(&status.stdout)));
         if !status.status.success() {
             println!("   FAILED: guarddog npm: {}", directory.display());
             refused = true;
         }
     }
     println!("   {checked} Python/npm manifest(s) checked");
-    if refused {
-        Ok(Section::Failed)
-    } else {
-        Ok(Section::Clean)
+    // A finding outranks an unrun rule, which is this crate's own ranking: a
+    // refusal is something somebody looked at and objected to. The unrun rules
+    // are printed either way, so the red that does appear says what was
+    // still not asked.
+    if let Some(ref reason) = unrun {
+        println!("   {reason}");
     }
+    if refused {
+        return Ok(Section::Failed);
+    }
+    if let Some(reason) = unrun {
+        return Ok(Section::CouldNotLook(reason));
+    }
+    Ok(Section::Clean)
 }
 
 /// A file that exists for one child process and is removed on the way out.

@@ -151,7 +151,19 @@ pre-push:
 #   pre-push:
 #     commands:
 #       uphold-supply-chain:
+#         use_stdin: true
 #         run: uphold supply-chain
+#   uphold-manual:
+#     commands:
+#       uphold-supply-chain:
+#         run: uphold supply-chain --all
+#
+# The bare form at pre-push scans what the push changed and needs the ref lines
+# to know what that is, which under lefthook means `use_stdin: true` for the
+# reason the guard above needs it -- without it the command sees no push and
+# refuses rather than guessing. `--all` is the whole tree, which belongs to a
+# schedule: it is the only form that can find an advisory published against a
+# dependency this push did not touch.
 #
 # .pre-commit-hooks.yaml still publishes the id, because that file is a
 # MANIFEST: nothing runs from it until a consumer names the id in their own

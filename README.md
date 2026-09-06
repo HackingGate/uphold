@@ -38,7 +38,10 @@ repos:
 ```
 
 One id per stage because the stage is an argument. Pinning all five costs
-nothing: which guards fire is decided by `policy/principles.toml`.
+nothing: which guards fire is decided by `policy/principles.toml`. The
+scanners are two more ids, unpinned above because they need a host toolchain:
+`uphold-supply-chain` at `pre-push`, which scans what the push changed, and
+`uphold-supply-chain-all` at `manual`, which scans everything.
 
 **lefthook** — no manifest format, so include the config this repo ships, then
 `lefthook install`. It runs commands rather than bootstrapping a language, so
@@ -159,7 +162,8 @@ uphold shim --install           # link this binary under each command's name
 uphold shim --status            # what is linked, and whether PATH reaches it
 uphold hook claude-code         # judge a pending agent tool call, read on stdin
 uphold audit --for-publication  # before flipping private -> public
-uphold supply-chain             # five scanners, one verdict; a missing one is exit 2
+uphold supply-chain             # five scanners over the pushed range; a missing one is exit 2
+uphold supply-chain --all       # the same over every manifest in the tree
 
 uphold hooks --identity ../a ../b   # do these repositories declare the same hooks
 uphold hooks --install              # write the hooks git runs, as tracked files
