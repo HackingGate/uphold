@@ -2018,7 +2018,9 @@ history and in a CI log. An empty `UPHOLD_ALLOW=` switches nothing off.
 ## `uphold supply-chain` — five scanners, one verdict
 
 ```sh
-uphold supply-chain
+uphold supply-chain             # what the pushed range changed
+uphold supply-chain --base REV  # what REV..HEAD changed
+uphold supply-chain --all       # every manifest in the tree
 ```
 
 Orchestrates the five external scanners a fleet had been driving from a
@@ -2059,10 +2061,54 @@ Each scanner's own exit code decides; findings are shown, never re-judged.
 The one filter applied is cargo-deny's headline lines, dropping the four
 classes that describe `deny.toml` rather than a dependency.
 
-One hook id ships it — `uphold-supply-chain` in `.pre-commit-hooks.yaml` —
-at `pre-push` and `manual` and never at `pre-commit`: every scanner reaches
-the network, and a check that adds a network round trip to a commit is a check
-somebody switches off. It is deliberately absent from `hooks/lefthook.yml`:
+### The range
+
+The command scans **what a range changed**, not the tree. At `pre-push` the
+range is the one the push guard already reads — git's ref lines on stdin, or
+the `PRE_COMMIT_FROM_REF` / `PRE_COMMIT_TO_REF` pair pre-commit and prek export
+in their place. `--base REV` names one by hand (`REV..HEAD`); `--all` scans
+every manifest. **No range and no flag is exit `2`**, naming both flags: the
+fall-through available here is the working tree, which at pre-push is quite
+likely a different branch, and a green tick about the wrong tree is the failure
+the push guard refuses for the same reason.
+
+The changed set is filtered to `Cargo.toml`, `Cargo.lock`, `uv.lock`,
+`pyproject.toml`, `package.json`, `package-lock.json` and
+`.github/workflows/**`. A range holding none of them runs no scanner, prints
+one line and exits `0`. Per scanner: osv-scanner is handed the changed
+lockfiles by path; zizmor the changed workflow files; cargo-deny each crate
+root whose `Cargo.toml` or `Cargo.lock` moved; cargo-vet only where a
+`Cargo.lock` moved and a store exists; guarddog pypi each directory whose
+`uv.lock` or `pyproject.toml` moved and guarddog npm each changed
+`package.json`.
+
+A **submodule pointer** that moved is expanded inside the submodule and its
+paths prefixed — a member's new lockfile is in the push as surely as one at
+the root. Where the submodule's object store lacks either commit the range
+cannot be read, so every manifest under it is in scope and the run says so; a
+branch the remote does not have widens the same way, for the push that
+introduces everything. A submodule that is **not checked out** is exit `2`
+rather than a widening: there is no tree to widen into, and reporting a clean
+scan of manifests that are not on disk is the shape this crate exists to
+refuse.
+
+### guarddog that could not look
+
+guarddog prints "Some rules failed to run while scanning \<package\>" and
+**exits 0** — its two email-domain rules time out routinely. Reading only the
+exit code files that under clean, so an unrun rule is could-not-look and exit
+`2`, with a line naming the packages and how many rules. This is the one place
+a scanner's output is read, and it is not a finding: it is the record that the
+question was asked and nobody answered.
+
+Two hook ids ship it in `.pre-commit-hooks.yaml`, and never at `pre-commit`:
+every scanner reaches the network, and a check that adds a network round trip
+to a commit is a check somebody switches off. `uphold-supply-chain` at
+`pre-push` scans the range; `uphold-supply-chain-all` at `manual` carries
+`--all`, since one entry cannot vary its arguments by stage. Pin the first for
+the push gate and the second for a schedule — only the full sweep can find an
+advisory published against a dependency no commit touched. Both are
+deliberately absent from `hooks/lefthook.yml`:
 that file is merged into a consumer's own config wholesale, so a command there
 arrives with a `ref:` bump in every consuming repository — and on any machine
 without the scanners installed it refuses every push with exit `2`. A

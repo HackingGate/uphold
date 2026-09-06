@@ -161,16 +161,44 @@
 # Five external scanners, one verdict. The scanners are NOT built by this
 # hook -- osv-scanner, zizmor, cargo-deny, cargo-vet and guarddog come from
 # the host's own toolchain, and one that is missing is exit 2, never a pass.
-# At pre-push and manual, not pre-commit: every one of them reaches the
-# network, and a check that adds a network round trip to a commit is a check
-# somebody switches off. Seven repositories carried this orchestration as a
-# ~100-line shell task, near-identical, already drifting; pin this id instead.
+# At pre-push, not pre-commit: every one of them reaches the network, and a
+# check that adds a network round trip to a commit is a check somebody
+# switches off. Seven repositories carried this orchestration as a ~100-line
+# shell task, near-identical, already drifting; pin this id instead.
+#
+# Scoped to the pushed range, which is why this entry no longer carries the
+# manual stage. The command reads the range from the same variables the push
+# guard above reads, and a push that changes no lockfile, manifest or workflow
+# now runs no scanner at all rather than the whole tree's worth. `always_run`
+# with no filenames for the same reason the push guard has it: the runner
+# passes the files in the push, and the range is not one of them.
 - id: uphold-supply-chain
   name: uphold supply-chain
-  description: origin, advisories, typosquats and workflow security -- five scanners, one verdict
+  description: origin, advisories, typosquats and workflow security over the pushed range -- five scanners, one verdict
   entry: uphold supply-chain
   language: rust
-  stages: [pre-push, manual]
+  stages: [pre-push]
+  pass_filenames: false
+  always_run: true
+
+# The whole tree, for a schedule rather than a push. A second id and not a
+# second stage on the one above, because a pre-commit entry cannot vary its
+# arguments by stage: one `args` list serves every stage the entry declares,
+# so `--all` at manual and the range at pre-push cannot be the same hook.
+#
+# What it catches that the scoped run cannot: an advisory published against a
+# dependency nobody touched. The scoped run answers "did this push introduce
+# something", and no diff will ever mention a lockfile that did not move --
+# which is the right trade at a push and the wrong one forever. A consumer
+# that pins only the scoped id gets the push gate and no sweep; pinning both
+# is the pair this was split into.
+- id: uphold-supply-chain-all
+  name: uphold supply-chain --all
+  description: the same five scanners over every manifest in the tree, for CI and scheduled runs
+  entry: uphold supply-chain
+  args: ["--all"]
+  language: rust
+  stages: [manual]
   pass_filenames: false
   always_run: true
 

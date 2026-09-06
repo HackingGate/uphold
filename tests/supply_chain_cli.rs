@@ -69,14 +69,127 @@ fn supply_without_the_system_path(root: &Path, tools: &Path) -> Output {
     run(root, tools.as_os_str())
 }
 
+/// The whole-tree form, which is what every section test here is about.
+///
+/// `--all` is spelled out rather than defaulted because the command no longer
+/// has a default: with no range and no flag it refuses, and a helper that hid
+/// which of the two modes each test drives would make the scoped tests below
+/// read as the same run.
 fn run(root: &Path, path: &std::ffi::OsStr) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_uphold"))
+    invoke(root, path, &["--all"], &[])
+}
+
+/// One invocation, with the runner's push variables under the test's control.
+///
+/// They are REMOVED unless a test sets them: a suite run from a pre-push hook
+/// inherits a real `PRE_COMMIT_FROM_REF`, and the test that asserts the refusal
+/// would then be handed somebody's actual push to scan.
+fn invoke(root: &Path, path: &std::ffi::OsStr, args: &[&str], push: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command
         .arg("supply-chain")
+        .args(args)
         .env("PATH", path)
+        // Where each stub records that it ran, and with what.
+        .env("STUB_LOG", root.join("stub.log"))
         .current_dir(root)
-        .stdin(Stdio::null())
+        .stdin(Stdio::null());
+    for name in [
+        "PRE_COMMIT_FROM_REF",
+        "PRE_COMMIT_TO_REF",
+        "PRE_COMMIT_SOURCE",
+        "PRE_COMMIT_ORIGIN",
+        "PRE_COMMIT_LOCAL_BRANCH",
+        "PRE_COMMIT_REMOTE_BRANCH",
+    ] {
+        command.env_remove(name);
+    }
+    for (name, value) in push {
+        command.env(name, value);
+    }
+    command.output().unwrap()
+}
+
+/// The scoped form, driven the way prek drives it: the range in the two
+/// variables the pre-push guard already reads.
+fn pushed(root: &Path, tools: &Path, from: &str, to: &str) -> Output {
+    let mut path = tools.as_os_str().to_owned();
+    path.push(":/usr/bin:/bin");
+    invoke(
+        root,
+        &path,
+        &[],
+        &[("PRE_COMMIT_FROM_REF", from), ("PRE_COMMIT_TO_REF", to)],
+    )
+}
+
+/// What the stubs recorded, or the empty string where none ran.
+fn journal(root: &Path) -> String {
+    std::fs::read_to_string(root.join("stub.log")).unwrap_or_default()
+}
+
+/// A stub that records its name, its working directory and its arguments.
+///
+/// The working directory is half the assertion in the scoped tests: guarddog is
+/// run from the manifest's own directory, and a scan of the right file from the
+/// wrong place reads the wrong `package.json`.
+fn recording(answer: &str) -> String {
+    format!("echo \"$(basename \"$0\") [$PWD] $*\" >> \"$STUB_LOG\"\n{answer}")
+}
+
+fn git(root: &Path, args: &[&str]) {
+    let status = Command::new(support::real_git())
+        .args(args)
+        .current_dir(root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {args:?} failed");
+}
+
+fn commit(root: &Path, message: &str) -> String {
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "--allow-empty", "-m", message]);
+    head(root)
+}
+
+fn head(root: &Path) -> String {
+    let output = Command::new(support::real_git())
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
         .output()
-        .unwrap()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// A fixture with history, because a range is the subject of every test below.
+fn tracked() -> PathBuf {
+    let root = support::scratch("supply-chain-range");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    // Git first, policy second: on a machine with the shims installed, `git
+    // init` inside a tree whose policy is already written runs the shim, and
+    // the fixture's setup would be reading its own subject.
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["config", "user.name", "Test"]);
+    git(&root, &["config", "user.email", "test@example.test"]);
+    std::fs::create_dir_all(root.join("policy")).unwrap();
+    std::fs::write(
+        root.join("policy/principles.toml"),
+        "[rule.no-shouting]\nregexp = '^SHOUTING'\nmessage = \"quiet\"\nfiles.include = [\".\"]\n",
+    )
+    .unwrap();
+    commit(&root, "the tree before the range");
+    root
+}
+
+fn write(root: &Path, relative: &str, contents: &str) {
+    let path = root.join(relative);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(path, contents).unwrap();
 }
 
 fn code(output: &Output) -> i32 {
@@ -501,4 +614,291 @@ fn a_cargo_deny_that_finds_nothing_is_clean_and_says_how_many_crates_it_read() {
     assert!(said.contains("2 crate(s) checked"), "{said}");
     assert!(said.contains("all checks passed"), "{said}");
     assert!(!said.contains("no crate to hold to it"), "{said}");
+}
+
+// ── the range, and what it selects ───────────────────────────────────
+//
+// Every scanner here reaches the network, and the whole-tree form charged a
+// push that changed no lockfile, manifest or workflow for all five. What the
+// scoped mode has to prove is not that it is faster: it is that the narrowing
+// is the RANGE's and not the walker's convenience -- a manifest inside a bumped
+// submodule is in the push as surely as one at the root, and a range this
+// command cannot read is refused rather than narrowed to nothing.
+
+/// No range and no flag refuses, naming both flags.
+///
+/// This is the guard's own rule about an absent source, at a second seam: the
+/// fall-through available here is the working tree, which at pre-push is quite
+/// likely a different branch, and reporting on it would be a green tick about
+/// something nobody pushed. The message has to name both flags, because a
+/// refusal that does not say how to proceed is the one people work around.
+#[test]
+fn no_range_and_no_flag_refuses_and_names_the_two_flags_that_supply_one() {
+    let root = tracked();
+    let tools = stubs(&[("osv-scanner", "exit 0")]);
+    let mut path = tools.as_os_str().to_owned();
+    path.push(":/usr/bin:/bin");
+    let output = invoke(&root, &path, &[], &[]);
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("--base"), "{said}");
+    assert!(said.contains("--all"), "{said}");
+    assert!(journal(&root).is_empty(), "{}", journal(&root));
+}
+
+/// A range with nothing a scanner reads runs nothing, and says so once.
+///
+/// The line matters as much as the exit code: a run that printed five empty
+/// sections would read as five scans that found nothing, and this one made no
+/// network call at all.
+#[test]
+fn a_range_touching_no_manifest_runs_no_scanner_and_says_so_in_one_line() {
+    let root = tracked();
+    write(&root, "src/main.rs", "fn main() {}\n");
+    let before = head(&root);
+    let after = commit(&root, "source only");
+    let tools = stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        ("zizmor", &recording("exit 0")),
+        ("guarddog", &recording("exit 0")),
+        ("cargo", &recording("exit 0")),
+    ]);
+    let output = pushed(&root, &tools, &before, &after);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains("nothing in this range"),
+        "{}",
+        text(&output)
+    );
+    assert!(journal(&root).is_empty(), "{}", journal(&root));
+}
+
+/// `--all` over the same tree still scans every manifest.
+///
+/// The scoped mode narrows what a push pays for; it does not decide what the
+/// tree contains. A scheduled full sweep is the second hook id, and if `--all`
+/// inherited the range's filter there would be nothing left that ever reads a
+/// manifest no commit touched.
+#[test]
+fn all_scans_every_manifest_even_where_the_range_holds_none_of_them() {
+    let root = tracked();
+    write(&root, "harness/uv.lock", "version = 1\n");
+    write(&root, ".github/workflows/ci.yml", "on: push\n");
+    write(&root, "src/main.rs", "fn main() {}\n");
+    let _ = commit(&root, "a tree with manifests in it");
+    let tools = stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        ("zizmor", &recording("exit 0")),
+        ("uv", &recording("echo 'requests==2.0.0'")),
+        ("guarddog", &recording("exit 0")),
+    ]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let ran = journal(&root);
+    assert!(ran.contains("osv-scanner"), "{ran}");
+    assert!(ran.contains("zizmor"), "{ran}");
+    assert!(ran.contains("guarddog"), "{ran}");
+}
+
+/// A changed Python lock is scanned where it lives, and nowhere else.
+///
+/// The second manifest is the assertion. guarddog is a minute of network per
+/// handful of packages, and a scoped run that still walked to every `uv.lock`
+/// in the tree would have narrowed nothing at the only cost that mattered.
+#[test]
+fn a_changed_python_lock_runs_guarddog_in_that_directory_and_not_the_others() {
+    let root = tracked();
+    write(&root, "other/uv.lock", "version = 1\n");
+    let _ = commit(&root, "a lock this push does not touch");
+    let before = head(&root);
+    write(&root, "harness/uv.lock", "version = 1\n");
+    let after = commit(&root, "the lock this push does touch");
+    let tools = stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        ("uv", &recording("echo 'requests==2.0.0'")),
+        ("guarddog", &recording("exit 0")),
+    ]);
+    let output = pushed(&root, &tools, &before, &after);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let ran = journal(&root);
+    assert!(ran.contains("guarddog"), "{ran}");
+    assert!(ran.contains("harness"), "{ran}");
+    assert!(!ran.contains("other"), "{ran}");
+    // The lock is handed to osv-scanner by path, not scanned for by a walk.
+    assert!(ran.contains("-L"), "{ran}");
+    assert!(
+        text(&output).contains("1 lockfile(s) in this range"),
+        "{}",
+        text(&output)
+    );
+}
+
+/// A changed workflow reaches zizmor as a FILE, and its neighbours do not.
+///
+/// zizmor handed the directory would report the whole directory's backlog for
+/// one edited workflow -- findings nobody in this push introduced, on the run
+/// that blocks it.
+#[test]
+fn a_changed_workflow_is_handed_to_zizmor_by_file_and_its_neighbours_are_not() {
+    let root = tracked();
+    write(&root, ".github/workflows/release.yml", "on: release\n");
+    let _ = commit(&root, "a workflow this push does not touch");
+    let before = head(&root);
+    write(&root, ".github/workflows/ci.yml", "on: push\n");
+    let after = commit(&root, "the workflow this push does touch");
+    let tools = stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        ("zizmor", &recording("exit 0")),
+    ]);
+    let output = pushed(&root, &tools, &before, &after);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let ran = journal(&root);
+    assert!(ran.contains("ci.yml"), "{ran}");
+    assert!(!ran.contains("release.yml"), "{ran}");
+    assert!(
+        text(&output).contains("1 workflow file(s) in this range"),
+        "{}",
+        text(&output)
+    );
+}
+
+/// A member repository, cloned into the fixture as a real submodule.
+fn with_a_submodule(root: &Path) {
+    let member = support::scratch("supply-chain-member");
+    std::fs::create_dir_all(&member).unwrap();
+    git(&member, &["init", "-q", "-b", "main"]);
+    git(&member, &["config", "user.name", "Test"]);
+    git(&member, &["config", "user.email", "test@example.test"]);
+    write(&member, "uv.lock", "version = 1\n");
+    commit(&member, "the member's own lock");
+    // `protocol.file.allow` because git refuses a local-path submodule by
+    // default since CVE-2022-39253, and the fixture is exactly a local path.
+    git(
+        root,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            &member.display().to_string(),
+            "sub",
+        ],
+    );
+    commit(root, "track the member");
+}
+
+/// A bumped submodule pointer is expanded into the member's own diff.
+///
+/// The superproject's diff shows one changed path, `sub`, and no scanner reads
+/// a gitlink. Stopping there is the failure: a member whose lockfile moved
+/// arrives in the push with nothing having looked at it, and the run says
+/// "nothing in this range" about a dependency change.
+#[test]
+fn a_bumped_submodule_pointer_expands_into_the_members_own_manifests() {
+    let root = tracked();
+    with_a_submodule(&root);
+    let before = head(&root);
+    let member = root.join("sub");
+    write(&member, "uv.lock", "version = 1\n# and a dependency more\n");
+    commit(&member, "the member's lock moves");
+    let after = commit(&root, "bump the pointer");
+    let tools = stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        ("uv", &recording("echo 'requests==2.0.0'")),
+        ("guarddog", &recording("exit 0")),
+    ]);
+    let output = pushed(&root, &tools, &before, &after);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let ran = journal(&root);
+    assert!(ran.contains("guarddog"), "{ran}");
+    assert!(ran.contains("sub"), "{ran}");
+}
+
+/// A pointer to a commit the member's store lacks widens to every manifest.
+///
+/// A shallow clone, or a fetch nobody ran, and the member's range cannot be
+/// read at all. Narrowing to nothing there would be the same silent pass as
+/// reading the gitlink and stopping; widening is what a scan does when it
+/// cannot narrow honestly, and the run says which submodule it happened to.
+#[test]
+fn a_submodule_commit_the_store_does_not_have_widens_to_every_manifest_under_it() {
+    let root = tracked();
+    with_a_submodule(&root);
+    let before = head(&root);
+    git(
+        &root,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,sub",
+        ],
+    );
+    git(&root, &["commit", "-q", "-m", "a pointer nobody fetched"]);
+    let after = head(&root);
+    let tools = stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        ("uv", &recording("echo 'requests==2.0.0'")),
+        ("guarddog", &recording("exit 0")),
+    ]);
+    let output = pushed(&root, &tools, &before, &after);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("does not have"), "{said}");
+    assert!(journal(&root).contains("guarddog"), "{}", journal(&root));
+}
+
+/// A submodule that is not checked out is exit 2, not a widening.
+///
+/// There is no tree to widen INTO. Widening would enumerate an empty directory
+/// and report a clean scan of manifests that are not on disk, which is the
+/// "looked at part of it, reported on all of it" shape this crate exists to
+/// refuse; the operator is told which submodule and how to make it readable.
+#[test]
+fn a_submodule_that_is_not_checked_out_is_refused_rather_than_widened() {
+    let root = tracked();
+    with_a_submodule(&root);
+    let before = head(&root);
+    let member = root.join("sub");
+    write(&member, "uv.lock", "version = 1\n# and a dependency more\n");
+    commit(&member, "the member's lock moves");
+    let after = commit(&root, "bump the pointer");
+    std::fs::remove_dir_all(&member).unwrap();
+    std::fs::create_dir_all(&member).unwrap();
+    let tools = stubs(&[("osv-scanner", &recording("exit 0"))]);
+    let output = pushed(&root, &tools, &before, &after);
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("not checked out"), "{said}");
+    assert!(said.contains("sub"), "{said}");
+}
+
+/// guarddog rules that did not run are could-not-look, not a pass.
+///
+/// guarddog prints "Some rules failed to run while scanning <package>" and
+/// exits 0, and the two email-domain rules time out routinely. An orchestrator
+/// reading only the exit code files that under clean: the publisher-identity
+/// question was asked and nobody answered it, which is the third verdict this
+/// command exists for, and the reason names the package and how many rules.
+#[test]
+fn guarddog_rules_that_did_not_run_are_could_not_look_rather_than_a_clean_scan() {
+    let root = repository();
+    std::fs::write(root.join("package.json"), "{\"name\": \"fixture\"}\n").unwrap();
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        (
+            "guarddog",
+            "echo 'Some rules failed to run while scanning left-pad:'\n\
+             echo '* potentially_compromised_email_domain: failed to run rule \
+             potentially_compromised_email_domain: timed out'\n\
+             exit 0",
+        ),
+    ]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("left-pad"), "{said}");
+    assert!(said.contains("1 rule(s) unrun"), "{said}");
+    assert!(!said.contains("all checks passed"), "{said}");
 }
