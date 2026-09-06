@@ -22,15 +22,11 @@ pre-commit:
       run: cargo run --quiet -- scan
     guards:
       run: cargo run --quiet -- guard --stage pre-commit
-    engine-tests:
-      run: cargo test --quiet
     # The lint profile lives in Cargo.toml, so all three runners hold the crate
     # to the same set. What differs is when a contributor hears about it: a
     # profile only CI reads is one whose first reader is a failed push.
     engine-fmt:
       run: cargo fmt --check
-    engine-clippy:
-      run: cargo clippy --quiet --all-targets
     # Report rather than fix, which is the one difference from the ruff hook the
     # other two runners get: pre-commit and prek own the staged file after a
     # hook rewrites it, and a linter that edits a file lefthook has already
@@ -104,7 +100,17 @@ pre-merge-commit:
       run: cargo run --quiet -- guard --stage pre-merge-commit
 
 pre-push:
+  parallel: true
   commands:
+    # The suite and the lint profile, one rung up from the commit. A full
+    # compile-and-run in front of every commit is how a gate teaches
+    # `--no-verify`, and a flag learned to skip a slow test run skips the
+    # guards standing beside it; once per push is where the same two still
+    # refuse before anything leaves the machine.
+    engine-tests:
+      run: cargo test --quiet
+    engine-clippy:
+      run: cargo clippy --quiet --all-targets
     # `use_stdin: true`, which this was missing. lefthook runs a command under a
     # pseudo-TTY by default and that stdin never closes, so git's ref lines
     # never arrived and the guards that read the pushed range were asked about

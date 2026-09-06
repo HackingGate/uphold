@@ -195,13 +195,19 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [manual]
+      # Not pre-commit. A full suite compiled and run in front of every commit
+      # is how a gate teaches `--no-verify`: the cost lands on every save point,
+      # including the ones that touch no Rust at all, and a flag learned to skip
+      # a slow test run skips the guards standing beside it. Pre-push is where
+      # the same suite still refuses before anything leaves the machine, which
+      # is the moment refusing is worth what it costs.
       - id: engine-tests
         name: scan engine tests
         entry: cargo test --quiet
         language: system
         pass_filenames: false
         always_run: true
-        stages: [pre-commit, manual]
+        stages: [pre-push, manual]
       # The lint profile is declared in Cargo.toml, so every runner and CI hold
       # the crate to one set. This is where a contributor hears about it: a
       # profile only the workflow runs is one whose first reader is a failed
@@ -214,13 +220,18 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit, manual]
+      # Pre-push for the reason the test run is. `--all-targets` compiles the
+      # test tree as well, so this is a second full build in front of a commit,
+      # and a stage a contributor has learned to skip holds nothing at all. The
+      # profile is still read before the push, which is what the comment above
+      # asks for: the first reader of a lint is not a failed workflow.
       - id: engine-clippy
         name: clippy, under the crate's own lint profile
         entry: cargo clippy --quiet --all-targets
         language: system
         pass_filenames: false
         always_run: true
-        stages: [pre-commit, manual]
+        stages: [pre-push, manual]
       # Fires on the declaration and on every config it reads -- the files that
       # can turn a true enforcement claim into a false one -- and on nothing
       # else. A check with no firing condition is the thing this repository's
