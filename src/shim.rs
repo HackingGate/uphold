@@ -1543,11 +1543,10 @@ impl Shim {
                 match self.visibility(root, &target).as_deref() {
                     Ok("public") => Ok(Standing::Holds),
                     Ok(_) => Ok(Standing::DoesNotHold),
-                    // The cause, in the words the forge used. It used to be
-                    // dropped here: a rate limit, an unauthenticated `gh` and a
-                    // deleted repository were one sentence, and the one thing
-                    // the reader needed in order to act was the one thing it
-                    // did not say.
+                    // The cause, in the words the forge used. A rate limit, an
+                    // unauthenticated `gh` and a deleted repository are three
+                    // different instructions to the reader, and a refusal
+                    // naming none of them is one the reader can only bypass.
                     Err(silence) => Ok(Standing::CouldNotTell(format!(
                         "the forge did not say whether {target} is public, so whether the \
                          `public-target` checks apply here could not be established. {}",
@@ -1893,9 +1892,9 @@ fn rate_limit_minutes(program: &str) -> Option<u64> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs();
-    // Rounded UP, so "0 minutes" is never printed for a wait somebody still has
-    // to sit through. A reset already in the past is a clock that disagrees with
-    // the forge's, and a wait nobody should be told to take.
+    // Rounded UP, so a wait somebody still has to sit through is never reported
+    // as no wait at all. A reset already in the past is a clock that disagrees
+    // with the forge's, and a wait nobody should be told to take.
     Some(reset.saturating_sub(now).div_ceil(60)).filter(|minutes| *minutes > 0)
 }
 
