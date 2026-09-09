@@ -22,13 +22,33 @@
 //! one verdict ranking this crate has, so a machine missing a scanner blocks
 //! exactly as loudly while saying what to install.
 //!
-//! What it deliberately does NOT do: parse any scanner's findings. Each tool's
-//! exit code decides, its output is shown when it refuses, and the one filter
+//! What it deliberately does NOT do: re-judge any scanner's findings. A tool's
+//! verdict is its own, its output is shown when it refuses, and the one filter
 //! applied (cargo-deny's headline lines) drops classes that describe the
 //! config rather than a dependency. A wrapper that re-judged findings would be
-//! a second opinion nobody asked for, drifting from the tool it wraps. The one
-//! thing read out of a scanner's OUTPUT is guarddog's own admission that a rule
-//! did not run, which is not a finding and is the opposite of one.
+//! a second opinion nobody asked for, drifting from the tool it wraps.
+//!
+//! ONE SCANNER'S FINDINGS ARE READ ANYWAY, and the exception is guarddog.
+//! `guarddog verify` exits 0 whether it found three high-severity risks or
+//! none, in both ecosystems, so for as long as this section answered by exit
+//! code it called every guarddog finding clean -- a false negative on the one
+//! scanner here that looks for malware. Its `--exit-non-zero-on-finding` flag
+//! is not the remedy: it counts `issues`, which includes capability matches
+//! guarddog itself scores 0.0 and labels `no_risks_detected`. So guarddog is
+//! run with `--output-format json` and its own `risks` list is counted. The
+//! count is reported, never recomputed; the choice is to parse it or to run it
+//! for nothing.
+//!
+//! What IS read out of a scanner's output is the opposite of a finding: its
+//! own admission that it did not look. Four of the five need it, because four
+//! of the five cannot say so in their exit code. guarddog reports rules that
+//! timed out and still exits 0; cargo-vet answers 255 both for an unvetted
+//! dependency and for a store it could not open; cargo-deny's exit 1 is a
+//! matched advisory or a database it could not fetch; and zizmor, handed one
+//! unparseable workflow among good ones, skips it and exits 0. None of those
+//! is a judgement about a dependency being re-judged here. Each is the record
+//! that a question went unasked, which is this command's third verdict and the
+//! reason it exists.
 //!
 //! What the run looks at is a RANGE, not a tree. Every scanner here reaches the
 //! network, and a push that changes no lockfile, manifest or workflow was
@@ -159,11 +179,24 @@ fn on_path(tool: &str) -> Option<String> {
     }
 }
 
-/// Run one tool, show what it said when it refused, answer by exit code.
+/// Run one tool, show what it said when it refused, and read its answer.
 ///
 /// A tool that died on a signal answered nothing, and nothing is could-not-
 /// look rather than either verdict.
-fn tool(root: &Path, program: &str, args: &[&str]) -> Result<Section> {
+///
+/// A NON-ZERO EXIT IS NOT ALWAYS A VERDICT. Some tools answer the same code
+/// for "your tree is out of step" and for "I could not start" -- cargo-vet
+/// answers 255 for both -- and mapping every non-zero code to a refusal files
+/// the second under the first, which is the failure this command exists to
+/// refuse, one layer down. The reader is handed stdout and stderr and names
+/// the could-not-look when it sees one. A tool whose exit code already
+/// separates the two passes a reader that never fires.
+fn tool_read(
+    root: &Path,
+    program: &str,
+    args: &[&str],
+    unread: impl Fn(i32, &str, &str) -> Option<String>,
+) -> Result<Section> {
     if let Some(reason) = on_path(program) {
         return Ok(Section::CouldNotLook(reason));
     }
@@ -177,14 +210,23 @@ fn tool(root: &Path, program: &str, args: &[&str]) -> Result<Section> {
             "{program} was killed and gave no verdict"
         )));
     };
-    if code == 0 {
+    let out = String::from_utf8_lossy(&output.stdout);
+    let err = String::from_utf8_lossy(&output.stderr);
+    // THE READER IS ASKED BEFORE THE ZERO IS BELIEVED. A tool that skipped an
+    // input it could not parse and exited 0 anyway -- zizmor, handed one bad
+    // workflow among good ones -- is the same could-not-look as one that
+    // refused to start, and a reader consulted only on failure would never see
+    // it. The exit code is passed in because for some tools it is the whole
+    // answer and for others it is the ambiguous part.
+    let unread = unread(code, &out, &err);
+    if unread.is_none() && code == 0 {
         return Ok(Section::Clean);
     }
-    for line in String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .chain(String::from_utf8_lossy(&output.stderr).lines())
-    {
+    for line in out.lines().chain(err.lines()) {
         println!("   {line}");
+    }
+    if let Some(reason) = unread {
+        return Ok(Section::CouldNotLook(reason));
     }
     Ok(Section::Failed)
 }
@@ -461,9 +503,9 @@ fn osv(root: &Path, scope: &Scope) -> Result<Section> {
         }
         println!("   {} lockfile(s) in this range", locks.len());
         let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
-        return tool(root, "osv-scanner", &borrowed);
+        return tool_read(root, "osv-scanner", &borrowed, osv_could_not_look);
     }
-    tool(
+    tool_read(
         root,
         "osv-scanner",
         &[
@@ -484,6 +526,7 @@ fn osv(root: &Path, scope: &Scope) -> Result<Section> {
             "g:**/upstream/**",
             ".",
         ],
+        osv_could_not_look,
     )
 }
 
@@ -532,7 +575,7 @@ fn zizmor(root: &Path, scope: &Scope) -> Result<Section> {
     ];
     args.extend(workflows.iter().map(|path| path.display().to_string()));
     let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
-    tool(root, "zizmor", &borrowed)
+    tool_read(root, "zizmor", &borrowed, zizmor_could_not_look)
 }
 
 fn find_workflow_dirs(root: &Path) -> Result<Vec<PathBuf>> {
@@ -617,6 +660,24 @@ fn deny(root: &Path, scope: &Scope) -> Result<Section> {
                 "cargo deny could not run (is cargo-deny installed?)",
             )));
         }
+        // EXIT 1 IS TWO DIFFERENT FACTS. cargo-deny's code is a bitmask over
+        // which check refused -- 1 advisories, 2 bans, 4 licenses, 8 sources --
+        // so a matched RUSTSEC advisory and a run that never started share the
+        // 1. What separates them is the stream: a run that reached its checks
+        // prints the per-check summary (`advisories FAILED`, `bans ok`) on
+        // STDOUT whatever the verdict, and one that could not -- an
+        // unparseable lock, a manifest it could not read, an advisory database
+        // it could not fetch -- leaves stdout empty and puts `[ERROR]` on
+        // stderr. Reading the code alone reports a database nobody could
+        // download as a vulnerability in this tree.
+        let said = String::from_utf8_lossy(&output.stdout);
+        if said.trim().is_empty() {
+            return Ok(Section::CouldNotLook(format!(
+                "cargo-deny reached no check on {}, so nothing here was judged: {}",
+                manifest.display(),
+                first_said(&String::from_utf8_lossy(&output.stderr))
+            )));
+        }
         refused = true;
         // HEADLINES ONLY, and the exit code decides. Grepping for `warning[`
         // once reported cargo-deny's own informational warnings as failures,
@@ -655,6 +716,93 @@ fn deny(root: &Path, scope: &Scope) -> Result<Section> {
     Ok(Section::Clean)
 }
 
+/// cargo-vet's could-not-look, which shares exit 255 with its finding.
+///
+/// cargo-vet answers 255 for two facts. Dependencies carrying no audit are a
+/// finding, and print "Vetting Failed!" on STDOUT with stderr empty. A run
+/// that could not start -- a store that does not parse, a `Cargo.lock` that
+/// `--locked` refuses, a `cargo metadata` that failed -- prints its diagnostic
+/// on STDERR with stdout empty. The exit code confuses them and the stream
+/// does not.
+///
+/// THE TEST IS THE STREAM, NOT THE WORDING. Matching the sentence cargo-vet
+/// prints when it fails would make this section turn a finding into could-not-
+/// look the first time upstream rewords it, and a discriminator that decays
+/// silently on somebody else's release is worse than the exit code it
+/// replaces. Anything on stdout means the tool got far enough to report on the
+/// tree, whatever it called the result; a non-zero exit that reported nothing
+/// judged no dependency, and that is the third verdict.
+fn vet_could_not_look(code: i32, stdout: &str, stderr: &str) -> Option<String> {
+    if code == 0 || !stdout.trim().is_empty() {
+        return None;
+    }
+    Some(format!(
+        "cargo-vet exited without reporting on a single dependency, so nothing \
+         here was vetted: {}",
+        first_said(stderr)
+    ))
+}
+
+/// The first thing a tool said, so a could-not-look names something.
+///
+/// "The scanner was inconclusive" with no subject is a red nobody can act on,
+/// which is the same argument the guarddog reason is built on.
+fn first_said(text: &str) -> &str {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("it printed nothing at all")
+}
+
+/// osv-scanner's could-not-look, which its own exit code names.
+///
+/// `0` is clean and `1` is a vulnerability; every higher code is the scanner
+/// declining to answer. `127` covers a path it could not resolve, a lockfile
+/// it could not parse, a config it could not read and a query it could not
+/// send. `128` is "no package sources found", which is NOT a clean tree: this
+/// section hands osv-scanner lockfiles by name, so inputs that yielded no
+/// package mean the named files were never read.
+fn osv_could_not_look(code: i32, _stdout: &str, stderr: &str) -> Option<String> {
+    if matches!(code, 0 | 1) {
+        return None;
+    }
+    Some(format!(
+        "osv-scanner exited {code} without a verdict, so no lockfile here was \
+         checked: {}",
+        first_said(stderr)
+    ))
+}
+
+/// zizmor's could-not-look, which hides in two places and one of them is zero.
+///
+/// The verdict codes are `11` through `14`, one per severity present, so any
+/// other non-zero code is a run that audited nothing.
+///
+/// THE ZERO IS THE DANGEROUS ONE. Handed a workflow it cannot parse ALONGSIDE
+/// workflows it can, zizmor skips the bad one, audits the rest, and exits 0
+/// with "No findings to report. Good job!" on stdout. The only witness is a
+/// `failed to parse input:` line on stderr. Its SARIF reports
+/// `executionSuccessful: true` in exactly that case, so the structured output
+/// is worse than useless here. This section hands zizmor a LIST of workflow
+/// files, which is precisely the shape that triggers it.
+fn zizmor_could_not_look(code: i32, _stdout: &str, stderr: &str) -> Option<String> {
+    const SKIPPED: &str = "failed to parse input:";
+    let skipped = stderr.matches(SKIPPED).count();
+    if skipped > 0 {
+        return Some(format!(
+            "zizmor could not parse {skipped} of the workflow(s) it was handed \
+             and audited the rest, so those were never read"
+        ));
+    }
+    if matches!(code, 0 | 11..=14) {
+        return None;
+    }
+    Some(format!(
+        "zizmor exited {code} without auditing anything: {}",
+        first_said(stderr)
+    ))
+}
+
 fn vet(root: &Path, scope: &Scope) -> Result<Section> {
     // Conditional on the store existing: a vet store carries an exemption for
     // every dependency present the day it was created, and creating one
@@ -676,7 +824,7 @@ fn vet(root: &Path, scope: &Scope) -> Result<Section> {
             )));
         }
     }
-    tool(root, "cargo", &["vet", "--locked"])
+    tool_read(root, "cargo", &["vet", "--locked"], vet_could_not_look)
 }
 
 /// Metadata rules only: the source-code rules download every release, which
@@ -744,6 +892,96 @@ fn rules_that_did_not_run(output: &str) -> Option<String> {
     ))
 }
 
+/// What one `guarddog verify` run established.
+enum Read {
+    /// guarddog objected to something, described.
+    Risks(String),
+    /// guarddog did not answer, described.
+    Unread(String),
+    /// guarddog ran and objected to nothing.
+    Clean,
+}
+
+/// Read one `guarddog verify` run out of its report rather than its exit code.
+///
+/// GUARDDOG CANNOT SAY "I FOUND SOMETHING" IN ITS EXIT CODE. `verify` answers
+/// 0 whether it found three high-severity risks or none, in both ecosystems,
+/// so a section reading the code called every finding clean. That is the one
+/// direction this crate must never get wrong, and it was wrong here.
+///
+/// `--exit-non-zero-on-finding` is not the fix. It keys off `issues`, which
+/// counts capability matches -- `six` scores `issues: 2` with `risks: []` and
+/// guarddog's own label `no_risks_detected` -- so the flag turns a package its
+/// own report calls clean into a hard failure, trading a false negative for a
+/// false positive.
+///
+/// So this is the one scanner whose FINDINGS are read here, against the rule
+/// the module header sets, and the reason is that the alternative is running
+/// it for nothing. `risks` is guarddog's own list of what it objected to and
+/// nothing is re-judged: the count is reported, not recomputed.
+fn guarddog_read(at: &str, code: Option<i32>, stdout: &str, stderr: &str) -> Read {
+    // Its own admission first, because it survives whatever the report is.
+    if let Some(reason) = rules_that_did_not_run(stdout).or_else(|| rules_that_did_not_run(stderr))
+    {
+        return Read::Unread(reason);
+    }
+    if code != Some(0) {
+        return Read::Unread(format!(
+            "guarddog gave no report at {at}: {}",
+            first_said(stderr)
+        ));
+    }
+    let Ok(serde_json::Value::Array(entries)) = serde_json::from_str::<serde_json::Value>(stdout)
+    else {
+        return Read::Unread(format!(
+            "guarddog printed no report this could read at {at}"
+        ));
+    };
+    // A bare `[]` against a manifest that had dependencies is what a total
+    // network failure looks like here, and it is not a clean bill of health.
+    if entries.is_empty() {
+        return Read::Unread(format!("guarddog reported on no dependency at all at {at}"));
+    }
+    let mut objected: Vec<String> = Vec::new();
+    for entry in &entries {
+        let name = entry
+            .get("dependency")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("a dependency it did not name");
+        let Some(result) = entry.get("result") else {
+            return Read::Unread(format!("guarddog said nothing about {name} at {at}"));
+        };
+        let scanned = result
+            .get("errors")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(serde_json::Map::is_empty);
+        if !scanned || result.get("results").is_none() {
+            return Read::Unread(format!(
+                "guarddog could not scan {name} at {at}: {}",
+                result.get("errors").map_or_else(
+                    || String::from("it reported no result for it"),
+                    ToString::to_string
+                )
+            ));
+        }
+        let risks = result
+            .get("risks")
+            .and_then(serde_json::Value::as_array)
+            .map_or(0, Vec::len);
+        if risks > 0 {
+            objected.push(format!("{name} ({risks} risk(s))"));
+        }
+    }
+    if objected.is_empty() {
+        Read::Clean
+    } else {
+        Read::Risks(format!(
+            "{at}: guarddog objected to {}",
+            objected.join(", ")
+        ))
+    }
+}
+
 fn guarddog(root: &Path, scope: &Scope) -> Result<Section> {
     let (python, npm) = match scope {
         Scope::Whole => (
@@ -803,31 +1041,47 @@ fn guarddog(root: &Path, scope: &Scope) -> Result<Section> {
         let requirements =
             tempfile_guard::TempFile::containing(&String::from_utf8_lossy(&exported.stdout))?;
         let status = Command::new("guarddog")
-            .args(["pypi", "verify"])
+            .args(["pypi", "verify", "--output-format", "json"])
             .arg(&requirements.path)
             .args(GUARDDOG_RULES)
             .current_dir(directory)
             .output()
             .map_err(|error| Fatal::new(format!("could not run guarddog: {error}")))?;
-        unrun = unrun.or_else(|| rules_that_did_not_run(&String::from_utf8_lossy(&status.stdout)));
-        if !status.status.success() {
-            println!("   FAILED: guarddog pypi: {}", directory.display());
-            refused = true;
+        match guarddog_read(
+            &directory.display().to_string(),
+            status.status.code(),
+            &String::from_utf8_lossy(&status.stdout),
+            &String::from_utf8_lossy(&status.stderr),
+        ) {
+            Read::Clean => {}
+            Read::Risks(said) => {
+                println!("   FAILED: guarddog pypi: {said}");
+                refused = true;
+            }
+            Read::Unread(said) => unrun = unrun.or(Some(said)),
         }
     }
     for manifest in npm {
         let directory = manifest.parent().unwrap_or(root);
         checked += 1;
         let status = Command::new("guarddog")
-            .args(["npm", "verify", "package.json"])
+            .args(["npm", "verify", "--output-format", "json", "package.json"])
             .args(GUARDDOG_RULES)
             .current_dir(directory)
             .output()
             .map_err(|error| Fatal::new(format!("could not run guarddog: {error}")))?;
-        unrun = unrun.or_else(|| rules_that_did_not_run(&String::from_utf8_lossy(&status.stdout)));
-        if !status.status.success() {
-            println!("   FAILED: guarddog npm: {}", directory.display());
-            refused = true;
+        match guarddog_read(
+            &directory.display().to_string(),
+            status.status.code(),
+            &String::from_utf8_lossy(&status.stdout),
+            &String::from_utf8_lossy(&status.stderr),
+        ) {
+            Read::Clean => {}
+            Read::Risks(said) => {
+                println!("   FAILED: guarddog npm: {said}");
+                refused = true;
+            }
+            Read::Unread(said) => unrun = unrun.or(Some(said)),
         }
     }
     println!("   {checked} Python/npm manifest(s) checked");
