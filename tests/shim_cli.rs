@@ -2623,6 +2623,263 @@ fn a_gitlab_project_id_is_the_same_destination_with_its_separator_escaped() {
     );
 }
 
+// ── a visibility this repository already declared ────────────────────
+
+/// A `public-target` shim over a repository that says what it is.
+///
+/// The `visibility` line is the whole point of the fixture: it is the same
+/// declaration `guard::names::target_is_public` has always read, written where
+/// a policy writes it, and the question it answers is exactly the one the shim
+/// was sending to a forge.
+const DECLARED_POLICY: &str = r#"
+visibility = "private"
+
+[rule.no-published-markers]
+message = "remove the marker"
+exec = "uphold guard --text -"
+
+[rule.no-published-markers.command]
+before = ["faux"]
+
+[rule.prevent-ai-author]
+builtin = "prevent-ai-author"
+
+[rule.prevent-ai-author.git]
+hooks = ["commit-msg"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-t", "--title"]
+target_flags = ["-R", "--repo"]
+target = "git-remote"
+scope = "public-target"
+"#;
+
+/// The workspace above with an `origin`, and a `gh` that records being run.
+///
+/// The stub fails rather than answering, and writes its marker before it does:
+/// "asked, and could not be told" and "never asked" are then two different
+/// states on disk rather than one exit code, which is what makes a forge call
+/// that should not have happened visible at all. It is also what a rate-limited
+/// account looks like, which is the failure this behaviour was reported from.
+fn declared_workspace(policy: &str, origin: &str) -> PathBuf {
+    let root = workspace(policy);
+    stub(
+        &root,
+        "gh",
+        "#!/bin/sh\necho asked >> \"$(dirname \"$0\")/../gh.asked\"\nexit 1\n",
+    );
+    Command::new(support::real_git())
+        .args(["remote", "add", "origin", origin])
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+    root
+}
+
+fn forge_was_asked(root: &Path) -> bool {
+    root.join("gh.asked").exists()
+}
+
+#[test]
+fn a_declared_private_visibility_answers_the_scope_with_no_forge_call() {
+    // The report: a repository whose policy says `private` still ran `gh api
+    // repos/<owner>/<repo>` on every `git push`, and when the account was
+    // rate-limited the lookup failed, the standing was could-not-tell, and the
+    // default `unresolved` refused every push in every tree -- over a fact the
+    // policy had stated offline the whole time.
+    let root = declared_workspace(DECLARED_POLICY, "https://github.com/acme/widget.git");
+    let output = shim(
+        &root,
+        &["faux", "pr", "create", "-t", "Generated with Claude Code"],
+    );
+    // Out of scope, so the checks do not apply and the command runs -- which is
+    // the policy's own answer about its own destination, not a check skipped.
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran:"), "{}", stdout(&output));
+    assert!(
+        !forge_was_asked(&root),
+        "the forge was asked about a repository whose policy had already answered"
+    );
+}
+
+#[test]
+fn a_declared_public_visibility_puts_the_checks_in_scope_with_no_forge_call() {
+    // The half that must not be lost. Reading the declaration is only safe if
+    // `public` reaches the checkers exactly as a forge saying `public` did:
+    // standing checks down on a word nobody read would be the failure this
+    // change could cause.
+    let root = declared_workspace(
+        DECLARED_POLICY
+            .replace("visibility = \"private\"", "visibility = \"public\"")
+            .as_str(),
+        "https://github.com/acme/widget.git",
+    );
+    let output = shim(
+        &root,
+        &["faux", "pr", "create", "-t", "Generated with Claude Code"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        !forge_was_asked(&root),
+        "the forge was asked about a repository whose policy had already answered"
+    );
+}
+
+#[test]
+fn a_declaration_about_this_repository_is_not_read_at_somebody_elses() {
+    // Where the shim is stricter than the guard, and it has to be: `-R
+    // other-owner/their-repo` is an explicit foreign destination, and what this
+    // policy says about this tree says nothing whatever about that one. So the
+    // forge is asked, it cannot answer, and a question that could not be asked
+    // has never been a pass here.
+    let root = declared_workspace(DECLARED_POLICY, "https://github.com/acme/widget.git");
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "pr",
+            "create",
+            "-R",
+            "other-owner/their-repo",
+            "-t",
+            "An ordinary title",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("other-owner/their-repo"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        forge_was_asked(&root),
+        "a foreign destination was answered out of this repository's own declaration"
+    );
+}
+
+#[test]
+fn a_repository_that_declares_nothing_still_asks_the_forge() {
+    // The unchanged path, asserted rather than assumed: a policy with no
+    // `visibility` line has said nothing, and silence is not an answer this
+    // seam may supply on the repository's behalf.
+    let root = declared_workspace(
+        DECLARED_POLICY
+            .replace("visibility = \"private\"\n", "")
+            .as_str(),
+        "https://github.com/acme/widget.git",
+    );
+    let output = shim(&root, &["faux", "pr", "create", "-t", "An ordinary title"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        forge_was_asked(&root),
+        "nothing was declared and nothing was asked either"
+    );
+}
+
+#[test]
+fn a_rate_limited_forge_says_so_where_the_scope_could_not_be_established() {
+    // The shim seam drew no line at all: every non-zero exit from `gh` was one
+    // indistinguishable "the forge did not say", so the sentence that reached
+    // the user over a rate limit was the same sentence a deleted repository
+    // would have produced -- and neither named the thing to do about it.
+    let root = workspace(
+        DECLARED_POLICY
+            .replace("visibility = \"private\"\n", "")
+            .as_str(),
+    );
+    let reset = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 8 * 60;
+    stub(
+        &root,
+        "gh",
+        &format!(
+            "#!/bin/sh\ncase \"$*\" in\n\
+             'api rate_limit --jq .rate.reset') echo {reset} ;;\n\
+             *) echo 'gh: API rate limit exceeded for user ID 1. (HTTP 403)' >&2; exit 1 ;;\n\
+             esac\n"
+        ),
+    );
+    Command::new(support::real_git())
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ])
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+
+    let output = shim(&root, &["faux", "pr", "create", "-t", "An ordinary title"]);
+    // Still exit 2. The verdict was never the question -- a scope that could not
+    // be evaluated is not a scope that said no, and that is unchanged.
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(
+        text.contains("did not say whether acme/widget is public"),
+        "{text}"
+    );
+    assert!(text.contains("rate-limiting this client"), "{text}");
+    assert!(text.contains("resets in about 8 minutes"), "{text}");
+}
+
+#[test]
+fn a_typed_destination_naming_this_repository_is_still_asked_about() {
+    // The narrowing at the case that looks safest, and the reason the shim is
+    // stricter than the guard even here. `-R acme/widget` inside `acme/widget`
+    // names what appears to be this repository -- but a typed `owner/repo`
+    // carries no host, so under a `--hostname` or a `GH_HOST` those same two
+    // names are a different forge's repository with its own visibility, and two
+    // matching path segments cannot tell the two apart. So the declaration
+    // answers only for the destination `origin` supplied, and everything
+    // somebody typed goes to the forge exactly as it did before.
+    let root = declared_workspace(DECLARED_POLICY, "https://github.com/acme/widget.git");
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "pr",
+            "create",
+            "-R",
+            "acme/widget",
+            "-t",
+            "Generated with Claude Code",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux ran:"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        forge_was_asked(&root),
+        "a typed destination was answered out of this repository's own declaration"
+    );
+}
+
 // A shim that can be handed its own probe.
 //
 // On 2026-09-02 the released binary fork-bombed a workstation from inside this

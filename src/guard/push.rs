@@ -32,7 +32,7 @@ use super::{Refusal, Request};
 use crate::config::{Policy, Rule};
 use crate::error::Result;
 use crate::git;
-use crate::shim::Forge;
+use crate::shim::{Forge, Silence};
 
 /// Which seam is asking, for the two phrases that differ between them.
 ///
@@ -132,21 +132,11 @@ pub(crate) enum Owned {
     Yes,
     /// The forge answered, and neither is true.
     No,
-    /// No answer: no `gh` on PATH, no credentials, no network, or output that
-    /// is neither a yes nor a no. Carries the first line of what `gh` said, so
-    /// the reader is told which of those it was.
+    /// No answer: no `gh` on PATH, no credentials, a rate limit, no network, or
+    /// output that is neither a yes nor a no. Carries one whole sentence saying
+    /// which of those it was, because "the forge could not be asked" is a
+    /// different instruction to the reader in each case.
     CouldNotAsk(String),
-}
-
-/// The first line of what a failed `gh` wrote, which is the part worth printing.
-fn first_line(stderr: &[u8]) -> String {
-    let text = String::from_utf8_lossy(stderr);
-    let line = text.lines().next().unwrap_or_default().trim().to_owned();
-    if line.is_empty() {
-        String::from("it said nothing")
-    } else {
-        line
-    }
 }
 
 /// Ask the forge whether the operator owns this destination, once per run.
@@ -181,11 +171,13 @@ fn ask_forge(owner: &str, key: &str) -> Owned {
         Ok(output) if output.status.success() => {
             String::from_utf8_lossy(&output.stdout).trim().to_owned()
         }
-        Ok(output) => return Owned::CouldNotAsk(first_line(&output.stderr)),
-        Err(error) => return Owned::CouldNotAsk(format!("gh could not be run ({error})")),
+        Ok(output) => return Owned::CouldNotAsk(Silence::of("gh", &output).sentence()),
+        Err(error) => {
+            return Owned::CouldNotAsk(Silence::unreachable("gh", &error).sentence());
+        }
     };
     if login.is_empty() {
-        return Owned::CouldNotAsk(String::from("`gh api user` printed no login"));
+        return Owned::CouldNotAsk(String::from("`gh api user` exited 0 and printed no login."));
     }
     // GitHub logins are case-insensitive, and a pin written in the case the
     // profile page shows is the same account as one written in the case a url
@@ -205,18 +197,22 @@ fn ask_forge(owner: &str, key: &str) -> Owned {
                 // `permissions` block that is not there answers `null`. Neither
                 // is a no about ownership.
                 other => Owned::CouldNotAsk(format!(
-                    "`gh api repos/{key}` answered {other:?}, which is neither true nor false"
+                    "`gh api repos/{key}` answered {other:?}, which is neither true nor false."
                 )),
             }
         }
-        // A 404 here is a definite no, and only because the request above
-        // succeeded: the client works and is authenticated, and a forge that
-        // will not show this repository to that identity is not a forge saying
-        // the identity administers it. Every other failure -- 401, 403, a rate
-        // limit, 5xx -- is the check not happening.
-        Ok(output) if String::from_utf8_lossy(&output.stderr).contains("(HTTP 404)") => Owned::No,
-        Ok(output) => Owned::CouldNotAsk(first_line(&output.stderr)),
-        Err(error) => Owned::CouldNotAsk(format!("gh could not be run ({error})")),
+        // Classified once, by the one classifier this binary has for the
+        // question -- see [`Silence`]. A 404 here is a definite no, and only
+        // because the request above succeeded: the client works and is
+        // authenticated, and a forge that will not show this repository to that
+        // identity is not a forge saying the identity administers it. Every
+        // other failure -- 401, 403, a rate limit, 5xx -- is the check not
+        // happening, and each of them says so in its own words.
+        Ok(output) => match Silence::of("gh", &output) {
+            Silence::NotFound => Owned::No,
+            silence => Owned::CouldNotAsk(silence.sentence()),
+        },
+        Err(error) => Owned::CouldNotAsk(Silence::unreachable("gh", &error).sentence()),
     }
 }
 
@@ -412,8 +408,8 @@ pub(crate) fn unowned(
         Some(Owned::CouldNotAsk(why)) => {
             return Err(crate::error::Fatal::new(format!(
                 "rule {:?}: {report}\n\nThe forge could not be asked whether you own {name}, \
-                 so the allow-list is the only answer there is and it is not a whole one: \
-                 {why}. Could not look is not a pass. Authenticate `gh`, or name the \
+                 so the allow-list is the only answer there is and it is not a whole one. \
+                 {why} Could not look is not a pass. Authenticate `gh`, or name the \
                  destination on the rule, or bypass this run deliberately with \
                  UPHOLD_ALLOW={}.",
                 rule.id, rule.id

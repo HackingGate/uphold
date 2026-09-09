@@ -32,6 +32,7 @@ use super::{Refusal, Request};
 use crate::config::visibility_is_public;
 use crate::error::{Fatal, Result};
 use crate::git;
+use crate::shim::Silence;
 
 /// Refuse a declared privacy the forge has stopped serving.
 ///
@@ -103,7 +104,8 @@ pub(crate) fn no_stale_visibility(request: &Request<'_>) -> Result<Option<Refusa
     // would not talk to us", which is exactly the line between a fact and an
     // absent check here.
     let mut cache = BTreeMap::new();
-    match lookup(&mut cache, &owner, &repo).visibility {
+    let resolved = lookup(&mut cache, &owner, &repo);
+    match resolved.visibility {
         Visibility::Public => Ok(Some(Refusal {
             id: id.clone(),
             report: format!(
@@ -119,20 +121,37 @@ pub(crate) fn no_stale_visibility(request: &Request<'_>) -> Result<Option<Refusa
             println!("{id}: declared {declared:?}, and the forge agrees.");
             Ok(None)
         }
-        // Neither of these disproves the declaration and neither confirms it.
+        // Neither of these disproves the declaration and neither confirms it,
+        // and both are exit 2 -- but they are not the same thing to be told, and
+        // for a while they were: `Unavailable` was reported in `Unknown`'s
+        // words, so an account eleven minutes into a rate limit read a paragraph
+        // about what a 404 means. The verdict is shared; the sentence is not.
+        //
         // `Unknown` is the forge answering that it will show us no repository by
         // this name, which for a repository declared private is the ordinary
         // answer to an unauthenticated request -- and it is also the answer for
-        // one that was deleted or renamed. `Unavailable` is no answer at all.
-        // Both are the check not happening, and a check that did not happen has
-        // never been a pass anywhere in this binary.
-        Visibility::Unknown | Visibility::Unavailable => Err(Fatal::new(format!(
+        // one that was deleted or renamed.
+        Visibility::Unknown => Err(Fatal::new(format!(
             "{id}: the forge did not say whether {owner}/{repo} is public, so the declared \
              {declared:?} was not checked. A 404 is a private repository, a deleted one, a \
              renamed one, and a request that carried no credentials -- this rule can \
              disprove a claim of privacy and can never confirm one, so it does not read \
              silence as agreement.\n\nCould not look is not a pass. Authenticate `gh`, or \
              bypass this run deliberately with UPHOLD_ALLOW={id}."
+        ))),
+        // `Unavailable` is no answer at all, and which no-answer it was is the
+        // one thing the reader can act on -- a rate limit is waited out, an
+        // unauthenticated client is fixed, and neither is the 404 above.
+        Visibility::Unavailable => Err(Fatal::new(format!(
+            "{id}: the forge was not able to say whether {owner}/{repo} is public, so the \
+             declared {declared:?} was not checked. {}\n\nThis rule can disprove a claim of \
+             privacy and can never confirm one, so it does not read silence as agreement. \
+             Could not look is not a pass -- bypass this run deliberately with \
+             UPHOLD_ALLOW={id}.",
+            resolved.silence.as_ref().map_or_else(
+                || String::from("The forge gave no reason."),
+                Silence::sentence
+            )
         ))),
     }
 }

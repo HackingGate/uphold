@@ -42,6 +42,7 @@ use super::{Refusal, Request, Stage};
 use crate::config::{Policy, Rule};
 use crate::error::{Fatal, Result};
 use crate::git;
+use crate::shim::Silence;
 
 /// A repository name, with what a sentence put on the end taken off.
 ///
@@ -96,6 +97,15 @@ pub(crate) enum Visibility {
 pub(crate) struct Resolved {
     pub visibility: Visibility,
     pub canonical: Option<String>,
+    /// Why there was no answer, where there was none.
+    ///
+    /// `Visibility` says only that the check did not happen; this says which of
+    /// the four ways it did not, in the words the forge used. A caller that
+    /// refuses over an unchecked claim owes the reader that much -- "the forge
+    /// did not say" is the same sentence for a deleted repository and for an
+    /// account that is over its budget for the next eleven minutes, and only one
+    /// of those is worth waiting out.
+    pub silence: Option<Silence>,
 }
 
 /// Any `host.tld/owner/repo` or its scp-like `host.tld:owner/repo`, with the
@@ -383,28 +393,34 @@ pub(crate) fn lookup(cache: &mut BTreeMap<String, Resolved>, owner: &str, repo: 
             Resolved {
                 visibility,
                 canonical,
+                silence: None,
             }
         }
-        // The forge said no. WHICH no it said is the whole question, and it is
-        // in stderr: `gh` writes `gh: Not Found (HTTP 404)` for a name it will
-        // not show us, and `gh: Bad credentials (HTTP 401)` for a client it
-        // will not talk to. Only the first is a fact about the name.
+        // The forge said no. WHICH no it said is the whole question, and
+        // [`Silence`] is where that line is drawn -- once, for this seam and for
+        // the two others that ask a forge the same kind of question. Only a
+        // `NotFound` is a fact about the name.
         //
         // Anything else -- 401, 403 and a rate limit, 5xx, a status line that
         // is not there, or no `gh` at all -- is the check not happening, and
         // reporting that as an inconclusive finding is how an unauthenticated
         // run passed every name in the tree.
-        Ok(output) => Resolved {
-            visibility: if String::from_utf8_lossy(&output.stderr).contains("(HTTP 404)") {
-                Visibility::Unknown
-            } else {
-                Visibility::Unavailable
-            },
-            canonical: None,
-        },
-        Err(_) => Resolved {
+        Ok(output) => {
+            let silence = Silence::of("gh", &output);
+            Resolved {
+                visibility: if silence == Silence::NotFound {
+                    Visibility::Unknown
+                } else {
+                    Visibility::Unavailable
+                },
+                canonical: None,
+                silence: Some(silence),
+            }
+        }
+        Err(error) => Resolved {
             visibility: Visibility::Unavailable,
             canonical: None,
+            silence: Some(Silence::unreachable("gh", &error)),
         },
     };
     cache.insert(key, resolved.clone());
@@ -626,6 +642,7 @@ fn judge(
                 Resolved {
                     visibility: Visibility::Private,
                     canonical: None,
+                    silence: None,
                 }
             } else {
                 lookup(&mut cache, &owner, &repo)
@@ -1306,6 +1323,7 @@ mod tests {
         Resolved {
             visibility,
             canonical: canonical.map(str::to_owned),
+            silence: None,
         }
     }
 
