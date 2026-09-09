@@ -1504,10 +1504,17 @@ impl Shim {
     /// pull-request body is worth refusing whatever the destination -- says so
     /// beside its `command.before` rather than inheriting the table's idea of
     /// the question.
+    ///
+    /// The policy is a parameter for the sake of one arm: `public-target` is a
+    /// question this repository may already have answered in writing, and a
+    /// predicate that asks a forge anyway is a network call -- and a token, and
+    /// a rate limit -- spent on a fact that was sitting in `principles.toml`
+    /// the whole time. See [`declared_standing`].
     pub(crate) fn scope_holds(
         &self,
         scope: &Scope,
         root: &Path,
+        policy: &Policy,
         collected: &Collected,
         argv: &[String],
     ) -> Result<Standing> {
@@ -1525,12 +1532,25 @@ impl Shim {
                          apply here could not be established",
                     )));
                 };
+                // What this repository says about itself, before anybody is
+                // asked. Read here and not before the resolver, because a tree
+                // with no `origin` has no destination for a declaration to be
+                // about, and that is the resolver's answer above rather than
+                // this one's.
+                if let Some(standing) = declared_standing(root, policy, collected)? {
+                    return Ok(standing);
+                }
                 match self.visibility(root, &target).as_deref() {
-                    Some("public") => Ok(Standing::Holds),
-                    Some(_) => Ok(Standing::DoesNotHold),
-                    None => Ok(Standing::CouldNotTell(format!(
+                    Ok("public") => Ok(Standing::Holds),
+                    Ok(_) => Ok(Standing::DoesNotHold),
+                    // The cause, in the words the forge used. A rate limit, an
+                    // unauthenticated `gh` and a deleted repository are three
+                    // different instructions to the reader, and a refusal
+                    // naming none of them is one the reader can only bypass.
+                    Err(silence) => Ok(Standing::CouldNotTell(format!(
                         "the forge did not say whether {target} is public, so whether the \
-                         `public-target` checks apply here could not be established"
+                         `public-target` checks apply here could not be established. {}",
+                        silence.sentence()
                     ))),
                 }
             }
@@ -1601,8 +1621,13 @@ impl Shim {
     /// neither public to the internet nor private. Only `public` is treated as
     /// public by the caller, so a forge that grows a fourth word does not
     /// quietly become one of the three.
-    fn visibility(&self, root: &Path, target: &str) -> Option<String> {
-        match self.forge(root)? {
+    fn visibility(&self, root: &Path, target: &str) -> std::result::Result<String, Silence> {
+        let Some(forge) = self.forge(root) else {
+            return Err(Silence::Refused(String::from(
+                "no forge client is known for that host, so there was nobody to ask",
+            )));
+        };
+        match forge {
             Forge::GitHub => forge_field(
                 "gh",
                 &["api", &format!("repos/{target}"), "--jq", ".visibility"],
@@ -1686,25 +1711,234 @@ impl Forge {
     }
 }
 
+/// What the policy already says about this destination, where it speaks for it.
+///
+/// `Some` is a declaration that settles the question offline, and it is the same
+/// declaration `guard::names::target_is_public` reads: a repository whose
+/// `principles.toml` says `visibility = "private"` has stated the fact, and a
+/// shim that ran `gh api repos/<owner>/<repo>` anyway needed an authenticated
+/// `gh` on every `git push` to learn it a second time. When GitHub rate-limits
+/// the account that lookup fails, the failure is a [`Standing::CouldNotTell`],
+/// and `unresolved = "refuse"` -- the default -- stops every push in every tree
+/// over a fact nobody had to ask for.
+///
+/// `None` sends the caller to the forge, and the narrowing that makes this safe
+/// is the destination it will read the declaration for. A declaration is about
+/// ONE repository, so this reads it only where the destination is the one
+/// [`Shim::resolve_target`] took from `origin` -- which is to say where nothing
+/// on the command line named a destination at all. A `target_flags` value is a
+/// destination somebody typed, and a typed `owner/repo` carries no host: `-R
+/// acme/widget` under a `--hostname` or a `GH_HOST` is a repository on another
+/// forge that happens to share a name with this one, and there is nothing in
+/// two matching path segments that can tell it apart from this tree. So every
+/// named destination goes to the forge exactly as it did before, including the
+/// ones that name this repository, and what is bought offline is the case the
+/// cost was actually in: the push that names nothing and means `origin`.
+fn declared_standing(
+    root: &Path,
+    policy: &Policy,
+    collected: &Collected,
+) -> Result<Option<Standing>> {
+    if collected
+        .target
+        .as_deref()
+        .is_some_and(|named| !named.is_empty())
+    {
+        return Ok(None);
+    }
+    // Lazily, and only here. Reading it is allowed to run `visibility_from`, which
+    // is a process, and a predicate that spawned one for a target the declaration
+    // does not speak for would trade the lookup this exists to avoid for another
+    // one.
+    let Some(declared) = policy.declared_visibility(root)? else {
+        return Ok(None);
+    };
+    // Held to the three spellings before it arrives -- a written one at load, a
+    // `visibility_from` answer as it is read -- so `None` here is unreachable
+    // rather than a fourth word being guessed at. It falls through to the forge
+    // regardless: a word this seam cannot read is not an answer this seam may
+    // invent.
+    Ok(
+        crate::config::visibility_is_public(&declared).map(|public| {
+            if public {
+                Standing::Holds
+            } else {
+                Standing::DoesNotHold
+            }
+        }),
+    )
+}
+
+/// Why a forge CLI gave no answer, told apart by what it printed.
+///
+/// One classifier rather than three. `guard::names::lookup`, `guard::push` and
+/// [`forge_field`] all ask a forge a question that can fail four ways, and all
+/// three used to draw their own line -- or, at this seam, none at all: a
+/// non-zero exit was one indistinguishable `None`, so a rate limit, an
+/// unauthenticated `gh` and a deleted repository arrived at the user as the same
+/// sentence about a 404. Three classifiers would be free to disagree about one
+/// `Output` and only one of them could be right.
+///
+/// The line is in stderr, because `gh api` writes the API's error BODY to
+/// stdout: `gh: Not Found (HTTP 404)` for a name it will not show us, `gh: Bad
+/// credentials (HTTP 401)` for a client it will not talk to, and an "API rate
+/// limit exceeded" for a client it has stopped talking to for now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Silence {
+    /// The forge answered, and the answer was that it will show us no
+    /// repository by this name. A fact about the name -- though not ONE fact:
+    /// private, deleted, renamed, mistyped, and a request that carried no
+    /// credentials all land here.
+    NotFound,
+    /// The client is over its budget. Not a fact about the name at all, and the
+    /// one silence that ends by itself -- so it carries the wait where the forge
+    /// would say.
+    RateLimited { resets_in_minutes: Option<u64> },
+    /// Anything else: no credentials, no network, no `gh`, a 5xx, a status line
+    /// that is not there. The first line of what the tool said, because a
+    /// message that names the cause is the difference between a check somebody
+    /// fixes and a check somebody bypasses.
+    Refused(String),
+}
+
+impl Silence {
+    /// Classify a failed run of `program`.
+    ///
+    /// The rate-limit arm asks one further question, and it is the only question
+    /// in this binary asked in reply to a failure: `gh api rate_limit` is the
+    /// endpoint GitHub exempts from the limit it is reporting, so the ask cannot
+    /// deepen the hole it is describing. `None` for the wait where even that did
+    /// not answer -- the limit is still the fact, and the clock is the courtesy.
+    pub(crate) fn of(program: &str, output: &std::process::Output) -> Self {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("(HTTP 404)") {
+            return Self::NotFound;
+        }
+        if stderr.to_lowercase().contains("rate limit") {
+            return Self::RateLimited {
+                resets_in_minutes: rate_limit_minutes(program),
+            };
+        }
+        Self::Refused(first_line(&stderr).unwrap_or_else(|| {
+            format!(
+                "`{program}` exited {}",
+                output
+                    .status
+                    .code()
+                    .map_or_else(|| String::from("on a signal"), |code| code.to_string())
+            )
+        }))
+    }
+
+    /// The forge could not be run at all -- no `gh` on PATH, no permission to
+    /// exec it. Distinct from a `gh` that ran and refused, and reported that way.
+    pub(crate) fn unreachable(program: &str, error: &std::io::Error) -> Self {
+        Self::Refused(format!("`{program}` could not be run ({error})"))
+    }
+
+    /// The clause a caller puts after "the forge did not say ...".
+    ///
+    /// One sentence per cause, and the point of having them is that they are
+    /// not interchangeable: a rate limit is waited out, an unauthenticated
+    /// client is fixed, a 404 is five different repositories at once. A caller
+    /// with a better sentence for its own question is free to write one --
+    /// `guard::visibility` does, because "no repository by that name" means
+    /// something specific when the name is your own `origin`.
+    pub(crate) fn sentence(&self) -> String {
+        match self {
+            Self::NotFound => String::from(
+                "The forge will show no repository by that name, which is a private one, a \
+                 deleted one, a renamed one, and a request that carried no credentials.",
+            ),
+            Self::RateLimited { resets_in_minutes } => resets_in_minutes.map_or_else(
+                || {
+                    String::from(
+                        "The forge is rate-limiting this client. This is not an answer about \
+                         the repository -- it is the same silence for a public one and a \
+                         private one.",
+                    )
+                },
+                |minutes| {
+                    format!(
+                        "The forge is rate-limiting this client; the budget resets in about \
+                         {minutes} minute{}. This is not an answer about the repository -- it \
+                         is the same silence for a public one and a private one.",
+                        if minutes == 1 { "" } else { "s" }
+                    )
+                },
+            ),
+            Self::Refused(what) => format!("The forge was asked and said: {what}"),
+        }
+    }
+}
+
+/// Minutes until the client's forge budget resets, where the forge will say.
+fn rate_limit_minutes(program: &str) -> Option<u64> {
+    if program != "gh" {
+        return None;
+    }
+    let output = inner_tool(program)
+        .args(["api", "rate_limit", "--jq", ".rate.reset"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let reset: u64 = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .ok()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    // Rounded UP, so a wait somebody still has to sit through is never reported
+    // as no wait at all. A reset already in the past is a clock that disagrees
+    // with the forge's, and a wait nobody should be told to take.
+    Some(reset.saturating_sub(now).div_ceil(60)).filter(|minutes| *minutes > 0)
+}
+
+/// The first non-empty line of what a tool printed, trimmed.
+fn first_line(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned)
+}
+
 /// Run a forge CLI and read one word out of what it printed.
 ///
 /// `field` names a JSON key to pull out where the CLI cannot be asked to do it;
 /// `None` means the whole of stdout is the answer.
-fn forge_field(program: &str, args: &[&str], field: Option<&str>) -> Option<String> {
-    let output = inner_tool(program).args(args).output().ok()?;
+fn forge_field(
+    program: &str,
+    args: &[&str],
+    field: Option<&str>,
+) -> std::result::Result<String, Silence> {
+    let output = match inner_tool(program).args(args).output() {
+        Ok(output) => output,
+        Err(error) => return Err(Silence::unreachable(program, &error)),
+    };
     if !output.status.success() {
-        return None;
+        return Err(Silence::of(program, &output));
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    let value = match field {
-        Some(field) => json_string_field(&text, field)?,
-        None => text.trim().to_owned(),
-    };
-    let value = value.trim().to_lowercase();
+    let value = field.map_or_else(
+        || Some(text.trim().to_owned()),
+        |field| json_string_field(&text, field),
+    );
+    let value = value.unwrap_or_default().trim().to_lowercase();
     // An empty answer is not an answer. `--jq` on a field that is not there
     // prints a blank line and exits 0, and treating that as a visibility would
-    // be a lookup that did not happen wearing the face of one that did.
-    (!value.is_empty() && value != "null").then_some(value)
+    // be a lookup that did not happen wearing the face of one that did. It is
+    // its own silence rather than a refusal, because a run that SUCCEEDED and
+    // said nothing is not a forge that would not talk to us.
+    if value.is_empty() || value == "null" {
+        return Err(Silence::Refused(format!(
+            "`{program}` exited 0 and printed no visibility"
+        )));
+    }
+    Ok(value)
 }
 
 /// Parse the document and read a TOP-LEVEL key, rather than scan for a needle.
@@ -2313,10 +2547,11 @@ impl ScopeMemo {
         shim: &Shim,
         scope: &Scope,
         root: &Path,
+        policy: &Policy,
         collected: &Collected,
         argv: &[String],
     ) -> Result<bool> {
-        match self.standing(shim, scope, root, collected, argv)? {
+        match self.standing(shim, scope, root, policy, collected, argv)? {
             Standing::Holds => Ok(true),
             Standing::DoesNotHold => Ok(false),
             Standing::CouldNotTell(why) => match shim.unresolved {
@@ -2343,6 +2578,7 @@ impl ScopeMemo {
         shim: &Shim,
         scope: &Scope,
         root: &Path,
+        policy: &Policy,
         collected: &Collected,
         argv: &[String],
     ) -> Result<Standing> {
@@ -2355,7 +2591,7 @@ impl ScopeMemo {
         if let Some(answer) = self.answers.get(&key) {
             return Ok(answer.clone());
         }
-        let answer = shim.scope_holds(scope, root, collected, argv)?;
+        let answer = shim.scope_holds(scope, root, policy, collected, argv)?;
         if let (Standing::CouldNotTell(why), Unresolved::Run) = (&answer, shim.unresolved) {
             eprintln!("uphold shim: {why}, and the command ran anyway. This is not a pass.");
         }
@@ -2468,6 +2704,7 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
                     shim,
                     effective_scope(rule, shim),
                     root,
+                    policy,
                     collected,
                     &opened_for,
                 )? {
@@ -2522,6 +2759,7 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
                         shim,
                         effective_scope(inner, shim),
                         root,
+                        policy,
                         collected,
                         &opened_for,
                     ),
@@ -2782,9 +3020,16 @@ pub(crate) fn run(
             )));
         }
         collected = shim.collect(root, &words)?;
-        let in_scope = scopes.holds(shim, &shim.scope, root, &collected, &words)?;
+        let in_scope = scopes.holds(shim, &shim.scope, root, policy, &collected, &words)?;
         for rule in &checkers {
-            if scopes.holds(shim, effective_scope(rule, shim), root, &collected, &words)? {
+            if scopes.holds(
+                shim,
+                effective_scope(rule, shim),
+                root,
+                policy,
+                &collected,
+                &words,
+            )? {
                 any_applies = true;
             }
         }
@@ -2850,7 +3095,14 @@ pub(crate) fn run(
                 // The rule's own scope where it wrote one, the table's where it
                 // did not -- the same reading the text path takes, answered
                 // from the same memo.
-                if !scopes.holds(shim, effective_scope(rule, shim), root, &collected, &words)? {
+                if !scopes.holds(
+                    shim,
+                    effective_scope(rule, shim),
+                    root,
+                    policy,
+                    &collected,
+                    &words,
+                )? {
                     continue;
                 }
                 if let Some(refusal) = crate::guard::target_refusal(
@@ -2895,7 +3147,14 @@ pub(crate) fn run(
                     // The rule's own scope where it wrote one, the table's
                     // where it did not -- answered from the memo, so a
                     // destination is looked up once however many rules ask.
-                    if !scopes.holds(shim, effective_scope(rule, shim), root, &collected, &words)? {
+                    if !scopes.holds(
+                        shim,
+                        effective_scope(rule, shim),
+                        root,
+                        policy,
+                        &collected,
+                        &words,
+                    )? {
                         continue;
                     }
                     // `subjects` narrows every kind of checker the same way:
@@ -2952,6 +3211,7 @@ pub(crate) fn run(
                                     shim,
                                     effective_scope(inner, shim),
                                     root,
+                                    policy,
                                     &collected,
                                     &words,
                                 )
@@ -3080,6 +3340,22 @@ mod tests {
 
     fn argv(line: &str) -> Vec<String> {
         line.split_whitespace().map(str::to_owned).collect()
+    }
+
+    /// A policy that declares nothing, which is the state every case that is
+    /// not about a declaration is in: `public-target` then asks the forge
+    /// exactly as it always did.
+    fn undeclared() -> Policy {
+        Policy::default()
+    }
+
+    /// A policy that says what this repository is, the way `principles.toml`
+    /// says it.
+    fn declaring(visibility: &str) -> Policy {
+        Policy {
+            visibility: Some(String::from(visibility)),
+            ..Policy::default()
+        }
     }
 
     fn named(shim: &Shim, line: &str) -> bool {
@@ -3280,6 +3556,7 @@ mod tests {
             npm.scope_holds(
                 &Scope::PublicRegistry,
                 &dir,
+                &undeclared(),
                 &Collected::default(),
                 &argv("publish")
             )
@@ -3298,6 +3575,7 @@ mod tests {
             npm.scope_holds(
                 &Scope::PublicRegistry,
                 Path::new("."),
+                &undeclared(),
                 &Collected::default(),
                 &argv("publish --dry-run")
             )
@@ -3595,6 +3873,7 @@ mod tests {
             gh().scope_holds(
                 &Scope::Always,
                 Path::new("."),
+                &undeclared(),
                 &Collected::default(),
                 &argv("pr create")
             )
@@ -3618,6 +3897,7 @@ mod tests {
                 .scope_holds(
                     &Scope::PublicTarget,
                     Path::new("."),
+                    &undeclared(),
                     &Collected::default(),
                     &argv("pr create")
                 )
@@ -3645,7 +3925,297 @@ mod tests {
         assert_eq!(unknown_host.forge(&dir), None);
         assert!(matches!(
             unknown_host
-                .scope_holds(&Scope::PublicTarget, &dir, &collected, &argv("pr create"))
+                .scope_holds(
+                    &Scope::PublicTarget,
+                    &dir,
+                    &undeclared(),
+                    &collected,
+                    &argv("pr create")
+                )
+                .unwrap(),
+            Standing::CouldNotTell(why) if why.contains("did not say whether acme/widget is public")
+        ));
+    }
+
+    /// A repository whose `origin` points at `url`, and whose forge no resolver
+    /// knows.
+    ///
+    /// The host is deliberately unrecognised, which is what makes "the forge
+    /// was not asked" an assertion rather than a hope: the only answer the
+    /// lookup can give here is [`Standing::CouldNotTell`], so a definite
+    /// standing coming back out is proof that the declaration answered and
+    /// nothing was spawned. The `gh` marker file the CLI tests use asserts the
+    /// same thing from outside; this asserts it where a stray `gh` on the
+    /// runner's PATH cannot reach.
+    fn repository_pointing_at(kind: &str, url: &str) -> PathBuf {
+        let dir = crate::fixture::scratch(kind);
+        std::fs::create_dir_all(&dir).unwrap();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["remote", "add", "origin", url][..],
+        ] {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?} failed");
+        }
+        dir
+    }
+
+    /// A shim whose command names no forge, so nothing here can reach one.
+    fn no_forge_cli() -> Shim {
+        let mut shim = gh();
+        shim.command = String::from("faux");
+        shim
+    }
+
+    #[test]
+    fn a_declared_private_visibility_answers_without_asking_the_forge() {
+        // The defect, as it was reported: a repository whose `principles.toml`
+        // says `visibility = "private"` made a network call on every `git push`
+        // to learn a fact the policy states offline, and when the account was
+        // rate-limited the lookup failed and the default `unresolved` refused
+        // every push in every tree.
+        let dir = repository_pointing_at(
+            "shim-declared-private",
+            "https://forge.example/acme/widget.git",
+        );
+        assert_eq!(
+            no_forge_cli()
+                .scope_holds(
+                    &Scope::PublicTarget,
+                    &dir,
+                    &declaring("private"),
+                    &Collected::default(),
+                    &argv("pr create")
+                )
+                .unwrap(),
+            Standing::DoesNotHold
+        );
+        // And the same fixture with nothing declared, which is where that
+        // answer would otherwise have had to come from.
+        assert!(matches!(
+            no_forge_cli()
+                .scope_holds(
+                    &Scope::PublicTarget,
+                    &dir,
+                    &undeclared(),
+                    &Collected::default(),
+                    &argv("pr create")
+                )
+                .unwrap(),
+            Standing::CouldNotTell(why) if why.contains("did not say whether acme/widget is public")
+        ));
+    }
+
+    #[test]
+    fn a_declared_public_visibility_puts_the_checks_in_scope_offline() {
+        // The other half, and it is the half that must not be lost: standing
+        // the checks DOWN on a declaration nobody read would be the failure
+        // this change could cause, so the `public` word has to reach `Holds`
+        // without a forge exactly as `private` reaches `DoesNotHold`.
+        let dir = repository_pointing_at(
+            "shim-declared-public",
+            "https://forge.example/acme/widget.git",
+        );
+        assert_eq!(
+            no_forge_cli()
+                .scope_holds(
+                    &Scope::PublicTarget,
+                    &dir,
+                    &declaring("public"),
+                    &Collected::default(),
+                    &argv("pr create")
+                )
+                .unwrap(),
+            Standing::Holds
+        );
+    }
+
+    #[test]
+    fn a_declaration_about_this_repository_says_nothing_about_another_one() {
+        // Where the shim is stricter than the guard, and it has to be: `-R
+        // other-owner/their-repo` is an explicit foreign destination, and this
+        // policy's `visibility` is a statement about this tree. Reading it at
+        // somebody else's repository would stand the checks down over a fact
+        // about a different place entirely.
+        let dir = repository_pointing_at(
+            "shim-declared-foreign",
+            "https://forge.example/acme/widget.git",
+        );
+        let elsewhere = Collected {
+            target: Some(String::from("other-owner/their-repo")),
+            ..Collected::default()
+        };
+        assert!(matches!(
+            no_forge_cli()
+                .scope_holds(
+                    &Scope::PublicTarget,
+                    &dir,
+                    &declaring("private"),
+                    &elsewhere,
+                    &argv("pr create")
+                )
+                .unwrap(),
+            Standing::CouldNotTell(why)
+                if why.contains("did not say whether other-owner/their-repo is public")
+        ));
+    }
+
+    /// One failed run of `sh`, standing in for a forge CLI that said this.
+    ///
+    /// A real `Output` rather than a hand-built one, because the field this
+    /// classifier reads is stderr and the thing worth asserting is that a
+    /// process's stderr reaches it.
+    fn said(stderr: &str, code: i32) -> std::process::Output {
+        Command::new("sh")
+            .args(["-c", &format!("printf '%s' \"$1\" >&2; exit {code}")])
+            .arg("sh")
+            .arg(stderr)
+            .output()
+            .expect("sh runs")
+    }
+
+    #[test]
+    fn a_404_is_the_one_silence_that_is_about_the_name() {
+        assert_eq!(
+            Silence::of("glab", &said("glab: Not Found (HTTP 404)", 1)),
+            Silence::NotFound
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_is_not_reported_as_a_404() {
+        // The report this came from: a rate-limited push was refused with a
+        // paragraph explaining what a 404 means, which is neither what happened
+        // nor anything the reader could act on. `glab` rather than `gh` so the
+        // reset is not looked up -- the classification is what is under test.
+        let silence = Silence::of(
+            "glab",
+            &said("glab: API rate limit exceeded for user ID 1. (HTTP 403)", 1),
+        );
+        assert_eq!(
+            silence,
+            Silence::RateLimited {
+                resets_in_minutes: None
+            }
+        );
+        assert!(
+            silence.sentence().contains("rate-limiting this client"),
+            "{}",
+            silence.sentence()
+        );
+        assert!(
+            !silence.sentence().contains("404"),
+            "{}",
+            silence.sentence()
+        );
+    }
+
+    #[test]
+    fn an_unauthenticated_client_is_reported_in_the_words_it_used() {
+        let silence = Silence::of("glab", &said("glab: Bad credentials (HTTP 401)", 1));
+        assert_eq!(
+            silence,
+            Silence::Refused(String::from("glab: Bad credentials (HTTP 401)"))
+        );
+        assert!(
+            silence.sentence().contains("Bad credentials"),
+            "{}",
+            silence.sentence()
+        );
+    }
+
+    #[test]
+    fn a_forge_that_said_nothing_at_all_is_still_named_by_its_exit() {
+        // A tool that fails silently used to arrive as an empty reason inside a
+        // sentence that promised one. The exit code is the only fact there is,
+        // so it is the fact reported.
+        assert_eq!(
+            Silence::of("glab", &said("", 7)),
+            Silence::Refused(String::from("`glab` exited 7"))
+        );
+    }
+
+    #[test]
+    fn a_destination_somebody_typed_is_asked_about_even_where_it_names_this_repository() {
+        // The narrowing, asserted at the case that looks safest. `-R
+        // acme/widget` inside `acme/widget` names what appears to be this
+        // repository, and two matching path segments are still not this
+        // repository: a typed `owner/repo` carries no host, so under a
+        // `--hostname` or a `GH_HOST` the same two names are a different forge's
+        // repository with its own visibility. Nothing here can tell those apart,
+        // so nothing here answers for either -- the forge does, as it always
+        // did.
+        let dir = repository_pointing_at(
+            "shim-declared-named",
+            "https://forge.example/acme/widget.git",
+        );
+        let named = Collected {
+            target: Some(String::from("acme/widget")),
+            ..Collected::default()
+        };
+        assert!(matches!(
+            no_forge_cli()
+                .scope_holds(
+                    &Scope::PublicTarget,
+                    &dir,
+                    &declaring("private"),
+                    &named,
+                    &argv("pr create")
+                )
+                .unwrap(),
+            Standing::CouldNotTell(why) if why.contains("did not say whether acme/widget is public")
+        ));
+    }
+
+    #[test]
+    fn an_internal_declaration_is_not_a_public_one() {
+        // `internal` is public to everyone with an account on the instance,
+        // which is neither public to the internet nor private -- and only
+        // `public` puts the `public-target` checks in scope here.
+        let dir = repository_pointing_at(
+            "shim-declared-internal",
+            "git@forge.example:acme/widget.git",
+        );
+        assert_eq!(
+            no_forge_cli()
+                .scope_holds(
+                    &Scope::PublicTarget,
+                    &dir,
+                    &declaring("internal"),
+                    &Collected::default(),
+                    &argv("pr create")
+                )
+                .unwrap(),
+            Standing::DoesNotHold
+        );
+    }
+
+    #[test]
+    fn a_declaration_needs_an_origin_to_be_about_anything() {
+        // No `origin` is nothing to compare the target against, so there is no
+        // establishing that the declaration speaks for this destination and the
+        // forge is where the question goes -- unchanged from before.
+        let dir = crate::fixture::scratch("shim-declared-no-origin");
+        std::fs::create_dir_all(&dir).unwrap();
+        let elsewhere = Collected {
+            target: Some(String::from("acme/widget")),
+            ..Collected::default()
+        };
+        assert!(matches!(
+            no_forge_cli()
+                .scope_holds(
+                    &Scope::PublicTarget,
+                    &dir,
+                    &declaring("private"),
+                    &elsewhere,
+                    &argv("pr create")
+                )
                 .unwrap(),
             Standing::CouldNotTell(why) if why.contains("did not say whether acme/widget is public")
         ));
@@ -3669,6 +4239,7 @@ mod tests {
                 .scope_holds(
                     &Scope::PublicRegistry,
                     &dir,
+                    &undeclared(),
                     &Collected::default(),
                     &argv("publish")
                 )
@@ -3683,7 +4254,13 @@ mod tests {
         };
         assert_eq!(
             npm()
-                .scope_holds(&Scope::PublicRegistry, &dir, &internal, &argv("publish"))
+                .scope_holds(
+                    &Scope::PublicRegistry,
+                    &dir,
+                    &undeclared(),
+                    &internal,
+                    &argv("publish")
+                )
                 .unwrap(),
             Standing::DoesNotHold
         );
@@ -3708,6 +4285,7 @@ mod tests {
                     &npm(),
                     &scope,
                     &dir,
+                    &undeclared(),
                     &Collected::default(),
                     &argv("publish")
                 )
@@ -3719,6 +4297,7 @@ mod tests {
                     &npm(),
                     &Scope::PublicRegistry,
                     &dir,
+                    &undeclared(),
                     &Collected::default(),
                     &argv("publish")
                 )

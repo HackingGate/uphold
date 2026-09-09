@@ -1302,6 +1302,93 @@ fn an_origin_with_no_owner_and_repository_in_it_is_not_a_checked_claim() {
     assert!(text.contains("Could not look is not a pass"), "{text}");
 }
 
+// The two cases that DO reach a forge, through the fixture's own `gh`. Both are
+// exit 2 and both leave the declaration unchecked -- the verdict was never the
+// question. What is asserted here is that they do not say the same thing: for a
+// while they did, and an account four minutes into a rate limit was handed a
+// paragraph about what a 404 means.
+
+/// A `gh` that is over its budget, and a `rate_limit` endpoint that says when.
+///
+/// The reset is built at call time because the message counts forward from now.
+/// GitHub exempts `rate_limit` from the limit it reports, which is what makes
+/// asking it in reply to a 403 something other than digging.
+fn gh_is_rate_limited(root: &Path, resets_in_seconds: u64) {
+    let reset = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + resets_in_seconds;
+    gh_says(
+        root,
+        &format!(
+            "case \"$*\" in\n\
+             'api rate_limit --jq .rate.reset') echo {reset} ;;\n\
+             *) echo 'gh: API rate limit exceeded for user ID 1. (HTTP 403)' >&2; exit 1 ;;\n\
+             esac\n"
+        ),
+    );
+}
+
+#[test]
+fn a_rate_limited_forge_is_not_reported_as_a_repository_that_is_not_there() {
+    let root = repository(
+        "visibility = \"private\"\n\n[rule.no-stale-visibility]\n\
+         builtin = \"no-stale-visibility\"\n\n\
+         [rule.no-stale-visibility.git]\nhooks = [\"pre-push\"]\n",
+    );
+    git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    gh_is_rate_limited(&root, 15 * 60);
+
+    let output = push_guard(&root, &[]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("rate-limiting this client"), "{text}");
+    // Counted forward and rounded up, so the reader is told how long to wait
+    // rather than left to compare two epochs.
+    assert!(text.contains("resets in about 15 minutes"), "{text}");
+    // The wording that used to be printed here, and the reason this test exists.
+    assert!(!text.contains("A 404 is a private repository"), "{text}");
+    assert!(text.contains("UPHOLD_ALLOW=no-stale-visibility"), "{text}");
+}
+
+#[test]
+fn a_forge_that_will_show_no_such_repository_still_gets_the_404_reading() {
+    // The other half: splitting the arms must not cost the case the original
+    // wording was right for. A 404 over a repository declared private is the
+    // ordinary answer to an unauthenticated request, and saying so is the whole
+    // value of the paragraph.
+    let root = repository(
+        "visibility = \"private\"\n\n[rule.no-stale-visibility]\n\
+         builtin = \"no-stale-visibility\"\n\n\
+         [rule.no-stale-visibility.git]\nhooks = [\"pre-push\"]\n",
+    );
+    git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    gh_says(&root, "echo 'gh: Not Found (HTTP 404)' >&2\nexit 1\n");
+
+    let output = push_guard(&root, &[]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("A 404 is a private repository"), "{text}");
+    assert!(!text.contains("rate-limiting"), "{text}");
+}
+
 // ── where a push is allowed to go ────────────────────────────────────
 
 /// A pre-push guard told nothing but its flags.

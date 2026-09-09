@@ -465,6 +465,23 @@ checkers down exactly where the lookup failed. That is exit `2` before the
 command runs, and `unresolved = "run"` on the `[[shim]]` table is the opt-out —
 see [the shims](#uphold-shim--the-shims).
 
+The rows above are what the forge said, and the shim reaches them only where it
+had to ask at all. A repository that declares its own `visibility` in its policy
+file has answered the question already, so `public-target` reads the declaration
+and asks nobody — `public` puts the checks in scope, `private` and `internal`
+stand them down, and no `gh` runs. That declaration speaks for this repository
+and for no other, so it is read for one destination only: the one the shim took
+from `origin` because nothing on the command line named another. A `gh -R
+owner/repo` goes to the forge exactly as it always did, and it does so **even
+where the name it carries is this repository's own** — a typed `owner/repo`
+has no host in it, so under a `--hostname` or a `GH_HOST` the same two names
+are a different forge's repository with its own visibility, and two matching
+path segments cannot tell the two apart. So the `2` above is still the answer
+for a named destination the forge could not be asked about, and for a repository
+that declares nothing; what is bought offline is the case the cost was actually
+in — the push that names nothing and means `origin`, which no longer needs an
+authenticated `gh` to be told what the policy already said.
+
 So **`gh` must be authenticated wherever these rules run**, CI included. In a
 GitHub Actions job that means `GH_TOKEN: ${{ github.token }}`; the job token
 reads this repository and public ones and answers `404` for everything else,
@@ -1161,7 +1178,7 @@ stamped on it, the range about to be pushed.
 | `no-merge-commit` | a commit finishing a merge or a squash merge |
 | `no-stale-hook-pins` | a pin left behind its upstream, or naming no ref — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree; a pin it **could not check** is exit `2` |
 | `no-hand-copied-base-rule` | a rule this policy writes out by hand under an id a bundled set already ships, from a set it does not inherit. Reads the **policy**, not the tree. At `pre-commit` only what the change adds; at `manual` the whole sweep |
-| `no-stale-visibility` | a declared `private` the forge no longer serves. Reads the **declaration** and the forge, not the tree; a forge that did not answer is exit `2` and never "confirmed private" |
+| `no-stale-visibility` | a declared `private` the forge no longer serves. Reads the **declaration** and the forge, not the tree; a forge that did not answer is exit `2` and never "confirmed private", and it says which silence it met — a 404 reads differently from a rate limit |
 
 Declared like any other rule, in the same file and the same id namespace.
 **`git.hooks` is the whole registration.**
@@ -1504,8 +1521,27 @@ nested form is the enum's own spelling; the flatter one this page used to show
 never parsed.) `collect = "git-refs"` replaces the argv walk for `git`, whose
 published text is positional.
 
-**A scope that could not be evaluated is not a scope that said no.**
-`public-target` is the one predicate that asks somebody else, and `gh`
+**`public-target` asks this repository before it asks anybody else.** The
+policy's own top-level `visibility` is a statement of the fact the predicate
+needs, so where there is one it settles the question offline: `public` is in
+scope, `private` and `internal` are out of it, and nothing is spawned. The
+narrowing that makes reading it safe is that a declaration is about ONE
+repository, and the only destination this seam can be sure of is the one it
+derived itself. So the declaration is read where a `target_flags` value is
+absent — where the destination came from `origin` — and nowhere else. A named
+destination goes to the forge whatever it names: `gh -R other/repo` obviously,
+and `gh -R this-owner/this-repo` too, because the name carries no host and
+`--hostname` and `GH_HOST` both make `owner/repo` a different repository on a
+different forge. A tree whose `origin` cannot be read has no destination for a
+declaration to be about, and a policy that declares nothing changes nothing.
+The guard seam does the same thing one step less strictly (see
+`guard::names::target_is_public`), and the difference is deliberate: a guard
+reads text belonging to this repository, while a shim stands in front of a
+command that may be publishing somewhere else entirely.
+
+**A scope that could not be evaluated is not a scope that said no.** Where the
+question does reach a forge, `public-target` is the one predicate that asks
+somebody else, and `gh`
 unauthenticated, a rate limit, no network, or a repository with no `origin` all
 answer nothing. That was read as "out of scope", which stood every checker
 behind the table down — including `prevent-unowned-target`, whose own contract
@@ -1517,6 +1553,31 @@ no checker did. The field is refused at load on a table no reading of which can
 reach `public-target` — neither the table's own `scope` nor the `command.scope`
 of any rule naming the command — because a parameter nothing reads is
 configuration that looks like it works.
+
+**A silence is told apart from the other silences.** "The forge did not say" was
+one sentence for four different situations, and the one thing the reader needed
+in order to act was the one thing it left out: a 404, an unauthenticated `gh`, a
+rate limit and a `gh` that is not installed are four instructions, not one. So a
+failed forge call is classified once — in `shim::Silence`, which the shim seam,
+`no-stale-visibility` and `prevent-public-push` all read, because three
+classifiers would be free to disagree about one exit code and only one of them
+could be right — and the refusal carries the cause:
+
+```text
+uphold shim: the forge did not say whether acme/widget is public, so whether the
+`public-target` checks apply here could not be established. The forge is
+rate-limiting this client; the budget resets in about 15 minutes. This is not an
+answer about the repository -- it is the same silence for a public one and a
+private one.
+```
+
+The reset time is the one question this tool asks in reply to a failure, and it
+asks the one endpoint GitHub exempts from the limit it is reporting, so the ask
+cannot deepen the hole it is describing. **None of this changes a verdict.**
+Every one of these is still exit `2`, still not a pass, and still not a cached
+answer — a wait somebody can sit out is worth naming precisely because the
+alternative on offer is `UPHOLD_ALLOW`, and a reader who cannot tell a rate limit
+from a deleted repository reaches for the bypass either way.
 
 **An alias is expanded before the `match` list is consulted.** `match` names
 verbs literally, and every one of these commands lets a person rename one:
@@ -1671,9 +1732,12 @@ than the seam.
 
 The fourth is uphold getting out of its own way, and it is documented here
 rather than left implicit because a reader who meets the line deserves to know
-what set it. A `public-target` scope asks the forge whether the destination is
-public, and it asks by running `gh api repos/<owner>/<repo> --jq .visibility`;
-a `git-remote` target asks by running `git remote get-url origin`. PATH answers
+what set it. A `public-target` scope asks whether the destination is public, and
+where this repository has not declared its own `visibility` — or where the
+command named a destination, which a declaration does not speak for — it asks
+by running `gh api repos/<owner>/<repo> --jq .visibility`; a `git-remote` target
+asks by running `git remote get-url origin`, which is how an unnamed destination
+is resolved in the first place and so runs either way. PATH answers
 `gh` and `git` with the shim, so **every question this tool asks on the way to a
 verdict is a command it stands in front of**. On 2026-09-02 that closed into a
 loop against the released binary inside this repository's own checkout: the
