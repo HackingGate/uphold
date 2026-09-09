@@ -37,7 +37,7 @@ hint = "the rustup toolchain multiplexer; the default toolchain is set by the ru
 name = "rustc"
 check = "rustc --version"
 version = "rustc --version"
-want = ">=1.88"
+want = ">=1.90"
 hint = "no default toolchain? run: scripts/deps.sh install (rustup default stable)"
 
 # cargo fmt / clippy hooks need these components on the active toolchain.

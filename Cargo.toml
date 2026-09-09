@@ -2,13 +2,15 @@
 name = "uphold"
 version = "1.16.0"
 edition = "2021"
-# 1.88, not 1.85: the ripgrep stack this crate embeds -- globset 0.4.20 and
-# ignore 0.4.33 in Cargo.lock -- refuses anything older. The 1.85 that stood here
-# had never been built, because CI built on whatever `stable` was that week; the
-# MSRV job added alongside this comment is what turned the claim into a check.
+# 1.90, and the floor is set by what the tree embeds rather than by taste: the
+# ripgrep stack -- globset 0.4.20 and ignore 0.4.33 in Cargo.lock -- refuses
+# anything older than 1.88, and tree-sitter 0.27 with tree-sitter-language 0.1.8
+# refuses anything older than 1.90. A number here that had never been built is
+# what the MSRV job exists to prevent: it builds the crate on this version rather
+# than on whatever `stable` was that week, so raising this is a claim CI checks.
 # Raising it means raising toolchain.toml's rustc `want` in the same commit --
 # tests/test_toolchain.py refuses the tree where only one of the two moved.
-rust-version = "1.88"
+rust-version = "1.90"
 description = "One binary for the engineering principles catalog and the rules that enforce it"
 license = "Apache-2.0"
 repository = "https://github.com/HackingGate/uphold"
