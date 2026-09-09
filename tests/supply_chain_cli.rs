@@ -133,6 +133,21 @@ fn journal(root: &Path) -> String {
 /// The working directory is half the assertion in the scoped tests: guarddog is
 /// run from the manifest's own directory, and a scan of the right file from the
 /// wrong place reads the wrong `package.json`.
+/// A clean `guarddog verify --output-format json` report.
+///
+/// guarddog is run with `--output-format json` because its exit code cannot
+/// say it found something: `verify` answers 0 either way. So a stub that only
+/// answers `exit 0` no longer models the tool -- a clean run PRINTS a report
+/// whose `risks` list is empty, and printing nothing is a run that did not
+/// report, which is could-not-look.
+const GUARDDOG_CLEAN: &str = "echo '[{\"dependency\":\"six\",\"result\":\
+    {\"errors\":{},\"issues\":0,\"results\":{},\"risks\":[]}}]'\nexit 0";
+
+/// The same report with one risk in it, which is a finding at exit 0.
+const GUARDDOG_RISK: &str = "echo '[{\"dependency\":\"reqests\",\"result\":\
+    {\"errors\":{},\"issues\":1,\"results\":{},\"risks\":\
+    [{\"name\":\"typosquatting\",\"severity\":\"high\"}]}}]'\nexit 0";
+
 fn recording(answer: &str) -> String {
     format!("echo \"$(basename \"$0\") [$PWD] $*\" >> \"$STUB_LOG\"\n{answer}")
 }
@@ -471,9 +486,12 @@ fn a_python_lock_is_exported_for_guarddog_and_its_refusal_is_the_runs() {
         ("uv", "echo 'reqests==2.0.0'"),
         (
             "guarddog",
-            "grep -q 'reqests==2.0.0' \"$3\" || { echo 'guarddog was not handed the export'; exit 2; }\n\
-             echo 'typosquatting: reqests shadows requests'\n\
-             exit 1",
+            // `$5`, not `$3`: the export path sits after `--output-format json`,
+            // which guarddog needs because its exit code cannot report a find.
+            &format!(
+                "grep -q 'reqests==2.0.0' \"$5\" || {{ echo 'guarddog was not handed the \
+                 export'; exit 2; }}\n{GUARDDOG_RISK}"
+            ),
         ),
     ]);
     let output = supply(&root, Some(&tools));
@@ -548,7 +566,9 @@ fn an_npm_manifest_is_scanned_where_it_lives_and_a_clean_one_is_a_pass() {
         ("osv-scanner", "exit 0"),
         (
             "guarddog",
-            "grep -q '\"web\"' package.json || { echo 'wrong directory'; exit 1; }\nexit 0",
+            &format!(
+                "grep -q '\"web\"' package.json || {{ echo 'wrong directory'; exit 1; }}\n{GUARDDOG_CLEAN}"
+            ),
         ),
     ]);
     let output = supply(&root, Some(&tools));
@@ -570,7 +590,7 @@ fn a_refusing_npm_scan_names_the_directory_it_refused_in() {
     let root = repository();
     std::fs::create_dir_all(root.join("web")).unwrap();
     std::fs::write(root.join("web/package.json"), "{\"name\": \"web\"}\n").unwrap();
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", "exit 1")]);
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_RISK)]);
     let output = supply(&root, Some(&tools));
     assert_eq!(code(&output), 1, "{}", text(&output));
     let said = text(&output);
@@ -668,7 +688,7 @@ fn a_range_touching_no_manifest_runs_no_scanner_and_says_so_in_one_line() {
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
         ("zizmor", &recording("exit 0")),
-        ("guarddog", &recording("exit 0")),
+        ("guarddog", &recording(GUARDDOG_CLEAN)),
         ("cargo", &recording("exit 0")),
     ]);
     let output = pushed(&root, &tools, &before, &after);
@@ -698,7 +718,7 @@ fn all_scans_every_manifest_even_where_the_range_holds_none_of_them() {
         ("osv-scanner", &recording("exit 0")),
         ("zizmor", &recording("exit 0")),
         ("uv", &recording("echo 'requests==2.0.0'")),
-        ("guarddog", &recording("exit 0")),
+        ("guarddog", &recording(GUARDDOG_CLEAN)),
     ]);
     let output = supply(&root, Some(&tools));
     assert_eq!(code(&output), 0, "{}", text(&output));
@@ -724,7 +744,7 @@ fn a_changed_python_lock_runs_guarddog_in_that_directory_and_not_the_others() {
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
         ("uv", &recording("echo 'requests==2.0.0'")),
-        ("guarddog", &recording("exit 0")),
+        ("guarddog", &recording(GUARDDOG_CLEAN)),
     ]);
     let output = pushed(&root, &tools, &before, &after);
     assert_eq!(code(&output), 0, "{}", text(&output));
@@ -823,7 +843,7 @@ fn a_bumped_submodule_pointer_expands_into_the_members_own_manifests() {
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
         ("uv", &recording("echo 'requests==2.0.0'")),
-        ("guarddog", &recording("exit 0")),
+        ("guarddog", &recording(GUARDDOG_CLEAN)),
     ]);
     let output = pushed(&root, &tools, &before, &after);
     assert_eq!(code(&output), 0, "{}", text(&output));
@@ -857,7 +877,7 @@ fn a_submodule_commit_the_store_does_not_have_widens_to_every_manifest_under_it(
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
         ("uv", &recording("echo 'requests==2.0.0'")),
-        ("guarddog", &recording("exit 0")),
+        ("guarddog", &recording(GUARDDOG_CLEAN)),
     ]);
     let output = pushed(&root, &tools, &before, &after);
     assert_eq!(code(&output), 0, "{}", text(&output));
@@ -917,5 +937,249 @@ fn guarddog_rules_that_did_not_run_are_could_not_look_rather_than_a_clean_scan()
     let said = text(&output);
     assert!(said.contains("left-pad"), "{said}");
     assert!(said.contains("1 rule(s) unrun"), "{said}");
+    assert!(!said.contains("all checks passed"), "{said}");
+}
+
+/// cargo-vet's finding and cargo-vet's refusal to start share exit 255.
+///
+/// A dependency carrying no audit and a store that does not parse are the same
+/// code, so a section answering by exit code alone files the second under the
+/// first. The stream separates them: the finding is on stdout and the refusal
+/// is on stderr. This is the finding half, which must stay a verdict.
+#[test]
+fn cargo_vet_that_found_unvetted_dependencies_is_a_finding_and_exits_one() {
+    let root = repository();
+    std::fs::create_dir_all(root.join("supply-chain")).unwrap();
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        (
+            "cargo",
+            "case \"$1\" in\n\
+             vet) echo 'Vetting Failed!'; echo '11 unvetted dependencies:'; exit 255 ;;\n\
+             *) exit 0 ;;\n\
+             esac",
+        ),
+    ]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 1, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("Vetting Failed!"), "{said}");
+    assert!(!said.contains("could not run"), "{said}");
+}
+
+/// The refusal half of the same exit code.
+///
+/// cargo-vet that could not open its store judged no dependency at all, and
+/// that is could-not-look rather than a tree that is out of step. Reading the
+/// exit code alone would report this repository as failing an audit nobody
+/// ran.
+#[test]
+fn cargo_vet_that_could_not_open_its_store_is_could_not_look_and_exits_two() {
+    let root = repository();
+    std::fs::create_dir_all(root.join("supply-chain")).unwrap();
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        (
+            "cargo",
+            "case \"$1\" in\n\
+             vet) echo 'ERROR   x Failed to parse toml file' >&2; exit 255 ;;\n\
+             *) exit 0 ;;\n\
+             esac",
+        ),
+    ]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("nothing here was vetted"), "{said}");
+    assert!(!said.contains("all checks passed"), "{said}");
+}
+
+/// osv-scanner says could-not-look in its own exit code, and 1 is not it.
+///
+/// `1` is a vulnerability. `127` is a path it could not resolve, a lockfile it
+/// could not parse, a config it could not read or a query it could not send,
+/// and reading it as a refusal reports a network outage as a vulnerability in
+/// this tree.
+#[test]
+fn osv_scanner_that_could_not_resolve_its_input_is_could_not_look_not_a_finding() {
+    let root = repository();
+    let tools = stubs(&[(
+        "osv-scanner",
+        "echo 'failed to resolve path: no such file or directory' >&2\nexit 127",
+    )]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("no lockfile here was checked"), "{said}");
+    assert!(!said.contains("all checks passed"), "{said}");
+}
+
+/// The control for the case above: exit 1 stays a vulnerability.
+#[test]
+fn osv_scanner_that_found_a_vulnerability_is_a_finding_and_exits_one() {
+    let root = repository();
+    let tools = stubs(&[(
+        "osv-scanner",
+        "echo 'Total 2 packages affected by 64 known vulnerabilities'\nexit 1",
+    )]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 1, "{}", text(&output));
+    assert!(
+        text(&output).contains("64 known vulnerabilities"),
+        "{}",
+        text(&output)
+    );
+}
+
+/// zizmor's could-not-look wears exit 0, which is the whole problem.
+///
+/// Handed one workflow it cannot parse alongside workflows it can, zizmor
+/// skips the bad one, audits the rest and exits 0 saying it found nothing. Its
+/// SARIF reports executionSuccessful true in exactly that case, so the only
+/// witness is the warning on stderr. A section believing the zero calls a
+/// workflow nobody read clean.
+#[test]
+fn zizmor_that_skipped_a_workflow_it_could_not_parse_is_not_a_clean_audit() {
+    let root = repository();
+    let workflows = root.join(".github/workflows");
+    std::fs::create_dir_all(&workflows).unwrap();
+    std::fs::write(workflows.join("ci.yml"), "on: push\njobs: {}\n").unwrap();
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        (
+            "zizmor",
+            "echo ' WARN collect_inputs: zizmor::registry::input: failed to parse input: \
+             mapping values are not allowed' >&2\n\
+             echo 'No findings to report. Good job! (2 suppressed)'\n\
+             exit 0",
+        ),
+    ]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("could not parse 1"), "{said}");
+    assert!(!said.contains("all checks passed"), "{said}");
+}
+
+/// The control: zizmor's severity ladder stays a finding.
+///
+/// 11 through 14 are the codes it answers when it audited everything and found
+/// something, one per severity present. Only the other non-zero codes, and the
+/// skipped-input warning above, are could-not-look.
+#[test]
+fn zizmor_severity_exit_codes_are_findings_rather_than_could_not_look() {
+    let root = repository();
+    let workflows = root.join(".github/workflows");
+    std::fs::create_dir_all(&workflows).unwrap();
+    std::fs::write(workflows.join("ci.yml"), "on: push\njobs: {}\n").unwrap();
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        (
+            "zizmor",
+            "echo 'warning[artipacked]: credential persistence'\nexit 14",
+        ),
+    ]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 1, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("artipacked"), "{said}");
+    assert!(!said.contains("without auditing anything"), "{said}");
+}
+
+/// cargo-deny's exit 1 is an advisory OR a database it could not fetch.
+///
+/// The code is a bitmask over which check refused, and advisories own the 1,
+/// so an advisory database that would not download shares its code with a
+/// RUSTSEC match. A run that reached its checks prints the per-check summary
+/// on stdout; one that did not leaves stdout empty.
+#[test]
+fn cargo_deny_that_never_reached_a_check_is_could_not_look_not_an_advisory() {
+    let root = repository();
+    std::fs::write(root.join("deny.toml"), "[bans]\n").unwrap();
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"f\"\n").unwrap();
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        (
+            "cargo",
+            "[ \"$1\" = deny ] || exit 0\n\
+             echo '[ERROR] failed to fetch advisory database' >&2\n\
+             exit 1",
+        ),
+    ]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("reached no check"), "{said}");
+    assert!(!said.contains("all checks passed"), "{said}");
+}
+
+/// guarddog reports a finding at exit 0, and the finding must survive that.
+///
+/// `guarddog verify` answers 0 whether it found three high-severity risks or
+/// none, so a section reading the exit code called every finding clean. This
+/// is the false negative that reading `risks` exists to close, on the one
+/// scanner here whose job is malware and typosquats.
+#[test]
+fn guarddog_that_found_risks_and_exited_zero_is_a_finding_not_a_clean_scan() {
+    let root = repository();
+    std::fs::create_dir_all(root.join("web")).unwrap();
+    std::fs::write(root.join("web/package.json"), "{\"name\": \"web\"}\n").unwrap();
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_RISK)]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 1, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("objected to reqests"), "{said}");
+    assert!(!said.contains("all checks passed"), "{said}");
+}
+
+/// `issues` is not the finding count, so a clean package stays clean.
+///
+/// `six` reports `issues: 2` with `risks: []` and guarddog's own label
+/// `no_risks_detected`; the two issues are capability matches on an `exec()`.
+/// This is why `--exit-non-zero-on-finding`, which counts issues, is not the
+/// remedy for the case above: it would fail a package guarddog calls clean.
+#[test]
+fn guarddog_issues_without_risks_are_not_a_finding() {
+    let root = repository();
+    std::fs::create_dir_all(root.join("web")).unwrap();
+    std::fs::write(root.join("web/package.json"), "{\"name\": \"web\"}\n").unwrap();
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        (
+            "guarddog",
+            "echo '[{\"dependency\":\"six\",\"result\":{\"errors\":{},\"issues\":2,\
+             \"results\":{},\"risks\":[]}}]'\nexit 0",
+        ),
+    ]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains("all checks passed"),
+        "{}",
+        text(&output)
+    );
+}
+
+/// A dependency guarddog could not download is could-not-look, not clean.
+///
+/// The 404 and network paths populate `errors` and drop `results`, and still
+/// exit 0. Reading the code alone calls a package nobody scanned clean.
+#[test]
+fn guarddog_that_could_not_scan_a_dependency_is_could_not_look() {
+    let root = repository();
+    std::fs::create_dir_all(root.join("web")).unwrap();
+    std::fs::write(root.join("web/package.json"), "{\"name\": \"web\"}\n").unwrap();
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        (
+            "guarddog",
+            "echo '[{\"dependency\":\"left-pad\",\"result\":{\"errors\":\
+             {\"download-package\":\"Received status code: 404 from PyPI\"},\"issues\":0}}]'\nexit 0",
+        ),
+    ]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("could not scan left-pad"), "{said}");
     assert!(!said.contains("all checks passed"), "{said}");
 }

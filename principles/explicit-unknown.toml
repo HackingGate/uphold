@@ -26,9 +26,9 @@ limits = ["A tool can see that an unknown state exists; it cannot tell whether t
 
 [[sources]]
 title = "Specification for the Extensible Configuration Checklist Description Format (XCCDF)"
-url = "https://csrc.nist.gov/pubs/ir/7275/r3/final"
+url = "https://csrc.nist.gov/pubs/ir/7275/r4/upd1/final"
 type = "standard"
-notes = "Defines rule-result values that keep pass, fail, error, unknown, notapplicable, notchecked, and notselected as separate outcomes rather than a boolean."
+notes = "Defines rule-result values that keep pass, fail, error, unknown, notapplicable, notchecked, notselected, informational and fixed as separate outcomes rather than a boolean. Its scoring rule excludes notapplicable and notchecked from the denominator and leaves error and unknown inside it, so a check that could not run counts against the score and never for it."
 
 [[sources]]
 title = "Static Analysis Results Interchange Format (SARIF)"

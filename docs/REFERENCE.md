@@ -2156,14 +2156,68 @@ rather than a widening: there is no tree to widen into, and reporting a clean
 scan of manifests that are not on disk is the shape this crate exists to
 refuse.
 
-### guarddog that could not look
+### guarddog, which cannot answer in its exit code at all
 
-guarddog prints "Some rules failed to run while scanning \<package\>" and
-**exits 0** — its two email-domain rules time out routinely. Reading only the
-exit code files that under clean, so an unrun rule is could-not-look and exit
-`2`, with a line naming the packages and how many rules. This is the one place
-a scanner's output is read, and it is not a finding: it is the record that the
-question was asked and nobody answered.
+`guarddog verify` **exits 0 whether it found three high-severity risks or
+none**, in both ecosystems. For as long as this section answered by exit code,
+every guarddog finding was reported clean — a false negative on the one
+scanner here whose subject is malware and typosquats.
+
+`--exit-non-zero-on-finding` is not the remedy. It counts `issues`, which
+includes capability matches: `six` reports `issues: 2` with `risks: []` and
+guarddog's own label `no_risks_detected`, so the flag fails a package guarddog
+itself calls clean. It trades a false negative for a false positive.
+
+So guarddog is run with `--output-format json` and its own `risks` list is
+counted. This is the one scanner whose findings are read here, and the choice
+is to read them or to run it for nothing. The count is reported, never
+recomputed.
+
+The same report carries the could-not-look. A dependency guarddog could not
+download populates `errors` and drops `results` while still exiting 0, and a
+total network failure returns a bare `[]`; both are unread rather than clean.
+Its older admission, "Some rules failed to run while scanning \<package\>" at
+exit 0 — the two email-domain rules time out routinely — is still read, and
+still names the packages and how many rules. None of that is a finding: it is
+the record that the question was asked and nobody answered.
+
+### The other three that confuse a verdict with a refusal
+
+`tool_read()` hands each scanner's exit code, stdout and stderr to a reader
+that may name a could-not-look. A tool whose exit code already separates the
+two passes a reader that never fires.
+
+- **osv-scanner** separates them itself: `0` clean, `1` a vulnerability, `127`
+  a path, lockfile, config or query it could not read, `128` inputs that
+  yielded no package. Only `1` is a finding.
+- **zizmor** answers `11` through `14` by highest severity present, so any
+  other non-zero code audited nothing. Its dangerous case is exit `0`: handed
+  one unparseable workflow among good ones it skips that one, audits the rest
+  and reports no findings, and its SARIF asserts `executionSuccessful: true`.
+  The `failed to parse input:` line on stderr is the only witness, and this
+  section hands zizmor a list of files, which is exactly that shape.
+- **cargo-deny** returns a bitmask — `1` advisories, `2` bans, `4` licenses,
+  `8` sources — so a matched RUSTSEC advisory and a database it could not
+  fetch share the `1`. A run that reached its checks prints the per-check
+  summary on stdout; one that did not leaves stdout empty.
+
+### cargo-vet and exit 255
+
+cargo-vet answers `255` for two different facts. Dependencies that carry no
+audit exit `255` and name them, which is a finding. A run that could not happen
+at all — no store to read, a store that does not parse, a lockfile `--locked`
+refuses — also exits `255`. `tool()` answers by exit code, and every non-zero
+code is a verdict, so the could-not-look half currently reports as out of step.
+This is the guarddog defect with the codes reversed: guarddog exits `0` on work
+it did not do, cargo-vet exits `255` on work it could not start.
+
+The exit code is the only place the two are confused. They separate cleanly on
+the stream: a vetting failure prints `Vetting Failed!` to stdout and leaves
+stderr empty, while a run that could not start prints `ERROR` to stderr and
+leaves stdout empty. `cargo vet --output-format=json` is the other half. So
+this is a section that has not been taught to read its tool yet, the way the
+guarddog section was, rather than a fact about cargo-vet that cannot be
+recovered.
 
 Two hook ids ship it in `.pre-commit-hooks.yaml`, and never at `pre-commit`:
 every scanner reaches the network, and a check that adds a network round trip
