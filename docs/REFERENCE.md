@@ -468,18 +468,18 @@ see [the shims](#uphold-shim--the-shims).
 The rows above are what the forge said, and the shim reaches them only where it
 had to ask at all. A repository that declares its own `visibility` in its policy
 file has answered the question already, so `public-target` reads the declaration
-and asks nobody -- `public` puts the checks in scope, `private` and `internal`
+and asks nobody — `public` puts the checks in scope, `private` and `internal`
 stand them down, and no `gh` runs. That declaration speaks for this repository
 and for no other, so it is read for one destination only: the one the shim took
 from `origin` because nothing on the command line named another. A `gh -R
 owner/repo` goes to the forge exactly as it always did, and it does so **even
-where the name it carries is this repository's own** -- a typed `owner/repo`
+where the name it carries is this repository's own** — a typed `owner/repo`
 has no host in it, so under a `--hostname` or a `GH_HOST` the same two names
 are a different forge's repository with its own visibility, and two matching
 path segments cannot tell the two apart. So the `2` above is still the answer
 for a named destination the forge could not be asked about, and for a repository
 that declares nothing; what is bought offline is the case the cost was actually
-in -- the push that names nothing and means `origin`, which no longer needs an
+in — the push that names nothing and means `origin`, which no longer needs an
 authenticated `gh` to be told what the policy already said.
 
 So **`gh` must be authenticated wherever these rules run**, CI included. In a
@@ -1528,7 +1528,7 @@ scope, `private` and `internal` are out of it, and nothing is spawned. The
 narrowing that makes reading it safe is that a declaration is about ONE
 repository, and the only destination this seam can be sure of is the one it
 derived itself. So the declaration is read where a `target_flags` value is
-absent -- where the destination came from `origin` -- and nowhere else. A named
+absent — where the destination came from `origin` — and nowhere else. A named
 destination goes to the forge whatever it names: `gh -R other/repo` obviously,
 and `gh -R this-owner/this-repo` too, because the name carries no host and
 `--hostname` and `GH_HOST` both make `owner/repo` a different repository on a
@@ -1733,8 +1733,8 @@ than the seam.
 The fourth is uphold getting out of its own way, and it is documented here
 rather than left implicit because a reader who meets the line deserves to know
 what set it. A `public-target` scope asks whether the destination is public, and
-where this repository has not declared its own `visibility` -- or where the
-command named a destination, which a declaration does not speak for -- it asks
+where this repository has not declared its own `visibility` — or where the
+command named a destination, which a declaration does not speak for — it asks
 by running `gh api repos/<owner>/<repo> --jq .visibility`; a `git-remote` target
 asks by running `git remote get-url origin`, which is how an unnamed destination
 is resolved in the first place and so runs either way. PATH answers
