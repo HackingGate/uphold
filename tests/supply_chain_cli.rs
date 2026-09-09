@@ -138,14 +138,22 @@ fn recording(answer: &str) -> String {
 }
 
 fn git(root: &Path, args: &[&str]) {
-    let status = Command::new(support::real_git())
+    let output = Command::new(support::real_git())
         .args(args)
         .current_dir(root)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .output()
         .unwrap();
-    assert!(status.success(), "git {args:?} failed");
+    // What git said, and where. A helper that swallowed stderr reported a
+    // missing committer identity as `git ["commit", ...] failed`, which is the
+    // one fact a reader already has -- and the cause was one config line away in
+    // a message nobody could see.
+    assert!(
+        output.status.success(),
+        "git {args:?} in {} failed:\n{}",
+        root.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn commit(root: &Path, message: &str) -> String {
@@ -785,6 +793,15 @@ fn with_a_submodule(root: &Path) {
             "sub",
         ],
     );
+    // The submodule in the working tree is a CLONE, and a clone carries none of
+    // the source repository's local config. Every other repository this fixture
+    // builds is handed an identity at `init`; this one is handed one here,
+    // because the tests that commit into it commit into the clone and not into
+    // the source. Without it the fixture borrows whoever is configured globally,
+    // which is a machine that has somebody -- and CI is a machine that does not.
+    let checkout = root.join("sub");
+    git(&checkout, &["config", "user.name", "Test"]);
+    git(&checkout, &["config", "user.email", "test@example.test"]);
     commit(root, "track the member");
 }
 
