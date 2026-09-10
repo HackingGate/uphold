@@ -790,6 +790,74 @@ fn a_changed_workflow_is_handed_to_zizmor_by_file_and_its_neighbours_are_not() {
     );
 }
 
+/// A push carrying only a CircleCI config is told the file went unscanned.
+///
+/// The alternative, and what this replaces, is "nothing in this range that a
+/// scanner reads" -- literally true, and heard as "nothing here needed
+/// scanning". A pipeline definition that mints a token or pulls an unpinned
+/// orb is the surface zizmor exists for, in a file zizmor cannot parse, and
+/// the run saying so is the whole of what this repository can honestly do
+/// about it.
+#[test]
+fn a_range_holding_only_a_ci_config_says_the_file_is_unscanned_not_that_there_was_nothing() {
+    let root = tracked();
+    let before = head(&root);
+    write(&root, ".circleci/config.yml", "version: 2.1\njobs: {}\n");
+    let after = commit(&root, "a pipeline no scanner here reads");
+    let tools = stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        ("zizmor", &recording("exit 0")),
+        ("guarddog", &recording(GUARDDOG_CLEAN)),
+        ("cargo", &recording("exit 0")),
+    ]);
+    let output = pushed(&root, &tools, &before, &after);
+    // A declaration, not a verdict: nothing failed and nothing was stopped
+    // from looking, so neither count moves and the run still exits clean.
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains(".circleci/config.yml is CI configuration no scanner here reads"),
+        "{}",
+        text(&output)
+    );
+    assert!(
+        !text(&output).contains("nothing in this range"),
+        "{}",
+        text(&output)
+    );
+    // And no scanner was handed it. The declaration is the run admitting the
+    // file is unread; handing it to zizmor would make that a lie in the
+    // direction the module header refuses.
+    assert!(journal(&root).is_empty(), "{}", journal(&root));
+}
+
+/// The whole-tree form declares it too, beside the workflows it did scan.
+///
+/// `--all` is the sweep a reader trusts to have seen everything, so it is the
+/// run where five green sections over an unscanned pipeline would mislead
+/// most. zizmor runs here on the Actions workflow, and the CircleCI config
+/// beside it is named as read by nothing rather than left out of the output.
+#[test]
+fn a_whole_tree_sweep_declares_the_ci_configuration_it_did_not_scan() {
+    let root = tracked();
+    write(&root, ".github/workflows/ci.yml", "on: push\n");
+    write(&root, ".circleci/config.yml", "version: 2.1\njobs: {}\n");
+    let _ = commit(&root, "two CI vendors, one scanner between them");
+    let tools = stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        ("zizmor", &recording("exit 0")),
+    ]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains(".circleci/config.yml is CI configuration no scanner here reads"),
+        "{}",
+        text(&output)
+    );
+    let ran = journal(&root);
+    assert!(ran.contains("zizmor"), "{ran}");
+    assert!(!ran.contains(".circleci"), "{ran}");
+}
+
 /// A member repository, cloned into the fixture as a real submodule.
 fn with_a_submodule(root: &Path) {
     let member = support::scratch("supply-chain-member");
