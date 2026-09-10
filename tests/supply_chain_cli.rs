@@ -790,6 +790,71 @@ fn a_changed_workflow_is_handed_to_zizmor_by_file_and_its_neighbours_are_not() {
     );
 }
 
+/// A push carrying only a pipeline definition is told the file went unscanned.
+///
+/// What this replaces is "nothing in this range that a scanner reads" --
+/// literally true, heard as "nothing here needed scanning". A job that mints a
+/// token or pulls an unpinned orb is the surface zizmor exists for, in a file
+/// zizmor cannot parse.
+#[test]
+fn a_range_holding_only_a_ci_config_says_the_file_is_unscanned_not_that_there_was_nothing() {
+    let root = tracked();
+    let before = head(&root);
+    write(&root, ".circleci/config.yml", "version: 2.1\njobs: {}\n");
+    let after = commit(&root, "a pipeline no scanner here reads");
+    let tools = stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        ("zizmor", &recording("exit 0")),
+        ("guarddog", &recording(GUARDDOG_CLEAN)),
+        ("cargo", &recording("exit 0")),
+    ]);
+    let output = pushed(&root, &tools, &before, &after);
+    // A declaration, not a verdict: neither count moves, so this exits clean.
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains(".circleci/config.yml is CI configuration no scanner here reads"),
+        "{}",
+        text(&output)
+    );
+    assert!(
+        !text(&output).contains("nothing in this range"),
+        "{}",
+        text(&output)
+    );
+    // And no scanner was handed it: the declaration says the file is unread.
+    assert!(journal(&root).is_empty(), "{}", journal(&root));
+}
+
+/// The whole-tree form declares it too, beside the workflows it did scan.
+///
+/// `--all` is the sweep a reader trusts to have seen everything, so it is the
+/// run where five green sections over an unscanned pipeline mislead most.
+///
+/// A DIFFERENT VENDOR FROM THE TEST ABOVE, deliberately: the class is every CI
+/// system no scanner reads, and two tests over one vendor would leave every
+/// other name in the list resting on the unit test alone.
+#[test]
+fn a_whole_tree_sweep_declares_the_ci_configuration_it_did_not_scan() {
+    let root = tracked();
+    write(&root, ".github/workflows/ci.yml", "on: push\n");
+    write(&root, ".gitlab-ci.yml", "stages:\n  - build\n");
+    let _ = commit(&root, "two CI vendors, one scanner between them");
+    let tools = stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        ("zizmor", &recording("exit 0")),
+    ]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains(".gitlab-ci.yml is CI configuration no scanner here reads"),
+        "{}",
+        text(&output)
+    );
+    let ran = journal(&root);
+    assert!(ran.contains("zizmor"), "{ran}");
+    assert!(!ran.contains(".gitlab-ci.yml"), "{ran}");
+}
+
 /// A member repository, cloned into the fixture as a real submodule.
 fn with_a_submodule(root: &Path) {
     let member = support::scratch("supply-chain-member");

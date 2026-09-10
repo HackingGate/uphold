@@ -50,6 +50,19 @@
 //! that a question went unasked, which is this command's third verdict and the
 //! reason it exists.
 //!
+//! WHAT NOTHING HERE READS IS SAID OUT LOUD TOO. zizmor parses GitHub Actions
+//! and nothing else, so a pipeline defined for any other vendor is read by no
+//! scanner here -- an asymmetry of tooling, not preference: Actions is the CI
+//! system somebody wrote a scanner for, and the defects are the same file to
+//! file. The run prints those files rather than leaving the gap implicit in a
+//! section list nobody enumerates.
+//!
+//! IT IS DECLARED RATHER THAN FILLED because the only candidate fails open.
+//! checkov, the one scanner found that reads a CircleCI config, logs a YAML
+//! parse error at debug level and exits 0, so a config it could not read comes
+//! back indistinguishable from a clean one -- this command's third verdict
+//! imported as a silent pass. Named here, not run.
+//!
 //! What the run looks at is a RANGE, not a tree. Every scanner here reaches the
 //! network, and a push that changes no lockfile, manifest or workflow was
 //! paying for all five: the whole-tree form is now `--all`, and the pre-push
@@ -72,6 +85,22 @@ const ZIZMOR_DEFAULT: &str = include_str!("../policy/zizmor.default.yml");
 /// somebody else's manifests, and scanning them reports somebody else's
 /// backlog.
 const PRUNE: [&str; 5] = ["target", "node_modules", ".git", "vendor", "upstream"];
+
+/// CI configuration no scanner here reads, by directory -- the whole of one
+/// is pipeline definition. Named so the run can say the files went unscanned;
+/// there is no scanner to point at them.
+const UNSCANNED_CI_DIRS: [&str; 1] = [".circleci"];
+
+/// The same by file name, for the vendors that put one pipeline in one file.
+///
+/// A list, not a pattern: `*.yml` at a repository root is a config file for
+/// anything, and the declaration on files no CI runner reads is noise.
+const UNSCANNED_CI_FILES: [&str; 4] = [
+    ".gitlab-ci.yml",
+    ".gitlab-ci.yaml",
+    "azure-pipelines.yml",
+    "Jenkinsfile",
+];
 
 /// What one section established.
 enum Section {
@@ -265,17 +294,22 @@ fn find_named(root: &Path, name: &str) -> Result<Vec<PathBuf>> {
     Ok(found)
 }
 
-/// Is this a path one of the five scanners would read?
+/// Is this a path this run has anything to say about?
 ///
-/// The two halves are the whole filter: a manifest or lock by name at any
-/// depth, and any file under a `.github/workflows` directory. A path that is
-/// neither changes nothing any scanner here would answer differently.
+/// Two halves are what a scanner would read: a manifest or lock by name at any
+/// depth, and any file under a `.github/workflows` directory. The third is the
+/// opposite -- CI configuration nothing reads -- and it is here BECAUSE
+/// nothing reads it: a push changing only a `.gitlab-ci.yml` would otherwise
+/// leave an empty range, and be told there was nothing here a scanner reads
+/// over the one file class whose being unread is worth saying out loud.
+/// Nothing downstream is handed it: every section selects its own inputs by
+/// name or by `is_workflow`.
 fn interesting(path: &Path) -> bool {
     let named = path
         .file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| MANIFEST_NAMES.contains(&name));
-    named || is_workflow(path)
+    named || is_workflow(path) || is_unscanned_ci(path)
 }
 
 /// A file inside a `.github/workflows` directory, at any depth.
@@ -284,6 +318,85 @@ fn is_workflow(path: &Path) -> bool {
     parts.windows(3).any(|window| {
         window.first() == Some(&".github".as_ref()) && window.get(1) == Some(&"workflows".as_ref())
     })
+}
+
+/// A CI configuration file no scanner in this set reads.
+///
+/// Mirrors `is_workflow`: anything under a listed directory at any depth, and
+/// a listed name at any depth. The directory itself is not one -- a directory
+/// is not a file anybody could have scanned.
+fn is_unscanned_ci(path: &Path) -> bool {
+    let parts: Vec<&std::ffi::OsStr> = path.iter().collect();
+    let Some((last, ancestors)) = parts.split_last() else {
+        return false;
+    };
+    let named = last
+        .to_str()
+        .is_some_and(|name| UNSCANNED_CI_FILES.contains(&name));
+    let under = ancestors.iter().any(|part| {
+        part.to_str()
+            .is_some_and(|name| UNSCANNED_CI_DIRS.contains(&name))
+    });
+    named || under
+}
+
+/// Every unscanned CI file in scope, as root-relative paths.
+///
+/// The walk poisons on an unreadable directory like every other enumeration
+/// here: a declaration naming two of three files understates the gap.
+fn unscanned_ci(root: &Path, scope: &Scope) -> Result<Vec<PathBuf>> {
+    if let Scope::Changed(paths) = scope {
+        return Ok(paths
+            .iter()
+            .filter(|path| is_unscanned_ci(path))
+            .cloned()
+            .collect());
+    }
+    let mut found = Vec::new();
+    let walk = ignore::WalkBuilder::new(root)
+        .standard_filters(false)
+        .filter_entry(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_none_or(|file| !PRUNE.contains(&file))
+        })
+        .build();
+    for entry in walk {
+        let entry = entry.map_err(|error| {
+            Fatal::new(format!(
+                "could not enumerate the tree looking for CI configuration: {error}. A run \
+                 that says which files went unscanned must not miss one"
+            ))
+        })?;
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let Ok(relative) = entry.path().strip_prefix(root) else {
+            continue;
+        };
+        if is_unscanned_ci(relative) {
+            found.push(relative.to_path_buf());
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// Say which CI configuration nobody looked at, before zizmor says what it did.
+///
+/// A statement, not a verdict: neither count in `run` moves, because nothing
+/// failed and nothing was prevented from looking. What it refuses is the
+/// silence -- five green sections over an unread pipeline read like six.
+fn declare_unscanned_ci(root: &Path, scope: &Scope) -> Result<()> {
+    for path in unscanned_ci(root, scope)? {
+        println!(
+            "   {} is CI configuration no scanner here reads -- a declared gap, \
+             not a scanner that failed",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// The scope of one or more ranges, submodule pointers expanded.
@@ -531,6 +644,10 @@ fn osv(root: &Path, scope: &Scope) -> Result<Section> {
 }
 
 fn zizmor(root: &Path, scope: &Scope) -> Result<Section> {
+    // This section's edge is the gap: what zizmor parses bounds what the whole
+    // set covers. Before its early returns, so a missing zizmor and a tree
+    // with no Actions workflow are still told.
+    declare_unscanned_ci(root, scope)?;
     let (workflows, unit) = match scope {
         Scope::Whole => (find_workflow_dirs(root)?, "workflow directories"),
         // The changed files themselves, not their directory: zizmor reports per
@@ -1138,7 +1255,7 @@ mod tempfile_guard {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_named, find_workflow_dirs, PRUNE};
+    use super::{find_named, find_workflow_dirs, interesting, unscanned_ci, Scope, PRUNE};
 
     /// Paths under the fixture, as strings, so a failure names what was found.
     fn relative(root: &std::path::Path, found: &[std::path::PathBuf]) -> Vec<String> {
@@ -1198,13 +1315,72 @@ mod tests {
         );
     }
 
+    /// CI configuration nothing scans is in scope, BECAUSE nothing scans it.
+    ///
+    /// Read as a list of what the five tools open, a pipeline definition
+    /// belongs out of it. It is in for what the run prints when the range is
+    /// empty: "nothing in this range that a scanner reads" is true of that
+    /// file in a way the sentence does not mean and the reader would not hear.
+    #[test]
+    fn ci_configuration_no_scanner_reads_is_in_scope_so_the_run_can_say_so() {
+        use std::path::Path;
+
+        for path in [
+            ".circleci/config.yml",
+            ".circleci/scripts/deploy.sh",
+            "sub/.circleci/config.yml",
+            ".gitlab-ci.yml",
+            "Jenkinsfile",
+        ] {
+            assert!(interesting(Path::new(path)), "{path}");
+        }
+        // A config file at a root is a config file for anything. Calling every
+        // one of them unscanned CI would put the declaration on files no CI
+        // runner ever reads, and a declaration nobody believes is noise.
+        for path in ["deny.toml", "config.yml", "docs/config.yml", ".circleci"] {
+            assert!(!interesting(Path::new(path)), "{path}");
+        }
+    }
+
+    /// The declaration names every unscanned file, at any depth, and no
+    /// vendored one.
+    ///
+    /// A missed submodule is a pipeline the run said nothing about, which is
+    /// the silence the declaration exists to break; a vendored copy is a file
+    /// nobody in this tree could scan even if a scanner existed.
+    #[test]
+    fn unscanned_ci_configuration_is_found_at_any_depth_and_not_inside_a_pruned_tree() {
+        let root = crate::fixture::scratch("supply-unscanned-ci");
+        for directory in [".circleci", "sub/.circleci", "vendor/.circleci"] {
+            std::fs::create_dir_all(root.join(directory)).unwrap();
+            std::fs::write(root.join(directory).join("config.yml"), "jobs:\n").unwrap();
+        }
+        std::fs::write(root.join(".gitlab-ci.yml"), "stages:\n").unwrap();
+        std::fs::create_dir_all(root.join(".github/workflows")).unwrap();
+        std::fs::write(root.join(".github/workflows/ci.yml"), "on: push\n").unwrap();
+
+        let found = unscanned_ci(&root, &Scope::Whole).unwrap();
+        assert_eq!(
+            found
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<String>>(),
+            [
+                ".circleci/config.yml",
+                ".gitlab-ci.yml",
+                "sub/.circleci/config.yml"
+            ]
+        );
+    }
+
     /// A directory that cannot be read poisons the enumeration.
     ///
     /// The failure this refuses is the one the whole crate exists to refuse: an
     /// unreadable directory that merely SHRINKS the result gives a scan that
     /// looked at part of the tree and reported on all of it -- a clean run over
     /// manifests nobody read. It has to be an error, so the section is COULD
-    /// NOT LOOK and the run exits 2.
+    /// NOT LOOK and the run exits 2. The unscanned-CI walk is held to the same
+    /// rule: a declaration that missed a file understates the gap.
     #[cfg(unix)]
     #[test]
     fn an_unreadable_directory_fails_the_enumeration_rather_than_shrinking_it() {
@@ -1223,6 +1399,7 @@ mod tests {
         let unreadable = std::fs::read_dir(&locked).is_err();
         let named = find_named(&root, "Cargo.toml");
         let workflows = find_workflow_dirs(&root);
+        let ci = unscanned_ci(&root, &Scope::Whole);
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         if !unreadable {
@@ -1239,5 +1416,11 @@ mod tests {
             workflows.contains("could not enumerate workflow directories"),
             "{workflows}"
         );
+        let ci = ci.unwrap_err().to_string();
+        assert!(
+            ci.contains("could not enumerate the tree looking for CI configuration"),
+            "{ci}"
+        );
+        assert!(ci.contains("must not miss one"), "{ci}");
     }
 }

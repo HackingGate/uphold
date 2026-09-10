@@ -2137,9 +2137,11 @@ likely a different branch, and a green tick about the wrong tree is the failure
 the push guard refuses for the same reason.
 
 The changed set is filtered to `Cargo.toml`, `Cargo.lock`, `uv.lock`,
-`pyproject.toml`, `package.json`, `package-lock.json` and
-`.github/workflows/**`. A range holding none of them runs no scanner, prints
-one line and exits `0`. Per scanner: osv-scanner is handed the changed
+`pyproject.toml`, `package.json`, `package-lock.json`, `.github/workflows/**`
+and the unscanned CI configuration below — that last group is in the set
+*because* nothing reads it, so a push carrying only a `.circleci/config.yml`
+is told the file went unscanned instead of being told there was nothing here.
+A range holding none of them runs no scanner, prints one line and exits `0`. Per scanner: osv-scanner is handed the changed
 lockfiles by path; zizmor the changed workflow files; cargo-deny each crate
 root whose `Cargo.toml` or `Cargo.lock` moved; cargo-vet only where a
 `Cargo.lock` moved and a store exists; guarddog pypi each directory whose
@@ -2155,6 +2157,48 @@ introduces everything. A submodule that is **not checked out** is exit `2`
 rather than a widening: there is no tree to widen into, and reporting a clean
 scan of manifests that are not on disk is the shape this crate exists to
 refuse.
+
+### CI configuration nothing here scans
+
+zizmor parses GitHub Actions and nothing else, so a pipeline defined for any
+other vendor is read by no scanner here. Where a run finds one it says so, by
+name:
+
+```text
+== zizmor -- workflow security
+   .circleci/config.yml is CI configuration no scanner here reads -- a declared gap, not a scanner that failed
+   1 workflow directories
+```
+
+**The asymmetry is the tooling's, not a preference.** Actions is not the CI
+system uphold favours; it is the one somebody wrote a scanner for, and a job
+that mints a token, pulls an unpinned action or orb, or runs a command over
+untrusted input is the same defect whichever vendor's file it lives in. The
+rest are enumerated by name because their file names are what identifies them:
+anything under a `.circleci/` directory at any depth, and `.gitlab-ci.yml`,
+`.gitlab-ci.yaml`, `azure-pipelines.yml` or `Jenkinsfile`. A list rather than
+`*.yml`, which at a repository root is a config file for anything.
+
+**A declaration, not a verdict.** Neither count moves and the exit code does
+not change: nothing failed, and nothing was prevented from looking. What the
+line refuses is the silence — five green sections over an unread pipeline read
+like six. The paths are in the changed set for the same reason, so a push
+carrying only a `.gitlab-ci.yml` is told the file went unscanned rather than
+that there was nothing here.
+
+**Why declared rather than filled.** [checkov][checkov] is the one scanner
+found that reads a CircleCI config, and it fails open: a YAML parse error is
+logged at debug level, the parser returns no model, and the run exits `0` with
+`"parsing_errors": 0`, so a config it could not read is indistinguishable from
+a clean one — this command's third verdict imported as a silent pass. Its
+CircleCI check set is thin besides (nine checks, one testing for a misspelled
+`@volitile` orb tag since 2022), and no scanner surveyed works from a
+normalised pipeline model, so there is no vendor-neutral tool to reach for
+instead. It is named here, not recommended. Should a scanner appear that reads
+one of these vendors the way zizmor reads Actions, the change is
+`interesting()` and a sixth entry in the section array.
+
+[checkov]: https://github.com/bridgecrewio/checkov
 
 ### guarddog, which cannot answer in its exit code at all
 

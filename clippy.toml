@@ -1,1 +1,5 @@
 too-many-lines-threshold = 250
+
+# Proper nouns clippy's doc lint would otherwise read as unbackticked code.
+# `..` keeps its default list rather than replacing it.
+doc-valid-idents = ["CircleCI", ".."]
