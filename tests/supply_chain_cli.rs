@@ -792,12 +792,10 @@ fn a_changed_workflow_is_handed_to_zizmor_by_file_and_its_neighbours_are_not() {
 
 /// A push carrying only a pipeline definition is told the file went unscanned.
 ///
-/// The alternative, and what this replaces, is "nothing in this range that a
-/// scanner reads" -- literally true, and heard as "nothing here needed
-/// scanning". A pipeline definition that mints a token or pulls an unpinned
-/// orb is the surface zizmor exists for, in a file zizmor cannot parse, and
-/// the run saying so is the whole of what this repository can honestly do
-/// about it.
+/// What this replaces is "nothing in this range that a scanner reads" --
+/// literally true, heard as "nothing here needed scanning". A job that mints a
+/// token or pulls an unpinned orb is the surface zizmor exists for, in a file
+/// zizmor cannot parse.
 #[test]
 fn a_range_holding_only_a_ci_config_says_the_file_is_unscanned_not_that_there_was_nothing() {
     let root = tracked();
@@ -811,8 +809,7 @@ fn a_range_holding_only_a_ci_config_says_the_file_is_unscanned_not_that_there_wa
         ("cargo", &recording("exit 0")),
     ]);
     let output = pushed(&root, &tools, &before, &after);
-    // A declaration, not a verdict: nothing failed and nothing was stopped
-    // from looking, so neither count moves and the run still exits clean.
+    // A declaration, not a verdict: neither count moves, so this exits clean.
     assert_eq!(code(&output), 0, "{}", text(&output));
     assert!(
         text(&output).contains(".circleci/config.yml is CI configuration no scanner here reads"),
@@ -824,23 +821,18 @@ fn a_range_holding_only_a_ci_config_says_the_file_is_unscanned_not_that_there_wa
         "{}",
         text(&output)
     );
-    // And no scanner was handed it. The declaration is the run admitting the
-    // file is unread; handing it to zizmor would make that a lie in the
-    // direction the module header refuses.
+    // And no scanner was handed it: the declaration says the file is unread.
     assert!(journal(&root).is_empty(), "{}", journal(&root));
 }
 
 /// The whole-tree form declares it too, beside the workflows it did scan.
 ///
 /// `--all` is the sweep a reader trusts to have seen everything, so it is the
-/// run where five green sections over an unscanned pipeline would mislead
-/// most. zizmor runs here on the Actions workflow, and the pipeline beside it
-/// is named as read by nothing rather than left out of the output.
+/// run where five green sections over an unscanned pipeline mislead most.
 ///
-/// A DIFFERENT VENDOR FROM THE TEST ABOVE, deliberately. None of this is about
-/// CircleCI: the class is every CI system no scanner in the set reads, and two
-/// tests over one vendor would leave every other name in the list resting on
-/// the unit test alone.
+/// A DIFFERENT VENDOR FROM THE TEST ABOVE, deliberately: the class is every CI
+/// system no scanner reads, and two tests over one vendor would leave every
+/// other name in the list resting on the unit test alone.
 #[test]
 fn a_whole_tree_sweep_declares_the_ci_configuration_it_did_not_scan() {
     let root = tracked();

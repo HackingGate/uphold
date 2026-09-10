@@ -2160,10 +2160,9 @@ refuse.
 
 ### CI configuration nothing here scans
 
-Between them the five scanners cover manifests, locks and GitHub Actions
-workflows. CI configuration for every other vendor is covered by none of them,
-and zizmor — the one shaped for the job — parses Actions only. Where a run
-finds a pipeline nothing here reads it says so, by name:
+zizmor parses GitHub Actions and nothing else, so a pipeline defined for any
+other vendor is read by no scanner here. Where a run finds one it says so, by
+name:
 
 ```
 == zizmor -- workflow security
@@ -2171,44 +2170,33 @@ finds a pipeline nothing here reads it says so, by name:
    1 workflow directories
 ```
 
-**The asymmetry is the tooling's, not a preference.** GitHub Actions is not
-the CI system uphold favours; it is the CI system somebody wrote a scanner
-for. A job that mints a token, pulls an unpinned action or orb, or runs a
-command over untrusted input is the same defect whichever vendor's file it
-lives in. The vendors are one class here, and what separates them is that
-exactly one of them has a scanner worth running; the rest are enumerated by
-name because their file names are what identifies them, not because any one
-of them is a special case.
+**The asymmetry is the tooling's, not a preference.** Actions is not the CI
+system uphold favours; it is the one somebody wrote a scanner for, and a job
+that mints a token, pulls an unpinned action or orb, or runs a command over
+untrusted input is the same defect whichever vendor's file it lives in. The
+rest are enumerated by name because their file names are what identifies them:
+anything under a `.circleci/` directory at any depth, and `.gitlab-ci.yml`,
+`.gitlab-ci.yaml`, `azure-pipelines.yml` or `Jenkinsfile`. A list rather than
+`*.yml`, which at a repository root is a config file for anything.
 
-The files that draw the line: anything under a `.circleci/` directory at any
-depth, and `.gitlab-ci.yml`, `.gitlab-ci.yaml`, `azure-pipelines.yml` or
-`Jenkinsfile` by name. A list rather than a pattern, because `*.yml` at a
-repository root is a config file for anything, and calling every one of them
-unscanned CI puts the declaration on files no CI runner ever reads.
+**A declaration, not a verdict.** Neither count moves and the exit code does
+not change: nothing failed, and nothing was prevented from looking. What the
+line refuses is the silence — five green sections over an unread pipeline read
+like six. The paths are in the changed set for the same reason, so a push
+carrying only a `.gitlab-ci.yml` is told the file went unscanned rather than
+that there was nothing here.
 
-**It is a declaration, not a verdict.** Neither count moves and the exit code
-does not change: nothing failed, and nothing was prevented from looking. The
-tools this command carries do not cover the file, which was already true
-before the run started. What the line refuses is the silence — five green
-sections over a repository whose pipeline definition no scanner opened reads
-exactly like six.
-
-**Why it is declared rather than filled.** [checkov][checkov] is the one
-scanner found that reads a CircleCI config, and it fails open: a YAML parse
-error is logged at debug level, the parser returns no model, and the run exits
-`0` with `"parsing_errors": 0`, so a config it could not read is
-indistinguishable from a clean one. That is this command's third verdict
-imported as a silent pass, and wrapping it would put the defect this crate
-exists to refuse inside the crate. Its CircleCI check set is thin besides —
-nine checks, one of which has tested for a misspelled `@volitile` orb tag
-since 2022 — and no scanner surveyed works from a normalised pipeline model,
-so there is no vendor-neutral tool to reach for instead. checkov is named
-here rather than recommended: reading a pipeline through a tool that reports
-clean on a file it could not parse is worse than reading it by hand, and worse
-than the declaration above. Should a scanner appear that reads any of these
-vendors the way zizmor reads Actions, the change is `interesting()` and a
-sixth entry in the section array; the missing piece is the scanner, not the
-plumbing.
+**Why declared rather than filled.** [checkov][checkov] is the one scanner
+found that reads a CircleCI config, and it fails open: a YAML parse error is
+logged at debug level, the parser returns no model, and the run exits `0` with
+`"parsing_errors": 0`, so a config it could not read is indistinguishable from
+a clean one — this command's third verdict imported as a silent pass. Its
+CircleCI check set is thin besides (nine checks, one testing for a misspelled
+`@volitile` orb tag since 2022), and no scanner surveyed works from a
+normalised pipeline model, so there is no vendor-neutral tool to reach for
+instead. It is named here, not recommended. Should a scanner appear that reads
+one of these vendors the way zizmor reads Actions, the change is
+`interesting()` and a sixth entry in the section array.
 
 [checkov]: https://github.com/bridgecrewio/checkov
 
