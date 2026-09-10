@@ -2164,7 +2164,7 @@ zizmor parses GitHub Actions and nothing else, so a pipeline defined for any
 other vendor is read by no scanner here. Where a run finds one it says so, by
 name:
 
-```
+```text
 == zizmor -- workflow security
    .circleci/config.yml is CI configuration no scanner here reads -- a declared gap, not a scanner that failed
    1 workflow directories
