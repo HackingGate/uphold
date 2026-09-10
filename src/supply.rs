@@ -50,13 +50,20 @@
 //! that a question went unasked, which is this command's third verdict and the
 //! reason it exists.
 //!
-//! WHAT NOTHING HERE READS IS SAID OUT LOUD TOO, and one surface qualifies.
-//! Between them the five cover manifests, locks and GitHub Actions workflows;
-//! CI configuration for any other vendor -- a `.circleci/config.yml`, a
-//! `.gitlab-ci.yml`, a Jenkinsfile -- is read by none of them, and zizmor, the
-//! one shaped for the job, parses Actions and nothing else. A job that mints a
-//! token, pulls an unpinned orb or runs a command over untrusted input is the
-//! same defect whichever vendor's file it lives in, so the gap is real.
+//! WHAT NOTHING HERE READS IS SAID OUT LOUD TOO, and one surface qualifies:
+//! CI configuration for every vendor except one. Between them the five cover
+//! manifests, locks and GitHub Actions workflows, and zizmor -- the one shaped
+//! for the job -- parses Actions and nothing else, so a pipeline defined
+//! anywhere else is read by nothing here.
+//!
+//! THE ASYMMETRY IS THE TOOLING'S, NOT A PREFERENCE. GitHub Actions is not the
+//! CI system this crate favours; it is the CI system somebody wrote a scanner
+//! for. A job that mints a token, pulls an unpinned action or orb, or runs a
+//! command over untrusted input is the same defect whichever vendor's file it
+//! lives in, and the vendors are one class here -- what separates them is that
+//! exactly one has a scanner worth running. The rest are enumerated by name
+//! because their file names are what identifies them, not because any of them
+//! is a special case: add a name and the declaration covers it.
 //!
 //! IT IS DECLARED RATHER THAN FILLED, because the only thing that would fill
 //! it fails open. checkov is the one scanner found that reads a CircleCI
@@ -97,8 +104,7 @@ const PRUNE: [&str; 5] = ["target", "node_modules", ".git", "vendor", "upstream"
 /// Everything under one of these is a pipeline definition, so the whole
 /// directory is the surface. Named here so the run can say the files are
 /// unscanned, NOT so a scanner can be pointed at them: there is no scanner to
-/// point. See the module header for checkov, the one tool that reads a
-/// CircleCI config and reports clean on one it could not parse.
+/// point. See the module header for why the one candidate is not run.
 const UNSCANNED_CI_DIRS: [&str; 1] = [".circleci"];
 
 /// The same, by file name -- the vendors that put one pipeline in one file.
@@ -310,8 +316,9 @@ fn find_named(root: &Path, name: &str) -> Result<Vec<PathBuf>> {
 /// Two halves are what a scanner would read: a manifest or lock by name at any
 /// depth, and any file under a `.github/workflows` directory. The third is the
 /// opposite -- CI configuration no scanner here reads. It is in the filter
-/// precisely BECAUSE nothing scans it: a push that changed only a
-/// `.circleci/config.yml` would otherwise leave an empty range, and the run
+/// precisely BECAUSE nothing scans it: a push that changed only a pipeline
+/// definition -- a `.circleci/config.yml`, a `.gitlab-ci.yml` -- would
+/// otherwise leave an empty range, and the run
 /// would print "nothing in this range that a scanner reads" over the one file
 /// class whose being unread is the thing worth saying out loud. Nothing
 /// downstream is handed it -- every section selects its own inputs by name or
@@ -402,8 +409,8 @@ fn unscanned_ci(root: &Path, scope: &Scope) -> Result<Vec<PathBuf>> {
 /// nothing here failed and nothing here was prevented from looking: the tools
 /// this set carries do not cover the file, which was already true before the
 /// run started and is not news the exit code should carry. What it refuses is
-/// the silence -- five green sections over a repository whose CircleCI config
-/// no scanner opened reads exactly like six.
+/// the silence -- five green sections over a repository whose pipeline no
+/// scanner opened reads exactly like six.
 fn declare_unscanned_ci(root: &Path, scope: &Scope) -> Result<()> {
     for path in unscanned_ci(root, scope)? {
         println!(
@@ -1336,9 +1343,9 @@ mod tests {
     /// CI configuration nothing scans is in scope, BECAUSE nothing scans it.
     ///
     /// The filter otherwise reads as a list of what the five tools open, and
-    /// on that reading a `.circleci/config.yml` belongs out of it. It is in
+    /// on that reading a pipeline definition belongs out of it. It is in
     /// because of what the run prints when the range is empty: a push carrying
-    /// one CircleCI edit and nothing else would be told there was nothing here
+    /// one pipeline edit and nothing else would be told there was nothing here
     /// a scanner reads, which is true of that file in a way the sentence does
     /// not mean and the reader would not hear. No section is handed it -- each
     /// selects its own inputs by name or by `is_workflow` -- so admitting it
@@ -1368,8 +1375,8 @@ mod tests {
     /// vendored one.
     ///
     /// Both halves matter for the same reason the workflow enumeration's do. A
-    /// missed submodule is a CircleCI config the run quietly said nothing
-    /// about, which is the silence this whole declaration exists to break; a
+    /// missed submodule is a pipeline the run quietly said nothing about,
+    /// which is the silence this whole declaration exists to break; a
     /// vendored copy is a file nobody in this tree could scan even if a
     /// scanner existed.
     #[test]

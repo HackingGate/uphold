@@ -2161,15 +2161,24 @@ refuse.
 ### CI configuration nothing here scans
 
 Between them the five scanners cover manifests, locks and GitHub Actions
-workflows. CI configuration for any other vendor is covered by none of them,
+workflows. CI configuration for every other vendor is covered by none of them,
 and zizmor — the one shaped for the job — parses Actions only. Where a run
-finds one it says so, by name:
+finds a pipeline nothing here reads it says so, by name:
 
 ```
 == zizmor -- workflow security
    .circleci/config.yml is CI configuration no scanner here reads -- a declared gap, not a scanner that failed
    1 workflow directories
 ```
+
+**The asymmetry is the tooling's, not a preference.** GitHub Actions is not
+the CI system uphold favours; it is the CI system somebody wrote a scanner
+for. A job that mints a token, pulls an unpinned action or orb, or runs a
+command over untrusted input is the same defect whichever vendor's file it
+lives in. The vendors are one class here, and what separates them is that
+exactly one of them has a scanner worth running; the rest are enumerated by
+name because their file names are what identifies them, not because any one
+of them is a special case.
 
 The files that draw the line: anything under a `.circleci/` directory at any
 depth, and `.gitlab-ci.yml`, `.gitlab-ci.yaml`, `azure-pipelines.yml` or
@@ -2193,9 +2202,13 @@ imported as a silent pass, and wrapping it would put the defect this crate
 exists to refuse inside the crate. Its CircleCI check set is thin besides —
 nine checks, one of which has tested for a misspelled `@volitile` orb tag
 since 2022 — and no scanner surveyed works from a normalised pipeline model,
-so there is no vendor-neutral tool to reach for instead. If a CircleCI
-equivalent of zizmor appears, the change is `interesting()` and a sixth entry
-in the section array; the missing piece is the scanner, not the plumbing.
+so there is no vendor-neutral tool to reach for instead. checkov is named
+here rather than recommended: reading a pipeline through a tool that reports
+clean on a file it could not parse is worse than reading it by hand, and worse
+than the declaration above. Should a scanner appear that reads any of these
+vendors the way zizmor reads Actions, the change is `interesting()` and a
+sixth entry in the section array; the missing piece is the scanner, not the
+plumbing.
 
 [checkov]: https://github.com/bridgecrewio/checkov
 

@@ -790,7 +790,7 @@ fn a_changed_workflow_is_handed_to_zizmor_by_file_and_its_neighbours_are_not() {
     );
 }
 
-/// A push carrying only a CircleCI config is told the file went unscanned.
+/// A push carrying only a pipeline definition is told the file went unscanned.
 ///
 /// The alternative, and what this replaces, is "nothing in this range that a
 /// scanner reads" -- literally true, and heard as "nothing here needed
@@ -834,13 +834,18 @@ fn a_range_holding_only_a_ci_config_says_the_file_is_unscanned_not_that_there_wa
 ///
 /// `--all` is the sweep a reader trusts to have seen everything, so it is the
 /// run where five green sections over an unscanned pipeline would mislead
-/// most. zizmor runs here on the Actions workflow, and the CircleCI config
-/// beside it is named as read by nothing rather than left out of the output.
+/// most. zizmor runs here on the Actions workflow, and the pipeline beside it
+/// is named as read by nothing rather than left out of the output.
+///
+/// A DIFFERENT VENDOR FROM THE TEST ABOVE, deliberately. None of this is about
+/// CircleCI: the class is every CI system no scanner in the set reads, and two
+/// tests over one vendor would leave every other name in the list resting on
+/// the unit test alone.
 #[test]
 fn a_whole_tree_sweep_declares_the_ci_configuration_it_did_not_scan() {
     let root = tracked();
     write(&root, ".github/workflows/ci.yml", "on: push\n");
-    write(&root, ".circleci/config.yml", "version: 2.1\njobs: {}\n");
+    write(&root, ".gitlab-ci.yml", "stages:\n  - build\n");
     let _ = commit(&root, "two CI vendors, one scanner between them");
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
@@ -849,13 +854,13 @@ fn a_whole_tree_sweep_declares_the_ci_configuration_it_did_not_scan() {
     let output = supply(&root, Some(&tools));
     assert_eq!(code(&output), 0, "{}", text(&output));
     assert!(
-        text(&output).contains(".circleci/config.yml is CI configuration no scanner here reads"),
+        text(&output).contains(".gitlab-ci.yml is CI configuration no scanner here reads"),
         "{}",
         text(&output)
     );
     let ran = journal(&root);
     assert!(ran.contains("zizmor"), "{ran}");
-    assert!(!ran.contains(".circleci"), "{ran}");
+    assert!(!ran.contains(".gitlab-ci.yml"), "{ran}");
 }
 
 /// A member repository, cloned into the fixture as a real submodule.
