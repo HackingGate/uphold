@@ -560,7 +560,7 @@ Each is named separately because taking one is a separate decision:
 `unmanaged-pins` refuses a shape a repository that vendors its dependencies
 has on purpose, `host-identity` shells out to read the running machine, and
 `captured-fixtures` refuses the script a parser's own test corpus is made of.
-The `process-residue` set rejects issue and PR URLs and numbered tracker
+The `process-residue` set rejects GitHub issue and PR URLs and numbered tracker
 references in source, configuration, and documentation, including
 systemd `Documentation=` fields. Keep the durable explanation in the repository;
 issues can point to code, but code must not require an issue to explain it.

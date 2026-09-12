@@ -90,7 +90,7 @@ Do not commit authoring dates in source or documentation. Git history owns
 edit chronology; keep the current contract and rationale in the file.
 """
 # `Da[t]e` so this rule text never matches itself.
-regexp = '(?i)^[\t ]*(?:(?:\#|//+|/\*+|\*|--|;)\s*)?(?:Da[t]e|Created|Updated|Last updated|Last modified):[\t ]*[0-9]{4}-[0-9]{2}-[0-9]{2}'
+regexp = '(?i)^[\t ]*(?:(?:\#|//+|/\*+|\*|--|;|<!--)\s*)?(?:Da[t]e|Created|Updated|Last updated|Last modified):[\t ]*[0-9]{4}-[0-9]{2}-[0-9]{2}'
 files.include = ["."]
 files.exclude = ["**/tests/fixtures/**", "**/test/fixtures/**", "**/testdata/**"]
 

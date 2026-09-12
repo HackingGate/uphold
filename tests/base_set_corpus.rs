@@ -99,7 +99,11 @@ const CORPUS: &[Case] = &[
         set: "process-residue",
         rule: "no-dated-source-metadata",
         path: "sample.md",
-        refuses: &["Date: 2026-08-14\n", "// Last updated: 2026-08-14\n"],
+        refuses: &[
+            "Date: 2026-08-14\n",
+            "// Last updated: 2026-08-14\n",
+            "<!-- Last updated: 2026-08-14 -->\n",
+        ],
         allows: &["Released on the fourteenth.\n", "const EPOCH: &str = \"2026-08-14\";\n"],
     },
     Case {
@@ -116,8 +120,8 @@ const CORPUS: &[Case] = &[
         refuses: &[
             "See github.com/acme/widget/issues/12 for the argument.\n",
             "Fixed in #451.\n",
-            "# See harness#711.\n",
-            "# See RouterPlane/harness#711.\n",
+            "# See widget#711.\n",
+            "# See acme/widget#711.\n",
         ],
         allows: &["The rule is stated here rather than in a tracker.\n"],
     },
@@ -522,9 +526,9 @@ fn tracker_references_are_refused_in_configuration_and_source() {
             allows: &[],
         };
         for sample in [
-            "Documentation=https://github.com/RouterPlane/harness/issues/711\n",
-            "# The split estate (harness#711).\n",
-            "// See RouterPlane/harness#711.\n",
+            "Documentation=https://github.com/acme/widget/issues/711\n",
+            "# The split estate (widget#711).\n",
+            "// See acme/widget#711.\n",
         ] {
             let (code, report) = verdict(&case, sample);
             assert_eq!(code, 1, "{path}: {report}");

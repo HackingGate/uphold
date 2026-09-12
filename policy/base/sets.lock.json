@@ -36,7 +36,7 @@
         },
         "id": "no-dated-source-metadata",
         "message": "Do not commit authoring dates in source or documentation. Git history owns\nedit chronology; keep the current contract and rationale in the file.\n",
-        "regexp": "(?i)^[\\t ]*(?:(?:\\#|//+|/\\*+|\\*|--|;)\\s*)?(?:Da[t]e|Created|Updated|Last updated|Last modified):[\\t ]*[0-9]{4}-[0-9]{2}-[0-9]{2}"
+        "regexp": "(?i)^[\\t ]*(?:(?:\\#|//+|/\\*+|\\*|--|;|<!--)\\s*)?(?:Da[t]e|Created|Updated|Last updated|Last modified):[\\t ]*[0-9]{4}-[0-9]{2}-[0-9]{2}"
       },
       {
         "builtin": "no-hand-copied-base-rule",
