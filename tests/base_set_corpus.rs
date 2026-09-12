@@ -99,8 +99,12 @@ const CORPUS: &[Case] = &[
         set: "process-residue",
         rule: "no-dated-source-metadata",
         path: "sample.md",
-        refuses: &["Date: 2026-08-14\n"],
-        allows: &["Released on the fourteenth.\n"],
+        refuses: &[
+            "Date: 2026-08-14\n",
+            "// Last updated: 2026-08-14\n",
+            "<!-- Last updated: 2026-08-14 -->\n",
+        ],
+        allows: &["Released on the fourteenth.\n", "const EPOCH: &str = \"2026-08-14\";\n"],
     },
     Case {
         set: "process-residue",
@@ -116,6 +120,8 @@ const CORPUS: &[Case] = &[
         refuses: &[
             "See github.com/acme/widget/issues/12 for the argument.\n",
             "Fixed in #451.\n",
+            "# See widget#711.\n",
+            "# See acme/widget#711.\n",
         ],
         allows: &["The rule is stated here rather than in a tracker.\n"],
     },
@@ -135,6 +141,20 @@ const CORPUS: &[Case] = &[
         rule: "no-tracked-private-data-paths",
         path: "artifacts/run.log",
         refuses: &["a build artefact somebody committed\n"],
+        allows: &[],
+    },
+    Case {
+        set: "process-residue",
+        rule: "no-source-changelog",
+        path: "docs/CHANGELOG.md",
+        refuses: &["Changes made to the implementation.\n"],
+        allows: &[],
+    },
+    Case {
+        set: "process-residue",
+        rule: "no-committed-logs",
+        path: "benchmark/results.log",
+        refuses: &["Captured output of a benchmark run.\n"],
         allows: &[],
     },
     Case {
@@ -487,6 +507,63 @@ fn every_promoted_rule_still_refuses_what_it_was_promoted_for() {
                 case.rule
             );
         }
+    }
+}
+
+#[test]
+fn tracker_references_are_refused_in_configuration_and_source() {
+    for path in [
+        "units/lab.service",
+        "src/estate.py",
+        "src/estate.rs",
+        "scripts/build",
+    ] {
+        let case = Case {
+            set: "process-residue",
+            rule: "no-task-tracker-references",
+            path,
+            refuses: &[],
+            allows: &[],
+        };
+        for sample in [
+            "Documentation=https://github.com/acme/widget/issues/711\n",
+            "# The split estate (widget#711).\n",
+            "// See acme/widget#711.\n",
+        ] {
+            let (code, report) = verdict(&case, sample);
+            assert_eq!(code, 1, "{path}: {report}");
+            assert!(report.contains(case.rule), "{path}: {report}");
+        }
+        for sample in [
+            "Documentation=https://example.org/docs/networking\n",
+            "// UTS #24 and UAX#29 define Unicode properties.\n",
+        ] {
+            let (code, report) = verdict(&case, sample);
+            assert_eq!(code, 0, "{path}: {report}");
+        }
+    }
+}
+
+#[test]
+fn volatile_content_rules_preserve_programs_and_synthetic_fixtures() {
+    for (path, sample) in [
+        (
+            "tests/fixtures/reference.txt",
+            "https://github.com/acme/widget/issues/12\n",
+        ),
+        ("tests/fixtures/output.log", "Synthetic log event\n"),
+        ("benchmarks/throughput.rs", "fn main() {}\n"),
+        ("src/history.rs", "pub struct History;\n"),
+    ] {
+        let case = Case {
+            set: "process-residue",
+            rule: "",
+            path,
+            refuses: &[],
+            allows: &[],
+        };
+        let (code, report) = verdict(&case, sample);
+        assert_eq!(code, 0, "{path}: {report}");
     }
 }
 
