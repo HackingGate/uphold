@@ -1360,6 +1360,18 @@ every path in every document as a name would be one lookup per path:
 | `<your own owner>/repo` | refused | refused |
 | `otherowner/repo`, bare | refused | **not seen** |
 | an organisation named on its own | refused | **not seen** |
+| `<owner>.<document>.v<N>`, a schema id | **passed** | **not seen** |
+
+**A schema id is not a repository name**, and the last row is where that is
+decided. An organisation that publishes document formats writes its own name
+into every id it publishes, so the bare-owner search read each of them as the
+organisation named on its own and no pull request could quote the id of the
+schema it was changing. The id is told from the name by what follows the owner:
+one or more dotted segments and then a version segment, `acme.widget_state.v1`
+and the `.schema.json` file that carries it. Nothing else moves. A schema id has
+no slash in it, so `<Owner>/<repo>` under a declared owner is refused exactly as
+before, and so is the organisation written on its own in a sentence -- there
+being no id after the name is the whole difference.
 
 An unreadable source is exit `2`, because a rule with no owners refuses nothing
 and would report a clean tree over a list it could not read.

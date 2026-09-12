@@ -99,6 +99,14 @@ command.scope = "always"
 # condition the family fires under always holds at this seam. A private
 # repository that inherits `private-names` keeps its hook-side guards standing
 # down; this one does not stand down, and that is the point.
+#
+# What it does NOT refuse, because this seam is where it was measured: a schema
+# id of the shape `<owner>.<document>.v<N>`. An organisation that publishes
+# document formats carries its own name in every id it publishes, and reading
+# those as the organisation named on its own left a pull-request body unable to
+# say which schema it was adding -- with the ids being exactly what the change
+# was about. `<Owner>/<repo>` and the organisation alone are refused as before;
+# see REFERENCE.md, "Why the owner list is worth declaring".
 [rule.no-published-private-repo-names]
 builtin = "no-private-repo-names"
 visibility = "public"

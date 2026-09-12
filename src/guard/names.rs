@@ -253,11 +253,50 @@ fn candidates(text: &str, owners: &OwnerMatchers) -> BTreeSet<(String, String)> 
         }
     }
     for (owner, matcher) in &owners.bare {
-        if matcher.is_match(text) {
+        // Every occurrence, not `is_match`, because one of the shapes an owner
+        // name occurs in is not a mention of the organisation at all. A text
+        // whose only occurrences are schema ids has nothing in it to refuse.
+        if matcher
+            .find_iter(text)
+            .any(|hit| !opens_a_schema_id(text, hit.end()))
+        {
             found.insert((owner.clone(), String::new()));
         }
     }
     found
+}
+
+/// The tail of a versioned schema id, read from where the owner name ends.
+///
+/// `<owner>.<document>.v<N>`: at least one dotted segment, then a version
+/// segment, then a boundary. Anchored, because what is being asked is whether
+/// the id CONTINUES from the name just matched -- a version number somewhere
+/// later in the sentence says nothing about this occurrence.
+static SCHEMA_ID_TAIL: OnceLock<Regex> = OnceLock::new();
+
+fn schema_id_tail() -> &'static Regex {
+    SCHEMA_ID_TAIL.get_or_init(|| {
+        crate::engine::literal_pattern(r"^(?:\.[A-Za-z0-9_]+)+\.v[0-9]+(?:[^A-Za-z0-9_]|$)")
+    })
+}
+
+/// Whether the owner name ending at `end` is the first segment of a schema id.
+///
+/// An organisation that publishes document formats names itself in every one of
+/// their ids -- `acme.widget_state.v1` is the id of a FORMAT, and the format is
+/// usually what the pull request adding it is about. The bare-owner search read
+/// that as the organisation named on its own, so a repository could not quote
+/// the id of the schema it was changing: measured on one workspace where every
+/// published contract carries the prefix, and the author elided the line.
+///
+/// Only this arm, and deliberately. A schema id has no slash in it, so nothing
+/// here reaches `<owner>/<repo>` in any of its forms -- a repository name under
+/// a private owner is refused exactly as before, and so is the organisation
+/// written on its own in a sentence. The id is told from the name by what
+/// FOLLOWS it, which is the one place the two shapes differ.
+fn opens_a_schema_id(text: &str, end: usize) -> bool {
+    text.get(end..)
+        .is_some_and(|tail| schema_id_tail().is_match(tail))
 }
 
 /// The patterns that depend only on the OWNER, compiled once per judgement.
@@ -1490,6 +1529,70 @@ mod tests {
         // private owner is caught on its own.
         let found = named("maintained by acme", &[], Some("acme"));
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_declared_owner_written_on_its_own_is_a_finding() {
+        // The control the exemption below is measured against: nothing about a
+        // schema id makes the organisation in a sentence acceptable.
+        let declared = vec!["acme".to_owned()];
+        let found = named("a change landed in acme this week", &declared, None);
+        assert!(
+            found.contains(&("acme".to_owned(), String::new())),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_schema_id_is_not_the_organisation_named_on_its_own() {
+        // `<owner>.<document>.v<N>` is the id of a document FORMAT. It carries
+        // the organisation's name the way every id in a published set does, and
+        // reading it as the organisation left a pull request unable to name the
+        // schema it was adding.
+        let declared = vec!["acme".to_owned()];
+        let found = named(
+            "This adds the contract whose id is acme.widget_state.v1.",
+            &declared,
+            None,
+        );
+        assert!(found.is_empty(), "{found:?}");
+
+        // And the file that carries it, which is the same id with the
+        // convention's suffix on the end.
+        let with_suffix = named("see acme.widget_state.v1.schema.json", &declared, None);
+        assert!(with_suffix.is_empty(), "{with_suffix:?}");
+    }
+
+    #[test]
+    fn a_repository_name_under_a_declared_owner_is_still_a_finding() {
+        // The other half of the planted pair. A schema id has no slash in it,
+        // so the exemption cannot reach this shape -- `<Owner>/<repo>` is what
+        // the rule exists for, and a text carrying both is refused over the
+        // second one.
+        let declared = vec!["acme".to_owned()];
+        let found = named(
+            "acme.widget_state.v1 is defined in acme/widget-contracts",
+            &declared,
+            None,
+        );
+        assert!(
+            found.contains(&("acme".to_owned(), "widget-contracts".to_owned())),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_version_that_is_not_a_version_segment_is_not_a_schema_id() {
+        // The exemption is the whole shape or nothing. A dotted name with no
+        // `v<N>` on the end is not an id this convention publishes, and reading
+        // it as one would quiet any sentence that happened to put a dot after
+        // the organisation.
+        let declared = vec!["acme".to_owned()];
+        let found = named("acme.internal runs the build", &declared, None);
+        assert!(
+            found.contains(&("acme".to_owned(), String::new())),
+            "{found:?}"
+        );
     }
 
     #[test]

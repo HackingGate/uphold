@@ -345,3 +345,72 @@ fn a_prose_rule_with_no_command_is_left_out_of_the_text_seam() {
     let output = scan_text(&root, b"Arguably the count is right.\n", EXAMPLE_HOME);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
+
+// ── a schema id is not a repository name ─────────────────────────────
+
+/// The private-name guard at the text seam, with the owner declared on the rule
+/// so no forge is asked: a declared owner is the operator saying so, and a test
+/// that needed `gh` would be a test of this machine's credentials.
+///
+/// `visibility = "public"` because that is the condition the whole family fires
+/// under, and the text seam is the one place it holds whatever the repository
+/// itself is.
+const PRIVATE_NAMES_POLICY: &str = r#"
+visibility = "public"
+
+[rule.no-private-repo-names]
+builtin = "no-private-repo-names"
+private_owners = ["acme"]
+command.before = ["gh"]
+
+[[shim]]
+command = "gh"
+match = ["pr:create"]
+text_flags = ["-b", "--body"]
+scope = "always"
+"#;
+
+/// The planted pair, run through the binary, one verdict each.
+///
+/// An organisation that publishes document formats writes its own name into
+/// every id it publishes -- `acme.widget_state.v1` -- and the bare-owner search
+/// read that as the organisation named on its own. The cost was measured: a
+/// pull request could not say which schema it was adding, in the one repository
+/// where that is the subject.
+#[test]
+fn a_schema_id_passes_the_text_seam_and_a_repository_name_does_not() {
+    let root = workspace(PRIVATE_NAMES_POLICY);
+
+    let id = guard_text(
+        &root,
+        b"This adds the contract whose id is acme.widget_state.v1.\n",
+        EXAMPLE_HOME,
+        None,
+    );
+    assert_eq!(code(&id), 0, "{}", stderr(&id));
+
+    let name = guard_text(
+        &root,
+        b"This adds the contract, defined in acme/widget-contracts.\n",
+        EXAMPLE_HOME,
+        None,
+    );
+    assert_eq!(code(&name), 1, "{}", stderr(&name));
+    let report = stderr(&name);
+    assert!(report.contains("acme/widget-contracts"), "{report}");
+
+    // And the organisation in a sentence, which is the shape the exemption must
+    // not reach: no id follows the name, so there is nothing to tell it from.
+    let alone = guard_text(
+        &root,
+        b"This was hit while working on something at acme.\n",
+        EXAMPLE_HOME,
+        None,
+    );
+    assert_eq!(code(&alone), 1, "{}", stderr(&alone));
+    assert!(
+        stderr(&alone).contains("named on its own"),
+        "{}",
+        stderr(&alone)
+    );
+}
