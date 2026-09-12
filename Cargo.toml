@@ -1,6 +1,6 @@
 [package]
 name = "uphold"
-version = "1.16.0"
+version = "1.17.0"
 edition = "2021"
 # 1.90, and the floor is set by what the tree embeds rather than by taste: the
 # ripgrep stack -- globset 0.4.20 and ignore 0.4.33 in Cargo.lock -- refuses

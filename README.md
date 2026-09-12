@@ -25,7 +25,7 @@ bootstraps).
 default_install_hook_types: [pre-commit, commit-msg, pre-merge-commit, pre-push]
 repos:
   - repo: https://github.com/HackingGate/uphold
-    rev: v1.16.0
+    rev: v1.17.0
     hooks:
       - id: uphold-check            # the claims still hold
       - id: uphold-scan             # the content policy
@@ -51,13 +51,13 @@ the binary must be on PATH.
 # lefthook.yml
 remotes:
   - git_url: https://github.com/HackingGate/uphold
-    ref: v1.16.0
+    ref: v1.17.0
     configs:
       - hooks/lefthook.yml
 ```
 
 ```sh
-cargo install --git https://github.com/HackingGate/uphold --tag v1.16.0
+cargo install --git https://github.com/HackingGate/uphold --tag v1.17.0
 ```
 
 That `ref:` is the one version a lefthook consumer pins, and **Dependabot does
