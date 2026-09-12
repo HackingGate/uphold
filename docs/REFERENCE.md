@@ -560,6 +560,24 @@ Each is named separately because taking one is a separate decision:
 `unmanaged-pins` refuses a shape a repository that vendors its dependencies
 has on purpose, `host-identity` shells out to read the running machine, and
 `captured-fixtures` refuses the script a parser's own test corpus is made of.
+The `process-residue` set rejects issue and PR URLs and numbered tracker
+references in source, configuration, and documentation, including
+systemd `Documentation=` fields. Keep the durable explanation in the repository;
+issues can point to code, but code must not require an issue to explain it.
+Captured logs, bug reports, and benchmark results belong in issues. Benchmark
+programs and synthetic fixtures belong in the repository. Git history owns edit
+dates and change history; tracked files describe the current contract.
+
+The static checks recognize tracker references, authoring-date headers,
+changelog filenames, and log filenames. Identifying a pasted bug report,
+benchmark result, or narrative edit history requires review; these checks do
+not claim to recognize arbitrary prose. The tracker rule retains the set's test
+directory and Go test exclusions for synthetic examples, and excludes `testdata`.
+Date and log rules exclude `tests/fixtures`, `test/fixtures`, and `testdata`.
+Unqualified all-uppercase identifiers are not treated as repository shorthand,
+and bare numbers need prose context or an opening delimiter, so standards
+citations remain valid. Other legitimate literal uses need a scoped override.
+
 None of those arguments should stand between anyone and `process-residue`. The
 binary answers "what is in it" directly:
 

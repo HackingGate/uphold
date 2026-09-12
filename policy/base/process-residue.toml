@@ -12,7 +12,7 @@
 # your own policy. Naming an id nothing inherited defines is refused, so a rule
 # renamed upstream cannot leave a silent opt-out behind.
 #
-# Every rule defaults to `exclude = ["**/tests/**", "**/test/**"]` because test
+# Most rules exclude test directories because test
 # fixtures legitimately carry example-bad content. Patterns are generic shapes
 # only — no project-, host-, or account-specific content.
 
@@ -86,14 +86,13 @@ files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "READ
 
 [rule.no-dated-source-metadata]
 message = """
-Do not commit dated status metadata in source docs. Use Git history for
-chronology and keep source files stable.
+Do not commit authoring dates in source or documentation. Git history owns
+edit chronology; keep the current contract and rationale in the file.
 """
 # `Da[t]e` so this rule text never matches itself.
-regexp = '^Da[t]e:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}'
+regexp = '(?i)^[\t ]*(?:(?:\#|//+|/\*+|\*|--|;)\s*)?(?:Da[t]e|Created|Updated|Last updated|Last modified):[\t ]*[0-9]{4}-[0-9]{2}-[0-9]{2}'
 files.include = ["."]
-files.glob = ["*.md", "*.rst", "*.txt"]
-files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "CHANGELOG*"]
+files.exclude = ["**/tests/fixtures/**", "**/test/fixtures/**", "**/testdata/**"]
 
 [rule.no-status-source-metadata]
 message = """
@@ -119,13 +118,18 @@ files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "**/docs/adr/**"]
 
 [rule.no-task-tracker-references]
 message = """
-Do not commit task-tracker references in source docs. Keep task tracking in
-tracker metadata, not in tracked files.
+Source, configuration, and documentation must not depend on volatile
+issue or PR records. State the durable contract and rationale here, or link to
+repository documentation. Issues may link to code; code must not depend on
+issues. Keep logs, bug reports, and benchmark results in issues, and edit
+chronology in Git history.
 """
-regexp = 'github\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|(?:^|[[:space:]]|\(|\[)#[0-9]+\b'
+# Unqualified repository names require a lowercase letter, and bare numbers
+# require a lowercase prose word or an opening delimiter. This avoids treating
+# uppercase standards designators as repositories or task-tracking prose.
+regexp = 'github\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\b|(?:^|\b[a-z]+[\t ]+|\(|\[)#[0-9]+\b'
 files.include = ["."]
-files.glob = ["*.md", "*.rst", "*.txt"]
-files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "CHANGELOG*"]
+files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "**/testdata/**"]
 
 [rule.no-process-history-references]
 message = """
@@ -135,7 +139,25 @@ docs. Extract the durable rule or final state instead.
 regexp = '(?i)\b(?:issue|pr)\s+#[0-9]+\b|\bas discussed in (?:an? )?(?:issue|thread|pr)\b|(?:https?://)?github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull)/[0-9]+\b'
 files.include = ["."]
 files.glob = ["*.md", "*.rst", "*.txt"]
-files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "CHANGELOG*"]
+files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go"]
+
+[rule.no-source-changelog]
+message = """
+Do not maintain change history in repository files. Git history owns changes
+and their dates; source and documentation describe the current behavior.
+"""
+path_regexp = '(?i)(?:^|/)(?:changelog|changes|history)(?:\.(?:md|rst|txt))?$'
+files.include = ["."]
+
+[rule.no-committed-logs]
+message = """
+Keep captured logs in issues or ignored local storage. Commit the code that
+produces and checks evidence, not the volatile output of a run. Synthetic log
+fixtures belong in an explicitly named fixture directory.
+"""
+path_regexp = '(?i)\.log(?:\.[0-9]+)?$'
+files.include = ["."]
+files.exclude = ["**/tests/fixtures/**", "**/test/fixtures/**", "**/testdata/**"]
 
 [rule.no-tracked-private-data-paths]
 message = """

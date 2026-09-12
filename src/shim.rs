@@ -3419,11 +3419,8 @@ mod tests {
             Reading::Unclear(flag) if flag == "--fic-a"
         ));
         // And ONE is the whole space, so both readings missing is a conclusion
-        // rather than a doubt. This line asserted `Unclear` until #56, and what
-        // that cost was measured: on a git shim declaring `push:*`, most
-        // ordinary invocations printed the could-not-look refusal -- `git show
-        // --stat HEAD`, `git commit -F -`, `git checkout -b <name>`, `git reset
-        // --hard HEAD` among them -- while `git push` itself was quiet. A
+        // rather than a doubt. A git shim declaring `push:*` must leave
+        // unrelated commands alone and check the push itself. A
         // warning printed over every command this shim exists to stay out of
         // the way of trains the reader to ignore the one invocation where the
         // doubt is real, which is the failure the whole arm was written to

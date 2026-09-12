@@ -297,8 +297,6 @@ impl OwnerMatchers {
         // the repository, followed by a name, is a sibling reference and not a
         // directory: nobody writes `acme/main.rs`.
         //
-        // Found by trying to write the deprecation note that would close #29
-        // and watching the guard pass it.
         let mut owners: Vec<String> = private_owners.to_vec();
         if let Some(own_owner) = own_owner {
             if !owners
@@ -429,7 +427,7 @@ pub(crate) fn lookup(cache: &mut BTreeMap<String, Resolved>, owner: &str, repo: 
 
 /// Whether the repository being written INTO is public.
 ///
-/// This is the scope condition, and it is also the gap #14 exists for: it asks
+/// This is the scope condition: it asks
 /// whether the target is public NOW. Content written into a private repository
 /// is correctly allowed at write time, and nothing re-examines that decision
 /// when the repository later goes public.

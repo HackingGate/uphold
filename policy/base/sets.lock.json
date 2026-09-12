@@ -5,17 +5,29 @@
       {
         "files": {
           "exclude": [
-            "**/tests/**",
-            "**/test/**",
-            "**/*_test.go",
-            "CHANGELOG*"
+            "**/tests/fixtures/**",
+            "**/test/fixtures/**",
+            "**/testdata/**"
           ],
           "exclude_cfg_test": false,
-          "glob": [
-            "*.md",
-            "*.rst",
-            "*.txt"
+          "include": [
+            "."
           ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-committed-logs",
+        "message": "Keep captured logs in issues or ignored local storage. Commit the code that\nproduces and checks evidence, not the volatile output of a run. Synthetic log\nfixtures belong in an explicitly named fixture directory.\n",
+        "path_regexp": "(?i)\\.log(?:\\.[0-9]+)?$"
+      },
+      {
+        "files": {
+          "exclude": [
+            "**/tests/fixtures/**",
+            "**/test/fixtures/**",
+            "**/testdata/**"
+          ],
+          "exclude_cfg_test": false,
           "include": [
             "."
           ],
@@ -23,8 +35,8 @@
           "word": false
         },
         "id": "no-dated-source-metadata",
-        "message": "Do not commit dated status metadata in source docs. Use Git history for\nchronology and keep source files stable.\n",
-        "regexp": "^Da[t]e:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}"
+        "message": "Do not commit authoring dates in source or documentation. Git history owns\nedit chronology; keep the current contract and rationale in the file.\n",
+        "regexp": "(?i)^[\\t ]*(?:(?:\\#|//+|/\\*+|\\*|--|;)\\s*)?(?:Da[t]e|Created|Updated|Last updated|Last modified):[\\t ]*[0-9]{4}-[0-9]{2}-[0-9]{2}"
       },
       {
         "builtin": "no-hand-copied-base-rule",
@@ -80,8 +92,7 @@
           "exclude": [
             "**/tests/**",
             "**/test/**",
-            "**/*_test.go",
-            "CHANGELOG*"
+            "**/*_test.go"
           ],
           "exclude_cfg_test": false,
           "glob": [
@@ -98,6 +109,19 @@
         "id": "no-process-history-references",
         "message": "Do not reference process-history records (issue/PR/thread numbers) in final\ndocs. Extract the durable rule or final state instead.\n",
         "regexp": "(?i)\\b(?:issue|pr)\\s+#[0-9]+\\b|\\bas discussed in (?:an? )?(?:issue|thread|pr)\\b|(?:https?://)?github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull)/[0-9]+\\b"
+      },
+      {
+        "files": {
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-source-changelog",
+        "message": "Do not maintain change history in repository files. Git history owns changes\nand their dates; source and documentation describe the current behavior.\n",
+        "path_regexp": "(?i)(?:^|/)(?:changelog|changes|history)(?:\\.(?:md|rst|txt))?$"
       },
       {
         "files": {
@@ -129,14 +153,9 @@
             "**/tests/**",
             "**/test/**",
             "**/*_test.go",
-            "CHANGELOG*"
+            "**/testdata/**"
           ],
           "exclude_cfg_test": false,
-          "glob": [
-            "*.md",
-            "*.rst",
-            "*.txt"
-          ],
           "include": [
             "."
           ],
@@ -144,8 +163,8 @@
           "word": false
         },
         "id": "no-task-tracker-references",
-        "message": "Do not commit task-tracker references in source docs. Keep task tracking in\ntracker metadata, not in tracked files.\n",
-        "regexp": "github\\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|(?:^|[[:space:]]|\\(|\\[)#[0-9]+\\b"
+        "message": "Source, configuration, and documentation must not depend on volatile\nissue or PR records. State the durable contract and rationale here, or link to\nrepository documentation. Issues may link to code; code must not depend on\nissues. Keep logs, bug reports, and benchmark results in issues, and edit\nchronology in Git history.\n",
+        "regexp": "github\\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\\b|(?:^|\\b[a-z]+[\\t ]+|\\(|\\[)#[0-9]+\\b"
       },
       {
         "files": {
