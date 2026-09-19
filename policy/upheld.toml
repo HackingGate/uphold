@@ -84,6 +84,19 @@ rule = "prevent-public-push"
 # not be asked is exit 2 rather than a pass.
 
 [[enforce]]
+principle = "observability"
+rule = "removed-function-named"
+# A removal is a state transition the tree keeps no evidence of: the function
+# is in no file after the commit, and the message is the one record that can
+# say it went and why. The guard refuses the commit until the message names
+# it, which is the record's claim -- evidence sufficient to explain a decision
+# without reproducing it -- applied to the history rather than to a running
+# system. What would make this claim false is the guard exiting 0 over a
+# removal it did not name: src/policy/removed_function_named.rs refuses one,
+# and exits 2 rather than 0 when the parser could not read the file and the
+# diff found no removal to refuse on.
+
+[[enforce]]
 principle = "least-privilege"
 rule = "workflow-declares-permissions"
 # A workflow with no `permissions:` block runs on the repository's default

@@ -18,7 +18,7 @@ use crate::error::{Fatal, Result};
 /// stops being the right file the moment anyone asks the guard about a NAMED
 /// message, at which point it reads the previous commit's -- clean -- and
 /// reports a pass over a file it never opened.
-fn message_text(request: &Request<'_>) -> Result<(PathBuf, String)> {
+pub(crate) fn message_text(request: &Request<'_>) -> Result<(PathBuf, String)> {
     // A named file that is not there is not "nothing was forwarded". The
     // `.is_file()` filter used to turn one into the other, which is the exact
     // failure the paragraph above describes: the fallback then reads the
@@ -90,14 +90,15 @@ fn message_subjects(request: &Request<'_>) -> Result<Vec<(String, String)>> {
 }
 
 /// The judgment, over text that may never have been a file.
+///
+/// The markers are the evidence layer's: `evidence::git` reports an agent's
+/// change from the same list, so a marker added there is refused here on the
+/// same commit.
 pub(crate) fn ai_author_in(rule: &crate::config::Rule, label: &str, text: &str) -> Option<Refusal> {
-    let mut found: Vec<&str> = Vec::new();
-    if coauthor().is_match(text) {
-        found.push("a Co-Authored-By trailer with a noreply address");
-    }
-    if generated().is_match(text) {
-        found.push("a \"Generated with\" attribution");
-    }
+    let found: Vec<&str> = crate::evidence::git::agent_markers_in(text)
+        .iter()
+        .map(|marker| marker.called)
+        .collect();
     if found.is_empty() {
         return None;
     }
@@ -127,20 +128,6 @@ pub(crate) fn unusual_unicode_in(
              words.",
             findings.join("\n")
         ),
-    })
-}
-
-fn coauthor() -> &'static Regex {
-    static COAUTHOR: OnceLock<Regex> = OnceLock::new();
-    COAUTHOR.get_or_init(|| crate::engine::literal_pattern(r"(?im)^Co-Authored-By:.*<noreply@"))
-}
-
-fn generated() -> &'static Regex {
-    static GENERATED: OnceLock<Regex> = OnceLock::new();
-    GENERATED.get_or_init(|| {
-        crate::engine::literal_pattern(
-            r"(?i)Generated with.*(Claude|GPT|Copilot|Cody|Codeium|Anthropic|OpenAI)",
-        )
     })
 }
 

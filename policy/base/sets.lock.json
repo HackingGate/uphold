@@ -807,6 +807,24 @@
     ]
   },
   {
+    "commands": [],
+    "rules": [
+      {
+        "builtin": "removed-function-named",
+        "git": {
+          "hooks": [
+            "commit-msg"
+          ]
+        },
+        "id": "removed-function-named"
+      }
+    ],
+    "set": "unnamed-removal",
+    "stages": [
+      "commit-msg"
+    ]
+  },
+  {
     "commands": [
       "gh",
       "git push"

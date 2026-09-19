@@ -14,6 +14,7 @@ opinion nobody asked for. The rules already active here are:
 - `no-stale-hook-pins`
 - `prevent-ai-author`
 - `prevent-public-push`
+- `removed-function-named`
 - `workflow-declares-permissions`
 
 Everything below is a constraint whose remainder is a judgment. For each, the

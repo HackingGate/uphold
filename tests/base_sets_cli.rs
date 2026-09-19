@@ -857,6 +857,7 @@ fn every_guard_set_declares_the_stages_its_rules_install() {
         "invisible-characters",
         "stale-pins",
         "unowned-push",
+        "unnamed-removal",
     ] {
         let root = repository(&format!("[inherit]\nsets = [\"{name}\"]\n"));
         let listed = Command::new(env!("CARGO_BIN_EXE_uphold"))

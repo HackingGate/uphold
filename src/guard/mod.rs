@@ -98,6 +98,12 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     // never itself, which is what keeps the dispatch finite.
     "text-guards",
     "text-literals",
+    // The one built-in that reads no artifact itself. It is handed the
+    // evidence every compiled-in provider reported about the change and
+    // judges that -- so which parser or which diff supplied a fact is not its
+    // business, and `tests/structural_evidence.rs` refuses the policy file
+    // naming one. See `evidence` for the shape and ADR 0008 for why.
+    "removed-function-named",
 ];
 
 /// The built-ins `uphold scan` dispatches, rather than `guard`.
@@ -179,6 +185,7 @@ pub(crate) struct Request<'a> {
 
 /// What a guard concluded. A refusal carries the whole report, because a guard
 /// that says only "refused" makes the reader go and find out what it saw.
+#[derive(Debug)]
 pub(crate) struct Refusal {
     pub id: String,
     pub report: String,
@@ -517,6 +524,23 @@ pub(crate) fn evaluate(request: &Request<'_>) -> Result<Option<Refusal>> {
         "no-stale-hook-pins" => crate::pins::stale(request),
         "no-stale-visibility" => visibility::no_stale_visibility(request),
         "no-hand-copied-base-rule" => sets::no_hand_copied_base_rule(request),
+        "removed-function-named" => {
+            // `git merge` runs `commit-msg` with the merged tree in the index,
+            // so the providers would report every function the other branch
+            // removed and the guard would demand each be named in the merge
+            // message. Those removals are recorded in the merged commits, and
+            // each of those met this guard or was waived at its own
+            // `commit-msg`; the merge commit removes nothing of its own. A
+            // squash leaves no `MERGE_HEAD` and makes a plain commit, so its
+            // removals are judged here like any other's.
+            if merge::in_progress(request.root)? {
+                return Ok(None);
+            }
+            crate::policy::removed_function_named::judge(
+                request.rule,
+                &crate::evidence::observe(request)?,
+            )
+        }
         other => Err(Fatal::new(format!("no built-in called {other:?}"))),
     }
 }
@@ -661,7 +685,7 @@ mod tests {
                 "{id} is in EVERY_BUILTIN with no dispatch arm"
             );
         }
-        assert_eq!(EVERY_BUILTIN.len(), 19);
+        assert_eq!(EVERY_BUILTIN.len(), 20);
     }
 
     #[test]

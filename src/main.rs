@@ -80,6 +80,7 @@ mod comments;
 mod config;
 mod engine;
 mod error;
+mod evidence;
 #[cfg(test)]
 mod fixture;
 mod git;
@@ -89,6 +90,7 @@ mod hooks;
 mod install;
 mod out;
 mod pins;
+mod policy;
 mod probe;
 mod prose;
 mod report;

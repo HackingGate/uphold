@@ -251,6 +251,44 @@ in the environment and is deliberately not a rule field: a bypass belongs to one
 invocation by whoever is standing there, and written into the policy file it
 would be committed, reviewed once, and permanent — which is not a bypass.
 
+## Evidence: what a provider reports and what a policy may read
+
+Most guards read their own artifact and decide on the spot, and for a rule
+about bytes that is the right shape. For a rule about what a change *means* --
+which functions it removes, what the message says it intends -- the reader is
+the part most likely to be replaced, and a rule written against the reader is
+rewritten with it. So there is a seam. A **provider** reads one artifact and
+reports **evidence**, one normalized shape: a kind, a subject, properties, and
+the provenance a reader of a refusal needs -- which provider, at what
+**strength**, over which **revision**. A **policy** is handed the body of
+everything reported and decides. It never names a provider;
+`tests/structural_evidence.rs` reads the provider names off `src/evidence/`
+and refuses a policy file that spells one.
+
+Strength is a variant, `Proven > Heuristic > Inferred`, and the three rules it
+buys are methods on the body rather than conventions: weaker evidence may add a
+refusal, may never supply a clean verdict where a stronger provider could not
+look, and may never cancel a stronger provider's refusal. A model's assertion
+is `Inferred` by construction and yields no refusal and no clean verdict on its
+own; no provider produces it yet, and the variant is exercised by a test double
+so the seam exists before the first one does.
+
+A provider that could not look says so in its answer, as a variant and never as
+an empty list. The parser provider answers `Unavailable` for a file with an
+`ERROR` node on either side, naming the file and the line, because the
+recovered tree is unpredictably shorter than the file -- measured in ADR 0008,
+where one missing brace hides one function of two from the walk and an
+unterminated string hides none. What follows is decided the same way every
+time: parser unavailable and the diff pattern silent is exit 2; parser
+unavailable and the diff pattern found a removal is a refusal; two `Proven`
+providers disagreeing about one subject is a refusal naming both.
+
+It is not a rule DSL and not a plugin API. A policy is a Rust predicate in this
+binary dispatched like every other built-in, a provider is a Rust type compiled
+in, and the trait between them is the shape of an answer to ADR 0005's third
+question for readers that live inside the binary. ADR 0003, 0005 and 0008
+carry the argument.
+
 ## Shims: what is data and what is code
 
 Most of a bash spec was already data — `SPEC_MATCH` and the `SPEC_*_FLAGS` were

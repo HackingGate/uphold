@@ -1,0 +1,56 @@
+# Base rule set: unnamed-removal (a function the change removes and the
+# commit message does not name)
+#
+# One guard, at the moment the message is written. Pull in with:
+#
+#   [inherit]
+#   sets = ["unnamed-removal"]
+#
+# WHAT IT REFUSES. A commit that removes a function -- a Rust `fn`, a Python
+# `def`, a Go `func` or method -- whose message does not carry that function's
+# name as a word. The refusal names the file, the function, and which reader
+# saw it go.
+#
+# WHY. An addition is in the tree for the next reader; a removal is in no tree
+# at all, and the message is the only place its name is written for the reader
+# who does not already know it. A history where removals are named is one
+# `git log --grep` can answer; one where they are not is answered only by
+# `git log -S`, which needs the name the reader is trying to find out.
+#
+# HOW IT READS THE CHANGE, and this is the part that differs from every other
+# guard. The rule reads no file itself. Two readers report what the change
+# removes -- the parser this binary links for Rust, Python and Go, comparing
+# the tree at HEAD with the tree in the index, and a pattern over the removed
+# lines of the staged diff -- and the message is read as a third fact. The rule
+# judges the facts and never the readers, which is what lets a reader be
+# replaced without the rule changing; see ADR 0008.
+#
+# WHAT IT DOES WHEN IT CANNOT LOOK. A file the parser could not read -- a
+# staged side with a syntax error in it -- is not a file with no removals in
+# it. If the pattern over the diff finds a removal there, the commit is refused
+# on that; if it finds none, the run exits 2 naming the file and the line,
+# because the parser's silence and the pattern's silence do not add up to a
+# clean verdict. Two parsers disagreeing about one function is a refusal that
+# names both.
+#
+# THE REMEDY. Name the function in the message -- what it was and why it is
+# gone -- or keep it. A deleted file takes every function in it, and naming the
+# file, by its path or its stem, names them all; a function gone from a file
+# that stays is named only by its own name. The message is read as git records
+# it: a name on a comment line, or below the scissors line `git commit -v`
+# writes, is in the file and not in the message.
+# `UPHOLD_ALLOW=removed-function-named` is the waiver for the commit that is
+# right anyway.
+#
+# WHAT IT COSTS. One hook at `commit-msg`, reading the staged paths in the
+# three linked languages twice (HEAD and index) and diffing them once. A file
+# in any other language is outside the readers' claim and is skipped. A merge
+# commit is not judged: the functions the other branch removed are recorded in
+# the commits being merged, each of which met this guard or was waived at its
+# own `commit-msg`, and the merge message is not asked to name them again.
+[set]
+stages = ["commit-msg"]
+
+[rule.removed-function-named]
+builtin = "removed-function-named"
+git.hooks = ["commit-msg"]
