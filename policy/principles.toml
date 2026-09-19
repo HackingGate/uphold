@@ -116,6 +116,14 @@ sets = [
     # where text reaches a forge API with no hook at all -- is the `[[shim]]`
     # further down, because no set may put a program in front of a real command.
     "private-names",
+    # A function this change removes must be named in the message that
+    # records the removal. The one guard here that reads no artifact itself:
+    # it judges what the parser, the diff and the message reported, and a
+    # file the parser could not read is exit 2 unless the diff saw the
+    # removal anyway. Inherited by the repository that ships it for the reason
+    # every other set is: a rule that cannot survive its own tree is one
+    # nobody should be asked to adopt.
+    "unnamed-removal",
     # The checkers for that fourth seam. The set supplies checkers and never
     # shims, so the `[[shim]]` tables further down stay this repository's own
     # declaration -- and two of its three rules are shadowed below, because

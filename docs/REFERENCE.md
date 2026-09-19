@@ -353,7 +353,7 @@ files.glob = ["*.yml", "*.yaml"]
 
 `inherit.sets` names bundled sets to inherit; it does not add settings. There
 is no `true` shorthand — naming the sets is cheap, and what a repository
-inherits should be written in the repository. Twenty are compiled into the
+inherits should be written in the repository. Twenty-one are compiled into the
 binary and mirrored in [`policy/base/`](../policy/base), each **named by what
 it refuses** so the name predicts the rule list:
 
@@ -370,6 +370,7 @@ it refuses** so the name predicts the rule list:
 | `hand-rolled-toolchain` | a host tool installed by hand where a version manager was available — a `curl \| tar` download-and-unpack, and the `$HOME/.local` symlink that puts its output on PATH. Deliberately silent on `curl \| sh` (a version manager's own bootstrap has nowhere else to live), on a host-prerequisite manifest beside it (a resolver provisions, a doctor verifies), and on distro packages |
 | `comment-facts` | a measurement of your own data stated in a source comment, where no anchor can ever recount it — `# 60 s timeout`, `// ~127 MB of rlib`, `# 3 of 5 done`. The other half of `doc-claims`: that one checks a fact somebody anchored, this one refuses the shape of a fact nobody can anchor. Scoped to lines whose first token opens a comment, in source files by extension, so a string literal and a markdown bullet are never read. Lets through a version (`v1.14.1`, `Go 1.25`), a date (`2026-09-04`) and a citation (`ADR 0005`, `issue 101`), none of which is followed by a unit. Cannot tell your data from a number that is not yours — a platform constant, a limit the code enforces, a worked example — so it refuses the shape and the reader decides. Installs no git hook; the fix is to drop the measurement (or move it to the commit or pull-request body), and for a number that is not a measurement to give the code a named constant the comment points at. Never spell the digits out as words. Its second rule refuses a comment that says only what the next line says — `# the runner is ubuntu-latest` over `runner = "ubuntu-latest"` — by the `trivial_comments` test, over every file kind that check can read, tests excluded because a test's comment names the case rather than the code; the fix is a why, a constraint or a consequence, or deletion |
 | `commit-message-residue` | authorship markers and unusual characters in the message a commit records — **installs `commit-msg`** |
+| `unnamed-removal` | a function the change removes and the commit message does not name — **installs `commit-msg`**. The one set whose guard reads no artifact of its own: it judges what the parser, the diff and the message reported, and a file the parser could not read is exit `2` unless the diff saw the removal anyway |
 | `unreviewed-history` | a merge made locally rather than through a pull request — **installs `pre-commit` and `pre-merge-commit`** |
 | `mismatched-author` | a commit whose author or committer identity disagrees with the global one on the machine making it — **installs `pre-commit`**, and declines with a note where no global identity is configured |
 | `invisible-characters` | characters that draw nothing, in committed content and in the paths that carry it — **installs four stages**, and reads the whole tree at each |
@@ -380,7 +381,7 @@ it refuses** so the name predicts the rule list:
 | `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push. **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [ADR 0006](adr/0006-what-a-bundled-set-may-attach-to-a-command.md) |
 | `prose-shapes` | four sentence shapes that carry nothing — a sentence announcing what the next one will say, a clause behind a dash restating the one in front of it, a hedge admitting no uncertainty, an objection nobody raised being answered. **Installs no git hook**: its rules run in `uphold scan` and at the shim seam (`gh`, `git push`), and like `published-text` it refuses to load until the repository has declared the `[[shim]]` tables itself. `UPHOLD_ALLOW=<rule-id>` is the waiver for the sentence a rule is wrong about |
 
-The eight before it install git hooks. Taking one is a decision about what will be
+The nine before it install git hooks. Taking one is a decision about what will be
 refused and when, so each is named and argued separately: `stale-pins` reaches
 the network and cannot answer on a train, `invisible-characters` reads the tree
 at four stages and is the slowest thing in a hook, `unreviewed-history` stands
@@ -1215,6 +1216,7 @@ stamped on it, the range about to be pushed.
 | `no-stale-hook-pins` | a pin left behind its upstream, or naming no ref — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree; a pin it **could not check** is exit `2` |
 | `no-hand-copied-base-rule` | a rule this policy writes out by hand under an id a bundled set already ships, from a set it does not inherit. Reads the **policy**, not the tree. At `pre-commit` only what the change adds; at `manual` the whole sweep |
 | `no-stale-visibility` | a declared `private` the forge no longer serves. Reads the **declaration** and the forge, not the tree; a forge that did not answer is exit `2` and never "confirmed private", and it says which silence it met — a 404 reads differently from a rate limit |
+| `removed-function-named` | a commit that removes a function -- a Rust `fn`, a Python `def`, a Go `func` or method -- whose message does not name it. Reads no artifact itself: it judges **evidence** from the compiled-in providers (the parser over `HEAD` and the index, a pattern over the staged diff, the message), and the refusal names the file, the function and which provider saw it go. A staged file the parser could not read is exit `2` unless the diff pattern found a removal in it, and two parsers disagreeing about one function is a refusal naming both. See [ADR 0008](adr/0008-evidence-and-what-a-policy-may-consume.md) |
 
 Declared like any other rule, in the same file and the same id namespace.
 **`git.hooks` is the whole registration.**

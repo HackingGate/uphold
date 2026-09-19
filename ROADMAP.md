@@ -228,3 +228,27 @@ because a version bump that refused the existing forty would be paid for by
 being switched off, which returns coverage to the zero it started at. Deleting
 the existing copies is per-repository work, and it is worth doing now that the
 sweep cannot refill.
+
+### Evidence providers, and what issue 165 leaves open
+
+The evidence layer ([ADR 0008](docs/adr/0008-evidence-and-what-a-policy-may-consume.md))
+ships with three compiled-in providers -- git over the message, tree-sitter
+over the staged trees, a pattern over the staged diff -- and one policy,
+`removed-function-named`, that reads them. What it deliberately does not ship:
+
+- **A compiler or LSP provider.** `symbol_defined`, `unresolved_reference` and
+  `type_changed` are kinds the issue names and nothing here reports, and a kind
+  with no provider is the dead configuration this repository refuses. ADR 0004
+  measured what the semantic tier costs before a commit; a provider there sits
+  at the manual seam or nowhere.
+- **`dependency_edge` and layer kinds.** The architectural-boundary policy the
+  issue sketches needs a provider that resolves imports across modules, which
+  is the same tier as the point above.
+- **An `Inferred` provider.** The variant exists and is tested with a double;
+  no provider produces it. The seam for one is `uphold hook`, where an agent's
+  own account of a change is already read -- and whatever it reports lands as
+  `Inferred` by construction, refusing nothing at a blocking stage and
+  cancelling nothing a parser said.
+- **A second policy.** One predicate over two providers is the demonstration;
+  the next policy written against the body is what shows the schema was not
+  shaped around the first.

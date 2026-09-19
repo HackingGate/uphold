@@ -1,14 +1,22 @@
 //! Merges made locally rather than through a forge.
 
+use std::path::Path;
+
 use super::{Refusal, Request};
 use crate::error::Result;
 use crate::git;
+
+/// Whether the commit being made is finishing a merge: `MERGE_HEAD` names the
+/// other parent from `git merge` until the merge commit is written.
+pub(crate) fn in_progress(root: &Path) -> Result<bool> {
+    Ok(git::try_run(root, &["rev-parse", "-q", "--verify", "MERGE_HEAD"])?.is_some())
+}
 
 /// Refuse a commit that is finishing a merge or a squash merge.
 pub(crate) fn no_merge_commit(request: &Request<'_>) -> Result<Option<Refusal>> {
     let git_dir = git::dir(request.root)?;
 
-    if git::try_run(request.root, &["rev-parse", "-q", "--verify", "MERGE_HEAD"])?.is_some() {
+    if in_progress(request.root)? {
         return Ok(Some(Refusal {
             id: request.rule.id.clone(),
             report: String::from(

@@ -143,6 +143,16 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
         "private-names",
         include_str!("../policy/base/private-names.toml"),
     ),
+    // The first set whose guard reads no artifact of its own. It is handed
+    // what the compiled-in providers reported about the change -- the parser
+    // and the diff on what was removed, the message on what was intended --
+    // and judges that. Its own name because taking it is a house-style
+    // decision about commit messages, which a repository inheriting the
+    // residue guards has said nothing about. See ADR 0008.
+    (
+        "unnamed-removal",
+        include_str!("../policy/base/unnamed-removal.toml"),
+    ),
     // The one set whose rules run at the shim seam and nowhere else. It ships
     // checkers and never shims: every `command.before` line in it must sit
     // inside the `[set] commands` ceiling, and each names a `[[shim]]` the

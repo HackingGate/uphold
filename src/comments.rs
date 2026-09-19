@@ -74,7 +74,12 @@ impl Language {
 
     /// The grammar and the node kinds that ARE comments in it, or `None` for
     /// the kind of file that is read by line.
-    fn grammar(self) -> Option<(tree_sitter::Language, &'static [&'static str])> {
+    ///
+    /// The one table of linked grammars. `evidence::syntax` reads the grammar
+    /// half of it, so a language this binary can read comments in is a
+    /// language it can read declarations in, with no second list to fall
+    /// behind the first.
+    pub(crate) fn grammar(self) -> Option<(tree_sitter::Language, &'static [&'static str])> {
         match self {
             Self::Rust => Some((
                 tree_sitter_rust::LANGUAGE.into(),
