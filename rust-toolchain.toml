@@ -1,0 +1,31 @@
+# rust-toolchain.toml -- the Rust toolchain this crate is built and linted with.
+#
+# ONE DECLARATION, THREE READERS, and that is the whole reason this file exists
+# rather than a fourth manifest entry. rustup reads it on every cargo
+# invocation in this tree; GitHub Actions' Rust setup reads it; and mise reads
+# it as an idiomatic version file. Before it, the same two facts were written
+# out in three places that nothing compared:
+#
+#   .github/workflows/test.yml   dtolnay/rust-toolchain@stable
+#   toolchain.toml [[setup]]     rustup default stable; rustup component add rustfmt clippy
+#   toolchain.toml [[tool]]      rustc want = ">=1.90"
+#
+# The first two are the same instruction typed twice, and the third is a
+# restatement of Cargo.toml `rust-version`. A developer's box was configured by
+# the setup step, the runner by the workflow, and nothing checked that the two
+# agreed about either the channel or the component list.
+#
+# `stable`, NOT A PINNED VERSION. The pinned form is a version a dependency bot
+# cannot see, which is what `unmanaged-pins` refuses elsewhere in this fleet.
+# The floor this crate refuses to build below is a different claim and stays
+# where it was: Cargo.toml `rust-version`, declared once, which cargo itself
+# enforces at resolution.
+#
+# COMPONENTS ARE THE POINT. They are rustup's vocabulary and no version manager
+# owns them, so this is the only file that can carry `rustfmt` and `clippy`
+# beside the channel. A fresh checkout now has them after the first cargo
+# command, rather than after remembering to run an install step.
+
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

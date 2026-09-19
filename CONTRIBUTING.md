@@ -206,8 +206,9 @@ should wait for. The proofs are cheap once it is installed.
 The MSRV is written twice, in `Cargo.toml` as `rust-version` and in
 `toolchain.toml` as the rustc `want`, because cargo and the preflight cannot read
 each other's manifest. Bump both together; `tests/test_toolchain.py` refuses a
-tree where they disagree, and CI builds the crate on the declared MSRV rather
-than on whatever `stable` is that week.
+tree where they disagree. Nothing builds the crate on that version: every build
+runs on the `stable` that `rust-toolchain.toml` names, and the number's work is
+done by cargo, which resolves dependencies against it.
 
 Write `enforcement.checks` as a brief for whoever builds the check, and
 `enforcement.limits` as what that person will not be able to observe. Neither is
