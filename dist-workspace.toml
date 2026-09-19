@@ -10,7 +10,17 @@ ci = "github"
 # The installers to generate for each app
 installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
+#
+# Linux only. The two Apple triples (aarch64-apple-darwin, x86_64-apple-darwin)
+# are not here because dist refuses to cross-compile to macOS from any host
+# that is not itself macOS (`build_wrapper_for_cross` in cargo-dist's
+# src/tasks.rs returns UnsupportedCrossCompile for a Darwin target on a Linux
+# host), so a macOS artifact costs a macos-* runner job, the most expensive
+# runner class, while Actions minutes are the constraint. To add them back:
+# append the two triples to this list and run `dist generate`; dist then
+# schedules its default macos-14 and macos-15-intel jobs for them with no
+# further configuration.
+targets = ["aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Where to host releases
@@ -30,3 +40,35 @@ pr-run-mode = "skip"
 # `dist generate` rewrites the file with dist's own pins and Dependabot moves
 # them again.
 allow-dirty = ["ci"]
+# One job builds every target rather than one job per target. The per-job
+# setup (checkout, toolchain, dist and cargo-zigbuild installs, registry
+# fetch) is paid once, and the host-side build scripts and proc macros in
+# `target/` are compiled once and shared across the four targets. The
+# price is latency, since the targets build in sequence, and fault isolation,
+# since one failing target fails the job.
+merge-tasks = true
+
+# Every target builds on the one x86_64 Linux runner. Without this table dist
+# schedules `ubuntu-22.04-arm` for the aarch64 Linux targets: a second runner
+# class, with its own rate and its own setup cost, for a build the Linux
+# runner can do itself. With `host` set to the runner's own triple, dist sees
+# a cross-compile and drives `cargo zigbuild` for the aarch64 targets
+# (`build_wrapper_for_cross` in cargo-dist's src/tasks.rs picks cargo-zigbuild
+# for any Linux target from a Linux host), installing cargo-zigbuild in the
+# job through pip. The x86_64 musl target is the same OS and architecture as
+# the host, so dist calls plain `cargo build` for it, as it already did.
+[dist.github-custom-runners.aarch64-unknown-linux-gnu]
+runner = "ubuntu-22.04"
+host = "x86_64-unknown-linux-gnu"
+
+[dist.github-custom-runners.aarch64-unknown-linux-musl]
+runner = "ubuntu-22.04"
+host = "x86_64-unknown-linux-gnu"
+
+[dist.github-custom-runners.x86_64-unknown-linux-musl]
+runner = "ubuntu-22.04"
+host = "x86_64-unknown-linux-gnu"
+
+[dist.github-custom-runners.x86_64-unknown-linux-gnu]
+runner = "ubuntu-22.04"
+host = "x86_64-unknown-linux-gnu"
