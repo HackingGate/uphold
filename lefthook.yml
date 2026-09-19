@@ -113,8 +113,12 @@ pre-push:
     # `--no-verify`, and a flag learned to skip a slow test run skips the
     # guards standing beside it; once per push is where the same two still
     # refuse before anything leaves the machine.
+    # Without the variables git exports to a hook: the fixtures strip them for
+    # their own `git`, but the tests that spawn the `uphold` binary
+    # inherit them and read the repository this hook fired in, which is the
+    # wrong tree for every one of them and a writable one for `hooks install`.
     engine-tests:
-      run: cargo test --quiet
+      run: env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_PREFIX -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_CONFIG_PARAMETERS cargo test --quiet
     engine-clippy:
       run: cargo clippy --quiet --all-targets
     # `use_stdin: true`, which this was missing. lefthook runs a command under a
