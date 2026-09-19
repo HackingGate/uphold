@@ -164,11 +164,7 @@ fn stripped_names(source: &str) -> Vec<String> {
         }
         pending.extend(node.children(&mut cursor));
     }
-    if removes {
-        names
-    } else {
-        Vec::new()
-    }
+    if removes { names } else { Vec::new() }
 }
 
 #[test]

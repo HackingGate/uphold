@@ -234,9 +234,11 @@ fn a_file_this_command_did_not_write_is_never_replaced() {
     let output = links(&root, &plain_path(&root), &["--install", "faux"]);
     assert_eq!(code(&output), 2, "{}", stdout(&output));
     assert!(stdout(&output).contains("REFUSED"), "{}", stdout(&output));
-    assert!(std::fs::read_to_string(root.join("shims/faux"))
-        .unwrap()
-        .contains("not ours"));
+    assert!(
+        std::fs::read_to_string(root.join("shims/faux"))
+            .unwrap()
+            .contains("not ours")
+    );
 }
 
 /// A link is made in one directory under the command's own name. A name

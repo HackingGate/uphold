@@ -104,7 +104,10 @@ const CORPUS: &[Case] = &[
             "// Last updated: 2026-08-14\n",
             "<!-- Last updated: 2026-08-14 -->\n",
         ],
-        allows: &["Released on the fourteenth.\n", "const EPOCH: &str = \"2026-08-14\";\n"],
+        allows: &[
+            "Released on the fourteenth.\n",
+            "const EPOCH: &str = \"2026-08-14\";\n",
+        ],
     },
     Case {
         set: "process-residue",

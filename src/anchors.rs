@@ -162,7 +162,7 @@ fn resolve_artifact(anchor: &Anchor, root: &Path) -> Option<String> {
             return Some(format!(
                 "names artifact {:?}, which is not a valid glob: {error}",
                 anchor.source
-            ))
+            ));
         }
     };
     // `standard_filters(false)`, and it is the difference between this check

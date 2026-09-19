@@ -75,7 +75,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::error::{verdict, Exit, Fatal, Result};
+use crate::error::{Exit, Fatal, Result, verdict};
 
 /// The zizmor policy run where the repository has none of its own.
 const ZIZMOR_DEFAULT: &str = include_str!("../policy/zizmor.default.yml");
@@ -151,14 +151,14 @@ pub(crate) enum Scope {
 
 /// `uphold supply-chain`
 pub(crate) fn run(root: &Path, scope: &Scope) -> Result<Exit> {
-    if let Scope::Changed(paths) = scope {
-        if paths.is_empty() {
-            println!(
-                "supply chain: nothing in this range that a scanner reads -- no lockfile, \
+    if let Scope::Changed(paths) = scope
+        && paths.is_empty()
+    {
+        println!(
+            "supply chain: nothing in this range that a scanner reads -- no lockfile, \
                  manifest or workflow changed"
-            );
-            return Ok(Exit::Clean);
-        }
+        );
+        return Ok(Exit::Clean);
     }
     let mut failed = 0_usize;
     let mut unread = 0_usize;
@@ -934,12 +934,12 @@ fn vet(root: &Path, scope: &Scope) -> Result<Section> {
     // -- and the answer can only change when the resolved set does. That is a
     // `Cargo.lock` moving; a manifest edit that did not relock changed nothing
     // vet reads.
-    if let Scope::Changed(paths) = scope {
-        if selected(root, paths, &["Cargo.lock"]).is_empty() {
-            return Ok(Section::Nothing(String::from(
-                "no Cargo.lock moved in this range",
-            )));
-        }
+    if let Scope::Changed(paths) = scope
+        && selected(root, paths, &["Cargo.lock"]).is_empty()
+    {
+        return Ok(Section::Nothing(String::from(
+            "no Cargo.lock moved in this range",
+        )));
     }
     tool_read(root, "cargo", &["vet", "--locked"], vet_could_not_look)
 }
@@ -1255,7 +1255,7 @@ mod tempfile_guard {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_named, find_workflow_dirs, interesting, unscanned_ci, Scope, PRUNE};
+    use super::{PRUNE, Scope, find_named, find_workflow_dirs, interesting, unscanned_ci};
 
     /// Paths under the fixture, as strings, so a failure names what was found.
     fn relative(root: &std::path::Path, found: &[std::path::PathBuf]) -> Vec<String> {

@@ -103,7 +103,7 @@ mod text;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use crate::error::{verdict, Exit, Fatal, Result};
+use crate::error::{Exit, Fatal, Result, verdict};
 
 const USAGE: &str = "\
 usage:
@@ -751,7 +751,7 @@ fn audit_command(arguments: &[OsString]) -> Result<Exit> {
         _ => {
             return Err(Fatal::new(format!(
                 "audit needs --for-publication\n\n{USAGE}"
-            )))
+            )));
         }
     }
     let working = std::env::current_dir()?;
@@ -1009,7 +1009,7 @@ fn links_command(mode: &str, rest: &[OsString]) -> Result<Exit> {
                 explicit_dir = Some(PathBuf::from(value));
             }
             other if other.starts_with('-') => {
-                return Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}")))
+                return Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}")));
             }
             other => words.push(other.to_owned()),
         }
@@ -1111,10 +1111,10 @@ fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result
     // path -- so handing it to the real command would give `gh` a path where a
     // subcommand goes, and the editor re-entry is installed by a pass that had
     // no marker on it in the first place.
-    if invoked != shim::Invoked::AsEditor {
-        if let Some(exit) = shim::inner_passthrough(name, argv)? {
-            return Ok(exit);
-        }
+    if invoked != shim::Invoked::AsEditor
+        && let Some(exit) = shim::inner_passthrough(name, argv)?
+    {
+        return Ok(exit);
     }
     let working = std::env::current_dir()?;
     // No policy where the command was typed means no repository here declares

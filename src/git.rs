@@ -458,9 +458,11 @@ mod tests {
     #[test]
     fn an_empty_list_asks_git_nothing() {
         assert!(blob_shas(&std::env::temp_dir(), &[]).unwrap().is_empty());
-        assert!(each_blob(&std::env::temp_dir(), &[], |_, _| ())
-            .unwrap()
-            .is_empty());
+        assert!(
+            each_blob(&std::env::temp_dir(), &[], |_, _| ())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

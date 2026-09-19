@@ -337,13 +337,12 @@ impl OwnerMatchers {
         // directory: nobody writes `acme/main.rs`.
         //
         let mut owners: Vec<String> = private_owners.to_vec();
-        if let Some(own_owner) = own_owner {
-            if !owners
+        if let Some(own_owner) = own_owner
+            && !owners
                 .iter()
                 .any(|owner| owner.eq_ignore_ascii_case(own_owner))
-            {
-                owners.push(own_owner.to_owned());
-            }
+        {
+            owners.push(own_owner.to_owned());
         }
 
         let mut named: Vec<(String, Regex)> = Vec::new();
@@ -919,16 +918,16 @@ pub(crate) fn in_message(request: &Request<'_>) -> Result<Option<Refusal>> {
     // The same trap `message::message_text` documents: a named file that is not
     // there fell through to `.git/COMMIT_EDITMSG`, so the guard read the
     // PREVIOUS commit's message and passed over one it never opened.
-    if let Some(named) = request.message_file {
-        if !named.is_file() {
-            return Err(Fatal::new(format!(
-                "{}: {} was named as the commit-message file and is not a file. \
+    if let Some(named) = request.message_file
+        && !named.is_file()
+    {
+        return Err(Fatal::new(format!(
+            "{}: {} was named as the commit-message file and is not a file. \
                  Refusing to fall back to the previous commit's message and report \
                  a pass over a file that was never opened",
-                request.rule.id,
-                named.display()
-            )));
-        }
+            request.rule.id,
+            named.display()
+        )));
     }
     let path = match request.message_file {
         Some(path) => path.to_path_buf(),
@@ -1499,8 +1498,10 @@ mod tests {
         // Otherwise every relative path in every document is a lookup.
         assert!(named("see src/main.rs", &[], None).is_empty());
         let declared = vec!["src".to_owned()];
-        assert!(named("see src/main.rs", &declared, None)
-            .contains(&("src".to_owned(), "main.rs".to_owned())));
+        assert!(
+            named("see src/main.rs", &declared, None)
+                .contains(&("src".to_owned(), "main.rs".to_owned()))
+        );
     }
 
     #[test]
@@ -1598,9 +1599,11 @@ mod tests {
         let declared = vec!["acme.corp".to_owned()];
         let found = named("acme.corp/thing and acmeXcorp/other", &declared, None);
         assert!(found.contains(&("acme.corp".to_owned(), "thing".to_owned())));
-        assert!(!found
-            .iter()
-            .any(|(owner, _)| owner.eq_ignore_ascii_case("acmeXcorp")));
+        assert!(
+            !found
+                .iter()
+                .any(|(owner, _)| owner.eq_ignore_ascii_case("acmeXcorp"))
+        );
     }
 
     #[test]

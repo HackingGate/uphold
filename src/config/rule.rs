@@ -1452,15 +1452,15 @@ impl Rule {
 
         // The label is resolved at load, so a typo is a refusal here and not a
         // rule that fails every file it selects.
-        if let Some(label) = self.encoding() {
-            if encoding_rs::Encoding::for_label(label.as_bytes()).is_none() {
-                return Err(Fatal::new(format!(
-                    "rule {:?}: {label:?} names no encoding the WHATWG registry carries. \
+        if let Some(label) = self.encoding()
+            && encoding_rs::Encoding::for_label(label.as_bytes()).is_none()
+        {
+            return Err(Fatal::new(format!(
+                "rule {:?}: {label:?} names no encoding the WHATWG registry carries. \
                      Labels are the ones browsers accept -- \"UTF-8\", \"Shift_JIS\", \
                      \"EUC-JP\", \"windows-1252\"",
-                    self.id
-                )));
-            }
+                self.id
+            )));
         }
 
         // Every declared private owner becomes a pattern, and a pattern that

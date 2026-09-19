@@ -45,9 +45,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::config::{CheckKind, Policy, Rule};
-use crate::error::{verdict, Exit, Fatal, Result};
+use crate::error::{Exit, Fatal, Result, verdict};
 use crate::git;
-use crate::guard::{names, Refusal};
+use crate::guard::{Refusal, names};
 
 /// True of every run of this subcommand, on every repository, forever.
 ///

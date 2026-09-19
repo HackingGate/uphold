@@ -231,9 +231,11 @@ mod tests {
 
         // The same pattern without it is a regex, where `$` is an anchor.
         let plain = Query::from_files("$HOME/secrets", &crate::config::Files::default());
-        assert!(search_text("literally $HOME/secrets here\n", &plain, "t")
-            .unwrap()
-            .is_empty());
+        assert!(
+            search_text("literally $HOME/secrets here\n", &plain, "t")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// `word` survives the literal branch too, which `require_regexp` dropped.
@@ -275,9 +277,11 @@ mod tests {
                 .len(),
             1
         );
-        assert!(search_text(text, &Query::regex(pattern, false), "t")
-            .unwrap()
-            .is_empty());
+        assert!(
+            search_text(text, &Query::regex(pattern, false), "t")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

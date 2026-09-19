@@ -33,8 +33,8 @@
 pub mod syntax;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Once;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The directory this run's fixtures live under.
 pub fn run_root() -> PathBuf {

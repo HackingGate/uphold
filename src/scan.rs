@@ -11,8 +11,8 @@ use unicode_script::{Script, UnicodeScript};
 use crate::config::{Check, CheckKind, Files, Policy, Rule};
 use crate::engine::{self, Hit, Query};
 use crate::error::{Fatal, Result};
-use crate::report::{body_for, Failure};
-use crate::selection::{normalize_rel, not_text_paths, Selection};
+use crate::report::{Failure, body_for};
+use crate::selection::{Selection, normalize_rel, not_text_paths};
 
 /// The command name a `command_sources` pattern captures out of a path.
 ///
@@ -254,7 +254,7 @@ impl<'a> Scan<'a> {
                                  no `git.hooks`, so nothing runs it and its `files.*` keys \
                                  would be read by nothing",
                                 rule.id
-                            )))
+                            )));
                         }
                     };
                     failures.extend(self.take_floor_failures());

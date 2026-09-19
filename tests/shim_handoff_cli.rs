@@ -166,7 +166,8 @@ impl Run<'_> {
         // this waits for.
         let mut out = child.stdout.take().unwrap();
         let mut err = child.stderr.take().unwrap();
-        let output = std::thread::scope(|scope| {
+
+        std::thread::scope(|scope| {
             let reading_out = scope.spawn(move || {
                 let mut bytes = Vec::new();
                 out.read_to_end(&mut bytes).ok();
@@ -184,8 +185,7 @@ impl Run<'_> {
                 stdout: reading_out.join().unwrap(),
                 stderr: reading_err.join().unwrap(),
             }
-        });
-        output
+        })
     }
 }
 

@@ -259,10 +259,10 @@ pub(crate) fn dispatched(sources: &[(String, String)]) -> BTreeSet<String> {
         let mut cursor = tree.root_node().walk();
         let mut stack = vec![tree.root_node()];
         while let Some(node) = stack.pop() {
-            if node.kind() == shape.switch {
-                if let Some(found) = dispatch_labels(node, shape, text) {
-                    verbs.extend(found);
-                }
+            if node.kind() == shape.switch
+                && let Some(found) = dispatch_labels(node, shape, text)
+            {
+                verbs.extend(found);
             }
             stack.extend(node.children(&mut cursor));
         }
@@ -308,10 +308,10 @@ pub(crate) fn documented(command: &str, sources: &[(String, String)]) -> BTreeSe
     let mut verbs = BTreeSet::new();
     for (_, text) in sources {
         for line in text.lines() {
-            if let Some((verb, rest)) = invoked(line, &pattern) {
-                if usage_shaped(&rest) {
-                    verbs.insert(verb);
-                }
+            if let Some((verb, rest)) = invoked(line, &pattern)
+                && usage_shaped(&rest)
+            {
+                verbs.insert(verb);
             }
         }
     }

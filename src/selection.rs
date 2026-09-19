@@ -30,8 +30,8 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Once;
 
-use ignore::overrides::{Override, OverrideBuilder};
 use ignore::WalkBuilder;
+use ignore::overrides::{Override, OverrideBuilder};
 
 use crate::config::Rule;
 use crate::error::{Fatal, Result};
@@ -120,10 +120,10 @@ pub(crate) fn not_text_paths(root: &Path) -> (Vec<String>, Option<String>) {
             return unmeasured(&format!(
                 "git check-attr exited {}",
                 status.code().unwrap_or(-1)
-            ))
+            ));
         }
         Err(error) => {
-            return unmeasured(&format!("git check-attr could not be waited for: {error}"))
+            return unmeasured(&format!("git check-attr could not be waited for: {error}"));
         }
     }
 

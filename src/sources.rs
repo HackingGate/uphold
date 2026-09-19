@@ -231,17 +231,17 @@ fn running_os_identity() -> Vec<Needle> {
     if !is_public_identity(&home_account) {
         push(&mut needles, "home-path", home, false);
     }
-    if let Some(user) = user.as_deref() {
-        if !is_public_identity(user) {
-            push(
-                &mut needles,
-                "ssh-user-prefix",
-                Some(format!("{user}@")),
-                false,
-            );
-            if user.len() >= 4 {
-                push(&mut needles, "username", Some(user.to_owned()), false);
-            }
+    if let Some(user) = user.as_deref()
+        && !is_public_identity(user)
+    {
+        push(
+            &mut needles,
+            "ssh-user-prefix",
+            Some(format!("{user}@")),
+            false,
+        );
+        if user.len() >= 4 {
+            push(&mut needles, "username", Some(user.to_owned()), false);
         }
     }
 
@@ -424,7 +424,7 @@ pub(crate) fn resolve(
             return Err(Fatal::new(format!(
                 "{label}: unknown literal source {unknown:?}; known sources are \
                  running-os-identity, running-os-metadata, running-default-route, command"
-            )))
+            )));
         }
     };
 

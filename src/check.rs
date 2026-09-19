@@ -32,7 +32,7 @@ use serde::Deserialize;
 
 use crate::catalog;
 use crate::config::Policy;
-use crate::error::{verdict, Exit, Fatal, Result};
+use crate::error::{Exit, Fatal, Result, verdict};
 
 const DECLARATION: &str = "policy/upheld.toml";
 
@@ -814,9 +814,11 @@ mod tests {
         let (scans, guards) = published().unwrap();
         assert!(scans.contains("uphold-scan"));
         assert!(!scans.contains("uphold-scan-text"));
-        assert!(guards
-            .values()
-            .any(|hook| hook == "uphold-guard-commit-msg"));
+        assert!(
+            guards
+                .values()
+                .any(|hook| hook == "uphold-guard-commit-msg")
+        );
     }
 
     #[test]

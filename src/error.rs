@@ -108,7 +108,7 @@ pub(crate) const fn verdict(found: usize, could_not_look: usize) -> Exit {
 /// crate -- the one where an unknown becomes a number a caller acts on.
 #[cfg(kani)]
 mod proofs {
-    use super::{verdict, Exit};
+    use super::{Exit, verdict};
 
     /// `could not look -> exit != 0`.
     #[kani::proof]

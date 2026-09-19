@@ -64,11 +64,11 @@ pub fn calls(source: &str) -> Vec<(String, Node<'_>)> {
     let mut cursor = tree.walk();
     let mut pending = vec![tree.root_node()];
     while let Some(node) = pending.pop() {
-        if node.kind() == "call_expression" {
-            if let Some(function) = node.child_by_field_name("function") {
-                let text = source[function.byte_range()].to_owned();
-                found.push((text, node));
-            }
+        if node.kind() == "call_expression"
+            && let Some(function) = node.child_by_field_name("function")
+        {
+            let text = source[function.byte_range()].to_owned();
+            found.push((text, node));
         }
         pending.extend(node.children(&mut cursor));
     }
@@ -163,7 +163,7 @@ fn documented(source: &str, node: Node<'_>) -> bool {
         match sibling.kind() {
             "attribute_item" => previous = sibling.prev_sibling(),
             "line_comment" | "block_comment" => {
-                return text.starts_with("///") || text.starts_with("/**")
+                return text.starts_with("///") || text.starts_with("/**");
             }
             _ => return false,
         }
@@ -178,10 +178,9 @@ fn documented(source: &str, node: Node<'_>) -> bool {
 /// all, and that is the difference the rule is scoped on.
 fn shared(node: Node<'_>) -> bool {
     let mut cursor = node.walk();
-    let found = node
-        .children(&mut cursor)
-        .any(|child| child.kind() == "visibility_modifier");
-    found
+
+    node.children(&mut cursor)
+        .any(|child| child.kind() == "visibility_modifier")
 }
 
 /// Every `pub` field of one named struct, in source order.
