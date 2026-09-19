@@ -29,10 +29,15 @@
     unreachable_pub,
     reason = "a shared test module is compiled into each test binary that includes it, and each uses the part of it that it needs"
 )]
+#![expect(
+    clippy::expect_used,
+    reason = "a fixture reports by panicking; there is no caller to hand a Result to"
+)]
 
 pub mod syntax;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Once;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -64,8 +69,8 @@ pub fn scratch(kind: &str) -> PathBuf {
 /// running" is the whole test. `/proc/<pid>` is that question on Linux, where
 /// this suite runs; anywhere else the sweep declines rather than guessing, since
 /// deleting a live run's fixtures would make one suite fail inside another.
-fn sweep(all: &std::path::Path) {
-    if !std::path::Path::new("/proc").is_dir() {
+fn sweep(all: &Path) {
+    if !Path::new("/proc").is_dir() {
         return;
     }
     let Ok(entries) = std::fs::read_dir(all) else {
@@ -80,7 +85,7 @@ fn sweep(all: &std::path::Path) {
         if name == ours || name.parse::<u32>().is_err() {
             continue;
         }
-        if std::path::Path::new("/proc").join(name).exists() {
+        if Path::new("/proc").join(name).exists() {
             continue;
         }
         let _ = std::fs::remove_dir_all(entry.path());
@@ -142,4 +147,65 @@ fn resolve_git() -> PathBuf {
         return candidate;
     }
     PathBuf::from("git")
+}
+
+/// What a hook runner exports that would send a fixture's `git` elsewhere.
+///
+/// The same list `detached` in `src/probe.rs` strips, and the two are copies
+/// rather than one item because this crate is a binary: an integration test
+/// links nothing from `src/`, and the one thing it could share would have to be
+/// a public item of a library that does not exist. Whoever adds a name to one
+/// list adds it to the other; `structural_git_env.rs` reads the other list off
+/// the helper's body, so this is the one a reader has to remember.
+const GIT_ENVIRONMENT: [&str; 8] = [
+    "GIT_DIR",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_WORK_TREE",
+    "GIT_PREFIX",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG_PARAMETERS",
+];
+
+/// A `git` that acts on `root` and on nothing else, however it was started.
+///
+/// `current_dir` is not what git reads first. A hook runner exports `GIT_DIR`
+/// and `GIT_INDEX_FILE` to the hook it runs, and a suite run from inside that
+/// hook -- a pre-push that runs the tests, say -- hands them to every fixture.
+/// The fixture's `init --bare`, `config user.*`, `add` and `commit` then reach
+/// the repository whose hook is running, not the scratch directory it was
+/// pointed at: a fixture commit on top of the commit being pushed, and a main
+/// checkout whose config says `core.bare = true`.
+///
+/// Stripped rather than overridden, for the reason `probe::detached` gives:
+/// the list of what git reads from an environment is git's, and an override
+/// answers only for the names somebody remembered.
+pub fn git_command(root: &Path) -> Command {
+    let mut command = Command::new(real_git());
+    command.current_dir(root);
+    for name in GIT_ENVIRONMENT {
+        command.env_remove(name);
+    }
+    command
+}
+
+/// Run `git args` in `root`, and fail the test if git did.
+///
+/// stderr is kept for the failure message rather than dropped: a helper that
+/// swallowed it reported a missing committer identity as `git ["commit", ...]
+/// failed`, which is the one fact a reader already has -- and the cause was one
+/// config line away in a message nobody could see.
+pub fn git(root: &Path, args: &[&str]) {
+    let output = git_command(root)
+        .args(args)
+        .stdout(Stdio::null())
+        .output()
+        .expect("git could not be started");
+    assert!(
+        output.status.success(),
+        "git {args:?} in {} failed:\n{}",
+        root.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

@@ -10,7 +10,7 @@
 mod support;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A fictional owner, deliberately. A fixture that hardcoded the real one would
@@ -66,21 +66,10 @@ fn repository(policy: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
     std::fs::write(root.join("policy/principles.toml"), policy).unwrap();
-    git(&root, &["init", "-q", "-b", "main"]);
-    git(&root, &["config", "user.name", "Test"]);
-    git(&root, &["config", "user.email", "test@example.test"]);
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    support::git(&root, &["config", "user.name", "Test"]);
+    support::git(&root, &["config", "user.email", "test@example.test"]);
     root
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let status = Command::new(support::real_git())
-        .args(args)
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
 }
 
 /// The fixtures live in a temp directory with no GitHub remote, so the forge
@@ -111,8 +100,8 @@ fn text(output: &Output) -> String {
 fn a_name_a_flip_would_republish_is_found_in_the_tree() {
     let root = with_outside_owners();
     std::fs::write(root.join("NOTES.md"), "we hit this in PrivateOrg first\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "notes", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "notes", "--no-verify"]);
 
     let output = audit(&root);
     assert_eq!(code(&output), 1, "{}", text(&output));
@@ -127,8 +116,8 @@ fn the_audit_judges_under_the_visibility_the_repository_is_about_to_have() {
     // fire today. The audit is the thing that asks the other question.
     let root = with_outside_owners();
     std::fs::write(root.join("NOTES.md"), "PrivateOrg\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "notes", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "notes", "--no-verify"]);
 
     let guarded = Command::new(env!("CARGO_BIN_EXE_uphold"))
         .args(["guard", "--stage", "pre-commit"])
@@ -149,8 +138,8 @@ fn a_surface_that_could_not_be_read_is_never_reported_as_clean() {
     // nobody measured.
     let root = with_outside_owners();
     std::fs::write(root.join("NOTES.md"), "nothing to see\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "notes", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "notes", "--no-verify"]);
 
     let output = audit(&root);
     assert_eq!(code(&output), 2, "{}", text(&output));
@@ -167,7 +156,7 @@ fn a_repository_naming_itself_is_not_a_finding() {
     // visibility lookup this would fire on every mention: the audit judges as
     // public while the forge still answers private for the repository itself.
     let root = with_outside_owners();
-    git(
+    support::git(
         &root,
         &[
             "remote",
@@ -181,8 +170,8 @@ fn a_repository_naming_itself_is_not_a_finding() {
         "clone https://github.com/acme/widget\n",
     )
     .unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "readme", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "readme", "--no-verify"]);
 
     let report = text(&audit(&root));
     assert!(!report.contains("acme/widget is private"), "{report}");
@@ -195,8 +184,8 @@ fn a_literal_list_of_private_owners_is_itself_a_finding() {
     // prevent, arriving through the rule.
     let root = repository(POLICY_WITH_LITERAL_NAMES);
     std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     let output = audit(&root);
     assert_eq!(code(&output), 1, "{}", text(&output));
@@ -213,8 +202,8 @@ fn without_a_private_name_rule_the_audit_refuses_to_guess() {
         "[rule.no-merge-commit]\nbuiltin = \"no-merge-commit\"\n\n[rule.no-merge-commit.git]\nhooks = [\"pre-commit\"]\n",
     );
     std::fs::write(root.join("a.txt"), "x\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     let output = audit(&root);
     assert_eq!(code(&output), 2);
@@ -261,8 +250,8 @@ hooks = ["commit-msg"]
 
     let root = repository(&policy);
     std::fs::write(root.join("a.md"), "a doc naming PrivateOrg\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "add a doc", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "add a doc", "--no-verify"]);
 
     let output = audit(&root);
     assert!(

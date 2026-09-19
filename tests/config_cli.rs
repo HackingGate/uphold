@@ -24,7 +24,7 @@
 mod support;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 
 /// A repository whose policy is exactly `policy`, with a stub `faux` on PATH.
 ///
@@ -53,12 +53,7 @@ fn workspace(policy: &str) -> PathBuf {
     // `discover` walks up until a repository root, so the fixture has to be
     // one; otherwise it climbs out of the temporary directory and finds
     // whatever policy the machine running the suite happens to carry.
-    Command::new(support::real_git())
-        .args(["init", "-q", "-b", "main"])
-        .current_dir(&root)
-        .stdout(Stdio::null())
-        .status()
-        .unwrap();
+    support::git(&root, &["init", "-q", "-b", "main"]);
     root
 }
 

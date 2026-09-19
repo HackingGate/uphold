@@ -26,21 +26,10 @@ fn repository(policy: &str) -> PathBuf {
     std::fs::create_dir_all(root.join("policy")).unwrap();
     std::fs::write(root.join("policy/principles.toml"), policy).unwrap();
 
-    git(&root, &["init", "-q", "-b", "main"]);
-    git(&root, &["config", "user.name", "Test"]);
-    git(&root, &["config", "user.email", "test@example.test"]);
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    support::git(&root, &["config", "user.name", "Test"]);
+    support::git(&root, &["config", "user.email", "test@example.test"]);
     root
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let status = Command::new(support::real_git())
-        .args(args)
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
 }
 
 fn write(root: &Path, relative: &str, contents: &str) {
@@ -88,9 +77,8 @@ fn stderr(output: &Output) -> String {
 }
 
 fn head(root: &Path) -> String {
-    let output = Command::new(support::real_git())
+    let output = support::git_command(root)
         .args(["rev-parse", "HEAD"])
-        .current_dir(root)
         .output()
         .unwrap();
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
@@ -159,7 +147,7 @@ fn a_staged_finding_names_the_file_it_arrived_in() {
         "docs/note.md",
         "we hit this in acme-private/secret\n",
     );
-    git(&root, &["add", "docs/note.md"]);
+    support::git(&root, &["add", "docs/note.md"]);
 
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
@@ -186,11 +174,11 @@ fn a_files_scope_written_on_the_staged_guard_is_obeyed() {
         "vendor/upstream.md",
         "shipped from acme-private/secret\n",
     );
-    git(&root, &["add", "vendor/upstream.md"]);
+    support::git(&root, &["add", "vendor/upstream.md"]);
     assert_eq!(code(&guard(&root, &["--stage", "pre-commit"])), 0);
 
     write(&root, "docs/note.md", "shipped from acme-private/secret\n");
-    git(&root, &["add", "docs/note.md"]);
+    support::git(&root, &["add", "docs/note.md"]);
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
 }
@@ -202,13 +190,13 @@ fn an_external_diff_driver_cannot_blind_the_staged_scan() {
     // setup -- made for reading diffs, not for this -- emitted no `+` line at
     // all and the guard reported a pass over a diff it never saw.
     let root = repository(STAGED);
-    git(&root, &["config", "diff.external", "true"]);
+    support::git(&root, &["config", "diff.external", "true"]);
     write(
         &root,
         "docs/note.md",
         "we hit this in acme-private/secret\n",
     );
-    git(&root, &["add", "docs/note.md"]);
+    support::git(&root, &["add", "docs/note.md"]);
 
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
@@ -221,15 +209,15 @@ fn a_diff_attribute_cannot_blind_the_staged_scan() {
     // and not one added line reaches the first pass.
     let root = repository(STAGED);
     write(&root, ".gitattributes", "* -diff\n");
-    git(&root, &["add", ".gitattributes"]);
-    git(&root, &["commit", "-qm", "attributes", "--no-verify"]);
+    support::git(&root, &["add", ".gitattributes"]);
+    support::git(&root, &["commit", "-qm", "attributes", "--no-verify"]);
 
     write(
         &root,
         "docs/note.md",
         "we hit this in acme-private/secret\n",
     );
-    git(&root, &["add", "docs/note.md"]);
+    support::git(&root, &["add", "docs/note.md"]);
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(
@@ -245,9 +233,9 @@ fn a_rename_publishes_a_path_and_adds_no_line() {
     // line-based scan to read.
     let root = repository(STAGED);
     write(&root, "notes.md", "nothing to see here\n");
-    git(&root, &["add", "notes.md"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
-    git(&root, &["mv", "notes.md", "acme-private-notes.md"]);
+    support::git(&root, &["add", "notes.md"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["mv", "notes.md", "acme-private-notes.md"]);
 
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
@@ -264,7 +252,7 @@ fn a_rename_publishes_a_path_and_adds_no_line() {
 fn a_path_names_a_private_repository_with_no_help_from_its_content() {
     let root = repository(TRACKED);
     write(&root, "acme-private/readme.md", "nothing to see here\n");
-    git(&root, &["add", "acme-private/readme.md"]);
+    support::git(&root, &["add", "acme-private/readme.md"]);
 
     let output = guard(&root, &["--stage", "manual"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
@@ -289,7 +277,7 @@ fn a_declared_owner_on_a_host_gh_cannot_ask_about_is_could_not_look() {
         "docs/note.md",
         "moved to https://gitlab.com/acme-private/secret\n",
     );
-    git(&root, &["add", "docs/note.md"]);
+    support::git(&root, &["add", "docs/note.md"]);
 
     let output = guard(&root, &["--stage", "manual"]);
     let text = stderr(&output);
@@ -307,7 +295,7 @@ fn a_declared_host_quiets_the_owner_it_carries() {
         "docs/note.md",
         "moved to https://gitlab.com/acme-private/secret\n",
     );
-    git(&root, &["add", "docs/note.md"]);
+    support::git(&root, &["add", "docs/note.md"]);
 
     let output = guard(&root, &["--stage", "manual"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
@@ -335,7 +323,7 @@ fn a_citation_on_an_unaskable_host_is_reported_and_is_not_exit_2() {
         "see https://doi.org/10.1109/PROC.1975.9939 and \
          https://en.wikipedia.org/wiki/Anti-pattern\n",
     );
-    git(&root, &["add", "docs/note.md"]);
+    support::git(&root, &["add", "docs/note.md"]);
 
     let output = guard(&root, &["--stage", "manual"]);
     let text = stderr(&output);
@@ -357,7 +345,7 @@ fn a_utf16_file_naming_a_private_repository_is_read_rather_than_lossily_skipped(
         "docs/note.txt",
         &utf16("we hit this in acme-private/secret\n"),
     );
-    git(&root, &["add", "docs/note.txt"]);
+    support::git(&root, &["add", "docs/note.txt"]);
 
     let output = guard(&root, &["--stage", "manual"]);
     let text = stderr(&output);
@@ -378,7 +366,7 @@ fn a_staged_utf16_file_naming_a_private_repository_is_read_too() {
         "docs/note.txt",
         &utf16("we hit this in acme-private/secret\n"),
     );
-    git(&root, &["add", "docs/note.txt"]);
+    support::git(&root, &["add", "docs/note.txt"]);
 
     let output = guard(&root, &["--stage", "pre-commit"]);
     let text = stderr(&output);
@@ -393,7 +381,7 @@ fn a_blob_no_charset_can_decode_is_could_not_look_and_not_a_clean_tree() {
     // of the very byte that should have stopped the run.
     let root = repository(TRACKED);
     write_bytes(&root, "docs/note.txt", b"caf\xe9 au lait\n");
-    git(&root, &["add", "docs/note.txt"]);
+    support::git(&root, &["add", "docs/note.txt"]);
 
     let output = guard(&root, &["--stage", "manual"]);
     let text = stderr(&output);
@@ -430,8 +418,8 @@ fn the_messages_a_push_publishes_are_read() {
     // no hook has read -- and everything else at pre-push reads the TREE.
     let root = repository(TRACKED);
     write(&root, "a.txt", "nothing to see here\n");
-    git(&root, &["add", "a.txt"]);
-    git(
+    support::git(&root, &["add", "a.txt"]);
+    support::git(
         &root,
         &[
             "commit",
@@ -467,10 +455,10 @@ fn a_submodule_does_not_end_the_scan_before_it_starts() {
     // and this workspace is full of them.
     let root = repository(IN_FILES);
     write(&root, "a.txt", "clean\n");
-    git(&root, &["add", "a.txt"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "a.txt"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
     let commit = head(&root);
-    git(
+    support::git(
         &root,
         &[
             "update-index",
@@ -490,7 +478,7 @@ fn a_submodule_does_not_end_the_scan_before_it_starts() {
 fn a_filename_is_committed_text_too() {
     let root = repository(IN_FILES);
     write(&root, "docs/re\u{200b}adme.md", "clean\n");
-    git(&root, &["add", "-A"]);
+    support::git(&root, &["add", "-A"]);
 
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
@@ -505,7 +493,7 @@ fn a_blob_that_cannot_be_read_as_text_is_never_reported_clean() {
     // cleared -- the bytes could not be looked at.
     let root = repository(IN_FILES);
     std::fs::write(root.join("mixed.txt"), b"caf\xe9 latin1\n").unwrap();
-    git(&root, &["add", "mixed.txt"]);
+    support::git(&root, &["add", "mixed.txt"]);
 
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 2, "{}", stderr(&output));
@@ -520,7 +508,7 @@ fn a_blob_that_cannot_be_read_as_text_is_never_reported_clean() {
 fn a_binary_file_is_still_the_one_honest_skip() {
     let root = repository(IN_FILES);
     std::fs::write(root.join("image.bin"), b"\x89PNG\x00\x1a\x0a\xff\xfe\x01").unwrap();
-    git(&root, &["add", "image.bin"]);
+    support::git(&root, &["add", "image.bin"]);
 
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
@@ -615,8 +603,8 @@ fn an_attribution_marker_in_a_pushed_commit_is_refused_at_pre_push() {
     // passed", exit 0, while the marker went to the remote.
     let root = repository(PUSHED_MESSAGES);
     write(&root, "a.txt", "one\n");
-    git(&root, &["add", "a.txt"]);
-    git(
+    support::git(&root, &["add", "a.txt"]);
+    support::git(
         &root,
         &[
             "commit",
@@ -626,8 +614,8 @@ fn an_attribution_marker_in_a_pushed_commit_is_refused_at_pre_push() {
         ],
     );
     write(&root, "b.txt", "two\n");
-    git(&root, &["add", "b.txt"]);
-    git(
+    support::git(&root, &["add", "b.txt"]);
+    support::git(
         &root,
         &["commit", "-qm", "Add another thing", "--no-verify"],
     );
@@ -648,14 +636,14 @@ fn an_attribution_marker_in_a_pushed_commit_is_refused_at_pre_push() {
 fn an_invisible_character_in_a_pushed_commit_is_refused_at_pre_push() {
     let root = repository(PUSHED_MESSAGES);
     write(&root, "a.txt", "one\n");
-    git(&root, &["add", "a.txt"]);
-    git(
+    support::git(&root, &["add", "a.txt"]);
+    support::git(
         &root,
         &["commit", "-qm", "Add the\u{200b}thing", "--no-verify"],
     );
     write(&root, "b.txt", "two\n");
-    git(&root, &["add", "b.txt"]);
-    git(
+    support::git(&root, &["add", "b.txt"]);
+    support::git(
         &root,
         &["commit", "-qm", "Add another thing", "--no-verify"],
     );
@@ -677,8 +665,8 @@ fn a_clean_push_still_passes_when_the_last_edited_message_was_not() {
     // for. Reading it at pre-push refuses a push that publishes nothing wrong.
     let root = repository(PUSHED_MESSAGES);
     write(&root, "a.txt", "one\n");
-    git(&root, &["add", "a.txt"]);
-    git(&root, &["commit", "-qm", "Add the thing", "--no-verify"]);
+    support::git(&root, &["add", "a.txt"]);
+    support::git(&root, &["commit", "-qm", "Add the thing", "--no-verify"]);
     let pushed = head(&root);
 
     // Left behind by an attempt that was refused and never became a commit.

@@ -27,23 +27,12 @@ fn repository(policy: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
 
-    git(&root, &["init", "-q", "-b", "main"]);
-    git(&root, &["config", "user.name", "Test"]);
-    git(&root, &["config", "user.email", "test@example.test"]);
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    support::git(&root, &["config", "user.name", "Test"]);
+    support::git(&root, &["config", "user.email", "test@example.test"]);
 
     std::fs::write(root.join("policy/principles.toml"), policy).unwrap();
     root
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let status = Command::new(support::real_git())
-        .args(args)
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
 }
 
 fn guard(root: &Path, args: &[&str]) -> Output {
@@ -176,8 +165,8 @@ files.include = ["."]
 
 fn commit_policy(root: &Path, policy: &str) {
     std::fs::write(root.join("policy/principles.toml"), policy).unwrap();
-    git(root, &["add", "-A"]);
-    git(root, &["commit", "-qm", "policy", "--no-verify"]);
+    support::git(root, &["add", "-A"]);
+    support::git(root, &["commit", "-qm", "policy", "--no-verify"]);
 }
 
 #[test]
@@ -371,9 +360,9 @@ fn a_push_allowed_by_a_derived_owner_says_the_owner_was_derived() {
          [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
     );
     std::fs::write(root.join("a.txt"), "one\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
-    git(
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(
         &root,
         &[
             "remote",
@@ -407,8 +396,8 @@ fn a_push_allowed_by_a_pinned_owner_says_nothing() {
          [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
     );
     std::fs::write(root.join("a.txt"), "one\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     let output = guard(
         &root,
@@ -436,9 +425,9 @@ fn a_push_allowed_by_a_named_repository_says_nothing_about_origin() {
          [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
     );
     std::fs::write(root.join("a.txt"), "one\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
-    git(
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(
         &root,
         &[
             "remote",
@@ -475,8 +464,8 @@ fn write(root: &Path, relative: &str, contents: &str) {
 
 fn commit_one(root: &Path) {
     write(root, "a.txt", "one\n");
-    git(root, &["add", "-A"]);
-    git(root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(root, &["add", "-A"]);
+    support::git(root, &["commit", "-qm", "one", "--no-verify"]);
 }
 
 #[test]
@@ -505,7 +494,7 @@ fn unowned_push_refuses_to_guess_who_this_repository_is() {
     // judged.
     let root = repository("[inherit]\nsets = [\"unowned-push\"]\n");
     commit_one(&root);
-    git(
+    support::git(
         &root,
         &[
             "remote",
@@ -1168,7 +1157,7 @@ fn a_file_this_repository_did_not_write_may_not_carry_a_command_that_speaks_for_
 /// A repository with an `origin` for the falsifier to ask about.
 fn repository_with_origin(policy: &str) -> PathBuf {
     let root = repository(policy);
-    git(
+    support::git(
         &root,
         &[
             "remote",

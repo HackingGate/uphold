@@ -1751,22 +1751,12 @@ fn repository(root: &Path) {
         &["config", "user.name", "Test"][..],
         &["config", "user.email", "test@example.test"][..],
     ] {
-        let status = Command::new(support::real_git())
-            .args(arguments)
-            .current_dir(root)
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {arguments:?} failed");
+        support::git(root, arguments);
     }
 }
 
 fn add(root: &Path) {
-    let status = Command::new(support::real_git())
-        .args(["add", "-A", "."])
-        .current_dir(root)
-        .status()
-        .unwrap();
-    assert!(status.success());
+    support::git(root, &["add", "-A", "."]);
 }
 
 /// A path git tracks and the working tree cannot produce is exit 2, named.

@@ -50,21 +50,10 @@ hooks = ["commit-msg"]
         ),
     )
     .unwrap();
-    git(&root, &["init", "-q", "-b", "main"]);
-    git(&root, &["config", "user.name", "Test"]);
-    git(&root, &["config", "user.email", "test@example.test"]);
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    support::git(&root, &["config", "user.name", "Test"]);
+    support::git(&root, &["config", "user.email", "test@example.test"]);
     root
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let status = Command::new(support::real_git())
-        .args(args)
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
 }
 
 /// The fixtures live in a temp directory with no forge, so the conversation half
@@ -98,11 +87,11 @@ fn text(output: &Output) -> String {
 fn a_name_deleted_before_head_is_still_found() {
     let root = repository();
     std::fs::write(root.join("NOTES.md"), "we hit this in PrivateOrg first\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "notes", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "notes", "--no-verify"]);
     std::fs::remove_file(root.join("NOTES.md")).unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "drop the notes", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "drop the notes", "--no-verify"]);
 
     let output = audit(&root);
     let report = text(&output);
@@ -126,12 +115,12 @@ fn a_name_deleted_before_head_is_still_found() {
 fn an_unchanged_file_is_read_once_and_not_once_per_commit() {
     let root = repository();
     std::fs::write(root.join("KEEP.md"), "PrivateOrg\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
     for round in ["two", "three", "four"] {
         std::fs::write(root.join("other.txt"), format!("{round}\n")).unwrap();
-        git(&root, &["add", "-A"]);
-        git(&root, &["commit", "-qm", round, "--no-verify"]);
+        support::git(&root, &["add", "-A"]);
+        support::git(&root, &["commit", "-qm", round, "--no-verify"]);
     }
 
     let report = text(&audit(&root));
@@ -153,8 +142,8 @@ fn an_unchanged_file_is_read_once_and_not_once_per_commit() {
 fn the_standing_caveat_is_stated_without_being_counted_as_unread() {
     let root = repository();
     std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     let report = text(&audit(&root));
     assert!(report.contains("standing caveat"), "{report}");
@@ -179,8 +168,8 @@ fn the_standing_caveat_is_stated_without_being_counted_as_unread() {
 fn a_forge_that_cannot_be_listed_is_named_with_its_reason() {
     let root = repository();
     std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     let output = audit(&root);
     let report = text(&output);
@@ -224,8 +213,8 @@ hooks = ["pre-commit"]
     )
     .unwrap();
     std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     let output = audit(&root);
     let report = text(&output);
@@ -255,22 +244,22 @@ fn a_pull_ref_the_forge_no_longer_serves_is_not_audited() {
     // subcommand reports the surface unreadable and never walks a ref.
     let origin = support::scratch("publication-origin");
     let _ = std::fs::remove_dir_all(&origin);
-    git(&root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
-    git(
+    support::git(&root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
+    support::git(
         &root,
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
 
     std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
-    git(&root, &["push", "-q", "origin", "main"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["push", "-q", "origin", "main"]);
 
     // A commit the remote does not have, parked under the audit's own
     // destination the way a previous run against another forge would leave it.
     std::fs::write(root.join("STALE.md"), "PrivateOrg\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(
+    support::git(&root, &["add", "-A"]);
+    support::git(
         &root,
         &[
             "commit",
@@ -279,14 +268,13 @@ fn a_pull_ref_the_forge_no_longer_serves_is_not_audited() {
             "--no-verify",
         ],
     );
-    let stale = Command::new(support::real_git())
+    let stale = support::git_command(&root)
         .args(["rev-parse", "HEAD"])
-        .current_dir(&root)
         .output()
         .unwrap();
     let stale = String::from_utf8_lossy(&stale.stdout).trim().to_owned();
-    git(&root, &["update-ref", "refs/audit/pull/9", &stale]);
-    git(&root, &["reset", "-q", "--hard", "HEAD~1"]);
+    support::git(&root, &["update-ref", "refs/audit/pull/9", &stale]);
+    support::git(&root, &["reset", "-q", "--hard", "HEAD~1"]);
 
     let output = audit(&root);
     let report = text(&output);
@@ -313,15 +301,15 @@ fn a_forge_retaining_no_pull_refs_is_not_an_unread_surface() {
     // bare repository with no `refs/pull/*` retains none, which is the fact.
     let origin = support::scratch("publication-no-pulls");
     let _ = std::fs::remove_dir_all(&origin);
-    git(&root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
-    git(
+    support::git(&root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
+    support::git(
         &root,
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
     std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
-    git(&root, &["push", "-q", "origin", "main"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["push", "-q", "origin", "main"]);
 
     let report = text(&audit(&root));
     assert!(
@@ -349,8 +337,8 @@ fn a_large_reachable_set_is_read_in_one_pass_and_reports_progress() {
         )
         .unwrap();
     }
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "many", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "many", "--no-verify"]);
 
     let output = audit(&root);
     let report = text(&output);
@@ -374,8 +362,8 @@ fn a_large_reachable_set_is_read_in_one_pass_and_reports_progress() {
 fn origin_for(root: &Path, kind: &str) -> PathBuf {
     let origin = support::scratch(kind);
     let _ = std::fs::remove_dir_all(&origin);
-    git(root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
-    git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    support::git(root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
+    support::git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
     origin
 }
 
@@ -453,9 +441,9 @@ fn a_run_that_read_every_surface_and_found_nothing_exits_clean() {
     let root = repository();
     let origin = origin_for(&root, "publication-clean-origin");
     std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
-    git(&root, &["push", "-q", "origin", "main"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["push", "-q", "origin", "main"]);
 
     // A forge with no issues and no pull requests: both listings succeed and
     // come back empty, which is an answer and not a failure to look.
@@ -489,8 +477,8 @@ fn a_run_that_read_every_surface_and_found_nothing_exits_clean() {
 fn a_private_name_in_an_issue_title_is_found() {
     let root = repository();
     std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     let output = audit_with_gh(
         &root,
@@ -528,8 +516,8 @@ esac
 fn a_private_name_in_a_review_body_or_a_review_thread_comment_is_found() {
     let root = repository();
     std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     let output = audit_with_gh(
         &root,
@@ -559,8 +547,8 @@ esac
 fn a_forge_call_that_fails_without_a_word_is_reported_with_its_exit_code() {
     let root = repository();
     std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     let output = audit_with_gh(&root, "exit 3\n");
     let report = text(&output);
@@ -588,8 +576,8 @@ fn a_forge_call_that_fails_without_a_word_is_reported_with_its_exit_code() {
 fn a_conversation_that_was_listed_and_then_failed_is_named_read_by_read() {
     let root = repository();
     std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     // Listing works; every read of what it listed does not -- a token that can
     // see the repository and not its conversations, which is what a
@@ -662,11 +650,11 @@ fn a_name_after_the_old_record_separator_in_a_message_is_found() {
     let root = repository();
     let origin = origin_for(&root, "publication-separator-origin");
     std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
     std::fs::write(root.join("b.txt"), "an ordinary change\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(
+    support::git(&root, &["add", "-A"]);
+    support::git(
         &root,
         &[
             "commit",
@@ -675,7 +663,7 @@ fn a_name_after_the_old_record_separator_in_a_message_is_found() {
             "--no-verify",
         ],
     );
-    git(&root, &["push", "-q", "origin", "main"]);
+    support::git(&root, &["push", "-q", "origin", "main"]);
 
     // A stub `gh`, for the reason `audit_with_gh` gives: on a runner with no
     // token the visibility lookup exits 2 before any message is judged.
@@ -688,9 +676,8 @@ fn a_name_after_the_old_record_separator_in_a_message_is_found() {
     );
     // Named by the commit it is in, not merely counted: a report that found the
     // text somewhere else entirely would not identify this commit.
-    let head = Command::new(support::real_git())
+    let head = support::git_command(&root)
         .args(["rev-parse", "--short=8", "HEAD"])
-        .current_dir(&root)
         .output()
         .unwrap();
     let sha = String::from_utf8_lossy(&head.stdout).trim().to_owned();
@@ -711,22 +698,22 @@ fn a_commit_only_on_a_retained_pull_ref_is_read() {
     let root = repository();
     let origin = origin_for(&root, "publication-retained-origin");
     std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
-    git(&root, &["push", "-q", "origin", "main"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["push", "-q", "origin", "main"]);
 
     // The name is in the MESSAGE and not in the file, so the finding can only
     // have come from walking the retained ref rather than from the blob.
     std::fs::write(root.join("b.txt"), "an ordinary change\n").unwrap();
-    git(&root, &["add", "-A"]);
-    git(
+    support::git(&root, &["add", "-A"]);
+    support::git(
         &root,
         &["commit", "-qm", "as PrivateOrg asked", "--no-verify"],
     );
-    git(&root, &["push", "-q", "origin", "HEAD:refs/pull/7/head"]);
+    support::git(&root, &["push", "-q", "origin", "HEAD:refs/pull/7/head"]);
     // Off every branch, the way a closed pull request's head is: nothing but
     // the forge's retained ref reaches this commit now.
-    git(&root, &["reset", "-q", "--hard", "HEAD~1"]);
+    support::git(&root, &["reset", "-q", "--hard", "HEAD~1"]);
 
     // A stub `gh`, for the reason `audit_with_gh` gives: the private-name rule
     // asks the forge about every owner/repo shape it meets, and on a runner

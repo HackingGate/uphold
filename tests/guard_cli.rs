@@ -30,23 +30,12 @@ fn repository(policy: &str) -> PathBuf {
     // whether anything stands in front of that command -- so writing the file
     // first made `git init` exit 2 inside the fixture, and the failure looked
     // like the test's own subject rather than like its setup.
-    git(&root, &["init", "-q", "-b", "main"]);
-    git(&root, &["config", "user.name", "Test"]);
-    git(&root, &["config", "user.email", "test@example.test"]);
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    support::git(&root, &["config", "user.name", "Test"]);
+    support::git(&root, &["config", "user.email", "test@example.test"]);
 
     std::fs::write(root.join("policy/principles.toml"), policy).unwrap();
     root
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let status = Command::new(support::real_git())
-        .args(args)
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
 }
 
 fn write(root: &Path, relative: &str, contents: &str) {
@@ -204,7 +193,7 @@ fn hidden_unicode_is_read_out_of_the_index_and_not_the_working_tree() {
         "[rule.prevent-unusual-unicode-in-files]\nbuiltin = \"prevent-unusual-unicode-in-files\"\n\n[rule.prevent-unusual-unicode-in-files.git]\nhooks = [\"pre-commit\", \"pre-merge-commit\", \"pre-push\", \"manual\"]\n",
     );
     write(&root, "a.txt", "clean\u{200B}\n");
-    git(&root, &["add", "a.txt"]);
+    support::git(&root, &["add", "a.txt"]);
     write(&root, "a.txt", "clean\n"); // the working tree is now innocent
 
     let output = guard(&root, &["--stage", "pre-commit"]);
@@ -220,11 +209,11 @@ fn an_allowance_scoped_to_a_path_admits_the_character_only_there() {
          allow = [\"U+00A0:captured/**\"]\n\n[rule.prevent-unusual-unicode-in-files.git]\nhooks = [\"pre-commit\"]\n",
     );
     write(&root, "captured/page.html", "a\u{00A0}b\n");
-    git(&root, &["add", "-A"]);
+    support::git(&root, &["add", "-A"]);
     assert_eq!(code(&guard(&root, &["--stage", "pre-commit"])), 0);
 
     write(&root, "src/main.rs", "let a\u{00A0}= 1;\n");
-    git(&root, &["add", "-A"]);
+    support::git(&root, &["add", "-A"]);
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(
@@ -252,7 +241,7 @@ fn a_path_declared_not_text_is_skipped_by_the_guard_that_cannot_decode_it() {
     // Shift-JIS bytes: valid text in their own encoding, not UTF-8, and no NUL
     // to make the binary guess fire.
     std::fs::write(root.join("captured.html"), [0x93, 0xFA, 0x96, 0x7B, 0x0A]).unwrap();
-    git(&root, &["add", "-A"]);
+    support::git(&root, &["add", "-A"]);
 
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(
@@ -263,7 +252,7 @@ fn a_path_declared_not_text_is_skipped_by_the_guard_that_cannot_decode_it() {
     );
 
     write(&root, ".gitattributes", "captured.html -text\n");
-    git(&root, &["add", "-A"]);
+    support::git(&root, &["add", "-A"]);
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(
@@ -288,7 +277,7 @@ fn a_symlinks_blob_is_its_target_path() {
     );
     write(&root, "real.txt", "clean\n");
     std::os::unix::fs::symlink("t\u{200B}gt", root.join("link")).unwrap();
-    git(&root, &["add", "-A"]);
+    support::git(&root, &["add", "-A"]);
 
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
@@ -301,8 +290,8 @@ fn a_merge_in_progress_is_refused_at_pre_commit() {
         "[rule.no-merge-commit]\nbuiltin = \"no-merge-commit\"\n\n[rule.no-merge-commit.git]\nhooks = [\"pre-commit\"]\n",
     );
     write(&root, "a.txt", "one\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
     assert_eq!(code(&guard(&root, &["--stage", "pre-commit"])), 0);
 
     // A SQUASH_MSG is the squash-merge half of the same guard.
@@ -319,8 +308,8 @@ fn a_push_outside_the_allow_list_is_refused_and_says_how_to_allow_it() {
         "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\nowner = \"acme\"\n\n[rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
     );
     write(&root, "a.txt", "one\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
     // The forge is asked about a destination the pin refused, so this test says
     // what it answered. Without that the run is exit 2 for want of an answer,
     // and the subject here is the answer the allow-list gave.
@@ -346,8 +335,8 @@ fn a_push_to_the_pinned_owner_passes() {
         "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\nowner = \"acme\"\n\n[rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
     );
     write(&root, "a.txt", "one\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
         .args([
@@ -374,9 +363,9 @@ fn an_unpinned_workspace_says_its_answer_came_from_origin() {
         "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\n\n[rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
     );
     write(&root, "a.txt", "one\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
-    git(
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(
         &root,
         &[
             "remote",
@@ -411,14 +400,14 @@ fn a_pin_that_names_no_tag_and_a_pin_left_behind_are_both_reported() {
     // network and no forge.
     let upstream = root.join("upstream");
     std::fs::create_dir_all(&upstream).unwrap();
-    git(&upstream, &["init", "-q", "-b", "main"]);
-    git(&upstream, &["config", "user.name", "Test"]);
-    git(&upstream, &["config", "user.email", "test@example.test"]);
+    support::git(&upstream, &["init", "-q", "-b", "main"]);
+    support::git(&upstream, &["config", "user.name", "Test"]);
+    support::git(&upstream, &["config", "user.email", "test@example.test"]);
     std::fs::write(upstream.join("a.txt"), "x\n").unwrap();
-    git(&upstream, &["add", "-A"]);
-    git(&upstream, &["commit", "-qm", "one", "--no-verify"]);
-    git(&upstream, &["tag", "v1.0.0"]);
-    git(&upstream, &["tag", "v2.0.0"]);
+    support::git(&upstream, &["add", "-A"]);
+    support::git(&upstream, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&upstream, &["tag", "v1.0.0"]);
+    support::git(&upstream, &["tag", "v2.0.0"]);
 
     let url = upstream.to_string_lossy().into_owned();
     write(
@@ -457,13 +446,13 @@ fn a_current_pin_passes() {
     );
     let upstream = root.join("upstream");
     std::fs::create_dir_all(&upstream).unwrap();
-    git(&upstream, &["init", "-q", "-b", "main"]);
-    git(&upstream, &["config", "user.name", "Test"]);
-    git(&upstream, &["config", "user.email", "test@example.test"]);
+    support::git(&upstream, &["init", "-q", "-b", "main"]);
+    support::git(&upstream, &["config", "user.name", "Test"]);
+    support::git(&upstream, &["config", "user.email", "test@example.test"]);
     std::fs::write(upstream.join("a.txt"), "x\n").unwrap();
-    git(&upstream, &["add", "-A"]);
-    git(&upstream, &["commit", "-qm", "one", "--no-verify"]);
-    git(&upstream, &["tag", "v1.0.0"]);
+    support::git(&upstream, &["add", "-A"]);
+    support::git(&upstream, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&upstream, &["tag", "v1.0.0"]);
 
     let url = upstream.to_string_lossy().into_owned();
     write(
@@ -493,9 +482,8 @@ hooks = ["pre-commit", "pre-merge-commit", "pre-push", "manual"]
 const ZERO: &str = "0000000000000000000000000000000000000000";
 
 fn head(root: &Path) -> String {
-    let output = Command::new(support::real_git())
+    let output = support::git_command(root)
         .args(["rev-parse", "HEAD"])
-        .current_dir(root)
         .output()
         .unwrap();
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
@@ -506,8 +494,8 @@ fn head(root: &Path) -> String {
 fn a_pre_push_told_nothing_refuses_rather_than_reading_the_working_tree() {
     let root = repository(IN_FILES);
     write(&root, "a.txt", "one\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
         .args(["guard", "--stage", "pre-push"])
@@ -534,13 +522,13 @@ fn a_pre_push_told_nothing_refuses_rather_than_reading_the_working_tree() {
 fn a_pre_push_reads_the_range_the_runner_exported_and_not_the_index() {
     let root = repository(IN_FILES);
     write(&root, "a.txt", "one\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
     let pushed = head(&root);
 
     // Staged, never committed, and carrying a zero-width space.
     write(&root, "b.txt", "two\u{200b}\n");
-    git(&root, &["add", "-A"]);
+    support::git(&root, &["add", "-A"]);
 
     let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
         .args(["guard", "--stage", "pre-push"])
@@ -566,8 +554,8 @@ fn a_pre_push_reads_the_range_the_runner_exported_and_not_the_index() {
 fn the_older_pre_commit_variable_names_are_read_too() {
     let root = repository(IN_FILES);
     write(&root, "a.txt", "one\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
     let pushed = head(&root);
 
     let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
@@ -594,8 +582,8 @@ fn ref_lines_on_stdin_are_still_read_and_still_win() {
 
     let root = repository(IN_FILES);
     write(&root, "a.txt", "one\u{200b}\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
     let pushed = head(&root);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
@@ -635,8 +623,8 @@ fn ref_lines_on_stdin_are_still_read_and_still_win() {
 fn a_first_push_names_a_branch_and_no_shas_and_is_still_read() {
     let root = repository(IN_FILES);
     write(&root, "a.txt", "one\u{200b}\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
         .args(["guard", "--stage", "pre-push"])
@@ -674,13 +662,13 @@ fn a_first_push_names_a_branch_and_no_shas_and_is_still_read() {
 fn a_remote_sha_this_clone_does_not_have_is_not_an_empty_push() {
     let root = repository(IN_FILES);
     write(&root, "a.txt", "clean\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "base", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "base", "--no-verify"]);
     write(&root, "bad.txt", "zero\u{200b}width\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "add", "--no-verify"]);
-    git(&root, &["rm", "-q", "bad.txt"]);
-    git(&root, &["commit", "-qm", "remove", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "add", "--no-verify"]);
+    support::git(&root, &["rm", "-q", "bad.txt"]);
+    support::git(&root, &["commit", "-qm", "remove", "--no-verify"]);
 
     let local = head(&root);
     let unknown = "1111111111111111111111111111111111111111";
@@ -720,8 +708,8 @@ fn a_remote_sha_this_clone_does_not_have_is_not_an_empty_push() {
 fn a_named_message_file_that_is_missing_is_not_a_pass() {
     let root = repository(AI_AUTHOR);
     write(&root, "a.txt", "one\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "a clean subject", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "a clean subject", "--no-verify"]);
 
     let output = guard(
         &root,
@@ -897,7 +885,7 @@ fn a_staged_finding_names_the_line_the_name_arrived_on() {
         "docs/note.md",
         "one\ntwo\nwe hit this in acme-private/secret\nfour\n",
     );
-    git(&root, &["add", "docs/note.md"]);
+    support::git(&root, &["add", "docs/note.md"]);
 
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
@@ -922,7 +910,7 @@ fn an_added_line_that_looks_like_a_diff_header_is_still_read() {
         "CHANGELOG.md",
         "notes\n++ ported from acme-private/secret\n",
     );
-    git(&root, &["add", "CHANGELOG.md"]);
+    support::git(&root, &["add", "CHANGELOG.md"]);
 
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
@@ -941,15 +929,15 @@ fn a_one_line_hunk_in_a_file_that_was_already_there_is_numbered() {
     // the name below is on line 7 of the file and on the sixth line of the diff.
     let root = repository(STAGED_NAMES);
     write(&root, "notes.md", "a\nb\nc\nd\ne\nf\ng\nh\n");
-    git(&root, &["add", "notes.md"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "notes.md"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     write(
         &root,
         "notes.md",
         "a\nb\nc\nd\ne\nf\nsee acme-private/secret\nh\n",
     );
-    git(&root, &["add", "notes.md"]);
+    support::git(&root, &["add", "notes.md"]);
 
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
@@ -968,15 +956,15 @@ fn a_diff_attribute_does_not_take_the_line_number_away() {
     // also the half whose findings said least about where they were.
     let root = repository(STAGED_NAMES);
     write(&root, ".gitattributes", "* -diff\n");
-    git(&root, &["add", ".gitattributes"]);
-    git(&root, &["commit", "-qm", "attributes", "--no-verify"]);
+    support::git(&root, &["add", ".gitattributes"]);
+    support::git(&root, &["commit", "-qm", "attributes", "--no-verify"]);
 
     write(
         &root,
         "docs/note.md",
         "one\ntwo\nwe hit this in acme-private/secret\n",
     );
-    git(&root, &["add", "docs/note.md"]);
+    support::git(&root, &["add", "docs/note.md"]);
 
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
@@ -994,15 +982,15 @@ fn a_personal_textconv_cannot_blind_the_listing_the_scan_starts_from() {
     // diff driver that reached them would take a file out of the scan before the
     // flags on the patch call could matter.
     let root = repository(STAGED_NAMES);
-    git(&root, &["config", "diff.external", "true"]);
-    git(&root, &["config", "diff.render.textconv", "true"]);
+    support::git(&root, &["config", "diff.external", "true"]);
+    support::git(&root, &["config", "diff.render.textconv", "true"]);
     write(&root, ".gitattributes", "* diff=render\n");
     write(
         &root,
         "docs/note.md",
         "one\nwe hit this in acme-private/secret\n",
     );
-    git(&root, &["add", "-A"]);
+    support::git(&root, &["add", "-A"]);
 
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
@@ -1034,8 +1022,8 @@ fn a_push_that_only_deletes_refs_has_nothing_to_scan_and_says_so() {
     // The tree holds a zero-width space, so a guard that fell through to the
     // working tree here would refuse. Passing means it read the push instead.
     write(&root, "a.txt", "one\u{200b}\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
     let deleted = head(&root);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
@@ -1070,8 +1058,8 @@ fn a_deletion_beside_a_real_ref_still_scans_the_real_ref() {
 
     let root = repository(IN_FILES);
     write(&root, "a.txt", "one\u{200b}\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
     let pushed = head(&root);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
@@ -1113,8 +1101,8 @@ fn stdin_that_parses_as_no_ref_line_at_all_still_refuses() {
 
     let root = repository(IN_FILES);
     write(&root, "a.txt", "one\u{200b}\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
         .args(["guard", "--stage", "pre-push"])
@@ -1181,21 +1169,21 @@ hooks = ["pre-merge-commit"]
 fn a_merge_git_has_prepared_but_not_recorded_is_refused_at_the_commit() {
     let root = repository(MERGE_COMMIT);
     write(&root, "a.txt", "one\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
-    git(&root, &["checkout", "-q", "-b", "topic"]);
+    support::git(&root, &["checkout", "-q", "-b", "topic"]);
     write(&root, "b.txt", "two\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "two", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "two", "--no-verify"]);
 
-    git(&root, &["checkout", "-q", "main"]);
+    support::git(&root, &["checkout", "-q", "main"]);
     write(&root, "c.txt", "three\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "three", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "three", "--no-verify"]);
     // Nothing is recorded yet, so the guard is asked at the moment a person
     // would type `git commit`.
-    git(&root, &["merge", "-q", "--no-commit", "--no-ff", "topic"]);
+    support::git(&root, &["merge", "-q", "--no-commit", "--no-ff", "topic"]);
     assert!(root.join(".git/MERGE_HEAD").is_file());
 
     let output = guard(&root, &["--stage", "pre-commit"]);
@@ -1218,8 +1206,8 @@ fn a_merge_git_has_prepared_but_not_recorded_is_refused_at_the_commit() {
 fn the_merge_itself_is_refused_at_pre_merge_commit_whatever_the_tree_holds() {
     let root = repository(LOCAL_MERGE);
     write(&root, "a.txt", "one\n");
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
 
     let output = guard(&root, &["--stage", "pre-merge-commit"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
@@ -1308,7 +1296,7 @@ fn an_origin_with_no_owner_and_repository_in_it_is_not_a_checked_claim() {
          builtin = \"no-stale-visibility\"\n\n\
          [rule.no-stale-visibility.git]\nhooks = [\"manual\"]\n",
     );
-    git(&root, &["remote", "add", "origin", "mirror.git"]);
+    support::git(&root, &["remote", "add", "origin", "mirror.git"]);
 
     let output = guard(&root, &["--stage", "manual"]);
     assert_eq!(code(&output), 2, "{}", stderr(&output));
@@ -1352,7 +1340,7 @@ fn a_rate_limited_forge_is_not_reported_as_a_repository_that_is_not_there() {
          builtin = \"no-stale-visibility\"\n\n\
          [rule.no-stale-visibility.git]\nhooks = [\"pre-push\"]\n",
     );
-    git(
+    support::git(
         &root,
         &[
             "remote",
@@ -1386,7 +1374,7 @@ fn a_forge_that_will_show_no_such_repository_still_gets_the_404_reading() {
          builtin = \"no-stale-visibility\"\n\n\
          [rule.no-stale-visibility.git]\nhooks = [\"pre-push\"]\n",
     );
-    git(
+    support::git(
         &root,
         &[
             "remote",
@@ -1513,7 +1501,7 @@ fn the_remote_named_on_the_command_line_is_the_one_resolved() {
     let root = repository(PINNED_PUSH);
     // A forge that says no, so the refusal below is the remote that was read.
     gh_says(&root, GH_SAYS_NO);
-    git(
+    support::git(
         &root,
         &[
             "remote",
@@ -1522,7 +1510,7 @@ fn the_remote_named_on_the_command_line_is_the_one_resolved() {
             "https://github.com/acme/widget.git",
         ],
     );
-    git(
+    support::git(
         &root,
         &[
             "remote",
@@ -1587,7 +1575,7 @@ fn an_allowed_repo_admits_one_repository_without_the_derived_owner_note() {
     );
     // For the sibling at the end, which the written list does not admit.
     gh_says(&root, GH_SAYS_NO);
-    git(
+    support::git(
         &root,
         &[
             "remote",
@@ -1634,7 +1622,7 @@ fn a_written_allowed_owners_admits_its_own_and_refuses_the_rest() {
     );
     // For the second push, which the written list does not admit.
     gh_says(&root, GH_SAYS_NO);
-    git(
+    support::git(
         &root,
         &[
             "remote",

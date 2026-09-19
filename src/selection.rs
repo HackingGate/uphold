@@ -547,8 +547,6 @@ pub(crate) fn normalize_rel(path: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
-
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::time::Duration;
@@ -568,22 +566,11 @@ mod tests {
         root
     }
 
-    fn git(root: &Path, args: &[&str]) {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?} failed");
-    }
-
     fn repository(label: &str) -> PathBuf {
         let root = workspace(label);
-        git(&root, &["init", "-q", "-b", "main"]);
-        git(&root, &["config", "user.name", "Test"]);
-        git(&root, &["config", "user.email", "test@example.test"]);
+        crate::fixture::git(&root, &["init", "-q", "-b", "main"]);
+        crate::fixture::git(&root, &["config", "user.name", "Test"]);
+        crate::fixture::git(&root, &["config", "user.email", "test@example.test"]);
         root
     }
 
@@ -623,7 +610,7 @@ mod tests {
         write(&root, ".gitignore", "hidden.txt\n");
         write(&root, "hidden.txt", "content\n");
         write(&root, "stray.txt", "content\n");
-        git(&root, &["add", "-f", ".gitignore", "hidden.txt"]);
+        crate::fixture::git(&root, &["add", "-f", ".gitignore", "hidden.txt"]);
 
         let files = selected(
             &root,
@@ -650,7 +637,7 @@ mod tests {
         let root = repository("deleted");
         write(&root, "a.txt", "content\n");
         write(&root, "gone.txt", "content\n");
-        git(&root, &["add", "-f", "a.txt", "gone.txt"]);
+        crate::fixture::git(&root, &["add", "-f", "a.txt", "gone.txt"]);
         std::fs::remove_file(root.join("gone.txt")).unwrap();
 
         let selection = Selection::build(&root, &rule(Files::default()), &[]).unwrap();
@@ -673,7 +660,7 @@ mod tests {
         // search that produced findings.
         let root = repository("outside");
         write(&root, "a.txt", "content\n");
-        git(&root, &["add", "a.txt"]);
+        crate::fixture::git(&root, &["add", "a.txt"]);
 
         for spec in ["../elsewhere", "/etc"] {
             let error = Selection::build(
@@ -742,7 +729,7 @@ mod tests {
         write(&root, "data1.bin", "not declared\n");
         write(&root, "data2.bin", "not declared\n");
         write(&root, "plain.txt", "not declared\n");
-        git(&root, &["add", "-f", "-A", "."]);
+        crate::fixture::git(&root, &["add", "-f", "-A", "."]);
 
         let declared = vec!["data{1,2}.bin".to_owned()];
         let files = Selection::build(&root, &rule(Files::default()), &declared)
@@ -768,7 +755,7 @@ mod tests {
         let root = repository("not-text-unclosed");
         write(&root, "capture[1.bin", "declared\n");
         write(&root, "plain.txt", "not declared\n");
-        git(&root, &["add", "-f", "-A", "."]);
+        crate::fixture::git(&root, &["add", "-f", "-A", "."]);
 
         let declared = vec!["capture[1.bin".to_owned()];
         let files = Selection::build(&root, &rule(Files::default()), &declared)
@@ -799,7 +786,7 @@ mod tests {
                 "content\n",
             );
         }
-        git(&root, &["add", "-f", "-A", "."]);
+        crate::fixture::git(&root, &["add", "-f", "-A", "."]);
 
         // On a thread with a deadline, because a test that proves a deadlock is
         // gone has to FAIL when it is not, and a test that hangs reports

@@ -15,7 +15,7 @@
 mod support;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 
 const POLICY: &str = r#"
 [rule.no-stale-hook-pins]
@@ -30,9 +30,9 @@ fn repository() -> PathBuf {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
     std::fs::write(root.join("policy/principles.toml"), POLICY).unwrap();
-    git(&root, &["init", "-q", "-b", "main"]);
-    git(&root, &["config", "user.name", "Test"]);
-    git(&root, &["config", "user.email", "test@example.test"]);
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    support::git(&root, &["config", "user.name", "Test"]);
+    support::git(&root, &["config", "user.email", "test@example.test"]);
     root
 }
 
@@ -41,27 +41,16 @@ fn repository() -> PathBuf {
 fn upstream(root: &Path, tags: &[&str]) -> String {
     let upstream = root.join("upstream");
     std::fs::create_dir_all(&upstream).unwrap();
-    git(&upstream, &["init", "-q", "-b", "main"]);
-    git(&upstream, &["config", "user.name", "Test"]);
-    git(&upstream, &["config", "user.email", "test@example.test"]);
+    support::git(&upstream, &["init", "-q", "-b", "main"]);
+    support::git(&upstream, &["config", "user.name", "Test"]);
+    support::git(&upstream, &["config", "user.email", "test@example.test"]);
     std::fs::write(upstream.join("a.txt"), "x\n").unwrap();
-    git(&upstream, &["add", "-A"]);
-    git(&upstream, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&upstream, &["add", "-A"]);
+    support::git(&upstream, &["commit", "-qm", "one", "--no-verify"]);
     for tag in tags {
-        git(&upstream, &["tag", tag]);
+        support::git(&upstream, &["tag", tag]);
     }
     upstream.to_string_lossy().into_owned()
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let status = Command::new(support::real_git())
-        .args(args)
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
 }
 
 fn write(root: &Path, relative: &str, contents: &str) {

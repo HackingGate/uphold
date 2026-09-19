@@ -88,13 +88,7 @@ fn a_set_may_not_install_a_hook_its_header_does_not_admit() {
     let root = support::scratch("set-header");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
-    Command::new(support::real_git())
-        .args(["init", "-q", "-b", "main"])
-        .current_dir(&root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
+    support::git(&root, &["init", "-q", "-b", "main"]);
     std::fs::write(
         root.join("policy/principles.toml"),
         "[set]\nstages = [\"pre-commit\"]\n\n[rule.prevent-ai-author]\nbuiltin = \"prevent-ai-author\"\ngit.hooks = [\"commit-msg\"]\n",
