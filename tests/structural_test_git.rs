@@ -23,6 +23,16 @@
 //! `structural_git_env.rs` already makes for `detached()` in `src/probe.rs`.
 //! This is the same argument for the same reason, one directory over.
 //!
+//! THE SECOND RULE, same shape. `Command::new(support::real_git())` picks the
+//! right git and still inherits the environment a hook runner exports, and
+//! `current_dir` does not win against an exported `GIT_DIR`: a suite run from
+//! a pre-push hook once committed a fixture onto the branch being pushed.
+//! `support::git_command` is the helper that strips those names, and it is
+//! held to the same standard as `real_git()`: outside the support module
+//! itself, a fixture that constructs its own `Command` around `real_git()` is
+//! an offender, whatever it does with the environment afterwards, because the
+//! rule is that there is one place that knows the list.
+//!
 //! WHY A PARSER AND NOT A REGEX, and here the difference is not academic.
 //! `structural_git_env.rs` contains the literal text `Command::new("git")`
 //! four times, inside raw-string fixtures it hands to its own reader and inside
@@ -48,6 +58,7 @@
 mod support;
 
 use support::syntax::{calls, enclosing_function, unparsed};
+use tree_sitter::Node;
 
 #[test]
 fn no_fixture_lets_path_decide_which_git_it_meant() {
@@ -84,6 +95,37 @@ fn no_fixture_lets_path_decide_which_git_it_meant() {
     );
 }
 
+#[test]
+fn no_fixture_builds_its_own_command_around_the_resolved_git() {
+    let mut offenders: Vec<String> = Vec::new();
+
+    for path in test_sources() {
+        if path.ends_with("support/mod.rs") {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("<unnamed>")
+            .to_owned();
+        let source = std::fs::read_to_string(&path).expect("a listed test source is readable");
+        assert_eq!(unparsed(&source), None, "tests/{name} did not parse");
+        offenders.extend(
+            undetached_git(&source)
+                .into_iter()
+                .map(|where_| format!("tests/{name} {where_}")),
+        );
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "a fixture builds its own `Command` around `real_git()`, so it inherits the `GIT_DIR` \
+         a hook runner exports and acts on that repository rather than its scratch directory. \
+         Use `support::git_command(root)` or `support::git(root, args)`: {}",
+        offenders.join(", ")
+    );
+}
+
 /// Every `Command::new("git")` in `source`, by line and enclosing function.
 ///
 /// The literal is what is refused, not the variable: `Command::new(program)`
@@ -95,14 +137,8 @@ fn no_fixture_lets_path_decide_which_git_it_meant() {
 /// const -- is an offender rather than a skip, since the rule is about where the
 /// construction happens and "nowhere in particular" is not a resolved path.
 fn bare_git(source: &str) -> Vec<String> {
-    calls(source)
-        .into_iter()
-        .filter(|(function, _)| function == "Command::new")
-        .filter(|(_, node)| {
-            source[node.byte_range()]
-                .replace(char::is_whitespace, "")
-                .starts_with("Command::new(\"git\")")
-        })
+    constructions(source)
+        .filter(|(argument, _)| argument == "\"git\"")
         .map(|(_, node)| {
             format!(
                 "line {} in {}",
@@ -112,6 +148,46 @@ fn bare_git(source: &str) -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// Every `Command::new(support::real_git())` and `Command::new(real_git())`
+/// in `source`, by line and enclosing function.
+///
+/// The argument is read off the call's own text, as `bare_git` reads its
+/// literal, so a fixture that stores the path in a variable first is not seen
+/// here -- and does not need to be, since the variable it would store is the
+/// one thing `real_git()` returns and `git_command` already holds.
+fn undetached_git(source: &str) -> Vec<String> {
+    constructions(source)
+        .filter(|(argument, _)| argument == "support::real_git()" || argument == "real_git()")
+        .map(|(_, node)| {
+            format!(
+                "line {} in {}",
+                node.start_position().row + 1,
+                enclosing_function(source, node)
+                    .unwrap_or_else(|| "<no enclosing function>".into())
+            )
+        })
+        .collect()
+}
+
+/// Every `Command::new(...)` in `source`, as the argument's text with the
+/// whitespace taken out, and the call.
+///
+/// Matched on how the path ENDS, so `std::process::Command::new` written out
+/// in full is the same construction as `Command::new` under a `use`: the two
+/// rules here are about what a fixture hands to a `Command`, and a fixture
+/// spelling the type's full path was handing it the same thing.
+fn constructions(source: &str) -> impl Iterator<Item = (String, Node<'_>)> {
+    calls(source)
+        .into_iter()
+        .filter(|(function, _)| function == "Command::new" || function.ends_with("::Command::new"))
+        .filter_map(|(_, node)| {
+            let arguments = node.child_by_field_name("arguments")?;
+            let text = source[arguments.byte_range()].replace(char::is_whitespace, "");
+            let inner = text.strip_prefix('(')?.strip_suffix(')')?;
+            Some((inner.to_owned(), node))
+        })
 }
 
 /// Every Rust source in `tests/`, including this one and the support module.
@@ -189,4 +265,39 @@ fn the_check_can_tell_a_bare_name_from_a_resolved_one() {
         "text inside a string literal was read as a call"
     );
     assert_eq!(unparsed(in_a_string), None, "the fixture itself is Rust");
+}
+
+#[test]
+fn the_check_can_tell_a_command_built_around_the_resolved_git_from_the_helper() {
+    let offending = r#"
+        use std::process::Command;
+        fn fixture(root: &Path) {
+            let _ = Command::new(support::real_git()).arg("add").current_dir(root).status();
+        }
+        fn also(root: &Path) {
+            let _ = Command::new(real_git()).arg("add").current_dir(root).status();
+        }
+        fn spelled_out(root: &Path) {
+            let _ = std::process::Command::new(support::real_git()).current_dir(root).status();
+        }
+    "#;
+    assert_eq!(
+        undetached_git(offending).len(),
+        3,
+        "a Command built around the resolved git was not found"
+    );
+    assert_eq!(unparsed(offending), None, "the fixture itself is Rust");
+
+    let clean = r#"
+        fn fixture(root: &Path) {
+            // Command::new(support::real_git()) in a comment is not a call.
+            let _ = support::git_command(root).arg("add").status();
+            let _ = std::os::unix::fs::symlink(support::real_git(), root.join("git"));
+        }
+    "#;
+    assert!(
+        undetached_git(clean).is_empty(),
+        "the helper, a comment or a symlink target was read as a violation"
+    );
+    assert_eq!(unparsed(clean), None, "the fixture itself is Rust");
 }
