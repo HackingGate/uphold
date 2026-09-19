@@ -55,6 +55,9 @@ repos:
     rev: v1.7.12
     hooks:
       - id: actionlint
+        # dist owns .github/workflows/release.yml and rewrites it on
+        # `dist generate`; a hand edit for a lint does not survive the next one.
+        exclude: ^\.github/workflows/release\.yml$
 
   # The shell this repository ships is the consumer harness that decides whether
   # the three runners agree, which is the part a consumer's experience rests on.
