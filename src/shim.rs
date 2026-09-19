@@ -438,20 +438,20 @@ fn repo_in_api_path(path: &str) -> Option<String> {
     };
     let segments: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
     for (index, segment) in segments.iter().enumerate() {
-        if *segment == "repos" {
-            if let (Some(owner), Some(repo)) = (segments.get(index + 1), segments.get(index + 2)) {
-                return Some(format!("{owner}/{repo}"));
-            }
+        if *segment == "repos"
+            && let (Some(owner), Some(repo)) = (segments.get(index + 1), segments.get(index + 2))
+        {
+            return Some(format!("{owner}/{repo}"));
         }
-        if *segment == "projects" {
-            if let Some(id) = segments.get(index + 1) {
-                let decoded = id.replace("%2F", "/").replace("%2f", "/");
-                // A numeric project id names a project this cannot resolve to
-                // an owner, and guessing one would be a destination nobody
-                // wrote.
-                if decoded.contains('/') {
-                    return Some(decoded);
-                }
+        if *segment == "projects"
+            && let Some(id) = segments.get(index + 1)
+        {
+            let decoded = id.replace("%2F", "/").replace("%2f", "/");
+            // A numeric project id names a project this cannot resolve to
+            // an owner, and guessing one would be a destination nobody
+            // wrote.
+            if decoded.contains('/') {
+                return Some(decoded);
             }
         }
     }
@@ -1009,10 +1009,10 @@ impl Shim {
         // A `-c alias.p=push` on the command line outranks the config file,
         // and reading it costs no process. The persisted alias below is the
         // case that needs one.
-        if self.command == "git" {
-            if let Some(value) = command_line_alias(argv, word) {
-                return Ok(Some(value));
-            }
+        if self.command == "git"
+            && let Some(value) = command_line_alias(argv, word)
+        {
+            return Ok(Some(value));
         }
         let own = std::env::current_exe().ok();
         let Some(real) = real_command(&self.command, own.as_deref()) else {
@@ -1562,10 +1562,11 @@ impl Shim {
                 // one is enough: a package marked private cannot be published
                 // at all, and a registry that is not the public one is
                 // somebody's internal infrastructure.
-                if let Ok(text) = std::fs::read_to_string(root.join("package.json")) {
-                    if text.contains("\"private\"") && json_bool_field(&text, "private") {
-                        return Ok(Standing::DoesNotHold);
-                    }
+                if let Ok(text) = std::fs::read_to_string(root.join("package.json"))
+                    && text.contains("\"private\"")
+                    && json_bool_field(&text, "private")
+                {
+                    return Ok(Standing::DoesNotHold);
                 }
                 let registry = collected
                     .target
@@ -1646,10 +1647,10 @@ impl Shim {
     }
 
     fn resolve_target(&self, root: &Path, collected: &Collected) -> Result<Option<String>> {
-        if let Some(explicit) = collected.target.as_deref() {
-            if !explicit.is_empty() {
-                return Ok(Some(explicit.to_owned()));
-            }
+        if let Some(explicit) = collected.target.as_deref()
+            && !explicit.is_empty()
+        {
+            return Ok(Some(explicit.to_owned()));
         }
         Ok(match self.target {
             Target::None => None,
@@ -3626,10 +3627,12 @@ mod tests {
             .map(|subject| subject.value.as_str())
             .collect();
         assert_eq!(values, vec!["fix/thing", "published"]);
-        assert!(collected
-            .subjects
-            .iter()
-            .all(|subject| subject.kind == "ref"));
+        assert!(
+            collected
+                .subjects
+                .iter()
+                .all(|subject| subject.kind == "ref")
+        );
     }
 
     #[test]
@@ -4277,8 +4280,8 @@ mod tests {
         };
         let mut memo = ScopeMemo::default();
         for _ in 0..3 {
-            assert!(memo
-                .holds(
+            assert!(
+                memo.holds(
                     &npm(),
                     &scope,
                     &dir,
@@ -4286,19 +4289,22 @@ mod tests {
                     &Collected::default(),
                     &argv("publish")
                 )
-                .unwrap());
+                .unwrap()
+            );
             // A different predicate is a different key, and is not answered
             // out of the first one's memo.
-            assert!(!memo
-                .holds(
-                    &npm(),
-                    &Scope::PublicRegistry,
-                    &dir,
-                    &undeclared(),
-                    &Collected::default(),
-                    &argv("publish")
-                )
-                .unwrap());
+            assert!(
+                !memo
+                    .holds(
+                        &npm(),
+                        &Scope::PublicRegistry,
+                        &dir,
+                        &undeclared(),
+                        &Collected::default(),
+                        &argv("publish")
+                    )
+                    .unwrap()
+            );
         }
         assert_eq!(
             std::fs::read_to_string(&asked).unwrap().lines().count(),
@@ -4392,20 +4398,24 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(pattern_refusal(
-            &pattern_rule(CheckKind::RequireRegexp, r"^v[0-9]+\.[0-9]+\.[0-9]+$"),
-            &ordinary
-        )
-        .unwrap()
-        .is_none());
+        assert!(
+            pattern_refusal(
+                &pattern_rule(CheckKind::RequireRegexp, r"^v[0-9]+\.[0-9]+\.[0-9]+$"),
+                &ordinary
+            )
+            .unwrap()
+            .is_none()
+        );
         // And a rule carrying neither pattern says nothing rather than
         // refusing a subject no pattern was ever written for.
-        assert!(pattern_refusal(
-            &Rule::synthetic("no-pattern", Check::empty(CheckKind::Builtin)),
-            &ordinary
-        )
-        .unwrap()
-        .is_none());
+        assert!(
+            pattern_refusal(
+                &Rule::synthetic("no-pattern", Check::empty(CheckKind::Builtin)),
+                &ordinary
+            )
+            .unwrap()
+            .is_none()
+        );
     }
 
     #[test]

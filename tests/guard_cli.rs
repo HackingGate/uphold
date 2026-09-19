@@ -170,7 +170,9 @@ fn a_guard_is_only_asked_at_a_stage_it_can_observe() {
 
 #[test]
 fn a_guard_id_that_names_no_guard_is_refused_at_load() {
-    let root = repository("[rule.invent-a-guard]\nbuiltin = \"invent-a-guard\"\n\n[rule.invent-a-guard.git]\nhooks = []\n");
+    let root = repository(
+        "[rule.invent-a-guard]\nbuiltin = \"invent-a-guard\"\n\n[rule.invent-a-guard.git]\nhooks = []\n",
+    );
     let output = guard(&root, &["--stage", "pre-commit"]);
     assert_eq!(code(&output), 2, "{}", stderr(&output));
     assert!(
@@ -198,8 +200,9 @@ fn a_missing_stage_is_an_error_and_not_a_default() {
 fn hidden_unicode_is_read_out_of_the_index_and_not_the_working_tree() {
     // A line staged and then edited away is in the commit and not on disk. A
     // guard reading the working tree judges the second and misses the first.
-    let root =
-        repository("[rule.prevent-unusual-unicode-in-files]\nbuiltin = \"prevent-unusual-unicode-in-files\"\n\n[rule.prevent-unusual-unicode-in-files.git]\nhooks = [\"pre-commit\", \"pre-merge-commit\", \"pre-push\", \"manual\"]\n");
+    let root = repository(
+        "[rule.prevent-unusual-unicode-in-files]\nbuiltin = \"prevent-unusual-unicode-in-files\"\n\n[rule.prevent-unusual-unicode-in-files.git]\nhooks = [\"pre-commit\", \"pre-merge-commit\", \"pre-push\", \"manual\"]\n",
+    );
     write(&root, "a.txt", "clean\u{200B}\n");
     git(&root, &["add", "a.txt"]);
     write(&root, "a.txt", "clean\n"); // the working tree is now innocent
@@ -243,8 +246,9 @@ fn an_allowance_scoped_to_a_path_admits_the_character_only_there() {
 /// declared, and a declaration is not a guess.
 #[test]
 fn a_path_declared_not_text_is_skipped_by_the_guard_that_cannot_decode_it() {
-    let root =
-        repository("[rule.prevent-unusual-unicode-in-files]\nbuiltin = \"prevent-unusual-unicode-in-files\"\n\n[rule.prevent-unusual-unicode-in-files.git]\nhooks = [\"pre-commit\"]\n");
+    let root = repository(
+        "[rule.prevent-unusual-unicode-in-files]\nbuiltin = \"prevent-unusual-unicode-in-files\"\n\n[rule.prevent-unusual-unicode-in-files.git]\nhooks = [\"pre-commit\"]\n",
+    );
     // Shift-JIS bytes: valid text in their own encoding, not UTF-8, and no NUL
     // to make the binary guess fire.
     std::fs::write(root.join("captured.html"), [0x93, 0xFA, 0x96, 0x7B, 0x0A]).unwrap();
@@ -279,8 +283,9 @@ fn a_symlinks_blob_is_its_target_path() {
     // Git stores the TARGET PATH as the blob, so a link whose target carries a
     // zero-width space commits one -- while any reader that follows the link
     // scans some other file's bytes and reports on those instead.
-    let root =
-        repository("[rule.prevent-unusual-unicode-in-files]\nbuiltin = \"prevent-unusual-unicode-in-files\"\n\n[rule.prevent-unusual-unicode-in-files.git]\nhooks = [\"pre-commit\", \"pre-merge-commit\", \"pre-push\", \"manual\"]\n");
+    let root = repository(
+        "[rule.prevent-unusual-unicode-in-files]\nbuiltin = \"prevent-unusual-unicode-in-files\"\n\n[rule.prevent-unusual-unicode-in-files.git]\nhooks = [\"pre-commit\", \"pre-merge-commit\", \"pre-push\", \"manual\"]\n",
+    );
     write(&root, "real.txt", "clean\n");
     std::os::unix::fs::symlink("t\u{200B}gt", root.join("link")).unwrap();
     git(&root, &["add", "-A"]);
@@ -292,7 +297,9 @@ fn a_symlinks_blob_is_its_target_path() {
 
 #[test]
 fn a_merge_in_progress_is_refused_at_pre_commit() {
-    let root = repository("[rule.no-merge-commit]\nbuiltin = \"no-merge-commit\"\n\n[rule.no-merge-commit.git]\nhooks = [\"pre-commit\"]\n");
+    let root = repository(
+        "[rule.no-merge-commit]\nbuiltin = \"no-merge-commit\"\n\n[rule.no-merge-commit.git]\nhooks = [\"pre-commit\"]\n",
+    );
     write(&root, "a.txt", "one\n");
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-qm", "one", "--no-verify"]);
@@ -308,8 +315,9 @@ fn a_merge_in_progress_is_refused_at_pre_commit() {
 
 #[test]
 fn a_push_outside_the_allow_list_is_refused_and_says_how_to_allow_it() {
-    let root =
-        repository("[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\nowner = \"acme\"\n\n[rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n");
+    let root = repository(
+        "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\nowner = \"acme\"\n\n[rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
+    );
     write(&root, "a.txt", "one\n");
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-qm", "one", "--no-verify"]);
@@ -334,8 +342,9 @@ fn a_push_outside_the_allow_list_is_refused_and_says_how_to_allow_it() {
 
 #[test]
 fn a_push_to_the_pinned_owner_passes() {
-    let root =
-        repository("[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\nowner = \"acme\"\n\n[rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n");
+    let root = repository(
+        "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\nowner = \"acme\"\n\n[rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
+    );
     write(&root, "a.txt", "one\n");
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-qm", "one", "--no-verify"]);
@@ -361,7 +370,9 @@ fn an_unpinned_workspace_says_its_answer_came_from_origin() {
     // The fallback is the weaker mode -- repointing origin moves it, which is
     // the accident the guard exists for -- so it says so rather than passing
     // itself off as the pinned one.
-    let root = repository("[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\n\n[rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n");
+    let root = repository(
+        "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\n\n[rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
+    );
     write(&root, "a.txt", "one\n");
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-qm", "one", "--no-verify"]);
@@ -392,7 +403,9 @@ fn an_unpinned_workspace_says_its_answer_came_from_origin() {
 
 #[test]
 fn a_pin_that_names_no_tag_and_a_pin_left_behind_are_both_reported() {
-    let root = repository("[rule.no-stale-hook-pins]\nbuiltin = \"no-stale-hook-pins\"\n\n[rule.no-stale-hook-pins.git]\nhooks = [\"pre-push\", \"manual\"]\n");
+    let root = repository(
+        "[rule.no-stale-hook-pins]\nbuiltin = \"no-stale-hook-pins\"\n\n[rule.no-stale-hook-pins.git]\nhooks = [\"pre-push\", \"manual\"]\n",
+    );
 
     // A local repository stands in for the upstream, so the test needs no
     // network and no forge.
@@ -439,7 +452,9 @@ fn a_pin_that_names_no_tag_and_a_pin_left_behind_are_both_reported() {
 
 #[test]
 fn a_current_pin_passes() {
-    let root = repository("[rule.no-stale-hook-pins]\nbuiltin = \"no-stale-hook-pins\"\n\n[rule.no-stale-hook-pins.git]\nhooks = [\"pre-push\", \"manual\"]\n");
+    let root = repository(
+        "[rule.no-stale-hook-pins]\nbuiltin = \"no-stale-hook-pins\"\n\n[rule.no-stale-hook-pins.git]\nhooks = [\"pre-push\", \"manual\"]\n",
+    );
     let upstream = root.join("upstream");
     std::fs::create_dir_all(&upstream).unwrap();
     git(&upstream, &["init", "-q", "-b", "main"]);

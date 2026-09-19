@@ -266,11 +266,7 @@ fn line(verdict: &str, name: &str, note: &str) {
 /// Agreement, because a report that says `1 of the links are` is a report
 /// written by something that was not counting.
 const fn are(count: usize) -> &'static str {
-    if count == 1 {
-        "is"
-    } else {
-        "are"
-    }
+    if count == 1 { "is" } else { "are" }
 }
 
 /// Whether this directory is the one a shell would find the command in.
@@ -342,7 +338,7 @@ pub(crate) fn hook(shell: &str, dir: &Path) -> Result<Exit> {
                  and a hook it has not been taught is better written by somebody who uses that \
                  shell than guessed at here: run `uphold shim --path` once per prompt and set \
                  PATH to what it prints"
-            )))
+            )));
         }
     };
     print!("{text}");
@@ -524,7 +520,7 @@ fn make_link(_target: &Path, at: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{are, directory, fish_word, links, place, posix_word, same_file, Placed};
+    use super::{Placed, are, directory, fish_word, links, place, posix_word, same_file};
     use std::ffi::OsString;
     use std::path::Path;
 

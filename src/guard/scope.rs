@@ -517,17 +517,17 @@ pub(crate) enum Decoded {
 /// exemption to the one invisible codepoint that turns up in committed files
 /// most often.
 pub(crate) fn decode(bytes: &[u8]) -> Decoded {
-    if let Some((encoding, _)) = encoding_rs::Encoding::for_bom(bytes) {
-        if encoding != encoding_rs::UTF_8 {
-            let (text, _, had_errors) = encoding.decode(bytes);
-            if had_errors {
-                return Decoded::Unreadable(format!(
-                    "declares a {} byte-order mark and does not decode as one",
-                    encoding.name()
-                ));
-            }
-            return Decoded::Text(text.into_owned());
+    if let Some((encoding, _)) = encoding_rs::Encoding::for_bom(bytes)
+        && encoding != encoding_rs::UTF_8
+    {
+        let (text, _, had_errors) = encoding.decode(bytes);
+        if had_errors {
+            return Decoded::Unreadable(format!(
+                "declares a {} byte-order mark and does not decode as one",
+                encoding.name()
+            ));
         }
+        return Decoded::Text(text.into_owned());
     }
     match std::str::from_utf8(bytes) {
         Ok(text) => Decoded::Text(text.to_owned()),

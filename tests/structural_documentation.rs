@@ -44,7 +44,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use support::syntax::{declarations, public_fields, unparsed, Declaration};
+use support::syntax::{Declaration, declarations, public_fields, unparsed};
 
 /// The shared declarations that carry no documentation today.
 ///

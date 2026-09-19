@@ -28,8 +28,8 @@
 //! habitual spelling already expands to.
 
 use std::io::{ErrorKind, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Which stream, and therefore which reader can have gone away independently of
 /// the other.
@@ -138,7 +138,7 @@ pub(crate) fn unwritten() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{put, verdict, Verdict};
+    use super::{Verdict, put, verdict};
     use std::io::ErrorKind;
 
     /// The one decision this module makes, and the direction each way costs

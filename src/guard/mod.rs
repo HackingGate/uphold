@@ -138,7 +138,7 @@ impl Stage {
                 return Err(Fatal::new(format!(
                     "unknown stage {other:?}; expected one of commit-msg, pre-commit, \
                      pre-merge-commit, pre-push, manual"
-                )))
+                )));
             }
         })
     }

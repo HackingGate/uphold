@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::{Exit, Fatal, Result};
-use crate::pins::{declarations, Declaration, Manager};
+use crate::pins::{Declaration, Manager, declarations};
 
 const WAIVERS: &str = "policy/hooks.toml";
 
@@ -477,13 +477,13 @@ pub(crate) fn install(root: &Path, runner: Option<&str>, directory: &str) -> Res
                 "lefthook installs and owns its own git hooks (`lefthook install`), and a \
                  `core.hooksPath` written here would displace them. This command wires prek \
                  and pre-commit",
-            ))
+            ));
         }
         Some(other) => {
             return Err(Fatal::new(format!(
                 "unknown runner {other:?}; this writes hooks that delegate to prek or \
                  pre-commit"
-            )))
+            )));
         }
         // Which of the two is detected from PATH, not from the config: both
         // read the same .pre-commit-config.yaml, and the one that is installed
@@ -536,14 +536,14 @@ pub(crate) fn install(root: &Path, runner: Option<&str>, directory: &str) -> Res
     // Somebody else's core.hooksPath is somebody else's decision. Equal is a
     // re-install; different is a question this command must not answer.
     let existing = git_config(root, "core.hooksPath")?;
-    if let Some(existing) = existing.as_deref() {
-        if existing != directory {
-            return Err(Fatal::new(format!(
-                "core.hooksPath is already {existing:?}, and overwriting it would take \
+    if let Some(existing) = existing.as_deref()
+        && existing != directory
+    {
+        return Err(Fatal::new(format!(
+            "core.hooksPath is already {existing:?}, and overwriting it would take \
                  the hooks that directory holds out of git's path. Point --dir at it, or \
                  unset it first"
-            )));
-        }
+        )));
     }
 
     let hooks_dir = root.join(directory);

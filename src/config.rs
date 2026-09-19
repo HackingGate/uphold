@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{read_to_string, Fatal, Result};
+use crate::error::{Fatal, Result, read_to_string};
 
 /// The bundled base rule sets, compiled in.
 ///
@@ -672,16 +672,16 @@ impl Policy {
             self.visibility_from.as_deref(),
             &self.resolved_visibility,
         )?;
-        if let Some(word) = value.as_deref() {
-            if visibility_is_public(word).is_none() {
-                return Err(Fatal::new(format!(
-                    "`visibility_from` answered {word:?}, which is not a visibility. The \
+        if let Some(word) = value.as_deref()
+            && visibility_is_public(word).is_none()
+        {
+            return Err(Fatal::new(format!(
+                "`visibility_from` answered {word:?}, which is not a visibility. The \
                      command must print \"public\", \"private\" or \"internal\" -- the word \
                      decides whether the guards that fire only on a published tree fire here \
                      at all, so there is no reading of an unrecognised one that is safe to \
                      guess at."
-                )));
-            }
+            )));
         }
         Ok(value)
     }
@@ -1032,17 +1032,17 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     // a fact about the file, and hearing about it when a hook fires means
     // hearing about it from whichever seam happened to run first, months after
     // the line was written.
-    if let Some(declared) = file.visibility.as_deref() {
-        if visibility_is_public(declared).is_none() {
-            return Err(Fatal::at(
-                policy_path,
-                format!(
-                    "`visibility` is {declared:?}, which is not a visibility. Write \
+    if let Some(declared) = file.visibility.as_deref()
+        && visibility_is_public(declared).is_none()
+    {
+        return Err(Fatal::at(
+            policy_path,
+            format!(
+                "`visibility` is {declared:?}, which is not a visibility. Write \
                      \"public\", \"private\" or \"internal\" -- the word decides whether the \
                      guards that fire only on a published tree fire here at all"
-                ),
-            ));
-        }
+            ),
+        ));
     }
     let inherit = file.inherit.clone().unwrap_or_default();
 
@@ -2905,10 +2905,12 @@ mod tests {
         .unwrap();
         assert!(policy.has_check(CheckKind::Regexp));
         assert!(policy.has_check(CheckKind::PathRegexp));
-        assert!(policy
-            .rules
-            .iter()
-            .any(|rule| rule.id == "no-pinned-tool-install"));
+        assert!(
+            policy
+                .rules
+                .iter()
+                .any(|rule| rule.id == "no-pinned-tool-install")
+        );
     }
 
     /// A policy nobody would write, and the two answers it may never give.
@@ -2932,11 +2934,13 @@ mod tests {
     /// every byte offset in it means something to the parser.
     #[test]
     fn a_policy_that_was_damaged_is_never_read_as_an_empty_one() {
-        let mut corpus: Vec<String> = vec![std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/policy/principles.toml"
-        ))
-        .expect("this repository's own policy")];
+        let mut corpus: Vec<String> = vec![
+            std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/policy/principles.toml"
+            ))
+            .expect("this repository's own policy"),
+        ];
         for (_, text) in BUNDLED {
             corpus.push((*text).to_owned());
         }

@@ -50,7 +50,7 @@ use std::path::{Path, PathBuf};
 use ignore::WalkBuilder;
 use serde::Deserialize;
 
-use crate::error::{read_to_string, Fatal, Result};
+use crate::error::{Fatal, Result, read_to_string};
 use crate::guard::{Refusal, Request};
 
 #[derive(Debug, Deserialize)]
@@ -752,13 +752,13 @@ pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
             ));
             continue;
         }
-        if let Some(newest) = tags.last() {
-            if newest != &pin.rev {
-                behind.push(format!(
-                    "{} pins {}, and {} is newer (in {})",
-                    pin.repo, pin.rev, newest, pin.source
-                ));
-            }
+        if let Some(newest) = tags.last()
+            && newest != &pin.rev
+        {
+            behind.push(format!(
+                "{} pins {}, and {} is newer (in {})",
+                pin.repo, pin.rev, newest, pin.source
+            ));
         }
     }
 

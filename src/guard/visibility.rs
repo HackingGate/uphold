@@ -27,7 +27,7 @@
 
 use std::collections::BTreeMap;
 
-use super::names::{lookup, Visibility};
+use super::names::{Visibility, lookup};
 use super::{Refusal, Request};
 use crate::config::visibility_is_public;
 use crate::error::{Fatal, Result};
@@ -58,7 +58,7 @@ pub(crate) fn no_stale_visibility(request: &Request<'_>) -> Result<Option<Refusa
                      claim for this rule to check. Declare it once, at the top of the policy \
                      file:\n\n  visibility = \"private\"    # or \"public\", or \"internal\"\n\n\
                      or point `visibility_from` at a command that prints one word."
-                )))
+                )));
             }
         },
     };

@@ -63,7 +63,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use super::{Refusal, Request, Stage};
-use crate::config::{bundled_ids, Origin, Policy};
+use crate::config::{Origin, Policy, bundled_ids};
 use crate::error::Result;
 use crate::git;
 

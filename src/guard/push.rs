@@ -294,10 +294,10 @@ pub(crate) fn unowned(
     // origin in beside the list would put that tautology back on every rule
     // carrying one.
     let mut allowed_owners: Vec<String> = rule.allowed_owners().to_vec();
-    if pinned || allowed_owners.is_empty() {
-        if let Some(workspace) = workspace.as_deref() {
-            allowed_owners.push(workspace.to_owned());
-        }
+    if (pinned || allowed_owners.is_empty())
+        && let Some(workspace) = workspace.as_deref()
+    {
+        allowed_owners.push(workspace.to_owned());
     }
 
     let by_owner = allowed_owners
@@ -323,19 +323,20 @@ pub(crate) fn unowned(
         // decided the question from a written list whatever origin says -- a
         // note on either would be a line on every push, and a line on every
         // push is a line nobody reads by the time it matters.
-        if !pinned && !by_repo {
-            if let Some(workspace) = workspace.as_deref() {
-                eprintln!(
-                    "{}: {} {} {name}, judged against {workspace} \
+        if !pinned
+            && !by_repo
+            && let Some(workspace) = workspace.as_deref()
+        {
+            eprintln!(
+                "{}: {} {} {name}, judged against {workspace} \
                      -- DERIVED FROM ORIGIN, not pinned. Repointing origin at a public \
                      upstream moves this answer with it, which is the accident this guard \
                      exists for. Pin it with `owner = \"{workspace}\"` at the top of the \
                      policy file, which is a place an inherited rule can reach.",
-                    seam.tool(),
-                    rule.id,
-                    seam.allowed()
-                );
-            }
+                seam.tool(),
+                rule.id,
+                seam.allowed()
+            );
         }
         return Ok(None);
     }

@@ -25,16 +25,16 @@ fn message_text(request: &Request<'_>) -> Result<(PathBuf, String)> {
     // PREVIOUS commit's message, finds it clean, and reports a pass over a file
     // it never opened. A typo'd path, a relative `$1` resolved from the wrong
     // directory, or an unset variable in a wrapper all produce it.
-    if let Some(named) = request.message_file {
-        if !named.is_file() {
-            return Err(Fatal::new(format!(
-                "{}: {} was named as the commit-message file and is not a file. \
+    if let Some(named) = request.message_file
+        && !named.is_file()
+    {
+        return Err(Fatal::new(format!(
+            "{}: {} was named as the commit-message file and is not a file. \
                  Refusing to fall back to the previous commit's message and report \
                  a pass over a file that was never opened",
-                request.rule.id,
-                named.display()
-            )));
-        }
+            request.rule.id,
+            named.display()
+        )));
     }
     let path = if let Some(path) = request.message_file {
         path.to_path_buf()

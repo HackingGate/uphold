@@ -14,8 +14,8 @@
 //! found "unviable", a measurement it had not made.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Once;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The directory this test run's fixtures live under.
 pub(crate) fn run_root() -> PathBuf {

@@ -209,7 +209,9 @@ fn a_literal_list_of_private_owners_is_itself_a_finding() {
 
 #[test]
 fn without_a_private_name_rule_the_audit_refuses_to_guess() {
-    let root = repository("[rule.no-merge-commit]\nbuiltin = \"no-merge-commit\"\n\n[rule.no-merge-commit.git]\nhooks = [\"pre-commit\"]\n");
+    let root = repository(
+        "[rule.no-merge-commit]\nbuiltin = \"no-merge-commit\"\n\n[rule.no-merge-commit.git]\nhooks = [\"pre-commit\"]\n",
+    );
     std::fs::write(root.join("a.txt"), "x\n").unwrap();
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-qm", "one", "--no-verify"]);

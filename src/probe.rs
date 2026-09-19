@@ -36,8 +36,8 @@ use std::process::Command;
 
 use serde::Deserialize;
 
-use crate::error::{read_to_string, Exit, Fatal, Result};
-use crate::pins::{declarations, Manager};
+use crate::error::{Exit, Fatal, Result, read_to_string};
+use crate::pins::{Manager, declarations};
 
 const PROBES: &str = "policy/hooks.toml";
 
@@ -262,21 +262,21 @@ fn drive(
         worktree.remove(&probe.path)?;
         return Ok(Verdict::CannotFail);
     }
-    if let Some(expected) = probe.expect.as_deref() {
-        if !output.contains(expected) {
-            worktree.remove(&probe.path)?;
-            // The tail rather than the head: runners print their banner first
-            // and the finding last, and a reader shown only the banner would
-            // have to run the probe again to learn what actually spoke.
-            let tail: Vec<&str> = output.lines().rev().take(12).collect();
-            let mut said = String::new();
-            for line in tail.into_iter().rev() {
-                said.push_str("    ");
-                said.push_str(line);
-                said.push('\n');
-            }
-            return Ok(Verdict::RefusedForAnotherReason { said });
+    if let Some(expected) = probe.expect.as_deref()
+        && !output.contains(expected)
+    {
+        worktree.remove(&probe.path)?;
+        // The tail rather than the head: runners print their banner first
+        // and the finding last, and a reader shown only the banner would
+        // have to run the probe again to learn what actually spoke.
+        let tail: Vec<&str> = output.lines().rev().take(12).collect();
+        let mut said = String::new();
+        for line in tail.into_iter().rev() {
+            said.push_str("    ");
+            said.push_str(line);
+            said.push('\n');
         }
+        return Ok(Verdict::RefusedForAnotherReason { said });
     }
 
     let Some(allows) = probe.allows.as_deref() else {
