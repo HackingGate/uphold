@@ -41,7 +41,10 @@ pre-commit:
       glob: ".github/workflows/*.{yml,yaml}"
       # dist owns .github/workflows/release.yml and rewrites it on
       # `dist generate`; a hand edit for a lint does not survive the next one.
-      exclude: '^\.github/workflows/release\.yml$'
+      # A glob, not a regex: lefthook 2 reads `exclude` as a list of globs, and
+      # the regex string it replaced matched nothing there.
+      exclude:
+        - .github/workflows/release.yml
       run: actionlint {staged_files}
     # The two shell files this repository ships: the consumer harness and the
     # extensionless wrapper a lefthook consumer ran out of the clone, which
