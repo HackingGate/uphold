@@ -215,12 +215,19 @@ files.glob = [
 # rots anywhere. A restatement in a test is different in kind: the comment
 # above an assertion names the CASE rather than the code -- `# the default
 # runner` over the line that sets it is what tells a reader which of nine
-# fixtures this one is -- and refusing it would refuse the label.
+# fixtures this one is -- and refusing it would refuse the label. A test is
+# a directory named for one, a Go file named `_test`, or a Python file named
+# `test_` or `_test`: the three spellings the languages this check reads put
+# a test beside its code under.
 #
-# THE GLOB NAMES EVERY KIND OF FILE THE CHECK CAN READ AND NO OTHER. A comment
+# THE GLOB NAMES THE EXTENSIONS THE CHECK CAN READ AND NO OTHER. A comment
 # rule that selects only files it cannot read is refused as a rule its author
 # believes runs, and a set inherited by a tree of Markdown must never trip
-# that: the glob is what keeps the selection inside the readable kinds.
+# that: the glob is what keeps the selection inside the readable kinds. The
+# check also reads an extensionless dotfile such as `.gitignore`, and no glob
+# here selects one, because the pattern that would -- `.*` -- selects
+# `.eslintrc.json` and every other dotted file the check cannot read, and a
+# tree where those are the whole selection would be refused for it.
 [rule.no-restated-line]
 message = """
 This comment says what the next line already says. State a why, a constraint
@@ -243,4 +250,10 @@ files.glob = [
   "*.ini",
   "*.cfg",
 ]
-files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go"]
+files.exclude = [
+  "**/tests/**",
+  "**/test/**",
+  "**/*_test.go",
+  "**/test_*.py",
+  "**/*_test.py",
+]

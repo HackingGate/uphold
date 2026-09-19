@@ -532,7 +532,9 @@
           "exclude": [
             "**/tests/**",
             "**/test/**",
-            "**/*_test.go"
+            "**/*_test.go",
+            "**/test_*.py",
+            "**/*_test.py"
           ],
           "exclude_cfg_test": false,
           "glob": [
