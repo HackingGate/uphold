@@ -37,9 +37,9 @@ anything else (`[rule."my rule"]`).
 | field | fails when |
 |---|---|
 | `regexp` | the regex matches anywhere in the selected files |
-| `comment_regexp` | the regex matches a **comment** in a selected Rust, Python or Go file |
+| `comment_regexp` | the regex matches a **comment** in a selected Rust, Python or Go file, or a `#` line of a selected TOML, YAML, shell, ini or dotfile |
 | `prose_regexp` | the regex matches the **prose** of a selected file — a document minus its code blocks, a source file's comments, a configuration file's `#` lines |
-| `trivial_comments` | a comment contributes no word the code beneath it already names |
+| `trivial_comments` | a comment contributes no word the code beneath it already names — the statements it introduces in a parsed language, the next line in a `#`-commented file |
 | `path_regexp` | a tracked path matches the regex |
 | `require_regexp` | a selected file does **not** contain the regex |
 | `max_lines` | a selected file is longer than that, or grew past its baseline |
@@ -368,7 +368,7 @@ it refuses** so the name predicts the rule list:
 | `doc-claims` | a document whose anchored fact disagrees with the record it names — a value the record does not hold, a key that is not there, a source or captured artifact that is absent |
 | `default-token-grant` | a GitHub Actions workflow with no top-level `permissions:` block, whose `GITHUB_TOKEN` is therefore scoped by a repository setting rather than by the workflow |
 | `hand-rolled-toolchain` | a host tool installed by hand where a version manager was available — a `curl \| tar` download-and-unpack, and the `$HOME/.local` symlink that puts its output on PATH. Deliberately silent on `curl \| sh` (a version manager's own bootstrap has nowhere else to live), on a host-prerequisite manifest beside it (a resolver provisions, a doctor verifies), and on distro packages |
-| `comment-facts` | a measurement of your own data stated in a source comment, where no anchor can ever recount it — `# 60 s timeout`, `// ~127 MB of rlib`, `# 3 of 5 done`. The other half of `doc-claims`: that one checks a fact somebody anchored, this one refuses the shape of a fact nobody can anchor. Scoped to lines whose first token opens a comment, in source files by extension, so a string literal and a markdown bullet are never read. Lets through a version (`v1.14.1`, `Go 1.25`), a date (`2026-09-04`) and a citation (`ADR 0005`, `issue 101`), none of which is followed by a unit. Cannot tell your data from a number that is not yours — a platform constant, a limit the code enforces, a worked example — so it refuses the shape and the reader decides. Installs no git hook; the fix is to drop the measurement (or move it to the commit or pull-request body), and for a number that is not a measurement to give the code a named constant the comment points at. Never spell the digits out as words |
+| `comment-facts` | a measurement of your own data stated in a source comment, where no anchor can ever recount it — `# 60 s timeout`, `// ~127 MB of rlib`, `# 3 of 5 done`. The other half of `doc-claims`: that one checks a fact somebody anchored, this one refuses the shape of a fact nobody can anchor. Scoped to lines whose first token opens a comment, in source files by extension, so a string literal and a markdown bullet are never read. Lets through a version (`v1.14.1`, `Go 1.25`), a date (`2026-09-04`) and a citation (`ADR 0005`, `issue 101`), none of which is followed by a unit. Cannot tell your data from a number that is not yours — a platform constant, a limit the code enforces, a worked example — so it refuses the shape and the reader decides. Installs no git hook; the fix is to drop the measurement (or move it to the commit or pull-request body), and for a number that is not a measurement to give the code a named constant the comment points at. Never spell the digits out as words. Its second rule refuses a comment that says only what the next line says — `# the runner is ubuntu-latest` over `runner = "ubuntu-latest"` — by the `trivial_comments` test, over every file kind that check can read, tests excluded because a test's comment names the case rather than the code; the fix is a why, a constraint or a consequence, or deletion |
 | `commit-message-residue` | authorship markers and unusual characters in the message a commit records — **installs `commit-msg`** |
 | `unreviewed-history` | a merge made locally rather than through a pull request — **installs `pre-commit` and `pre-merge-commit`** |
 | `mismatched-author` | a commit whose author or committer identity disagrees with the global one on the machine making it — **installs `pre-commit`**, and declines with a note where no global identity is configured |
@@ -754,6 +754,16 @@ the whole reason they are separate checks: `regexp` reads bytes, so
 way to write the difference down. These read comment nodes, so a marker inside a
 string literal is a string literal.
 
+Both also read the files no grammar here parses and every reader agrees about:
+TOML, YAML, shell (`sh`, `bash`, `zsh`, `fish`), ini and `cfg`, and a dotfile
+with no extension (`.gitignore`, `.editorconfig`). In those a comment is a line
+whose first non-blank character is `#`, and only that — a `#` after code may be
+inside a value (`color = "#fff"`), so a trailing remark is never read and a
+string can never be mistaken for one. The shebang opening a script is an
+interpreter directive, not a comment. A rule that selects only files of no
+readable kind is refused as a rule its author believes runs, which is why a
+bundled rule names every readable extension in its `files.glob` and no other.
+
 ```toml
 [rule.no-before-after-narrative-in-source]
 message = "State what holds, not what it replaced."
@@ -786,14 +796,22 @@ already name, counting their string literals. `// Stop and disable dnsmasq` over
 `systemd::stop("dnsmasq")` and `systemd::disable("dnsmasq")` fails; the same
 comment with a reason attached does not, and no list had to be edited for that to
 be true. The code it is judged against runs from the comment to the next blank
-line or the next comment — where a reader stops attributing it.
+line or the next comment — where a reader stops attributing it. In a
+`#`-commented file there is no statement to run to, so the code is the one line
+beneath the comment, its identifiers split on case, underscore and hyphen and
+the words of its values counted: `# the runner is ubuntu-latest` over
+`runner = "ubuntu-latest"` fails, `# the cheapest runner` over the same line
+does not.
 
-Five shapes are left alone, each because its words restate the code by design
+Eight shapes are left alone, each because its words restate the code by design
 while the comment is doing something else: a trailing comment on the same line as
 code, one line of a multi-line comment run, a separator (`---`, `===`, box
-drawing), a worked example (containing `=` or `→`), and a parenthesised aside.
-A tree that wants its separators gone writes a `comment_regexp` saying so; this
-check does not reach that verdict on its own.
+drawing), a worked example (containing `=` or `→`), a parenthesised aside, a
+comment holding a link, one holding a number with a unit (that is a
+measurement, and the `comment-facts` set has the rule for it), and one with
+more than six content words, which is a paragraph describing the code rather
+than a line repeating it. A tree that wants its separators gone writes a
+`comment_regexp` saying so; this check does not reach that verdict on its own.
 
 There is no fixer, and that is a decision rather than a gap. A comment worth
 deleting is usually worth replacing with the reason the code is that way, and

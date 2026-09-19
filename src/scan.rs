@@ -492,14 +492,14 @@ impl<'a> Scan<'a> {
 
     // -- comments -----------------------------------------------------------
 
-    /// Every comment in the files a rule selects, with the ones the language
-    /// cannot be read for left out.
+    /// Every comment in the files a rule selects, with the ones no reader here
+    /// knows left out.
     ///
-    /// A selected file in a language no grammar here knows is skipped and not
-    /// reported: `files.include = ["src"]` on a mixed tree is a normal thing to
-    /// write, and a Markdown file under it is not an unreadable one. What IS
-    /// reported is a rule that selects nothing parseable at all, because that is
-    /// a rule whose author believes it runs.
+    /// A selected file of a kind no grammar and no line reader here knows is
+    /// skipped and not reported: `files.include = ["src"]` on a mixed tree is a
+    /// normal thing to write, and a Markdown file under it is not an unreadable
+    /// one. What IS reported is a rule that selects nothing readable at all,
+    /// because that is a rule whose author believes it runs.
     fn comments_of(&self, rule: &Rule) -> Result<Vec<(String, crate::comments::Comment)>> {
         let files = self.select(rule)?;
         let mut parsed = 0_usize;
@@ -521,11 +521,11 @@ impl<'a> Scan<'a> {
         }
         if parsed == 0 && !files.is_empty() {
             return Err(Fatal::new(format!(
-                "rule {:?}: selects {} file(s) and none of them is Rust, Python or Go, so \
-                 the check reads no comments at all. Narrow `files.glob` to the languages \
-                 it is meant for",
+                "rule {:?}: selects {} file(s) and none of them is {}, so the check reads \
+                 no comments at all. Narrow `files.glob` to the languages it is meant for",
                 rule.id,
-                files.len()
+                files.len(),
+                crate::comments::Language::READABLE,
             )));
         }
         Ok(found)

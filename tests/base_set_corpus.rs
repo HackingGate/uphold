@@ -352,6 +352,32 @@ const CORPUS: &[Case] = &[
             "let t = \"60 s\";\n",
         ],
     },
+    // A comment that says what the next line says, in a file no grammar
+    // parses. The `refuses` line is the one that opened the rule; every
+    // `allows` line is a shape the check leaves alone on purpose, and each is
+    // here so that a widened test cannot start refusing it without this file
+    // saying which shape it was.
+    Case {
+        set: "comment-facts",
+        rule: "no-restated-line",
+        path: "release.toml",
+        refuses: &[
+            "# the runner is ubuntu-latest\nrunner = \"ubuntu-latest\"\n",
+            "# dependencies\n[dependencies]\n",
+        ],
+        allows: &[
+            // A reason, and a word the line does not have.
+            "# ubuntu-latest, since the installer falls back to musl\nrunner = \"ubuntu-latest\"\n",
+            "# the cheapest runner\nrunner = \"ubuntu-latest\"\n",
+            // A link and a measurement each carry something the line does
+            // not, whatever the words around them say.
+            "# runner https://example.test/runner\nrunner = \"ubuntu-latest\"\n",
+            "# runner 2 GiB\nrunner = \"2 GiB\"\n",
+            // A run is prose, and a trailing comment is not an introduction.
+            "# the runner\n# is ubuntu-latest\nrunner = \"ubuntu-latest\"\n",
+            "runner = \"ubuntu-latest\" # the runner is ubuntu-latest\n",
+        ],
+    },
     // The prose set. Its `allows` are the near misses each pattern was written
     // to let through, and they are the half worth reading: a shape rule that
     // widened by one alternative refuses the sentence it was written to permit,
@@ -617,10 +643,18 @@ fn every_content_rule_in_every_bundled_set_is_in_the_corpus() {
         for rule in set["rules"].as_array().unwrap() {
             // A built-in is compiled in and has its own tests; a corpus line
             // about one would be a line about this binary rather than about a
-            // pattern. What is left is the patterns.
-            let checks_content = ["regexp", "path_regexp", "require_regexp", "prose_regexp"]
-                .iter()
-                .any(|field| rule.get(field).is_some());
+            // pattern. What is left is the patterns, and the one word-set test
+            // that fails the same silent way a narrowed pattern does.
+            let checks_content = [
+                "regexp",
+                "path_regexp",
+                "require_regexp",
+                "prose_regexp",
+                "comment_regexp",
+                "trivial_comments",
+            ]
+            .iter()
+            .any(|field| rule.get(field).is_some());
             if !checks_content {
                 continue;
             }

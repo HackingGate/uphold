@@ -62,32 +62,27 @@ enum Kind {
 
 /// The kind of one repository-relative path, or `None` for a file this module
 /// reads no prose from.
+///
+/// Which files hold comments is the comment module's fact, asked of it rather
+/// than transcribed here, so the two cannot disagree about a `.fish` script.
+/// What is decided here is only what is a document: the extensions that name
+/// one, and the extensionless file that is not a dotfile -- LICENSE, CODEOWNERS,
+/// the file somebody wrote and did not name.
 fn kind_of(path: &str) -> Option<Kind> {
     let name = path.rsplit('/').next().unwrap_or(path);
-    // A leading dot is part of the NAME, not the start of an extension.
-    // `.gitignore` has no extension at all, and reading one off it would find
-    // `gitignore` -- while `.pre-commit-config.yaml` really is YAML and has to
-    // stay YAML, which is why the dot is stripped before the split rather than
-    // the whole name being treated as one.
     let extension = name
         .strip_prefix('.')
         .unwrap_or(name)
         .rsplit_once('.')
         .map(|(_, found)| found);
-    match extension {
-        Some("md") => Some(Kind::Document { markdown: true }),
-        Some("rst" | "txt" | "adoc") => Some(Kind::Document { markdown: false }),
-        Some("rs") => Some(Kind::Source(Language::Rust)),
-        Some("py" | "pyi") => Some(Kind::Source(Language::Python)),
-        Some("go") => Some(Kind::Source(Language::Go)),
-        Some("toml" | "yaml" | "yml" | "sh" | "bash" | "zsh" | "ini" | "cfg") => Some(Kind::Hashes),
-        Some(_) => None,
-        // No extension. A dotfile is configuration -- `.gitignore`,
-        // `.dockerignore`, `.editorconfig` -- and its remarks are `#` lines.
-        // Anything else with no extension is a document: LICENSE, CODEOWNERS,
-        // the file somebody wrote and did not name.
-        None if name.starts_with('.') => Some(Kind::Hashes),
-        None => Some(Kind::Document { markdown: false }),
+    match (extension, Language::for_path(path)) {
+        (Some("md"), _) => Some(Kind::Document { markdown: true }),
+        (Some("rst" | "txt" | "adoc"), _) | (None, None) => {
+            Some(Kind::Document { markdown: false })
+        }
+        (_, Some(Language::HashLines)) => Some(Kind::Hashes),
+        (_, Some(language)) => Some(Kind::Source(language)),
+        (Some(_), None) => None,
     }
 }
 

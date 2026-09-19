@@ -20,44 +20,74 @@ use tree_sitter::{Node, Parser};
 
 /// The languages a comment rule can be asked about.
 ///
-/// Three, and the third is the demonstration of what the first two claimed: a
-/// language is a grammar dependency and three lines in [`Language::for_path`],
-/// not a redesign. Go cost neither a dependency nor a design -- the grammar was
-/// already linked in for the doc-command resolver.
+/// Three grammars, and the third is the demonstration of what the first two
+/// claimed: a language is a grammar dependency and three lines in
+/// [`Language::for_path`], not a redesign. Go cost neither a dependency nor a
+/// design -- the grammar was already linked in for the doc-command resolver.
+///
+/// The fourth is not a grammar. TOML, YAML, shell, ini and the dotfiles agree
+/// on one thing about comments -- a line whose first non-blank character is
+/// `#` is one -- and disagree on everything else, so no parser is linked in for
+/// them and none is needed for the one question this module asks of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Language {
     Rust,
     Python,
     Go,
+    /// A file whose comments are its `#` lines: TOML, YAML, a shell script, an
+    /// ini file, a dotfile. Read by line rather than by grammar, and the
+    /// own-line restriction is what makes that sound -- a `#` after code may
+    /// be inside a string (`color = "#fff"`), a `#` opening a line cannot be.
+    HashLines,
 }
 
 impl Language {
     /// The language of a repository-relative path, or `None` for a file no
     /// comment rule can read.
     pub(crate) fn for_path(path: &str) -> Option<Self> {
-        match path.rsplit_once('.') {
-            Some((_, "rs")) => Some(Self::Rust),
-            Some((_, "py" | "pyi")) => Some(Self::Python),
-            Some((_, "go")) => Some(Self::Go),
+        let name = path.rsplit('/').next().unwrap_or(path);
+        // A leading dot is part of the NAME, not the start of an extension.
+        // `.gitignore` has no extension at all, and reading one off it would
+        // find `gitignore` -- while `.pre-commit-config.yaml` really is YAML
+        // and has to stay YAML, which is why the dot is stripped before the
+        // split rather than the whole name being treated as one.
+        let extension = name
+            .strip_prefix('.')
+            .unwrap_or(name)
+            .rsplit_once('.')
+            .map(|(_, found)| found);
+        match extension {
+            Some("rs") => Some(Self::Rust),
+            Some("py" | "pyi") => Some(Self::Python),
+            Some("go") => Some(Self::Go),
+            Some("toml" | "yaml" | "yml" | "sh" | "bash" | "zsh" | "fish" | "ini" | "cfg") => {
+                Some(Self::HashLines)
+            }
+            // No extension. A dotfile is configuration -- `.gitignore`,
+            // `.dockerignore`, `.editorconfig` -- and its remarks are `#`
+            // lines. Anything else with no extension is a document, or a
+            // binary, and neither has comments.
+            None if name.starts_with('.') => Some(Self::HashLines),
             _ => None,
         }
     }
 
-    fn grammar(self) -> tree_sitter::Language {
+    /// The grammar and the node kinds that ARE comments in it, or `None` for
+    /// the kind of file that is read by line.
+    fn grammar(self) -> Option<(tree_sitter::Language, &'static [&'static str])> {
         match self {
-            Self::Rust => tree_sitter_rust::LANGUAGE.into(),
-            Self::Python => tree_sitter_python::LANGUAGE.into(),
-            Self::Go => tree_sitter_go::LANGUAGE.into(),
+            Self::Rust => Some((
+                tree_sitter_rust::LANGUAGE.into(),
+                &["line_comment", "block_comment"],
+            )),
+            Self::Python => Some((tree_sitter_python::LANGUAGE.into(), &["comment"])),
+            Self::Go => Some((tree_sitter_go::LANGUAGE.into(), &["comment"])),
+            Self::HashLines => None,
         }
     }
 
-    /// The node kinds that ARE comments in this grammar.
-    const fn comment_kinds(self) -> &'static [&'static str] {
-        match self {
-            Self::Rust => &["line_comment", "block_comment"],
-            Self::Python | Self::Go => &["comment"],
-        }
-    }
+    /// What a selection error names when a rule reads none of these.
+    pub(crate) const READABLE: &'static str = "Rust, Python, Go, or a file whose comments are `#` lines (TOML, YAML, shell, ini, a dotfile)";
 }
 
 /// One comment, with the code it sits above.
@@ -73,13 +103,13 @@ pub(crate) struct Comment {
     /// rule that treats it as a comment about the code is a rule that deletes
     /// the public API's documentation.
     ///
-    /// Always false for Python and for Go, and for Go that is a fact about the
-    /// language rather than a gap here. godoc publishes the comment ABOVE a
-    /// declaration with no marker to distinguish it -- `//` is the whole of the
-    /// syntax -- so there is nothing in the grammar to read, and guessing from
-    /// position would make every comment above a function a doc comment and
-    /// exclude it from the check. An ordinary comment is the safe reading: it
-    /// is the one that leaves the rule doing something.
+    /// Always false for Python, for Go and for a `#`-line file, and for Go that
+    /// is a fact about the language rather than a gap here. godoc publishes the
+    /// comment ABOVE a declaration with no marker to distinguish it -- `//` is
+    /// the whole of the syntax -- so there is nothing in the grammar to read,
+    /// and guessing from position would make every comment above a function a
+    /// doc comment and exclude it from the check. An ordinary comment is the
+    /// safe reading: it is the one that leaves the rule doing something.
     pub doc: bool,
     /// Whether the comment stands on its own line rather than trailing code.
     pub own_line: bool,
@@ -293,15 +323,17 @@ fn introduced_code<'tree>(comment: Node<'tree>, kinds: &[&str]) -> Vec<Node<'tre
 /// error recovery keeps lexing. What a caller gets from a file it could not
 /// read at all is an empty list, and the selection layer is what reports that.
 pub(crate) fn collect(source: &str, language: Language) -> Vec<Comment> {
+    let Some((grammar, kinds)) = language.grammar() else {
+        return collect_hash_lines(source);
+    };
     let mut parser = Parser::new();
-    if parser.set_language(&language.grammar()).is_err() {
+    if parser.set_language(&grammar).is_err() {
         return Vec::new();
     }
     let Some(tree) = parser.parse(source, None) else {
         return Vec::new();
     };
 
-    let kinds = language.comment_kinds();
     let mut nodes = Vec::new();
     let mut cursor = tree.walk();
     let mut pending = vec![tree.root_node()];
@@ -351,6 +383,69 @@ pub(crate) fn collect(source: &str, language: Language) -> Vec<Comment> {
         .collect()
 }
 
+/// Every `#` line of a file no grammar reads.
+///
+/// The subject is the one line under the comment, not a run of statements: with
+/// no tree there is no statement, and the next line is the unit a reader of a
+/// TOML or YAML file attributes a comment to. A blank line under the comment
+/// leaves the subject empty, as it does in the parsed languages, because that
+/// is where the reader stops attributing it.
+///
+/// A shebang is an interpreter directive and not a remark, so the `#!` opening
+/// a file is not a comment here. Nothing else that opens with `#` is excluded:
+/// a `#` line inside a YAML block scalar is a comment in the script the scalar
+/// holds, and the reader it is addressed to is the same one.
+fn collect_hash_lines(source: &str) -> Vec<Comment> {
+    let lines: Vec<&str> = source.lines().collect();
+    let is_comment = |row: usize| {
+        lines.get(row).is_some_and(|line| {
+            let opener = line.trim_start();
+            opener.starts_with('#') && !(row == 0 && opener.starts_with("#!"))
+        })
+    };
+    lines
+        .iter()
+        .enumerate()
+        .filter(|&(row, _)| is_comment(row))
+        .map(|(row, line)| {
+            let above = row.checked_sub(1).is_some_and(is_comment);
+            let below = is_comment(row + 1);
+            let next = lines.get(row + 1).copied().unwrap_or_default();
+            let mut subject = BTreeSet::new();
+            if !below && !next.trim().is_empty() {
+                identifier_words(code_of_line(next), &mut subject);
+            }
+            Comment {
+                line: row as u64 + 1,
+                text: strip_markers(line),
+                doc: false,
+                own_line: true,
+                in_run: above || below,
+                subject,
+            }
+        })
+        .collect()
+}
+
+/// A line without the remark trailing it, so the subject is what the code says
+/// and not what a second comment beside it says.
+///
+/// Cut at a `#` that follows whitespace, which is the one spelling a trailing
+/// comment has in every `#`-line format; a `#` inside a value is welded to what
+/// precedes it (`"#fff"`, `url/#anchor`) and survives the cut.
+fn code_of_line(line: &str) -> &str {
+    let cut = line
+        .char_indices()
+        .find(|&(index, character)| {
+            character == '#'
+                && line
+                    .get(..index)
+                    .is_some_and(|before| before.ends_with(char::is_whitespace))
+        })
+        .map_or(line.len(), |(index, _)| index);
+    line.get(..cut).unwrap_or(line)
+}
+
 /// The words a comment contributes, filler removed.
 fn comment_words(text: &str) -> Vec<String> {
     let mut words = Vec::new();
@@ -365,6 +460,51 @@ fn comment_words(text: &str) -> Vec<String> {
         words.push(lowered);
     }
     words
+}
+
+/// The most content words a comment may carry and still be judged. Past this
+/// it is a paragraph, and a paragraph whose every word is in the code beneath
+/// it is describing that code rather than repeating it.
+const JUDGED_WORDS: usize = 6;
+
+/// A number with a unit -- `<n>ms`, `<n> KiB`, `<n>%` -- is a measurement, and a
+/// measurement states something even when its digits also appear in the code:
+/// which quantity the code's number is. `comment-facts` refuses the shape on
+/// its own ground; this check leaves it alone rather than reach a second verdict
+/// on the same line.
+///
+/// The digits must open their token, so `sha256`, `utf8` and `v2` are names and
+/// not amounts, and the unit is a short run of letters that is not filler --
+/// `<n> of <n>` is a proportion the measurement rule reads, not a unit this one
+/// does.
+fn has_measurement(text: &str) -> bool {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    tokens.iter().enumerate().any(|(index, token)| {
+        let token = token.trim_start_matches(|c: char| !c.is_alphanumeric());
+        if !token.starts_with(|c: char| c.is_ascii_digit()) {
+            return false;
+        }
+        let rest =
+            token.trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, '.' | ',' | '_'));
+        let unit = if rest.is_empty() {
+            tokens.get(index + 1).copied().unwrap_or_default()
+        } else {
+            rest
+        };
+        is_unit(unit)
+    })
+}
+
+fn is_unit(token: &str) -> bool {
+    const LONGEST_UNIT: usize = 5;
+    let token = token.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '%');
+    if token == "%" {
+        return true;
+    }
+    !token.is_empty()
+        && token.len() <= LONGEST_UNIT
+        && token.chars().all(|c| c.is_ascii_alphabetic())
+        && !FILLER.contains(&token.to_ascii_lowercase().as_str())
 }
 
 /// Whether two words name the same thing.
@@ -433,8 +573,17 @@ pub(crate) fn is_trivial(comment: &Comment) -> bool {
     if comment.text.contains('(') && comment.text.contains(')') {
         return false;
     }
+    // A link is a reference the code does not carry, whatever the words
+    // around it say; a measurement is a claim about a quantity, judged by the
+    // rule written for one.
+    if comment.text.contains("://") || comment.text.contains("www.") {
+        return false;
+    }
+    if has_measurement(&comment.text) {
+        return false;
+    }
     let words = comment_words(&comment.text);
-    if words.is_empty() {
+    if words.is_empty() || words.len() > JUDGED_WORDS {
         return false;
     }
     if words
@@ -665,5 +814,128 @@ mod tests {
         assert_eq!(Language::for_path("scripts/x.py"), Some(Language::Python));
         assert_eq!(Language::for_path("cmd/x/main.go"), Some(Language::Go));
         assert_eq!(Language::for_path("README.md"), None);
+    }
+
+    /// The dot that opens a dotfile's name is not the dot before an extension.
+    #[test]
+    fn a_hash_line_file_is_known_by_extension_or_by_its_leading_dot() {
+        for path in [
+            "Cargo.toml",
+            ".github/workflows/ci.yml",
+            ".pre-commit-config.yaml",
+            "scripts/install.sh",
+            "setup.cfg",
+            ".gitignore",
+        ] {
+            assert_eq!(
+                Language::for_path(path),
+                Some(Language::HashLines),
+                "{path}"
+            );
+        }
+        assert_eq!(Language::for_path("LICENSE"), None);
+        assert_eq!(Language::for_path("docs/index.html"), None);
+    }
+
+    fn hashes(source: &str) -> Vec<Comment> {
+        collect(source, Language::HashLines)
+    }
+
+    /// The case that opened this: a comment no text-only rule can see anything
+    /// wrong with, because everything wrong with it is on the next line.
+    #[test]
+    fn a_hash_comment_restating_the_next_line_is_trivial() {
+        let found = hashes("# the runner is ubuntu-latest\nrunner = \"ubuntu-latest\"\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].text, "the runner is ubuntu-latest");
+        assert!(is_trivial(&found[0]), "{:?}", found[0]);
+    }
+
+    #[test]
+    fn a_hash_comment_giving_a_reason_is_kept() {
+        let found = hashes(
+            "# ubuntu-latest, because the installer falls back to musl\nrunner = \"ubuntu-latest\"\n",
+        );
+        assert!(!is_trivial(&found[0]), "{:?}", found[0]);
+    }
+
+    #[test]
+    fn a_hash_comment_carrying_a_word_the_line_lacks_is_kept() {
+        let found = hashes("# the cheapest runner\nrunner = \"ubuntu-latest\"\n");
+        assert!(!is_trivial(&found[0]), "{:?}", found[0]);
+    }
+
+    /// A link, a measurement and a paragraph are each doing something other
+    /// than repeating, and none is judged.
+    #[test]
+    fn a_link_a_measurement_and_a_paragraph_are_not_judged() {
+        for source in [
+            "# runner https://example.test/runner\nrunner = \"ubuntu-latest\"\n",
+            "# runner timeout 30 s\nrunner_timeout = 30\n",
+            "# 50% of the runner\nrunner = \"ubuntu-latest\"\n",
+            "# the ubuntu latest runner image name value default choice\nrunner = \"ubuntu latest image name value default choice\"\n",
+        ] {
+            let found = hashes(source);
+            assert!(!is_trivial(&found[0]), "{:?}", found[0]);
+        }
+    }
+
+    /// The measurement skip reads amounts, not the digits inside a name.
+    #[test]
+    fn a_number_is_a_measurement_only_with_a_unit_after_it() {
+        assert!(has_measurement("timeout 30 s"));
+        assert!(has_measurement("about 4KiB each"));
+        assert!(has_measurement("~127 MB of rlib"));
+        assert!(has_measurement("half, 50%"));
+        assert!(!has_measurement("sha256 of the archive"));
+        assert!(!has_measurement("python3 interpreter"));
+        assert!(!has_measurement("since 2024"));
+        assert!(!has_measurement("3 of them"));
+        assert!(!has_measurement("v1.14.1 release"));
+    }
+
+    /// The trailing remark on the code line is not the code.
+    #[test]
+    fn a_trailing_remark_on_the_next_line_is_not_part_of_its_subject() {
+        let found = hashes("# the runner\nrunner = \"x\" # runner of the job\n");
+        assert!(!found[0].subject.contains("job"), "{:?}", found[0]);
+        assert_eq!(
+            code_of_line("color = \"#fff\" # swatch"),
+            "color = \"#fff\" "
+        );
+        assert_eq!(code_of_line("url = \"a/#anchor\""), "url = \"a/#anchor\"");
+    }
+
+    /// A run is prose, and a blank line is where attribution stops -- the same
+    /// two answers the parsed languages give.
+    #[test]
+    fn a_hash_comment_in_a_run_or_above_a_blank_line_is_not_judged() {
+        let run = hashes("# the runner\n# is ubuntu-latest\nrunner = \"ubuntu-latest\"\n");
+        assert_eq!(run.len(), 2, "{run:?}");
+        assert!(run.iter().all(|comment| comment.in_run), "{run:?}");
+        assert!(run.iter().all(|comment| !is_trivial(comment)), "{run:?}");
+        let blank = hashes("# the runner\n\nrunner = \"ubuntu-latest\"\n");
+        assert!(blank[0].subject.is_empty(), "{:?}", blank[0]);
+        assert!(!is_trivial(&blank[0]), "{:?}", blank[0]);
+    }
+
+    /// A shebang is an interpreter directive; a `#` line further down a script
+    /// is a comment like any other.
+    #[test]
+    fn a_shebang_is_not_a_comment_and_a_later_hash_line_is() {
+        let found = hashes("#!/usr/bin/env bash\n# strict mode\nset -euo pipefail\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].line, 2);
+        assert!(!found[0].in_run, "{:?}", found[0]);
+    }
+
+    /// A TOML table header and a YAML key are lines, and a comment repeating
+    /// either is repeating the code.
+    #[test]
+    fn a_hash_comment_over_a_table_header_or_a_key_is_judged_against_it() {
+        let table = hashes("# dependencies\n[dependencies]\n");
+        assert!(is_trivial(&table[0]), "{:?}", table[0]);
+        let key = hashes("# the release job\nrelease:\n  runs-on: ubuntu-latest\n");
+        assert!(!is_trivial(&key[0]), "{:?}", key[0]);
     }
 }
