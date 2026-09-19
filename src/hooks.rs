@@ -513,11 +513,11 @@ pub(crate) fn install(root: &Path, runner: Option<&str>, directory: &str) -> Res
     // off: `core.hooksPath` makes git look in one directory for every hook,
     // and a type with no file there is a hook that no longer fires.
     let text = crate::error::read_to_string(&config)?;
-    let parsed: serde_yaml_ng::Value =
-        serde_yaml_ng::from_str(&text).map_err(|error| Fatal::at(&config, error))?;
+    let parsed: serde_json::Value =
+        serde_saphyr::from_str(&text).map_err(|error| Fatal::yaml(&config, &error))?;
     if let Some(declared) = parsed
         .get("default_install_hook_types")
-        .and_then(serde_yaml_ng::Value::as_sequence)
+        .and_then(serde_json::Value::as_array)
     {
         for declared_type in declared {
             let name = declared_type.as_str().unwrap_or_default();

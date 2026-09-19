@@ -177,8 +177,8 @@ struct PublishedHook {
 
 /// `(ids that run the scan, stage -> the id that installs it)`.
 fn published() -> Result<(BTreeSet<String>, BTreeMap<String, String>)> {
-    let hooks: Vec<PublishedHook> = serde_yaml_ng::from_str(MANIFEST)
-        .map_err(|error| Fatal::new(format!(".pre-commit-hooks.yaml: {error}")))?;
+    let hooks: Vec<PublishedHook> = serde_saphyr::from_str(MANIFEST)
+        .map_err(|error| Fatal::yaml(Path::new(".pre-commit-hooks.yaml"), &error))?;
 
     let mut scans = BTreeSet::new();
     let mut guards = BTreeMap::new();
@@ -246,7 +246,7 @@ fn pinned_ids(root: &Path) -> Result<Option<BTreeSet<String>>> {
     }
     let text = std::fs::read_to_string(&path).map_err(|error| Fatal::at(&path, error))?;
     let config: PreCommitConfig =
-        serde_yaml_ng::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
+        serde_saphyr::from_str(&text).map_err(|error| Fatal::yaml(&path, &error))?;
     let Some(repos) = config.repos else {
         return Err(Fatal::at(
             &path,
@@ -269,7 +269,7 @@ struct LefthookConfig {
     #[serde(default)]
     remotes: Vec<LefthookRemote>,
     #[serde(flatten)]
-    stages: BTreeMap<String, serde_yaml_ng::Value>,
+    stages: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -295,7 +295,7 @@ fn lefthook_seams(root: &Path, guards: &BTreeMap<String, String>) -> Result<Inst
     }
     let text = std::fs::read_to_string(&path).map_err(|error| Fatal::at(&path, error))?;
     let config: LefthookConfig =
-        serde_yaml_ng::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
+        serde_saphyr::from_str(&text).map_err(|error| Fatal::yaml(&path, &error))?;
 
     let mut direct = false;
     for (key, body) in &config.stages {
@@ -400,25 +400,23 @@ fn lefthook_commands(
         if !guards.contains_key(stage.as_str()) {
             continue;
         }
-        let Some(commands) = body.get("commands").and_then(|value| value.as_mapping()) else {
+        let Some(commands) = body.get("commands").and_then(|value| value.as_object()) else {
             continue;
         };
         for key in commands.keys() {
-            if let Some(name) = key.as_str() {
-                names.insert(name.to_owned());
-            }
+            names.insert(key.clone());
         }
     }
     names
 }
 
 /// Every `run:` string under a lefthook stage, at any nesting.
-fn runs_in(value: &serde_yaml_ng::Value) -> Vec<String> {
+fn runs_in(value: &serde_json::Value) -> Vec<String> {
     let mut found = Vec::new();
     match value {
-        serde_yaml_ng::Value::Mapping(mapping) => {
+        serde_json::Value::Object(mapping) => {
             for (key, nested) in mapping {
-                if key.as_str() == Some("run") {
+                if key == "run" {
                     if let Some(text) = nested.as_str() {
                         found.push(text.to_owned());
                     }
@@ -427,7 +425,7 @@ fn runs_in(value: &serde_yaml_ng::Value) -> Vec<String> {
                 }
             }
         }
-        serde_yaml_ng::Value::Sequence(items) => {
+        serde_json::Value::Array(items) => {
             for item in items {
                 found.extend(runs_in(item));
             }
@@ -873,7 +871,7 @@ mod tests {
         // the sequence arm would make a config read as declaring nothing --
         // which reconciles as "no seam here supplies it" over a repository
         // whose hooks are installed and running.
-        let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+        let config: serde_json::Value = serde_saphyr::from_str(
             "commands:\n  - first:\n      run: uphold scan\n  - second:\n      run: uphold guard --stage pre-commit\n",
         )
         .unwrap();

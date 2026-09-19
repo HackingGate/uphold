@@ -30,6 +30,18 @@ impl Fatal {
     pub(crate) fn at(path: &Path, message: impl fmt::Display) -> Self {
         Self::new(format!("{}: {message}", path.display()))
     }
+
+    /// A YAML file that would not parse, on one line.
+    ///
+    /// The parser's own rendering is a message, a line and column, and then a
+    /// source excerpt labelled `<input>` with a caret under the fault. The
+    /// excerpt is the file the reader is about to open, labelled with a
+    /// placeholder where every other error here writes the path, and it is
+    /// three to six more lines in a hook's stderr. The line and column are what
+    /// a reader acts on, and the plain rendering keeps them.
+    pub(crate) fn yaml(path: &Path, error: &serde_saphyr::Error) -> Self {
+        Self::at(path, error.without_snippet())
+    }
 }
 
 impl fmt::Display for Fatal {

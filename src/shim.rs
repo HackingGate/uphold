@@ -1949,11 +1949,12 @@ fn forge_field(
 /// document -- inside a nested object, inside a string value, inside a
 /// description that happens to quote the word. On the visibility question that
 /// is a `public-target` decision made from somebody else's field, and the shim
-/// stands in front of publication on the strength of it. The parser is already a
-/// dependency: YAML 1.2 is a superset of JSON, so `serde_yaml_ng` reads a forge
-/// response without adding one.
-fn json_value(text: &str) -> Option<serde_yaml_ng::Value> {
-    serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text).ok()
+/// stands in front of publication on the strength of it. Read by the JSON
+/// parser and not the YAML one: a forge answers in JSON, and reading it through
+/// YAML's superset admits spellings no forge sends and a YAML reader's own
+/// resolution rules over the ones it does.
+fn json_value(text: &str) -> Option<serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(text).ok()
 }
 
 fn json_string_field(text: &str, field: &str) -> Option<String> {
@@ -1962,9 +1963,9 @@ fn json_string_field(text: &str, field: &str) -> Option<String> {
     // A number or a bool spelled where a string was expected is still an answer
     // the caller can use; a nested object is not.
     match value {
-        serde_yaml_ng::Value::String(found) => Some(found.clone()),
-        serde_yaml_ng::Value::Number(found) => Some(found.to_string()),
-        serde_yaml_ng::Value::Bool(found) => Some(found.to_string()),
+        serde_json::Value::String(found) => Some(found.clone()),
+        serde_json::Value::Number(found) => Some(found.to_string()),
+        serde_json::Value::Bool(found) => Some(found.to_string()),
         _ => None,
     }
 }
@@ -1973,7 +1974,7 @@ fn json_bool_field(text: &str, field: &str) -> bool {
     json_value(text)
         .as_ref()
         .and_then(|parsed| parsed.get(field))
-        .and_then(serde_yaml_ng::Value::as_bool)
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
 }
 
