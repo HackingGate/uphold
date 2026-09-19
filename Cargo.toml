@@ -77,8 +77,19 @@ tree-sitter-python = "0.25"
 # of three lines, because the dependency was already here.
 tree-sitter-go = "0.25"
 
+# `strip` is deliberately absent: stripping is a packaging step, and a stripped
+# binary with no build-id cannot be symbolicated from a core. `debug = 1` keeps
+# the line tables so a crash names the line it happened on.
 [profile.release]
-strip = true
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = 1
+
+# The profile `dist` builds the release artifacts with. It adds nothing to
+# `release`: the shipped binary is the one `cargo build --release` produces.
+[profile.dist]
+inherits = "release"
 
 # The same lint profile the sibling crates run under. A repository whose
 # whole job is enforcing engineering rules should not hold its own Rust to a
