@@ -747,7 +747,6 @@ pub(crate) fn for_publication(root: &Path, policy: &Policy) -> Result<Exit> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     #[test]
     fn the_audit_rule_is_the_repositorys_own_with_one_field_moved() {
@@ -817,20 +816,9 @@ mod tests {
             &["config", "user.name", "Test"][..],
             &["config", "user.email", "test@example.test"][..],
         ] {
-            git(&root, args);
+            crate::fixture::git(&root, args);
         }
         root
-    }
-
-    fn git(root: &Path, args: &[&str]) {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?} failed");
     }
 
     /// A fetch that never RAN is not a fetch that found nothing new.
@@ -887,15 +875,15 @@ mod tests {
     fn pull_refs_the_forge_lists_but_the_fetch_did_not_bring_are_unread() {
         let root = repository("audit-pull-listed");
         std::fs::write(root.join("a.txt"), "nothing to see\n").unwrap();
-        git(&root, &["add", "-A"]);
-        git(&root, &["commit", "-qm", "one", "--no-verify"]);
+        crate::fixture::git(&root, &["add", "-A"]);
+        crate::fixture::git(&root, &["commit", "-qm", "one", "--no-verify"]);
         let origin = crate::fixture::scratch("audit-pull-listed-origin");
-        git(&root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
-        git(
+        crate::fixture::git(&root, &["init", "-q", "--bare", origin.to_str().unwrap()]);
+        crate::fixture::git(
             &root,
             &["remote", "add", "origin", origin.to_str().unwrap()],
         );
-        git(&root, &["push", "-q", "origin", "HEAD:refs/pull/1/head"]);
+        crate::fixture::git(&root, &["push", "-q", "origin", "HEAD:refs/pull/1/head"]);
 
         let note =
             no_pull_refs(&root).expect("a forge that lists pull refs is not one that retains none");

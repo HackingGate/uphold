@@ -357,7 +357,6 @@ pub(crate) fn owner_repo(url: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     #[test]
     fn owner_and_repo_come_out_of_every_url_spelling() {
@@ -405,14 +404,7 @@ mod tests {
             &["config", "user.name", "Test"][..],
             &["config", "user.email", "test@example.test"][..],
         ] {
-            let status = Command::new("git")
-                .args(args)
-                .current_dir(&root)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .unwrap();
-            assert!(status.success(), "git {args:?} failed");
+            crate::fixture::git(&root, args);
         }
 
         // Written and staged in one `git add`, because the point of the test is
@@ -425,14 +417,7 @@ mod tests {
             )
             .unwrap();
         }
-        let status = Command::new("git")
-            .args(["add", "-A", "."])
-            .current_dir(&root)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .unwrap();
-        assert!(status.success(), "git add failed");
+        crate::fixture::git(&root, &["add", "-A", "."]);
         let staged = run(&root, &["ls-files", "-s"]).unwrap();
         let shas: Vec<String> = staged
             .lines()
@@ -480,26 +465,12 @@ mod tests {
             &["config", "user.name", "Test"][..],
             &["config", "user.email", "test@example.test"][..],
         ] {
-            let status = Command::new("git")
-                .args(args)
-                .current_dir(&root)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .unwrap();
-            assert!(status.success(), "git {args:?} failed");
+            crate::fixture::git(&root, args);
         }
         let awkward: Vec<u8> = b"first line\n0123456789abcdef blob 12\n\0trailing".to_vec();
         std::fs::write(root.join("awkward.bin"), &awkward).unwrap();
         std::fs::write(root.join("plain.txt"), "plain\n").unwrap();
-        let status = Command::new("git")
-            .args(["add", "-A", "."])
-            .current_dir(&root)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .unwrap();
-        assert!(status.success(), "git add failed");
+        crate::fixture::git(&root, &["add", "-A", "."]);
 
         let staged = run(&root, &["ls-files", "-s"]).unwrap();
         let mut shas: Vec<String> = staged

@@ -530,7 +530,7 @@ fn which(command: &str) -> Option<PathBuf> {
 /// Stripped rather than overridden: the list of things git puts in an
 /// environment is git's, and an override answers only for the names somebody
 /// remembered.
-fn detached(program: &str, directory: &Path) -> Command {
+pub(crate) fn detached(program: &str, directory: &Path) -> Command {
     let mut command = Command::new(program);
     command.current_dir(directory);
     for name in [

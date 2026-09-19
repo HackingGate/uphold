@@ -57,12 +57,7 @@ fn workspace(policy: &str, stubs: &[(&str, &str)]) -> PathBuf {
         std::fs::set_permissions(&path, permissions).unwrap();
     }
 
-    Command::new(support::real_git())
-        .args(["init", "-q", "-b", "main"])
-        .current_dir(&root)
-        .stdout(Stdio::null())
-        .status()
-        .unwrap();
+    support::git(&root, &["init", "-q", "-b", "main"]);
     root
 }
 
@@ -1092,12 +1087,7 @@ command.before = ["faux"]
 
 /// A remote to resolve a target out of, written rather than fetched.
 fn origin(root: &Path, url: &str) {
-    Command::new(support::real_git())
-        .args(["remote", "add", "origin", url])
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .status()
-        .unwrap();
+    support::git(root, &["remote", "add", "origin", url]);
 }
 
 #[test]

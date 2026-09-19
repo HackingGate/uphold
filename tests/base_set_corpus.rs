@@ -468,22 +468,11 @@ fn repository(policy: &str) -> PathBuf {
     let root = support::scratch("corpus");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
-    git(&root, &["init", "-q", "-b", "main"]);
-    git(&root, &["config", "user.name", "Test"]);
-    git(&root, &["config", "user.email", "test@example.test"]);
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    support::git(&root, &["config", "user.name", "Test"]);
+    support::git(&root, &["config", "user.email", "test@example.test"]);
     std::fs::write(root.join("policy/principles.toml"), policy).unwrap();
     root
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let status = Command::new(support::real_git())
-        .args(args)
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
 }
 
 fn scan(root: &Path) -> Output {
@@ -511,7 +500,7 @@ fn verdict(case: &Case, sample: &str) -> (i32, String) {
         std::fs::create_dir_all(parent).unwrap();
     }
     std::fs::write(&path, sample).unwrap();
-    git(&root, &["add", "-A"]);
+    support::git(&root, &["add", "-A"]);
     let output = scan(&root);
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));

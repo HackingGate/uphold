@@ -69,12 +69,7 @@ fn workspace(policy: &str) -> PathBuf {
     std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
     std::fs::set_permissions(&stub, permissions).unwrap();
 
-    Command::new(support::real_git())
-        .args(["init", "-q", "-b", "main"])
-        .current_dir(&root)
-        .stdout(Stdio::null())
-        .status()
-        .unwrap();
+    support::git(&root, &["init", "-q", "-b", "main"]);
     root
 }
 
@@ -806,11 +801,10 @@ fn a_global_option_does_not_shift_which_word_the_branch_is() {
     // run, and `git -c ... push` published a branch name through nothing.
     let root = workspace(GIT_REFS_POLICY);
     forwarding_git(&root);
-    Command::new(support::real_git())
-        .args(["symbolic-ref", "HEAD", "refs/heads/fix/acme-outage"])
-        .current_dir(&root)
-        .status()
-        .unwrap();
+    support::git(
+        &root,
+        &["symbolic-ref", "HEAD", "refs/heads/fix/acme-outage"],
+    );
 
     for form in [
         vec!["git", "push", "origin", "fix/acme-outage"],
@@ -1685,12 +1679,7 @@ fn a_push_with_no_refspec_still_names_the_branch_it_is_publishing() {
     // string this shim is standing in front of unread -- and it goes to the
     // ref list, the pull request the forge suggests, and every notification.
     let root = workspace(REF_POLICY);
-    Command::new(support::real_git())
-        .args(["checkout", "-q", "-b", "fix/acme-outage"])
-        .current_dir(&root)
-        .stdout(Stdio::null())
-        .status()
-        .unwrap();
+    support::git(&root, &["checkout", "-q", "-b", "fix/acme-outage"]);
 
     let refused = shim(&root, &["faux", "push", "origin"]);
     assert_eq!(code(&refused), 1, "{}", stderr(&refused));
@@ -1997,15 +1986,6 @@ fn plumbing_git(root: &Path) {
     );
 }
 
-fn git_in(root: &Path, args: &[&str]) {
-    Command::new(support::real_git())
-        .args(args)
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .status()
-        .unwrap();
-}
-
 #[test]
 fn an_alias_for_a_push_is_expanded_before_the_match_list_is_read() {
     // The gap this closes, reproduced against the built binary on PATH: a
@@ -2015,7 +1995,7 @@ fn an_alias_for_a_push_is_expanded_before_the_match_list_is_read() {
     // branch name it exists to read going out unexamined.
     let root = workspace(GIT_REFS_POLICY);
     plumbing_git(&root);
-    git_in(&root, &["config", "alias.p", "push"]);
+    support::git(&root, &["config", "alias.p", "push"]);
 
     // The persisted alias, and the one written on the command line. `-c`
     // outranks the config file and costs no process to read.
@@ -2049,7 +2029,7 @@ fn a_shell_alias_is_a_could_not_look_rather_than_an_absence() {
     // to refuse.
     let root = workspace(GIT_REFS_POLICY);
     plumbing_git(&root);
-    git_in(&root, &["config", "alias.deploy", "!echo deploying"]);
+    support::git(&root, &["config", "alias.deploy", "!echo deploying"]);
 
     let output = shim(&root, &["git", "deploy"]);
     assert_eq!(code(&output), 2, "{}", stderr(&output));
@@ -2171,7 +2151,7 @@ fn a_push_of_every_branch_checks_every_branch() {
     // other thirty-nine went out unread.
     let root = workspace(GIT_REFS_POLICY);
     plumbing_git(&root);
-    git_in(
+    support::git(
         &root,
         &[
             "-c",
@@ -2185,7 +2165,7 @@ fn a_push_of_every_branch_checks_every_branch() {
             "a commit to hang a branch on",
         ],
     );
-    git_in(&root, &["branch", "fix/acme-outage"]);
+    support::git(&root, &["branch", "fix/acme-outage"]);
 
     // Standing on `main`, so the name that would be refused appears nowhere in
     // argv and nowhere in HEAD.
@@ -2670,12 +2650,7 @@ fn declared_workspace(policy: &str, origin: &str) -> PathBuf {
         "gh",
         "#!/bin/sh\necho asked >> \"$(dirname \"$0\")/../gh.asked\"\nexit 1\n",
     );
-    Command::new(support::real_git())
-        .args(["remote", "add", "origin", origin])
-        .current_dir(&root)
-        .stdout(Stdio::null())
-        .status()
-        .unwrap();
+    support::git(&root, &["remote", "add", "origin", origin]);
     root
 }
 
@@ -2820,17 +2795,15 @@ fn a_rate_limited_forge_says_so_where_the_scope_could_not_be_established() {
              esac\n"
         ),
     );
-    Command::new(support::real_git())
-        .args([
+    support::git(
+        &root,
+        &[
             "remote",
             "add",
             "origin",
             "https://github.com/acme/widget.git",
-        ])
-        .current_dir(&root)
-        .stdout(Stdio::null())
-        .status()
-        .unwrap();
+        ],
+    );
 
     let output = shim(&root, &["faux", "pr", "create", "-t", "An ordinary title"]);
     // Still exit 2. The verdict was never the question -- a scope that could not
@@ -2976,16 +2949,15 @@ fn own_probe_workspace() -> PathBuf {
         "gh",
         "#!/bin/sh\nprintf '%s' \"$UPHOLD_SHIM_INNER\" > \"$(dirname \"$0\")/../probe.depth\"\necho public\n",
     );
-    Command::new(support::real_git())
-        .args([
+    support::git(
+        &root,
+        &[
             "remote",
             "add",
             "origin",
             "https://github.com/acme/widget.git",
-        ])
-        .current_dir(&root)
-        .status()
-        .unwrap();
+        ],
+    );
     root
 }
 

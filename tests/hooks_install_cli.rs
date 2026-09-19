@@ -32,19 +32,8 @@ fn repository() -> PathBuf {
         "default_install_hook_types: [pre-commit, commit-msg, pre-merge-commit, pre-push]\nrepos: []\n",
     )
     .unwrap();
-    git(&root, &["init", "-q", "-b", "main"]);
+    support::git(&root, &["init", "-q", "-b", "main"]);
     root
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let status = Command::new(support::real_git())
-        .args(args)
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
 }
 
 /// A stub runner on PATH, so detection and the delegates have something real.
@@ -86,9 +75,8 @@ fn text(output: &Output) -> String {
 }
 
 fn hooks_path(root: &Path) -> String {
-    let output = Command::new(support::real_git())
+    let output = support::git_command(root)
         .args(["config", "--get", "core.hooksPath"])
-        .current_dir(root)
         .output()
         .unwrap();
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
@@ -141,7 +129,7 @@ fn a_file_somebody_else_wrote_is_refused_rather_than_replaced() {
 fn a_foreign_core_hookspath_is_refused_rather_than_repointed() {
     let root = repository();
     let stub = stub_runner("prek");
-    git(&root, &["config", "core.hooksPath", "somewhere/else"]);
+    support::git(&root, &["config", "core.hooksPath", "somewhere/else"]);
 
     let output = install(&root, &[], &stub);
     assert_eq!(code(&output), 2, "{}", text(&output));

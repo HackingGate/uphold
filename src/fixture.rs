@@ -14,6 +14,7 @@
 //! found "unviable", a measurement it had not made.
 
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Once;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -62,4 +63,30 @@ fn sweep(all: &Path) {
         }
         drop(std::fs::remove_dir_all(entry.path()));
     }
+}
+
+/// Run `git args` in `root`, and fail the test if git did.
+///
+/// Through `probe::detached`, because `current_dir` is not what git reads
+/// first: a suite run from inside a hook inherits the `GIT_DIR` and
+/// `GIT_INDEX_FILE` the hook runner exported, and a fixture's `config user.*`
+/// and `commit` then land in the repository whose hook is running rather than
+/// in the scratch directory they were pointed at. `tests/support` carries the
+/// same helper for the CLI suites, which cannot reach this one.
+///
+/// stderr is kept for the failure message rather than dropped, since a
+/// fixture that failed for want of a committer identity is otherwise reported
+/// as `git ["commit", ...] failed` and nothing more.
+pub(crate) fn git(root: &Path, args: &[&str]) {
+    let output = crate::probe::detached("git", root)
+        .args(args)
+        .stdout(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?} in {} failed:\n{}",
+        root.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

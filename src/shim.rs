@@ -3955,14 +3955,7 @@ mod tests {
             &["init", "-q", "-b", "main"][..],
             &["remote", "add", "origin", url][..],
         ] {
-            let status = Command::new("git")
-                .args(args)
-                .current_dir(&dir)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .unwrap();
-            assert!(status.success(), "git {args:?} failed");
+            crate::fixture::git(&dir, args);
         }
         dir
     }

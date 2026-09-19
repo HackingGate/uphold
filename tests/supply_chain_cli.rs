@@ -152,35 +152,15 @@ fn recording(answer: &str) -> String {
     format!("echo \"$(basename \"$0\") [$PWD] $*\" >> \"$STUB_LOG\"\n{answer}")
 }
 
-fn git(root: &Path, args: &[&str]) {
-    let output = Command::new(support::real_git())
-        .args(args)
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .output()
-        .unwrap();
-    // What git said, and where. A helper that swallowed stderr reported a
-    // missing committer identity as `git ["commit", ...] failed`, which is the
-    // one fact a reader already has -- and the cause was one config line away in
-    // a message nobody could see.
-    assert!(
-        output.status.success(),
-        "git {args:?} in {} failed:\n{}",
-        root.display(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 fn commit(root: &Path, message: &str) -> String {
-    git(root, &["add", "-A"]);
-    git(root, &["commit", "-q", "--allow-empty", "-m", message]);
+    support::git(root, &["add", "-A"]);
+    support::git(root, &["commit", "-q", "--allow-empty", "-m", message]);
     head(root)
 }
 
 fn head(root: &Path) -> String {
-    let output = Command::new(support::real_git())
+    let output = support::git_command(root)
         .args(["rev-parse", "HEAD"])
-        .current_dir(root)
         .output()
         .unwrap();
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
@@ -194,9 +174,9 @@ fn tracked() -> PathBuf {
     // Git first, policy second: on a machine with the shims installed, `git
     // init` inside a tree whose policy is already written runs the shim, and
     // the fixture's setup would be reading its own subject.
-    git(&root, &["init", "-q", "-b", "main"]);
-    git(&root, &["config", "user.name", "Test"]);
-    git(&root, &["config", "user.email", "test@example.test"]);
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    support::git(&root, &["config", "user.name", "Test"]);
+    support::git(&root, &["config", "user.email", "test@example.test"]);
     std::fs::create_dir_all(root.join("policy")).unwrap();
     std::fs::write(
         root.join("policy/principles.toml"),
@@ -859,14 +839,14 @@ fn a_whole_tree_sweep_declares_the_ci_configuration_it_did_not_scan() {
 fn with_a_submodule(root: &Path) {
     let member = support::scratch("supply-chain-member");
     std::fs::create_dir_all(&member).unwrap();
-    git(&member, &["init", "-q", "-b", "main"]);
-    git(&member, &["config", "user.name", "Test"]);
-    git(&member, &["config", "user.email", "test@example.test"]);
+    support::git(&member, &["init", "-q", "-b", "main"]);
+    support::git(&member, &["config", "user.name", "Test"]);
+    support::git(&member, &["config", "user.email", "test@example.test"]);
     write(&member, "uv.lock", "version = 1\n");
     commit(&member, "the member's own lock");
     // `protocol.file.allow` because git refuses a local-path submodule by
     // default since CVE-2022-39253, and the fixture is exactly a local path.
-    git(
+    support::git(
         root,
         &[
             "-c",
@@ -885,8 +865,8 @@ fn with_a_submodule(root: &Path) {
     // the source. Without it the fixture borrows whoever is configured globally,
     // which is a machine that has somebody -- and CI is a machine that does not.
     let checkout = root.join("sub");
-    git(&checkout, &["config", "user.name", "Test"]);
-    git(&checkout, &["config", "user.email", "test@example.test"]);
+    support::git(&checkout, &["config", "user.name", "Test"]);
+    support::git(&checkout, &["config", "user.email", "test@example.test"]);
     commit(root, "track the member");
 }
 
@@ -928,7 +908,7 @@ fn a_submodule_commit_the_store_does_not_have_widens_to_every_manifest_under_it(
     let root = tracked();
     with_a_submodule(&root);
     let before = head(&root);
-    git(
+    support::git(
         &root,
         &[
             "update-index",
@@ -937,7 +917,7 @@ fn a_submodule_commit_the_store_does_not_have_widens_to_every_manifest_under_it(
             "160000,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,sub",
         ],
     );
-    git(&root, &["commit", "-q", "-m", "a pointer nobody fetched"]);
+    support::git(&root, &["commit", "-q", "-m", "a pointer nobody fetched"]);
     let after = head(&root);
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),

@@ -16,7 +16,7 @@
 mod support;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 
 /// One shim, whose scope is `always` so the tests need no forge.
 const POLICY: &str = r#"
@@ -52,12 +52,7 @@ fn workspace(name: &str) -> PathBuf {
     // be on PATH under its own name.
     std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_uphold"), root.join("bin/uphold")).unwrap();
     executable(&root.join("bin/faux"), "#!/bin/sh\necho \"faux ran: $*\"\n");
-    Command::new(support::real_git())
-        .args(["init", "-q", "-b", "main"])
-        .current_dir(&root)
-        .stdout(Stdio::null())
-        .status()
-        .unwrap();
+    support::git(&root, &["init", "-q", "-b", "main"]);
     root
 }
 

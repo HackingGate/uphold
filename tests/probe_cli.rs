@@ -24,9 +24,9 @@ fn repository(probes: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("policy")).unwrap();
 
-    git(&root, &["init", "-q", "-b", "main"]);
-    git(&root, &["config", "user.name", "Test"]);
-    git(&root, &["config", "user.email", "test@example.test"]);
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    support::git(&root, &["config", "user.name", "Test"]);
+    support::git(&root, &["config", "user.email", "test@example.test"]);
 
     std::fs::write(
         root.join("policy/principles.toml"),
@@ -43,20 +43,9 @@ fn repository(probes: &str) -> PathBuf {
     }
     // A commit, because the probe checks out HEAD into a throwaway worktree --
     // which is the whole reason the operator's own tree is never planted in.
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
     root
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let status = Command::new(support::real_git())
-        .args(args)
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?} failed");
 }
 
 /// A `prek` on PATH that answers the way this case needs.
@@ -191,8 +180,8 @@ fn the_denominator_is_printed_beside_the_probes() {
         "repos:\n  - repo: https://github.com/example/hooks\n    rev: v1.0.0\n    hooks:\n      - id: no-markers\n      - id: something-else\n",
     )
     .unwrap();
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-qm", "two", "--no-verify"]);
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "two", "--no-verify"]);
     let stub = runner("grep -q MARKER sample.txt && exit 1\nexit 0");
 
     let output = probe(&root, Some(&stub));
@@ -266,9 +255,8 @@ fn the_operators_own_tree_is_never_planted_in() {
         !root.join("sample.txt").exists(),
         "the probe left its fixture in the working tree"
     );
-    let status = Command::new(support::real_git())
+    let status = support::git_command(&root)
         .args(["status", "--porcelain"])
-        .current_dir(&root)
         .output()
         .unwrap();
     assert!(

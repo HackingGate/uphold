@@ -28,14 +28,7 @@ fn workspace() -> PathBuf {
 fn repository(workspace: &Path, name: &str, config: &str) -> PathBuf {
     let root = workspace.join(name);
     std::fs::create_dir_all(&root).unwrap();
-    let status = Command::new(support::real_git())
-        .args(["init", "-q", "-b", "main"])
-        .current_dir(&root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    support::git(&root, &["init", "-q", "-b", "main"]);
     std::fs::write(root.join(".pre-commit-config.yaml"), config).unwrap();
     root
 }
@@ -163,14 +156,7 @@ fn waivers(root: &Path, text: &str) {
     )
     .unwrap();
     std::fs::write(root.join("policy/hooks.toml"), text).unwrap();
-    let status = Command::new(support::real_git())
-        .args(["init", "-q", "-b", "main"])
-        .current_dir(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    support::git(root, &["init", "-q", "-b", "main"]);
 }
 
 #[test]
@@ -296,14 +282,7 @@ fn a_lefthook_command_under_two_hooks_is_two_declarations_not_a_fork() {
     let workspace = workspace();
     let one = workspace.join("one");
     std::fs::create_dir_all(&one).unwrap();
-    let status = Command::new(support::real_git())
-        .args(["init", "-q", "-b", "main"])
-        .current_dir(&one)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    support::git(&one, &["init", "-q", "-b", "main"]);
     std::fs::write(
         one.join("lefthook.yml"),
         "pre-commit:\n  commands:\n    guards:\n      run: uphold guard --stage pre-commit\npre-push:\n  commands:\n    guards:\n      run: uphold guard --stage pre-push\n",
