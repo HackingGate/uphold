@@ -52,7 +52,7 @@ unicode-script = "0.5"
 # A homoglyph finding shows a letter that looks exactly like the Latin one it
 # replaced, so printing the character is no help at all and "CYRILLIC SMALL
 # LETTER EN" is the whole answer.
-unicode_names2 = "3.1"
+unicode_names2 = "4.0"
 # The WHATWG encoding registry, which is what an `encoding` rule's label
 # resolves through: "Shift_JIS" here means what it means to every browser, and
 # a hand-enumerated subset of the registry would be the failure
