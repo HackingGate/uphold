@@ -529,6 +529,39 @@
     "rules": [
       {
         "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go"
+          ],
+          "exclude_cfg_test": false,
+          "glob": [
+            "*.rs",
+            "*.py",
+            "*.pyi",
+            "*.go",
+            "*.toml",
+            "*.yaml",
+            "*.yml",
+            "*.sh",
+            "*.bash",
+            "*.zsh",
+            "*.fish",
+            "*.ini",
+            "*.cfg"
+          ],
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-restated-line",
+        "message": "This comment says what the next line already says. State a why, a constraint\nor a consequence, or delete it.\n",
+        "trivial_comments": true
+      },
+      {
+        "files": {
           "exclude_cfg_test": false,
           "glob": [
             "*.rs",

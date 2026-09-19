@@ -1,7 +1,9 @@
-# Base rule set: comment-facts (a measurement of the author's own data, stated
-# in a comment where nothing can ever recount it)
+# Base rule set: comment-facts (what a comment may claim: not a measurement of
+# the author's own data, which nothing can ever recount, and not the line
+# beneath it, which the code already states)
 #
-# A comment that states a measurement is a fact with no anchor. Pull in with:
+# A comment that states a measurement is a fact with no anchor; a comment that
+# restates the next line is a fact with no reader. Pull in with:
 #
 #   [inherit]
 #   sets = ["comment-facts"]
@@ -23,12 +25,13 @@
 #
 # THE EXAMPLES IN THIS FILE CARRY `<n>` WHERE A COMMENT WOULD CARRY DIGITS,
 # and that is not squeamishness. This file is a `.toml` full of `#` lines, so
-# the rule defined here reads it exactly as it reads any other source file. A
+# the rules defined here read it exactly as they read any other source file. A
 # set that had to exclude its own definition would be writing the first
 # exemption into the rule it ships. The shape is what the examples are for,
 # and `<n>` shows the shape; digits would be there only to make the file fire
 # on itself. `process-residue` spells its own `Da[t]e` pattern the same way
-# and for the same reason.
+# and for the same reason. The restatement rule reads this file the same way,
+# and the comment over each `[rule.<id>]` header below is held to it.
 #
 # WHY THE SHAPE AND NOT THE STALENESS. A staleness check needs the record the
 # number came from, and that record is exactly what a comment omits: the number
@@ -96,10 +99,10 @@
 # rule's subject, not this one's, and the two would otherwise disagree about
 # the same line.
 
-# WHAT THIS SET MAY INSTALL. Nothing: one pattern over tracked files, read by
+# WHAT THIS SET MAY INSTALL. Nothing: two checks over tracked files, read by
 # `uphold scan` and by any stage the inheriting repository already runs. A
-# measurement is wrong slowly, so there is no moment this has to stand in front
-# of.
+# measurement is wrong slowly and a restatement is wrong quietly, so there is
+# no moment this has to stand in front of.
 [set]
 stages = []
 
@@ -182,3 +185,62 @@ files.glob = [
 # person on exactly the same day. A directory a rule silently skips is a
 # directory it says nothing about, and saying nothing is how this whole class
 # of defect survived in the first place.
+
+# A COMMENT THAT SAYS WHAT THE NEXT LINE SAYS. `# the runner is ubuntu-latest`
+# over `runner = "ubuntu-latest"` states no measurement, names no tracker and
+# carries no history, so every rule that judges a comment's text on its own
+# lets it through; what is wrong with it is only visible beside the line it
+# sits on. It belongs in this set because it is the same defect as the rule
+# above from the other side: that one refuses a claim the code cannot check,
+# this one refuses a claim the code already makes.
+#
+# THE TEST IS A SUBSET AND NOT A LIST OF BORING VERBS. Every word the comment
+# contributes -- filler like `the` and `is` removed -- has to be a word the
+# line beneath it already spells, counting the identifiers split on case,
+# underscore and hyphen and the words inside string values. A comment carrying
+# one word the line lacks is saying something, whatever the word is, and a
+# comment carrying `because`, `unless`, `otherwise` or any other word that
+# opens a reason is never judged at all. So is one holding a link, a number
+# with a unit, a worked example, a parenthesised aside, or more than a
+# handful of words: each of those is doing something other than repeating.
+#
+# THE REMEDY IS A WHY, A CONSTRAINT OR A CONSEQUENCE. The comment worth having
+# over `runner = "ubuntu-latest"` says what breaks on another runner; a comment
+# that cannot say that is deleted, not reworded, because a synonym for the
+# identifier restates it in a form this rule can no longer read and a reader
+# still skips.
+#
+# TESTS ARE EXCLUDED, and this is the one rule in the set with an exclusion.
+# The measurement rule reads a test because a stale number rots there as it
+# rots anywhere. A restatement in a test is different in kind: the comment
+# above an assertion names the CASE rather than the code -- `# the default
+# runner` over the line that sets it is what tells a reader which of nine
+# fixtures this one is -- and refusing it would refuse the label.
+#
+# THE GLOB NAMES EVERY KIND OF FILE THE CHECK CAN READ AND NO OTHER. A comment
+# rule that selects only files it cannot read is refused as a rule its author
+# believes runs, and a set inherited by a tree of Markdown must never trip
+# that: the glob is what keeps the selection inside the readable kinds.
+[rule.no-restated-line]
+message = """
+This comment says what the next line already says. State a why, a constraint
+or a consequence, or delete it.
+"""
+trivial_comments = true
+files.include = ["."]
+files.glob = [
+  "*.rs",
+  "*.py",
+  "*.pyi",
+  "*.go",
+  "*.toml",
+  "*.yaml",
+  "*.yml",
+  "*.sh",
+  "*.bash",
+  "*.zsh",
+  "*.fish",
+  "*.ini",
+  "*.cfg",
+]
+files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go"]
