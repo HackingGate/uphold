@@ -9,9 +9,9 @@
 # The manifest exists here for one reason the other rows only support: Cargo.toml
 # declares an MSRV, and cargo enforces it at dependency resolution rather than
 # before the build. A contributor on an older rustc reads a resolver error naming
-# a dependency, and CI -- which builds on whatever `stable` is that week -- cannot
-# fail on an MSRV the tree has outgrown. The rustc row's `want` is that same
-# claim, stated where a preflight can read it before either happens.
+# a dependency. The rustc row's `want` is that same claim, stated where a
+# preflight can read it before that happens. The channel every build runs on is
+# rust-toolchain.toml's, not this file's.
 
 [meta]
 name = "uphold"
@@ -27,8 +27,9 @@ packages.debian = "rustup"
 hint = "the rustup toolchain multiplexer; the default toolchain is set by the rust-toolchain setup step"
 
 # The compiler must satisfy the repo MSRV (Cargo.toml `rust-version`). rustc only
-# resolves once a default toolchain is set (see the rust-toolchain setup step),
-# so on a fresh box this reports missing until `deps.sh install` runs.
+# resolves once rustup has installed the channel rust-toolchain.toml names (see
+# the rust-toolchain setup step), so on a fresh box this reports missing until
+# `deps.sh install` runs.
 #
 # Bumping this means bumping Cargo.toml's `rust-version` in the same commit: two
 # copies of one number is what `single-authoritative-source` refuses, and the
@@ -38,7 +39,7 @@ name = "rustc"
 check = "rustc --version"
 version = "rustc --version"
 want = ">=1.90"
-hint = "no default toolchain? run: scripts/deps.sh install (rustup default stable)"
+hint = "toolchain not installed? run: scripts/deps.sh install (rustup toolchain install)"
 
 # cargo fmt / clippy hooks need these components on the active toolchain.
 [[tool]]
@@ -52,7 +53,7 @@ check = "cargo clippy --version"
 hint = "component; run: scripts/deps.sh install (rustup component add clippy)"
 
 # uv is how every Python line in this repository is spelt: the four hook entries
-# in .pre-commit-config.yaml and lefthook.yml, the unit-tests and MSRV steps in
+# in .pre-commit-config.yaml and lefthook.yml, the unit-tests step in
 # .github/workflows/test.yml, and the commands the README gives. All of them are
 # `uv run --no-project`, which resolves nothing and reads no lockfile -- what it
 # pins is the interpreter, and the scripts are stdlib-only.
@@ -156,13 +157,14 @@ hint = "lefthook runs the host's copy; pipx install bashate"
 
 # ── non-package setup ───────────────────────────────────────────────────────
 
-# Ensure a default rustup toolchain exists and carries rustfmt + clippy.
+# Ensure the toolchain rust-toolchain.toml names is installed and carries
+# rustfmt + clippy. A bare `rustup toolchain install` reads that file, channel
+# and components both, so neither is written a second time here.
 [[setup]]
 name = "rust-toolchain"
 check = "rustup show active-toolchain >/dev/null 2>&1 && cargo fmt --version >/dev/null 2>&1 && cargo clippy --version >/dev/null 2>&1"
 run = """
-rustup show active-toolchain >/dev/null 2>&1 || rustup default stable
-rustup component add rustfmt clippy
+rustup toolchain install
 """
 
 # Coverage tooling. Optional for the same reason the tools above are: nothing on

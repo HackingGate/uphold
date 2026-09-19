@@ -102,54 +102,6 @@ jobs:
       - name: The policy over its own tree
         run: cargo run --locked --quiet -- scan
 
-  # `rust-version` in Cargo.toml is a promise to anyone who builds this, and the
-  # job above cannot keep it: it runs whatever `stable` is this week, so a
-  # dependency bump or a newer-than-MSRV language feature lands green and breaks
-  # for the reader on the version the manifest claims to support. The toolchain
-  # is READ from that manifest rather than written here -- a second copy of the
-  # number would be the one that goes stale, and it would go stale silently in
-  # the direction that passes.
-  msrv:
-    name: MSRV
-    runs-on: ubuntu-slim
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
-
-      - name: Read the MSRV from Cargo.toml
-        id: msrv
-        run: |
-          set -euo pipefail
-          version="$(uv run --no-project python -c '
-          import sys, tomllib
-          with open("Cargo.toml", "rb") as fh:
-              v = tomllib.load(fh)["package"].get("rust-version")
-          if not v:
-              sys.exit("Cargo.toml declares no rust-version")
-          print(v)
-          ')"
-          echo "version=$version" >>"$GITHUB_OUTPUT"
-          echo "MSRV is $version"
-
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.msrv.outputs.version }}
-
-      # Its own key, because the compiler differs from the stable jobs' and a
-      # target directory built by one is not readable by the other.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: msrv-${{ steps.msrv.outputs.version }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      # `check`, not `test`: what MSRV promises is that the crate and its pinned
-      # dependency graph COMPILE on that compiler. Behaviour is the stable job's
-      # question and running it twice buys nothing.
-      - name: Compiles on the declared MSRV
-        run: cargo check --locked --all-targets
-
   # Coverage is collected here and nowhere else, but the floor it is held to
   # lives in scripts/coverage.sh, which the manual hook runs too -- so the number
   # that fails a push is the number a contributor can reproduce before pushing.
