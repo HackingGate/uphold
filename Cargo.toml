@@ -58,7 +58,15 @@ unicode_names2 = "3.1"
 # a hand-enumerated subset of the registry would be the failure
 # `parameterize-do-not-enumerate` names.
 encoding_rs = "0.8"
-serde_yaml_ng = "0.10.0"
+# The YAML reader, for hook configurations and the YAML arm of the anchor
+# check. serde_yaml was archived in 2024 and every fork of it carries the same
+# libyaml port; this is the maintained parser with a stable major. It has no
+# value type of its own, so a document with no fixed shape is read into
+# `serde_json::Value`, which is already the model the anchor check reads every
+# format into. A `<<` merge key expands, as it does under the YAML readers
+# pre-commit and lefthook use, and a duplicate key is refused rather than
+# silently resolved to whichever copy came last.
+serde-saphyr = "1.3"
 # A parser, for the one question a regex over file contents cannot answer:
 # whether the text it matched is a comment. `grep-regex` reads bytes, so
 # `let s = "// TODO";` is a hit and a rule about comments is a rule about

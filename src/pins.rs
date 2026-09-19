@@ -78,7 +78,7 @@ struct RepoEntry {
     /// repository and not in another is a fork whether or not this struct knows
     /// what `args` is, so the comparison is over the mapping as written.
     #[serde(default)]
-    hooks: Vec<serde_yaml_ng::Value>,
+    hooks: Vec<serde_json::Value>,
 }
 
 /// lefthook's own remote-config block: another repository's hook definitions,
@@ -93,7 +93,7 @@ struct LefthookConfig {
     /// than named because lefthook's hook names are githooks(5)'s and this
     /// crate has no business carrying a second copy of that list.
     #[serde(flatten)]
-    rest: BTreeMap<String, serde_yaml_ng::Value>,
+    rest: BTreeMap<String, serde_json::Value>,
     /// lefthook's older singular spelling, still accepted by lefthook and still
     /// in the wild. Read for the reason the plural one is: the pin a consumer
     /// wrote is the pin that runs, whichever key they wrote it under.
@@ -257,7 +257,7 @@ fn unpinned(path: &Path, repo: &str, field: &str) -> Fatal {
 
 fn pre_commit_pins(path: &Path, source: &str, text: &str) -> Result<Vec<Pin>> {
     let config: HookConfig =
-        serde_yaml_ng::from_str(text).map_err(|error| Fatal::at(path, error))?;
+        serde_saphyr::from_str(text).map_err(|error| Fatal::yaml(path, &error))?;
     let Some(repos) = config.repos else {
         return Err(Fatal::at(
             path,
@@ -296,7 +296,7 @@ fn pre_commit_pins(path: &Path, source: &str, text: &str) -> Result<Vec<Pin>> {
 /// configuration, so it reads as zero pins rather than as unreadable.
 fn lefthook_pins(path: &Path, source: &str, text: &str) -> Result<Vec<Pin>> {
     let config: LefthookConfig =
-        serde_yaml_ng::from_str(text).map_err(|error| Fatal::at(path, error))?;
+        serde_saphyr::from_str(text).map_err(|error| Fatal::yaml(path, &error))?;
     let mut pins = Vec::new();
     for remote in config.remotes.into_iter().chain(config.remote) {
         // No `ref:` means lefthook takes the remote's default branch, which is
@@ -456,7 +456,7 @@ pub(crate) fn declarations(root: &Path) -> Result<Vec<Declaration>> {
             .is_some_and(|name| name == PRE_COMMIT_CONFIG)
         {
             let config: HookConfig =
-                serde_yaml_ng::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
+                serde_saphyr::from_str(&text).map_err(|error| Fatal::yaml(&path, &error))?;
             let Some(repos) = config.repos else {
                 return Err(Fatal::at(
                     &path,
@@ -465,7 +465,7 @@ pub(crate) fn declarations(root: &Path) -> Result<Vec<Declaration>> {
             };
             for entry in repos {
                 for hook in entry.hooks {
-                    let Some(id) = hook.get("id").and_then(serde_yaml_ng::Value::as_str) else {
+                    let Some(id) = hook.get("id").and_then(serde_json::Value::as_str) else {
                         return Err(Fatal::at(
                             &path,
                             format!(
@@ -488,7 +488,7 @@ pub(crate) fn declarations(root: &Path) -> Result<Vec<Declaration>> {
             }
         } else {
             let config: LefthookConfig =
-                serde_yaml_ng::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
+                serde_saphyr::from_str(&text).map_err(|error| Fatal::yaml(&path, &error))?;
             let pinned = config
                 .remotes
                 .first()
@@ -498,16 +498,13 @@ pub(crate) fn declarations(root: &Path) -> Result<Vec<Declaration>> {
                 // `commands:` under a git hook name. Anything else at the top
                 // level -- `colors:`, `skip_output:`, `min_version:` -- is
                 // lefthook's own configuration and declares no hook.
-                let Some(commands) = body.get("commands").and_then(|value| value.as_mapping())
+                let Some(commands) = body.get("commands").and_then(|value| value.as_object())
                 else {
                     continue;
                 };
                 for (name, command) in commands {
-                    let Some(name) = name.as_str() else {
-                        continue;
-                    };
                     found.push(Declaration {
-                        id: name.to_owned(),
+                        id: name.clone(),
                         manager: Manager::Lefthook,
                         stage: Some(hook.clone()),
                         from: pinned.as_ref().map(|(url, _)| url.clone()),
@@ -525,38 +522,36 @@ pub(crate) fn declarations(root: &Path) -> Result<Vec<Declaration>> {
 /// One declaration as a string that two repositories can be compared by.
 ///
 /// Serialized rather than formatted with `Debug`, because `Debug` renders the
-/// parser's own types and a change to `serde_yaml_ng` would then read as every
-/// repository in the fleet having forked at once. Mappings come back in the
-/// order they were written, so the key order is normalized here -- two
-/// repositories that wrote the same declaration with `args:` above `stages:`
-/// and below it are not two declarations.
-fn canonical(value: &serde_yaml_ng::Value) -> String {
-    fn sorted(value: &serde_yaml_ng::Value) -> serde_yaml_ng::Value {
+/// value type's own structure and a change to it would then read as every
+/// repository in the fleet having forked at once. Rendered as YAML and not
+/// JSON because the report prints it, and the reader is holding the YAML it
+/// came from. Whether a mapping keeps the order it was written in is a feature
+/// flag on `serde_json` that any dependency in the tree may switch on, so the
+/// key order is normalized here rather than assumed -- two repositories that
+/// wrote the same declaration with `args:` above `stages:` and below it are
+/// not two declarations.
+fn canonical(value: &serde_json::Value) -> String {
+    fn sorted(value: &serde_json::Value) -> serde_json::Value {
         match value {
-            serde_yaml_ng::Value::Mapping(mapping) => {
-                let mut keyed: Vec<(String, serde_yaml_ng::Value)> = mapping
+            serde_json::Value::Object(mapping) => {
+                let mut keyed: Vec<(&String, serde_json::Value)> = mapping
                     .iter()
-                    .map(|(key, item)| {
-                        (
-                            serde_yaml_ng::to_string(key).unwrap_or_default(),
-                            sorted(item),
-                        )
-                    })
+                    .map(|(key, item)| (key, sorted(item)))
                     .collect();
-                keyed.sort_by(|left, right| left.0.cmp(&right.0));
-                let mut out = serde_yaml_ng::Mapping::new();
+                keyed.sort_by(|left, right| left.0.cmp(right.0));
+                let mut out = serde_json::Map::new();
                 for (key, item) in keyed {
-                    out.insert(serde_yaml_ng::Value::String(key.trim().to_owned()), item);
+                    out.insert(key.clone(), item);
                 }
-                serde_yaml_ng::Value::Mapping(out)
+                serde_json::Value::Object(out)
             }
-            serde_yaml_ng::Value::Sequence(items) => {
-                serde_yaml_ng::Value::Sequence(items.iter().map(sorted).collect())
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(sorted).collect())
             }
             other => other.clone(),
         }
     }
-    serde_yaml_ng::to_string(&sorted(value))
+    serde_saphyr::to_string(&sorted(value))
         .unwrap_or_default()
         .trim_end()
         .to_owned()

@@ -307,9 +307,9 @@ fn resolve_fact(anchor: &Anchor, root: &Path) -> Option<String> {
             Ok(value) => value,
             Err(error) => return Some(parse_failure(&anchor.source, &error)),
         },
-        _ => match serde_yaml_ng::from_str(&text) {
+        _ => match serde_saphyr::from_str(&text) {
             Ok(value) => value,
-            Err(error) => return Some(parse_failure(&anchor.source, &error)),
+            Err(error) => return Some(parse_failure(&anchor.source, &error.without_snippet())),
         },
     };
 
@@ -436,7 +436,7 @@ mod tests {
         // `read_path: none` is a deliberate answer. Rendering it as `none` and
         // reporting it as ABSENT are different verdicts, and only one is true.
         let document: serde_json::Value =
-            serde_yaml_ng::from_str("read_path: null\n").unwrap_or(serde_json::Value::Null);
+            serde_saphyr::from_str("read_path: null\n").unwrap_or(serde_json::Value::Null);
         assert_eq!(read(&document, "read_path"), Some(String::from("none")));
         assert_eq!(read(&document, "absent"), None);
     }
