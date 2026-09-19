@@ -1,0 +1,32 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.33.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
+# Where to host releases
+hosting = "github"
+# Whether to install an updater program
+install-updater = false
+# Attach a GitHub build provenance attestation to every artifact
+github-attestations = true
+# No run on pull requests: a `dist plan` on every pull request is Actions
+# minutes spent on a question the tag push answers. The tag push is the whole
+# trigger list; `dispatch-releases` is not set because dist takes it as a
+# replacement for the tag trigger rather than an addition to it.
+pr-run-mode = "skip"
+# Dependabot's github-actions entry moves the `uses:` pins in the generated
+# workflow, and `dist plan` refuses a workflow that differs from what it would
+# generate. This keeps the release running across such a bump; the next
+# `dist generate` rewrites the file with dist's own pins and Dependabot moves
+# them again.
+allow-dirty = ["ci"]
