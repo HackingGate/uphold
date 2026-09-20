@@ -417,3 +417,208 @@ fn the_timeout_flag_overrides_the_file_for_one_run() {
     assert_eq!(code(&output), 2, "{}", text(&output));
     assert!(text(&output).contains("never"), "{}", text(&output));
 }
+
+// ─── `push = "empty"`: the range the delegate exists for ─────────────────────
+
+/// The probe that pushes nothing, to a destination the policy pins against.
+///
+/// `refuses` and `allows` are destinations rather than files: an empty range
+/// carries no content, so what the pre-push guard judges is where the push is
+/// going.
+const EMPTY_RANGE_PROBE: &str = r#"
+[[probe]]
+id = "empty-range"
+push = "empty"
+refuses = "someone-else/widget"
+allows = "acme/widget"
+expect = "prevent-public-push"
+"#;
+
+/// A repository pinned to `acme`, with `prevent-public-push` at pre-push and
+/// a policy that says nothing else -- so the only thing that can refuse a push
+/// is the destination guard, and only through the delegate.
+///
+/// `install` says whether `uphold hooks --install` writes the delegate into
+/// the tree before it is committed. Without it git runs `.git/hooks`, which
+/// holds nothing, and the push goes through: that is the state every
+/// consumer was in before the delegate existed, and it is the state this
+/// probe is for.
+fn pinned_repository(probes: &str, install: bool, stub: &Path) -> PathBuf {
+    let root = support::scratch("probe-push");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("policy")).unwrap();
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    support::git(&root, &["config", "user.name", "Test"]);
+    support::git(&root, &["config", "user.email", "test@example.test"]);
+    std::fs::write(
+        root.join("policy/principles.toml"),
+        "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\nowner = \"acme\"\n\n\
+         [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
+    )
+    .unwrap();
+    std::fs::write(root.join(".pre-commit-config.yaml"), "repos: []\n").unwrap();
+    std::fs::write(root.join("policy/hooks.toml"), probes).unwrap();
+    if install {
+        let mut path = stub.as_os_str().to_owned();
+        path.push(":/usr/bin:/bin");
+        let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+            .args(["hooks", "--install"])
+            .env("PATH", path)
+            .current_dir(&root)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(code(&output), 0, "{}", text(&output));
+    }
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    root
+}
+
+/// The stub runner beside `uphold` itself, since the delegate calls both by
+/// name and a PATH holding only one of them makes the hook refuse before the
+/// guard is reached.
+fn runner_beside_uphold(script: &str) -> PathBuf {
+    let stub = runner(script);
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_uphold"), stub.join("uphold")).unwrap();
+    stub
+}
+
+fn probe_push(root: &Path, stub: &Path) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command.args(["probe", "--runner", "prek"]);
+    let mut path = stub.as_os_str().to_owned();
+    path.push(":/usr/bin:/bin");
+    command
+        .env("PATH", path)
+        .env_remove("UPHOLD_ALLOW")
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn an_empty_range_push_reaches_the_delegate_and_the_guard_it_runs_first() {
+    // Nothing is being sent, and the push to the wrong owner is refused by
+    // name anyway -- by the delegate, before the runner is reached. Then the
+    // same push to the pinned owner goes through, so the refusal was about the
+    // destination and not about everything.
+    let stub = runner_beside_uphold("exit 0");
+    let root = pinned_repository(EMPTY_RANGE_PROBE, true, &stub);
+
+    let output = probe_push(&root, &stub);
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(
+        said.contains(
+            "empty-range (git push of an empty range): refuses its fixture, accepts a clean one"
+        ),
+        "{said}"
+    );
+    // Nothing of the probe is left in the operator's tree, and no remote was
+    // added to its config.
+    let status = support::git_command(&root)
+        .args(["status", "--porcelain"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&status.stdout).trim(), "");
+    let remotes = support::git_command(&root)
+        .args(["remote"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&remotes.stdout).trim(), "");
+}
+
+#[test]
+fn an_empty_range_push_with_no_delegate_is_accepted_and_that_is_the_finding() {
+    // The state every consumer was in before the delegate existed: the range
+    // is empty, so nothing on the push path asks the destination guard, and
+    // the push to somebody else's repository goes through.
+    let stub = runner_beside_uphold("exit 0");
+    let root = pinned_repository(EMPTY_RANGE_PROBE, false, &stub);
+
+    let output = probe_push(&root, &stub);
+    let said = text(&output);
+    assert_eq!(code(&output), 1, "{said}");
+    assert!(
+        said.contains("empty-range (git push of an empty range): ACCEPTED"),
+        "{said}"
+    );
+}
+
+#[test]
+fn an_empty_range_push_refused_for_another_reason_is_not_the_guard_demonstrated() {
+    // The delegate refuses when `uphold` is missing from PATH, before the
+    // guard is reached, and that is a refusal too -- of every push, for a
+    // reason that has nothing to do with where it was going. `expect` is what
+    // keeps that red from counting as the destination guard.
+    let stub = runner("exit 0");
+    let root = pinned_repository(EMPTY_RANGE_PROBE, true, &stub);
+
+    let output = probe_push(&root, &stub);
+    let said = text(&output);
+    assert_eq!(code(&output), 1, "{said}");
+    assert!(said.contains("WITHOUT the words `expect` names"), "{said}");
+    assert!(said.contains("uphold is not on PATH"), "{said}");
+}
+
+#[test]
+fn a_push_probe_with_a_path_or_a_stage_is_refused_at_load() {
+    let stub = runner_beside_uphold("exit 0");
+    let root = pinned_repository(
+        "[[probe]]\nid = \"empty-range\"\npush = \"empty\"\npath = \"x.txt\"\nrefuses = \"someone-else/widget\"\n",
+        true,
+        &stub,
+    );
+    let output = probe_push(&root, &stub);
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    assert!(
+        text(&output).contains("plants no file"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn a_push_probe_whose_fixture_is_not_a_destination_is_refused_at_load() {
+    let stub = runner_beside_uphold("exit 0");
+    let root = pinned_repository(
+        "[[probe]]\nid = \"empty-range\"\npush = \"empty\"\nrefuses = \"https://github.com/someone-else/widget\"\n",
+        true,
+        &stub,
+    );
+    let output = probe_push(&root, &stub);
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    assert!(
+        text(&output).contains("not an `owner/repo`"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn a_push_of_a_shape_this_command_does_not_drive_is_refused_at_load() {
+    let stub = runner_beside_uphold("exit 0");
+    let root = pinned_repository(
+        "[[probe]]\nid = \"empty-range\"\npush = \"force\"\nrefuses = \"someone-else/widget\"\n",
+        true,
+        &stub,
+    );
+    let output = probe_push(&root, &stub);
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    assert!(
+        text(&output).contains("the only push this command drives is \"empty\""),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn a_runner_probe_with_no_path_is_refused_at_load() {
+    let root = repository("[[probe]]\nid = \"no-markers\"\nrefuses = \"MARKER\\n\"\n");
+    let stub = runner("exit 0");
+    let output = probe(&root, Some(&stub));
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    assert!(text(&output).contains("has no `path`"), "{}", text(&output));
+}

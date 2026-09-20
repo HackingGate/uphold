@@ -295,3 +295,72 @@ fn a_current_pin_still_passes() {
     let output = guard(&root);
     assert_eq!(output.status.code().unwrap(), 0, "{}", text(&output));
 }
+
+/// A tree whose one pin is current, holding the pre-push delegate this binary
+/// writes -- through `hooks --install`, so the file is the binary's and not a
+/// transcription.
+fn tree_with_a_delegate() -> PathBuf {
+    let root = repository();
+    let url = upstream(&root, &["v1.0.0"]);
+    write(
+        &root,
+        ".pre-commit-config.yaml",
+        &format!("repos:\n  - repo: {url}\n    rev: v1.0.0\n    hooks:\n      - id: x\n"),
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["hooks", "--install", "--runner", "prek"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap(), 0, "{}", text(&output));
+    root
+}
+
+/// The delegate is a pin whose upstream is the binary, and this guard is the
+/// stage at which a copy behind it is refused.
+///
+/// The fleet that asked for this kept a script to notice the drift and ran
+/// it by hand; a guard that runs at pre-push is what makes noticing not
+/// optional.
+#[test]
+fn a_pre_push_delegate_matching_this_binary_passes_and_a_drifted_one_is_refused() {
+    let root = tree_with_a_delegate();
+    let output = guard(&root);
+    let report = text(&output);
+    assert_eq!(output.status.code().unwrap(), 0, "{report}");
+    assert!(!report.contains("delegate"), "{report}");
+
+    let hook = root.join(".githooks/pre-push");
+    let installed = std::fs::read_to_string(&hook).unwrap();
+    std::fs::write(&hook, installed.replace("exit 2", "exit 0")).unwrap();
+
+    let drifted = guard(&root);
+    let refusal = text(&drifted);
+    assert_eq!(drifted.status.code().unwrap(), 1, "{refusal}");
+    assert!(refusal.contains("no-stale-hook-pins"), "{refusal}");
+    assert!(
+        refusal.contains(".githooks/pre-push is a pre-push delegate whose lines are not"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("--check"), "{refusal}");
+}
+
+/// A hand-written copy with the binary's lines is not behind anything. It is
+/// said aloud, with the command that takes it over, and it passes.
+#[test]
+fn a_hand_written_delegate_with_the_same_lines_passes_with_a_note() {
+    let root = tree_with_a_delegate();
+    let hook = root.join(".githooks/pre-push");
+    let installed = std::fs::read_to_string(&hook).unwrap();
+    let by_hand: Vec<&str> = installed
+        .lines()
+        .filter(|line| !line.starts_with('#') || line.starts_with("#!"))
+        .collect();
+    std::fs::write(&hook, format!("{}\n", by_hand.join("\n"))).unwrap();
+
+    let output = guard(&root);
+    let report = text(&output);
+    assert_eq!(output.status.code().unwrap(), 0, "{report}");
+    assert!(report.contains("hand-written copy"), "{report}");
+    assert!(report.contains("--adopt"), "{report}");
+}

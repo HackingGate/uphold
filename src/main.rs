@@ -118,6 +118,7 @@ usage:
   uphold audit --for-publication     what a private->public flip would republish
   uphold hooks --identity DIR...     do these repositories declare the same hooks
   uphold hooks --install             write the hooks git runs, as tracked files
+               [--adopt | --check]   take over a hand-written copy; or only report
   uphold supply-chain                origin, advisories, typosquats and workflow
                                      security over the pushed range -- five
                                      scanners, one verdict
@@ -324,12 +325,13 @@ fn run() -> Result<Exit> {
         "hooks" => match rest {
             [flag, tail @ ..] if flag == "--install" => {
                 let mut runner: Option<&OsString> = None;
-                let mut directory = ".githooks";
+                let mut directory = hooks::DEFAULT_DIRECTORY;
+                let mut mode = hooks::Mode::Write;
                 let mut index = 0;
                 let usage = || {
                     Fatal::new(format!(
                         "usage: uphold hooks --install [--runner prek|pre-commit] \
-                         [--dir DIR]\n\n{USAGE}"
+                         [--dir DIR] [--adopt | --check]\n\n{USAGE}"
                     ))
                 };
                 while let Some(word) = tail.get(index) {
@@ -342,6 +344,10 @@ fn run() -> Result<Exit> {
                             index += 1;
                             directory = text_of(tail.get(index).ok_or_else(usage)?)?;
                         }
+                        // One or the other: a run that both adopts and
+                        // promises to write nothing cannot keep both.
+                        "--adopt" if mode == hooks::Mode::Write => mode = hooks::Mode::Adopt,
+                        "--check" if mode == hooks::Mode::Write => mode = hooks::Mode::Check,
                         _ => return Err(usage()),
                     }
                     index += 1;
@@ -349,7 +355,7 @@ fn run() -> Result<Exit> {
                 let runner = runner.map(|name| text_of(name)).transpose()?;
                 let working = std::env::current_dir()?;
                 let (root, _) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
-                hooks::install(&root, runner, directory)
+                hooks::install(&root, runner, directory, mode)
             }
             [flag, paths @ ..] if flag == "--identity" && !paths.is_empty() => {
                 let mut directories = Vec::new();

@@ -398,6 +398,10 @@ pub(crate) fn read_pins(root: &Path) -> Result<Reading> {
 pub(crate) enum Manager {
     PreCommit,
     Lefthook,
+    /// git itself, for the pre-push delegate `hooks --install` writes: a hook
+    /// no runner's configuration declares, because it is the file git runs
+    /// BEFORE the runner is reached.
+    Git,
 }
 
 impl Manager {
@@ -405,6 +409,7 @@ impl Manager {
         match self {
             Self::PreCommit => "pre-commit",
             Self::Lefthook => "lefthook",
+            Self::Git => "git",
         }
     }
 }
@@ -434,6 +439,11 @@ pub(crate) struct Declaration {
     pub rev: Option<String>,
     pub body: String,
     pub source: String,
+    /// Whether this declaration's text is not the text THIS BINARY would
+    /// write for it. Only the pre-push delegate has such a text; every
+    /// declaration a runner's config holds is somebody's to write, and this is
+    /// `false` for all of them.
+    pub drifted: bool,
 }
 
 /// Every hook declaration in one tree, from either manager.
@@ -483,6 +493,7 @@ pub(crate) fn declarations(root: &Path) -> Result<Vec<Declaration>> {
                         rev: entry.rev.clone(),
                         body: canonical(&hook),
                         source: source.clone(),
+                        drifted: false,
                     });
                 }
             }
@@ -511,10 +522,28 @@ pub(crate) fn declarations(root: &Path) -> Result<Vec<Declaration>> {
                         rev: pinned.as_ref().and_then(|(_, rev)| rev.clone()),
                         body: canonical(command),
                         source: source.clone(),
+                        drifted: false,
                     });
                 }
             }
         }
+    }
+    // The pre-push delegate, where git's hooks directory holds one. Its
+    // declaration is the text this binary would write, so `hooks --identity`
+    // compares copies with each other AND with the binary: a fleet whose every
+    // copy agrees can still be a fleet on an older binary's text, and only the
+    // second comparison says so.
+    if let Some(delegate) = crate::hooks::delegate(root)? {
+        found.push(Declaration {
+            id: String::from("pre-push"),
+            manager: Manager::Git,
+            stage: Some(String::from("pre-push")),
+            from: None,
+            rev: None,
+            drifted: delegate.runner.is_none(),
+            body: delegate.body(),
+            source: delegate.source,
+        });
     }
     Ok(found)
 }
@@ -757,8 +786,45 @@ pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
         }
     }
 
+    // The delegate `uphold hooks --install` writes is a pin with no `rev:`,
+    // and its upstream is this binary. A copy from an older binary is behind
+    // it in exactly the sense a `rev:` behind its tag is, and the fleet that
+    // asked for this kept a script whose only job was to notice. Read through
+    // the reader `hooks --identity` uses, so the two cannot disagree about
+    // which lines count.
+    let mut drifted: Vec<String> = Vec::new();
+    if let Some(delegate) = crate::hooks::delegate(request.root)? {
+        if delegate.runner.is_none() {
+            drifted.push(format!(
+                "{} is a pre-push delegate whose lines are not the ones this binary writes \
+                 (fingerprint {}). A delegate from an older binary, or edited by hand, runs \
+                 something other than what `uphold hooks --install` writes now; \
+                 `uphold hooks --install --check` shows the difference",
+                delegate.source, delegate.fingerprint
+            ));
+        } else if !delegate.marked {
+            println!(
+                "{}: {} is a hand-written copy of the pre-push delegate `uphold hooks \
+                 --install` writes, with the same lines. `uphold hooks --install --adopt` \
+                 takes it over.",
+                request.rule.id, delegate.source
+            );
+        }
+    }
+
     let mut report = String::new();
+    if !drifted.is_empty() {
+        report.push_str(&drifted.join("\n"));
+        report.push_str(
+            "\n\nThe binary owns the delegate's text; the file is a copy of it. A file \
+             `hooks --install` wrote is rewritten by running it again; one written by hand \
+             has to be moved aside.",
+        );
+    }
     if !missing.is_empty() {
+        if !report.is_empty() {
+            report.push_str("\n\n");
+        }
         report.push_str(&missing.join("\n"));
         report.push_str(
             "\n\nA rev that names no ref fails at hook-init, as a clone error, before any \

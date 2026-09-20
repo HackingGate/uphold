@@ -7,7 +7,7 @@
 //! report a fork, which is why a fork is invisible to every other check this
 //! binary has.
 //!
-//! Three findings, and they are three different failures:
+//! Four findings, and they are four different failures:
 //!
 //! * **forked** -- one id, two declarations. Some repositories run a hook with
 //!   `args:` the others do not have, or a different `entry:` under a name that
@@ -19,6 +19,12 @@
 //! * **absent** -- an id most of the set declares and one does not. Not a
 //!   defect on its own, which is why it is reported with the count and can be
 //!   waived: a repository with no Go in it has no business declaring `gofmt`.
+//! * **drifted** -- the pre-push delegate `hooks --install` writes, in a
+//!   repository where its lines are not the ones this binary writes. The
+//!   delegate's upstream is the binary rather than a `rev:`, so this is the
+//!   pinned-apart finding for a file that has no rev to pin; and unlike the
+//!   other three it can be reported over a single repository, which is why
+//!   `no-stale-hook-pins` reads the same file through the same reader.
 //!
 //! WAIVERS, and why they carry a reason. `policy/hooks.toml` in the repository
 //! this runs from holds them. A waiver with no reason is a check switched off
@@ -74,7 +80,7 @@ struct Waiver {
     findings: Vec<String>,
 }
 
-/// The three findings, named once.
+/// The four findings, named once.
 ///
 /// A match arm over a string would have let a waiver name a finding that does
 /// not exist and silently waive nothing -- an exemption that reads as switching
@@ -84,16 +90,18 @@ enum Finding {
     Forked,
     PinnedApart,
     Absent,
+    Drifted,
 }
 
 impl Finding {
-    const ALL: [Self; 3] = [Self::Forked, Self::PinnedApart, Self::Absent];
+    const ALL: [Self; 4] = [Self::Forked, Self::PinnedApart, Self::Absent, Self::Drifted];
 
     const fn as_str(self) -> &'static str {
         match self {
             Self::Forked => "forked",
             Self::PinnedApart => "pinned-apart",
             Self::Absent => "absent",
+            Self::Drifted => "drifted",
         }
     }
 }
@@ -251,6 +259,33 @@ pub(crate) fn identity(root: &Path, paths: &[PathBuf]) -> Result<Exit> {
                 write!(report, "\n  {rev} ({from}) in {}", who.join(", ")).ok();
             }
             findings.push(report);
+        }
+
+        // -- drifted -------------------------------------------------------
+        //
+        // One repository at a time, because the comparison is not between
+        // repositories: it is between the file and the binary running this.
+        // Every copy in the set can agree with every other and still be the
+        // text an older binary wrote, and the forked finding above would call
+        // that a fleet in agreement.
+        for (read, declaration) in holders {
+            if declaration.drifted
+                && !waived(
+                    &waivers,
+                    id,
+                    Finding::Drifted,
+                    &[read.name.as_str()],
+                    &mut used,
+                )
+            {
+                findings.push(format!(
+                    "drifted: `{id}` in {} ({}) is not the text this binary writes:\n  {}\n  \
+                     `uphold hooks --install --check` there shows the difference. A file \
+                     `hooks --install` wrote is rewritten by running it again; one written \
+                     by hand has to be moved aside",
+                    read.name, declaration.source, declaration.body
+                ));
+            }
         }
     }
 
@@ -439,12 +474,32 @@ fn waived(
 
 /// The four hook files this command writes, and the line that marks them as
 /// its own. A file without the marker was written by somebody, and somebody's
-/// file is looked at and refused, never replaced.
+/// file is looked at and refused, never replaced -- unless `--adopt` finds it
+/// to be a hand-written copy of this command's own text, in which case the
+/// only thing replaced is the comments.
 const MARKER: &str = "Written by `uphold hooks --install`; the next install overwrites this file.";
 
 const STAGES: [&str; 4] = ["pre-commit", "commit-msg", "pre-merge-commit", "pre-push"];
 
-/// `uphold hooks --install [--runner prek|pre-commit] [--dir DIR]`
+/// Where the files go when `core.hooksPath` says nothing, which is also where
+/// `--dir` defaults to and where a delegate written before this command
+/// existed was kept.
+pub(crate) const DEFAULT_DIRECTORY: &str = ".githooks";
+
+/// What `hooks --install` may do to a file it finds in the directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mode {
+    /// Write the four files. A file without the marker is refused.
+    Write,
+    /// Write the four files, taking over a file without the marker when its
+    /// effective lines are the ones this command writes, and refusing it with
+    /// the difference when they are not.
+    Adopt,
+    /// Say what is in the directory and whether git runs it. Writes nothing.
+    Check,
+}
+
+/// `uphold hooks --install [--runner prek|pre-commit] [--dir DIR] [--adopt | --check]`
 ///
 /// Writes the four guard-stage hook files into a TRACKED directory and points
 /// `core.hooksPath` at it, so the hook git runs is reviewable in a diff and a
@@ -463,12 +518,36 @@ const STAGES: [&str; 4] = ["pre-commit", "commit-msg", "pre-merge-commit", "pre-
 /// `uphold guard --stage pre-push` unconditionally, BEFORE anything
 /// downstream decides the push is uninteresting, and only then delegates.
 ///
-/// One fleet carried this file by hand, byte-identical in ten trees, plus a
-/// script whose whole job was to notice when a copy drifted. The other three
-/// files are delegates: `core.hooksPath` makes git look for EVERY hook in the
-/// named directory, so a directory holding only `pre-push` would silently
-/// switch the other stages off -- the same defect the pre-push file closes.
-pub(crate) fn install(root: &Path, runner: Option<&str>, directory: &str) -> Result<Exit> {
+/// git itself does run the hook for that push. Measured 2026-09-20, git
+/// 2.55.0: a push whose every ref is already up to date starts the pre-push
+/// hook with the remote's name and url on argv and NOTHING on stdin, which is
+/// the shape `uphold probe` drives with `push = "empty"`. The delegate reads
+/// the destination off argv for exactly this reason -- the ref lines are the
+/// one thing an empty range does not carry.
+///
+/// One fleet carried this file by hand, byte-identical in ten trees and
+/// wrapped differently in three, plus a script whose whole job was to notice
+/// when a copy drifted. `--adopt` is how those trees move onto this command
+/// without moving the file aside first: a copy whose EFFECTIVE lines -- the
+/// shebang and every line that is not a comment, continuation lines joined --
+/// are this command's own is rewritten with the marker, and a copy that does
+/// something else is refused with the difference, because a hook that does
+/// something else is somebody's decision and this command does not overrule
+/// it. The other three files are delegates: `core.hooksPath` makes git look
+/// for EVERY hook in the named directory, so a directory holding only
+/// `pre-push` would silently switch the other stages off -- the same defect
+/// the pre-push file closes.
+///
+/// What the fleet's script noticed is what [`delegate`] now reads: the same
+/// effective lines, compared with the text this binary would write, reported
+/// by `hooks --identity` as `drifted` and refused by `no-stale-hook-pins` at
+/// the stage that guard runs.
+pub(crate) fn install(
+    root: &Path,
+    runner: Option<&str>,
+    directory: &str,
+    mode: Mode,
+) -> Result<Exit> {
     let runner = match runner {
         Some("prek") => "prek",
         Some("pre-commit") => "pre-commit",
@@ -533,9 +612,13 @@ pub(crate) fn install(root: &Path, runner: Option<&str>, directory: &str) -> Res
         }
     }
 
+    let existing = git_config(root, "core.hooksPath")?;
+    if mode == Mode::Check {
+        return check(root, runner, directory, existing.as_deref());
+    }
+
     // Somebody else's core.hooksPath is somebody else's decision. Equal is a
     // re-install; different is a question this command must not answer.
-    let existing = git_config(root, "core.hooksPath")?;
     if let Some(existing) = existing.as_deref()
         && existing != directory
     {
@@ -548,24 +631,44 @@ pub(crate) fn install(root: &Path, runner: Option<&str>, directory: &str) -> Res
 
     let hooks_dir = root.join(directory);
     std::fs::create_dir_all(&hooks_dir).map_err(|error| Fatal::at(&hooks_dir, error))?;
+    let mut adopted: Vec<&str> = Vec::new();
     for stage in STAGES {
         let path = hooks_dir.join(stage);
+        let body = written(runner, directory, stage);
         if path.exists() {
             let current = crate::error::read_to_string(&path)?;
             if !current.contains(MARKER) {
-                return Err(Fatal::at(
-                    &path,
-                    "this file was not written by `uphold hooks --install`, and replacing \
-                     a hook somebody wrote is not this command's call. Move it aside, or \
-                     fold what it does into the runner's own config",
-                ));
+                if mode != Mode::Adopt {
+                    return Err(Fatal::at(
+                        &path,
+                        "this file was not written by `uphold hooks --install`, and replacing \
+                         a hook somebody wrote is not this command's call. Move it aside, or \
+                         fold what it does into the runner's own config -- or, if it is a \
+                         hand-written copy of what this command writes, `--adopt` takes it \
+                         over",
+                    ));
+                }
+                let theirs = effective_lines(&current);
+                let ours = effective_lines(&body);
+                if theirs != ours {
+                    return Err(Fatal::at(
+                        &path,
+                        format!(
+                            "this file was not written by `uphold hooks --install`, and what \
+                             it does is not what this command writes, so it is not a copy to \
+                             adopt. The lines that differ, comments and blank lines aside:\n\n{}",
+                            unified_diff(
+                                &format!("{directory}/{stage}"),
+                                &theirs,
+                                "what `uphold hooks --install` writes",
+                                &ours
+                            )
+                        ),
+                    ));
+                }
+                adopted.push(stage);
             }
         }
-        let body = if stage == "pre-push" {
-            pre_push_hook(runner, directory)
-        } else {
-            delegate_hook(runner, stage)
-        };
         std::fs::write(&path, body).map_err(|error| Fatal::at(&path, error))?;
         #[cfg(unix)]
         {
@@ -589,6 +692,13 @@ pub(crate) fn install(root: &Path, runner: Option<&str>, directory: &str) -> Res
         }
     }
 
+    if !adopted.is_empty() {
+        println!(
+            "adopted {}: the lines were already this command's own, and the file now \
+             carries its marker.",
+            adopted.join(", ")
+        );
+    }
     println!(
         "wrote {} into {directory}/ and pointed core.hooksPath at it.\n\
          Commit the directory: the hook git runs is now a tracked file, and a rerun of \
@@ -596,6 +706,277 @@ pub(crate) fn install(root: &Path, runner: Option<&str>, directory: &str) -> Res
         STAGES.join(", ")
     );
     Ok(Exit::Clean)
+}
+
+/// `uphold hooks --install --check`: what is in the directory, against what
+/// this binary would write there, and whether git runs any of it.
+///
+/// Exit 1 for anything short of four marked files matching this binary under
+/// a `core.hooksPath` that names the directory. An unmarked copy whose lines
+/// match is reported as adoptable rather than as wrong, and a file that does
+/// not match is shown the difference -- the one thing the fleet's own drift
+/// script printed that nothing here did.
+fn check(root: &Path, runner: &str, directory: &str, hooks_path: Option<&str>) -> Result<Exit> {
+    let mut wrong = 0_usize;
+    for stage in STAGES {
+        let path = root.join(directory).join(stage);
+        let Ok(current) = std::fs::read_to_string(&path) else {
+            wrong += 1;
+            println!("  {directory}/{stage}: absent");
+            continue;
+        };
+        let theirs = effective_lines(&current);
+        let ours = effective_lines(&written(runner, directory, stage));
+        let marked = current.contains(MARKER);
+        let same = theirs == ours;
+        if !(marked && same) {
+            wrong += 1;
+        }
+        let state = match (marked, same) {
+            (true, true) => "written by `uphold hooks --install`, and the text this binary writes",
+            (true, false) => {
+                "written by `uphold hooks --install`, and NOT the text this binary writes: \
+                 an older install, or edited since. Rerunning `hooks --install` rewrites it"
+            }
+            (false, true) => {
+                "written by hand, and its lines are the ones this binary writes. \
+                 `hooks --install --adopt` takes it over"
+            }
+            (false, false) => {
+                "written by hand, and NOT the text this binary writes. Neither `--install` \
+                 nor `--adopt` will replace it"
+            }
+        };
+        println!("  {directory}/{stage}: {state}");
+        if !same {
+            for line in unified_diff(
+                &format!("{directory}/{stage}"),
+                &theirs,
+                "what `uphold hooks --install` writes",
+                &ours,
+            )
+            .lines()
+            {
+                println!("    {line}");
+            }
+        }
+    }
+    match hooks_path {
+        Some(path) if path == directory => {
+            println!("  core.hooksPath is {directory}, so these are the hooks git runs");
+        }
+        Some(other) => {
+            wrong += 1;
+            println!(
+                "  core.hooksPath is {other:?}, so git runs the hooks there and none of these"
+            );
+        }
+        None => {
+            wrong += 1;
+            println!(
+                "  core.hooksPath is unset, so git runs the hooks under .git/hooks and none \
+                 of these"
+            );
+        }
+    }
+    if wrong == 0 {
+        println!("the hooks git runs are the ones this binary writes");
+        return Ok(Exit::Clean);
+    }
+    eprintln!(
+        "{wrong} thing(s) are not as `uphold hooks --install` would leave them; nothing was \
+         written"
+    );
+    Ok(Exit::Violations)
+}
+
+/// The text `install` writes for one stage.
+fn written(runner: &str, directory: &str, stage: &str) -> String {
+    if stage == "pre-push" {
+        pre_push_hook(runner, directory)
+    } else {
+        delegate_hook(runner, stage)
+    }
+}
+
+/// The lines of a hook that decide what it does.
+///
+/// Comments and blank lines are dropped, a line ending in `\` is joined with
+/// the one after it, and every run of whitespace becomes one space. The
+/// shebang stays: it is the interpreter, not a remark. This is the comparison
+/// `--adopt`, `--check`, `hooks --identity` and `no-stale-hook-pins` all make,
+/// and it is one function so that a file all four read cannot be adopted by
+/// one and reported as drifted by another.
+///
+/// Continuations are joined because three of the fleet's hand-written copies
+/// wrapped one long command at a different word than this binary does, and
+/// where a line is wrapped is not a difference in what runs.
+pub(crate) fn effective_lines(text: &str) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut pending = String::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if pending.is_empty()
+            && (line.is_empty() || (line.starts_with('#') && !line.starts_with("#!")))
+        {
+            continue;
+        }
+        if let Some(head) = line.strip_suffix('\\') {
+            pending.push_str(head);
+            pending.push(' ');
+            continue;
+        }
+        pending.push_str(line);
+        lines.push(pending.split_whitespace().collect::<Vec<&str>>().join(" "));
+        pending.clear();
+    }
+    if !pending.is_empty() {
+        lines.push(pending.split_whitespace().collect::<Vec<&str>>().join(" "));
+    }
+    lines
+}
+
+/// A fingerprint of a hook's effective lines, for a report to name the text
+/// by. FNV-1a, in this file, because the question is only ever "are these the
+/// same lines" within one run and a dependency for that is a pin to keep.
+fn fingerprint(lines: &[String]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in lines
+        .iter()
+        .flat_map(|line| line.bytes().chain(std::iter::once(b'\n')))
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Two line lists as one unified-diff hunk with every line as context.
+///
+/// Written here rather than pulled in: the inputs are a few dozen lines, and
+/// what a reader needs is which line differs, shown in the format every diff
+/// reader already knows.
+fn unified_diff(from_label: &str, from: &[String], to_label: &str, to: &[String]) -> String {
+    // The longest common subsequence from each (i, j) to the two ends, in one
+    // flat table read through `get`: a cell this arithmetic missed is worth a
+    // zero rather than a panic inside a refusal message.
+    let width = to.len() + 1;
+    let mut table = vec![0_usize; (from.len() + 1) * width];
+    let at = |i: usize, j: usize| i * width + j;
+    for (i, left) in from.iter().enumerate().rev() {
+        for (j, right) in to.iter().enumerate().rev() {
+            let below = table.get(at(i + 1, j)).copied().unwrap_or(0);
+            let beside = table.get(at(i, j + 1)).copied().unwrap_or(0);
+            let diagonal = table.get(at(i + 1, j + 1)).copied().unwrap_or(0);
+            let value = if left == right {
+                diagonal + 1
+            } else {
+                below.max(beside)
+            };
+            if let Some(cell) = table.get_mut(at(i, j)) {
+                *cell = value;
+            }
+        }
+    }
+    let remaining = |i: usize, j: usize| table.get(at(i, j)).copied().unwrap_or(0);
+
+    let mut out = format!(
+        "--- {from_label}\n+++ {to_label}\n@@ -1,{} +1,{} @@\n",
+        from.len(),
+        to.len()
+    );
+    let mut left = from.iter().enumerate().peekable();
+    let mut right = to.iter().enumerate().peekable();
+    loop {
+        let (line, advance_left, advance_right) = match (left.peek(), right.peek()) {
+            (Some((i, a)), Some((j, b))) => {
+                if a == b {
+                    (format!(" {a}"), true, true)
+                } else if remaining(i + 1, *j) >= remaining(*i, j + 1) {
+                    (format!("-{a}"), true, false)
+                } else {
+                    (format!("+{b}"), false, true)
+                }
+            }
+            (Some((_, a)), None) => (format!("-{a}"), true, false),
+            (None, Some((_, b))) => (format!("+{b}"), false, true),
+            (None, None) => break,
+        };
+        out.push_str(&line);
+        out.push('\n');
+        if advance_left {
+            left.next();
+        }
+        if advance_right {
+            right.next();
+        }
+    }
+    out.trim_end().to_owned()
+}
+
+/// The pre-push delegate a tree holds, read from where git would run it.
+///
+/// `core.hooksPath` decides the directory, and the default is the one
+/// `install` writes to. A tree pointing git somewhere else keeps its delegate
+/// there, and reading `.githooks` regardless would report on a file git never
+/// runs while missing the one it does.
+pub(crate) struct Delegate {
+    /// Repository-relative, as a report names it.
+    pub source: String,
+    /// The runner whose written text these lines are, or `None` when they are
+    /// no runner's -- the file drifted, or an older binary wrote it.
+    pub runner: Option<&'static str>,
+    /// Whether the file carries the marker `install` writes. A hand-written
+    /// copy is unmarked, and unmarked is not drifted.
+    pub marked: bool,
+    pub fingerprint: String,
+}
+
+impl Delegate {
+    /// The declaration `hooks --identity` compares and `drifted` reports.
+    pub(crate) fn body(&self) -> String {
+        self.runner.map_or_else(
+            || {
+                format!(
+                    "pre-push delegate whose lines are not the ones this binary writes for \
+                     prek or pre-commit (fingerprint {})",
+                    self.fingerprint
+                )
+            },
+            |runner| {
+                format!(
+                    "pre-push delegate for {runner}, the text `uphold hooks --install` \
+                     writes (fingerprint {})",
+                    self.fingerprint
+                )
+            },
+        )
+    }
+}
+
+/// Read the delegate, or `None` where git's hooks directory has no `pre-push`.
+///
+/// Compared against both runners' texts rather than the one on PATH: which
+/// runner a delegate calls is written in the file, and a machine without that
+/// runner installed still holds the same file.
+pub(crate) fn delegate(root: &Path) -> Result<Option<Delegate>> {
+    let directory =
+        git_config(root, "core.hooksPath")?.unwrap_or_else(|| DEFAULT_DIRECTORY.to_owned());
+    let path = root.join(&directory).join("pre-push");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let text = crate::error::read_to_string(&path)?;
+    let lines = effective_lines(&text);
+    let runner = ["prek", "pre-commit"]
+        .into_iter()
+        .find(|runner| effective_lines(&pre_push_hook(runner, &directory)) == lines);
+    Ok(Some(Delegate {
+        source: Path::new(&directory).join("pre-push").display().to_string(),
+        runner,
+        marked: text.contains(MARKER),
+        fingerprint: fingerprint(&lines),
+    }))
 }
 
 fn git_config(root: &Path, key: &str) -> Result<Option<String>> {
@@ -697,4 +1078,51 @@ fn pre_push_hook(runner: &str, directory: &str) -> String {
          \t--hook-type=pre-push -- \"$@\"\n",
         args = impl_args(runner),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effective_lines_keep_the_shebang_and_drop_the_rest_of_the_comments() {
+        let lines = effective_lines(
+            "#!/bin/sh\n# a remark\n\nset -e\n\n  # indented remark\nfoo   bar \\\n\tbaz\n",
+        );
+        assert_eq!(lines, ["#!/bin/sh", "set -e", "foo bar baz"]);
+    }
+
+    #[test]
+    fn a_command_wrapped_at_a_different_word_is_the_same_command() {
+        // The three fleet copies that were not byte-identical differed here
+        // and nowhere else.
+        let ours = effective_lines(&pre_push_hook("prek", ".githooks"));
+        let theirs = effective_lines(&pre_push_hook("prek", ".githooks").replace(
+            "--hook-dir \"$hook_dir\" --script-version 4 \\\n\t--hook-type=pre-push",
+            "--hook-dir \"$hook_dir\" \\\n\t--script-version 4 --hook-type=pre-push",
+        ));
+        assert_eq!(ours, theirs);
+        assert_ne!(
+            ours,
+            effective_lines(&pre_push_hook("pre-commit", ".githooks"))
+        );
+    }
+
+    #[test]
+    fn the_diff_names_only_the_lines_that_differ() {
+        let from = ["a", "b", "c"].map(str::to_owned);
+        let to = ["a", "x", "c", "d"].map(str::to_owned);
+        assert_eq!(
+            unified_diff("from", &from, "to", &to),
+            "--- from\n+++ to\n@@ -1,3 +1,4 @@\n a\n-b\n+x\n c\n+d"
+        );
+    }
+
+    #[test]
+    fn a_fingerprint_is_the_lines_and_not_their_layout() {
+        let one = fingerprint(&effective_lines("set -e\nfoo \\\n  bar\n"));
+        let two = fingerprint(&effective_lines("# hi\nset -e\n\nfoo bar\n"));
+        assert_eq!(one, two);
+        assert_ne!(one, fingerprint(&effective_lines("set -e\nfoo baz\n")));
+    }
 }
