@@ -29,6 +29,16 @@
 //! every commit. It happens in a `git worktree` at HEAD, never in the tree the
 //! operator is standing in: a probe that planted a fixture in the working tree
 //! would leave one behind the first time it was interrupted.
+//!
+//! THE ONE PROBE THAT IS NOT A RUNNER RUN. `push = "empty"` drives `git push`
+//! itself, of a range with nothing in it, through whatever hooks git runs. The
+//! pre-push delegate `hooks --install` writes exists for that range -- prek
+//! skips its whole pre-push stage over it -- and a `<runner> run <id>` can
+//! never reach the case, because the runner is the thing being stepped
+//! around. The fixture for such a probe is a DESTINATION rather than a file:
+//! an empty range carries no content for a hook to object to, so what a
+//! pre-push guard judges is where the push is going, and `refuses` and
+//! `allows` name one destination each.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -58,18 +68,29 @@ struct ProbeFile {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Probe {
-    /// The hook id to drive, as the runner knows it.
+    /// The hook id to drive, as the runner knows it. For a `push` probe, the
+    /// name the report calls it by: what is driven is git's pre-push hook,
+    /// which no runner's configuration declares.
     id: String,
     /// Where the fixture goes. Repository-relative, and it decides as much as
     /// the content does: a hook scoped to `*.go` says nothing about a file
-    /// called `fixture.txt`.
-    path: String,
-    /// What this hook must refuse.
+    /// called `fixture.txt`. Required for a runner probe, refused for a `push`
+    /// one, whose fixture is a destination and not a file.
+    #[serde(default)]
+    path: Option<String>,
+    /// What this hook must refuse: file contents, or for a `push` probe the
+    /// `owner/repo` of a destination.
     refuses: String,
     /// What it must accept. Absent means only one verdict is driven, which the
     /// report says rather than passing off as both.
     #[serde(default)]
     allows: Option<String>,
+    /// `"empty"`: drive `git push` of an empty range to a throwaway bare
+    /// remote already at the tip, through the hooks git runs, instead of
+    /// `<runner> run <id>`. The only value, and a string rather than a bool
+    /// so that a second shape of push can be named without a second field.
+    #[serde(default)]
+    push: Option<String>,
     /// The stage to run the hook at. Absent means `pre-commit`, which is where
     /// most hooks live and is what every runner defaults to.
     #[serde(default)]
@@ -136,9 +157,11 @@ pub(crate) fn run(root: &Path, runner: Option<&str>, timeout: Option<u64>) -> Re
 
     // A probe naming a hook this repository does not declare drives nothing,
     // and reads as coverage while providing none -- the same failure a
-    // `disabled_rules` entry naming nothing has.
+    // `disabled_rules` entry naming nothing has. A push probe names no hook:
+    // git's own pre-push is what it drives, and whether that reaches anything
+    // is the verdict rather than a precondition.
     for probe in &probes {
-        if !declared.contains(&probe.id) {
+        if probe.push.is_none() && !declared.contains(&probe.id) {
             return Err(Fatal::at(
                 &root.join(PROBES),
                 format!(
@@ -170,7 +193,14 @@ pub(crate) fn run(root: &Path, runner: Option<&str>, timeout: Option<u64>) -> Re
         // about the machines this repository runs on. With none of the three
         // the run waits, which is what it always did.
         let patience = timeout.or(probe.timeout_seconds).or(file_timeout);
-        results.push((probe.id.clone(), drive(&worktree, runner, probe, patience)?));
+        // Said in the report line, because the verdict words below are about
+        // "its fixture", and for this probe the fixture is where a push went.
+        let label = if probe.push.is_some() {
+            format!("{} (git push of an empty range)", probe.id)
+        } else {
+            probe.id.clone()
+        };
+        results.push((label, drive(&worktree, runner, probe, patience)?));
     }
     drop(worktree);
 
@@ -241,7 +271,12 @@ pub(crate) fn run(root: &Path, runner: Option<&str>, timeout: Option<u64>) -> Re
     Ok(crate::error::verdict(failed, unmeasured))
 }
 
-/// Plant, run, clean, run.
+/// Plant, run, clean, run -- or, for a push probe, push to the destination
+/// that must be refused and then to the one that must be allowed.
+///
+/// One verdict logic for both shapes. The push probe differs only in what a
+/// fixture IS and what runs over it, and a second copy of the six verdicts
+/// worded for a push would be two readings of the same pair of exit codes.
 fn drive(
     worktree: &Worktree,
     runner: Runner,
@@ -249,23 +284,31 @@ fn drive(
     patience: Option<u64>,
 ) -> Result<Verdict> {
     let stage = probe.stage.as_deref().unwrap_or("pre-commit");
+    let run = |fixture: &str| -> Result<Ran> {
+        if probe.push.is_some() {
+            return worktree.push_empty_range(fixture, patience);
+        }
+        // Validated at load, which is where a probe of this shape without a
+        // path is refused.
+        let path = probe.path.as_deref().unwrap_or_default();
+        worktree.plant(path, fixture)?;
+        let ran = runner.drive(worktree.path(), &probe.id, path, stage, patience);
+        worktree.remove(path)?;
+        ran
+    };
 
-    worktree.plant(&probe.path, &probe.refuses)?;
-    let refused = runner.drive(worktree.path(), &probe.id, &probe.path, stage, patience)?;
+    let refused = run(&probe.refuses)?;
     let Ran::Finished { code, output } = refused else {
-        worktree.remove(&probe.path)?;
         return Ok(Verdict::Unmeasured {
             after: patience.unwrap_or_default(),
         });
     };
     if code == 0 {
-        worktree.remove(&probe.path)?;
         return Ok(Verdict::CannotFail);
     }
     if let Some(expected) = probe.expect.as_deref()
         && !output.contains(expected)
     {
-        worktree.remove(&probe.path)?;
         // The tail rather than the head: runners print their banner first
         // and the finding last, and a reader shown only the banner would
         // have to run the probe again to learn what actually spoke.
@@ -280,13 +323,9 @@ fn drive(
     }
 
     let Some(allows) = probe.allows.as_deref() else {
-        worktree.remove(&probe.path)?;
         return Ok(Verdict::RefusedOnly);
     };
-    worktree.plant(&probe.path, allows)?;
-    let accepted = runner.drive(worktree.path(), &probe.id, &probe.path, stage, patience)?;
-    worktree.remove(&probe.path)?;
-    let Ran::Finished { code: clean, .. } = accepted else {
+    let Ran::Finished { code: clean, .. } = run(allows)? else {
         return Ok(Verdict::Unmeasured {
             after: patience.unwrap_or_default(),
         });
@@ -611,6 +650,81 @@ impl Worktree {
             .map_err(|error| Fatal::new(format!("could not stage the fixture: {error}")))?;
         Ok(())
     }
+
+    /// Where the throwaway remotes go: beside the worktree, removed with it.
+    fn remotes(&self) -> PathBuf {
+        self.path
+            .with_file_name(format!("uphold-probe-{}-remotes", std::process::id()))
+    }
+
+    /// `git push` of an empty range to `owner/repo`, through the hooks git
+    /// runs, and what that push said.
+    ///
+    /// The remote is a bare repository made here and brought to the
+    /// worktree's tip with a push that skips the hooks, so the push that is
+    /// measured has nothing to send. git still runs the pre-push hook for it,
+    /// with the remote's name and url on argv and no ref line on stdin, which
+    /// is the case the delegate `hooks --install` writes exists for.
+    ///
+    /// The destination's directory is `<owner>/<repo>.git`, so the url git
+    /// hands the hook parses to the same `owner/repo` the guard would read off
+    /// a forge url -- through the one parser both use. The remote is named on
+    /// the command line with `-c`, never added to the repository's config:
+    /// worktrees share it, and a remote left behind by an interrupted probe
+    /// would be the operator's to find.
+    fn push_empty_range(&self, destination: &str, patience: Option<u64>) -> Result<Ran> {
+        const REMOTE: &str = "uphold-probe";
+        let bare = self.remotes().join(format!("{destination}.git"));
+        drop(std::fs::remove_dir_all(&bare));
+        std::fs::create_dir_all(&bare).map_err(|error| Fatal::at(&bare, error))?;
+        let made = detached("git", &bare)
+            .args(["init", "--bare", "--quiet"])
+            .output()
+            .map_err(|error| Fatal::new(format!("could not make a bare remote: {error}")))?;
+        if !made.status.success() {
+            return Err(Fatal::at(
+                &bare,
+                format!(
+                    "could not make a bare remote to push to: {}",
+                    String::from_utf8_lossy(&made.stderr).trim()
+                ),
+            ));
+        }
+        let seeded = detached("git", &self.path)
+            .args(["push", "--quiet", "--no-verify"])
+            .arg(&bare)
+            .arg("HEAD:refs/heads/probe")
+            .output()
+            .map_err(|error| Fatal::new(format!("could not seed the bare remote: {error}")))?;
+        if !seeded.status.success() {
+            return Err(Fatal::at(
+                &bare,
+                format!(
+                    "could not bring the bare remote to the tip, so no push to it would \
+                     have an empty range: {}",
+                    String::from_utf8_lossy(&seeded.stderr).trim()
+                ),
+            ));
+        }
+
+        let mut command = detached("git", &self.path);
+        command
+            .arg("-c")
+            .arg(format!("remote.{REMOTE}.url={}", bare.display()))
+            .args(["push", REMOTE, "HEAD:refs/heads/probe"]);
+        match bounded(command, patience)
+            .map_err(|error| Fatal::new(format!("could not run git push: {error}")))?
+        {
+            Bounded::TimedOut => Ok(Ran::TimedOut),
+            Bounded::Exited { code: None, .. } => Err(Fatal::new(format!(
+                "git push to {destination} was killed, so the hooks it runs gave no verdict"
+            ))),
+            Bounded::Exited {
+                code: Some(code),
+                output,
+            } => Ok(Ran::Finished { code, output }),
+        }
+    }
 }
 
 impl Drop for Worktree {
@@ -625,6 +739,7 @@ impl Drop for Worktree {
                 .output(),
         );
         drop(std::fs::remove_dir_all(&self.path));
+        drop(std::fs::remove_dir_all(self.remotes()));
     }
 }
 
@@ -674,6 +789,65 @@ fn probes(root: &Path) -> Result<(Vec<Probe>, Option<u64>)> {
                 ),
             ));
         }
+        match probe.push.as_deref() {
+            None => {
+                if probe.path.is_none() {
+                    return Err(Fatal::at(
+                        &path,
+                        format!(
+                            "the probe for `{}` has no `path`, so there is nowhere to plant \
+                             its fixture",
+                            probe.id
+                        ),
+                    ));
+                }
+            }
+            Some("empty") => {
+                // The fields a push probe has no use for are refused rather
+                // than ignored: a `path` beside `push` reads as a file the
+                // push will carry, and an empty range carries none.
+                if probe.path.is_some() || probe.stage.is_some() {
+                    return Err(Fatal::at(
+                        &path,
+                        format!(
+                            "the probe for `{}` has `push = \"empty\"` beside `path` or \
+                             `stage`. An empty-range push plants no file and runs at \
+                             pre-push by definition, so neither field can mean anything \
+                             here",
+                            probe.id
+                        ),
+                    ));
+                }
+                for (field, value) in [
+                    ("refuses", Some(probe.refuses.as_str())),
+                    ("allows", probe.allows.as_deref()),
+                ] {
+                    if let Some(value) = value
+                        && !is_destination(value)
+                    {
+                        return Err(Fatal::at(
+                            &path,
+                            format!(
+                                "the probe for `{}` has `{field} = {value:?}`, which is not \
+                                 an `owner/repo`. A push probe's fixture is where the push \
+                                 goes: one owner, one slash, one repository, no host",
+                                probe.id
+                            ),
+                        ));
+                    }
+                }
+            }
+            Some(other) => {
+                return Err(Fatal::at(
+                    &path,
+                    format!(
+                        "the probe for `{}` has `push = {other:?}`, and the only push this \
+                         command drives is \"empty\": a range with nothing in it",
+                        probe.id
+                    ),
+                ));
+            }
+        }
     }
     if parsed.timeout_seconds == Some(0) {
         return Err(Fatal::at(
@@ -685,9 +859,47 @@ fn probes(root: &Path) -> Result<(Vec<Probe>, Option<u64>)> {
     Ok((parsed.probes, parsed.timeout_seconds))
 }
 
+/// `owner/repo`, as a push probe's fixture: the two path segments a bare
+/// remote is made under, and nothing a path could not hold or a url parser
+/// would read as a host.
+fn is_destination(value: &str) -> bool {
+    let segments: Vec<&str> = value.split('/').collect();
+    segments.len() == 2
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && *segment != "."
+                && *segment != ".."
+                && segment
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_destination_is_one_owner_one_slash_one_repository() {
+        for good in ["acme/widget", "someone-else/their.repo", "a_b/c-d"] {
+            assert!(is_destination(good), "{good}");
+        }
+        // No host, no path walk, no url: the value names a directory the
+        // remote is made under and the guard parses back.
+        for bad in [
+            "widget",
+            "acme/",
+            "/widget",
+            "acme/widget/extra",
+            "../acme/widget",
+            "acme/..",
+            "github.com/acme/widget",
+            "https://github.com/acme/widget",
+            "acme/wid get",
+        ] {
+            assert!(!is_destination(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn a_runner_is_named_by_the_command_it_runs() {

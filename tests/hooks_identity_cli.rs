@@ -232,7 +232,7 @@ fn a_waiver_naming_a_finding_that_does_not_exist_is_refused() {
     std::fs::create_dir_all(&from).unwrap();
     waivers(
         &from,
-        "[[waive]]\nid = \"ruff-check\"\nfindings = [\"drifted\"]\nreason = \"a typo for forked\"\n",
+        "[[waive]]\nid = \"ruff-check\"\nfindings = [\"froked\"]\nreason = \"a typo for forked\"\n",
     );
     let one = repository(&workspace, "one", PINNED);
     let two = repository(&workspace, "two", PINNED);
@@ -341,4 +341,153 @@ fn a_misspelled_waiver_field_is_still_refused() {
 
     let output = identity(&from, &[&one, &two]);
     assert_eq!(code(&output), 2, "{}", text(&output));
+}
+
+/// The pre-push delegate `uphold hooks --install` writes, in one repository,
+/// through the command itself -- so what the comparison reads is what the
+/// binary wrote and not a transcription of it.
+fn install_delegate(root: &Path, extra: &[&str]) {
+    std::fs::create_dir_all(root.join("policy")).unwrap();
+    std::fs::write(
+        root.join("policy/principles.toml"),
+        "[rule.x]\nregexp = 'zzz'\nmessage = \"no\"\nfiles.include = [\".\"]\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["hooks", "--install", "--runner", "prek"])
+        .args(extra)
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", text(&output));
+}
+
+#[test]
+fn the_pre_push_delegate_is_a_declaration_and_a_copy_that_drifted_is_reported() {
+    // Two installs agree with each other and with the binary. Then one copy
+    // is edited: it still declares the same id, so nothing in either tree
+    // reports it, and the comparison between the two would call it forked --
+    // which is true and not the point. The point is that it no longer runs
+    // what this binary writes, and that is its own finding.
+    let workspace = workspace();
+    let one = repository(&workspace, "one", PINNED);
+    let two = repository(&workspace, "two", PINNED);
+    install_delegate(&one, &[]);
+    install_delegate(&two, &[]);
+
+    let output = identity(&workspace, &[&one, &two]);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let report = text(&output);
+    assert!(report.contains("2 distinct hook id(s)"), "{report}");
+    assert!(report.contains("one: 2 declaration(s)"), "{report}");
+
+    let hook = two.join(".githooks/pre-push");
+    let installed = std::fs::read_to_string(&hook).unwrap();
+    std::fs::write(&hook, installed.replace("exit 2", "exit 0")).unwrap();
+
+    let drifted = identity(&workspace, &[&one, &two]);
+    assert_eq!(code(&drifted), 1, "{}", text(&drifted));
+    let finding = text(&drifted);
+    assert!(finding.contains("drifted: `pre-push` in two"), "{finding}");
+    assert!(finding.contains(".githooks/pre-push"), "{finding}");
+    assert!(
+        finding.contains("not the text this binary writes"),
+        "{report}"
+    );
+    assert!(!report.contains("drifted: `pre-push` in one"), "{report}");
+}
+
+#[test]
+fn a_hand_written_copy_with_the_binarys_lines_agrees_with_an_installed_one() {
+    // The fleet's own case: a delegate carried by hand, without the marker and
+    // under its own comments, beside one this command wrote. Same lines, same
+    // declaration -- the comments were never what ran.
+    let workspace = workspace();
+    let one = repository(&workspace, "one", PINNED);
+    let two = repository(&workspace, "two", PINNED);
+    install_delegate(&one, &[]);
+    let installed = std::fs::read_to_string(one.join(".githooks/pre-push")).unwrap();
+    let kept: Vec<&str> = installed
+        .lines()
+        .filter(|line| !line.starts_with('#') || line.starts_with("#!"))
+        .collect();
+    let by_hand = format!("{}\n", kept.join("\n")).replace(
+        "--hook-dir \"$hook_dir\" --script-version 4 \\\n\t--hook-type=pre-push",
+        "--hook-dir \"$hook_dir\" \\\n\t--script-version 4 --hook-type=pre-push",
+    );
+    assert_ne!(by_hand, installed);
+    std::fs::create_dir_all(two.join(".githooks")).unwrap();
+    std::fs::write(
+        two.join(".githooks/pre-push"),
+        format!("{by_hand}# a remark of the tree's own\n"),
+    )
+    .unwrap();
+
+    let output = identity(&workspace, &[&one, &two]);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains("every declaration agrees"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn the_delegate_is_read_from_where_core_hookspath_points() {
+    // A tree that keeps its hooks somewhere other than `.githooks` has its
+    // delegate there, and reading `.githooks` regardless would report a file
+    // git never runs while missing the one it does.
+    let workspace = workspace();
+    let one = repository(&workspace, "one", PINNED);
+    let two = repository(&workspace, "two", PINNED);
+    install_delegate(&one, &[]);
+    install_delegate(&two, &["--dir", "hooks/git"]);
+    assert!(two.join("hooks/git/pre-push").is_file());
+    assert!(!two.join(".githooks").exists());
+
+    let output = identity(&workspace, &[&one, &two]);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains("two: 2 declaration(s)"),
+        "{}",
+        text(&output)
+    );
+
+    let hook = two.join("hooks/git/pre-push");
+    let installed = std::fs::read_to_string(&hook).unwrap();
+    std::fs::write(&hook, installed.replace("exit 2", "exit 0")).unwrap();
+    let drifted = identity(&workspace, &[&one, &two]);
+    assert_eq!(code(&drifted), 1, "{}", text(&drifted));
+    assert!(
+        text(&drifted).contains("drifted: `pre-push` in two (hooks/git/pre-push)"),
+        "{}",
+        text(&drifted)
+    );
+}
+
+#[test]
+fn a_drifted_delegate_can_be_waived_by_name() {
+    let workspace = workspace();
+    let from = workspace.join("from");
+    std::fs::create_dir_all(&from).unwrap();
+    waivers(
+        &from,
+        "[[waive]]\nid = \"pre-push\"\nfindings = [\"drifted\"]\nrepos = [\"two\"]\nreason = \"two is on the release before this one until its next bump\"\n",
+    );
+    let one = repository(&workspace, "one", PINNED);
+    let two = repository(&workspace, "two", PINNED);
+    install_delegate(&one, &[]);
+    install_delegate(&two, &[]);
+    let hook = two.join(".githooks/pre-push");
+    let installed = std::fs::read_to_string(&hook).unwrap();
+    std::fs::write(&hook, installed.replace("exit 2", "exit 0")).unwrap();
+
+    let output = identity(&from, &[&one, &two]);
+    let report = text(&output);
+    assert!(!report.contains("drifted:"), "{report}");
+    // The fork between the two copies is not waived, because it was not
+    // named: the two trees do run different things.
+    assert!(report.contains("forked: `pre-push`"), "{report}");
+    assert_eq!(code(&output), 1, "{report}");
 }

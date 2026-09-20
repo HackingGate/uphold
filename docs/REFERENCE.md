@@ -1535,6 +1535,18 @@ runner with no network fails this guard where it used to pass it.
 `UPHOLD_ALLOW=no-stale-hook-pins` is the deliberate bypass in each of those
 cases, and every refusal names it.
 
+The pre-push delegate `uphold hooks --install` writes is read here as well,
+from the directory `core.hooksPath` names (`.githooks` when it names none).
+It is a pin with no `rev:` whose upstream is the binary: a copy whose
+effective lines are not the ones this binary writes — an older release's text,
+or a hand edit — is **behind** in exactly the sense a `rev:` behind its tag is,
+and it is refused (exit `1`) with the file named and `hooks --install --check`
+pointed at. A hand-written copy with the *same* lines is not behind anything;
+it passes with a note naming `hooks --install --adopt`. A tree with no delegate
+is a tree with no delegate, and nothing here says otherwise. The comparison is
+the one `hooks --identity` makes, through the same reader, so a file cannot
+be reported as drifted by one and current by the other.
+
 ### Overriding one
 
 ```sh
@@ -2433,13 +2445,14 @@ that the copies stopped agreeing. A claim naming that id then means one thing in
 one repository and something else next door, and `uphold check` reconciles both
 green.
 
-Three findings, and they are three different failures:
+Four findings, and they are four different failures:
 
 | finding | means |
 |---|---|
 | `forked` | one id, two declarations — different `args:`, a different `entry:`, a different glob |
 | `pinned apart` | one id, one upstream, two revisions. Everybody runs the check; some run an older one |
 | `absent` | an id **most** of the set declares and one does not |
+| `drifted` | the pre-push delegate `hooks --install` writes, in a repository where it is no longer the text **this binary** writes |
 
 `absent` is deliberately reported only where a majority declares the id. "This
 repository has a hook the others do not" is the normal state of a fleet — a
@@ -2450,6 +2463,20 @@ The same id in a `.pre-commit-config.yaml` and in a `lefthook.yml` is one check
 written twice in two formats, which is what supporting both runners means; the
 two are never compared against each other. A lefthook command under two hook
 names is two declarations, not one that disagrees with itself.
+
+The pre-push delegate is read as a declaration too, under the id `pre-push`
+and the manager `git`, from the directory `core.hooksPath` names (or
+`.githooks` when it names none) — so a tree that keeps its hooks elsewhere is
+read where git reads it. Its body is the file's *effective lines*: the shebang
+and every line that is not a comment, with a line ending in `\` joined to the
+next and whitespace runs collapsed, so a hand-written copy that wraps one
+command at a different word is the same declaration. Two copies that match
+each other are compared with the binary as well, because a fleet whose every
+copy agrees can still be a fleet on the text an older release wrote, and
+`forked` would call that agreement. `drifted` is reported per repository, and
+`no-stale-hook-pins` reads the same file through the same reader (below) so
+the finding is also a refusal at pre-push. `hooks --install --check` shows the
+difference.
 
 Exit `0` when every declaration agrees, `1` on a divergence, `2` when a named
 directory is not a repository — a directory that declares nothing and one that
@@ -2464,7 +2491,7 @@ repository excusing itself.
 ```toml
 [[waive]]
 id = "uphold-guard-push"
-findings = ["absent"]        # or omit: covers all three
+findings = ["absent"]        # or omit: covers all four
 repos = ["uphold"]           # or omit: every repository in the comparison
 reason = "the hooks repository cannot pin itself"
 ```
@@ -2487,6 +2514,8 @@ compared, because the comparison set is whatever was named on the command line.
 ```sh
 uphold hooks --install                      # runner detected from PATH
 uphold hooks --install --runner pre-commit  # or named; --dir DIR for the directory
+uphold hooks --install --adopt              # take over a hand-written copy of the same text
+uphold hooks --install --check              # report the directory; write nothing
 ```
 
 Writes the four guard-stage hook files — `pre-commit`, `commit-msg`,
@@ -2505,8 +2534,14 @@ of zero commits. The written `pre-push` runs `uphold guard --stage pre-push`
 unconditionally, reading the destination off argv — where git puts it, and
 where a `git config` lookup would answer with the very thing that was just
 changed — and only then delegates to the runner. One fleet carried this file
-by hand, byte-identical in ten trees, with a script whose whole job was to
-notice when a copy drifted.
+by hand, byte-identical in ten trees and wrapped differently in three, with a
+script whose whole job was to notice when a copy drifted.
+
+git itself does run the hook for an empty range. Measured 2026-09-20, git
+2.55.0: a push whose every ref is already up to date starts the pre-push hook
+with the remote's name and url on argv and **nothing** on stdin. That is why
+the delegate reads the destination off argv, and it is the push `uphold probe`
+drives with `push = "empty"` (below).
 
 The other three files are delegates. `core.hooksPath` makes git look for
 **every** hook in the named directory, so a directory holding only `pre-push`
@@ -2522,6 +2557,25 @@ type outside the four is refused, because that type would otherwise stop
 firing while the install read as one that worked. lefthook is refused by name:
 it installs and owns its own hooks, and a `core.hooksPath` written here would
 displace them.
+
+**`--adopt`** is the one exception to "never replaced", and it replaces only
+the comments. A file in the directory without this command's marker is
+compared with the text the command would write, by *effective lines*: the
+shebang and every line that is not a comment, a line ending in `\` joined to
+the next, runs of whitespace collapsed. Equal lines mean the file already does
+what this command's file does, so it is rewritten with the marker and reported
+as `adopted`; from then on it is an ordinary install. Lines that differ mean
+somebody decided something, and the run refuses (exit `2`) with a unified diff
+of the two — the file is not touched. That is how the trees that carried the
+delegate by hand move onto the command without moving their file aside first.
+
+**`--check`** writes nothing and says, for each of the four files, whether it
+is absent, written by this command and matching this binary, written by this
+command and **not** matching (an older install, or edited since — rerunning
+`--install` rewrites it), written by hand and adoptable, or written by hand
+and different — with the diff wherever the lines differ — and whether
+`core.hooksPath` actually points git at the directory. Exit `0` only when all
+four match and git runs them; `1` otherwise.
 
 ## `uphold probe` — can each hook refuse?
 
@@ -2592,6 +2646,46 @@ Fixtures are staged in the throwaway worktree the moment they are planted, so
 a rule that reads **tracked** files sees every plant — a probe is never
 invisible to the scan it drives.
 
+### `push = "empty"` — the range the delegate exists for
+
+```toml
+[[probe]]
+id = "empty-range"                 # the report's name for it; no runner declares it
+push = "empty"                     # the only value
+refuses = "someone-else/widget"    # a destination, not a file
+allows = "acme/widget"             # the owner the policy pins
+expect = "prevent-public-push"
+```
+
+One probe is not a `<runner> run <id>`. The pre-push delegate `uphold hooks
+--install` writes exists for a push whose range is **empty** — prek skips its
+whole pre-push stage over one — and a runner run can never reach that case,
+because the runner is the thing being stepped around. So `push = "empty"`
+drives `git push` itself: a throwaway bare remote is made, brought to the
+worktree's tip with a push that skips the hooks, and then pushed to again
+**through** the hooks git runs, so there is nothing to send and the only thing
+on the push path that can refuse is whatever git runs before the runner is
+reached. The remote is named on the command line for that one push and never
+added to the repository's config.
+
+The fixture is a **destination**, because an empty range carries no content
+for a hook to object to, and what a pre-push guard judges on it is where the
+push is going. `refuses` and `allows` each name one, as `owner/repo`: the
+bare remote is made under a directory of that name, so the url git hands the
+hook parses to the same `owner/repo` the guard would read off a forge url,
+through the one parser both use. No host: a value that is not one owner, one
+slash and one repository is refused at load, and so is a `path` or a `stage`
+beside `push` — the push plants no file and runs at pre-push by definition.
+
+The six verdicts are the runner probe's, read off the push's exit code and
+output exactly as they are read off a runner's. The one worth naming: a tree
+with no delegate — nothing installed, or a directory `core.hooksPath` does not
+point at — reports **ACCEPTED what it is declared to refuse**, because that
+push went through. That is the state every consumer was in before the
+delegate existed, and the probe is what shows a tree has left it. `expect` is
+what keeps a red from somewhere else from counting: the delegate refuses every
+push when `uphold` is not on PATH, and that refusal does not name the guard.
+
 Fixtures are written down rather than generated. uphold knows what its own rules
 match and knows nothing about `gofmt`, `ruff`, or a hook somebody wrote this
 morning — and the hooks worth probing are exactly the ones it knows nothing
@@ -2600,7 +2694,7 @@ typing it saves.
 
 The count of declared hooks with **no** probe is printed every run: "two hooks
 were probed" means one thing beside two declarations and another beside twenty.
-A probe naming a hook nothing declares is refused, and so is an empty `refuses`
+A probe naming a hook nothing declares is refused (a `push` probe names none), and so is an empty `refuses`
 — an empty fixture demonstrates nothing, and a hook that accepted it would be
 reported as unable to fail.
 
