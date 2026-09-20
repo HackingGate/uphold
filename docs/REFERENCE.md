@@ -576,8 +576,10 @@ not claim to recognize arbitrary prose. The tracker rule retains the set's test
 directory and Go test exclusions for synthetic examples, and excludes `testdata`.
 Date and log rules exclude `tests/fixtures`, `test/fixtures`, and `testdata`.
 Unqualified all-uppercase identifiers are not treated as repository shorthand,
-and bare numbers need prose context or an opening delimiter, so standards
-citations remain valid. Other legitimate literal uses need a scoped override.
+and bare numbers need prose context, an opening delimiter, or a list separator
+(a comma, semicolon, or slash) before them, so standards citations remain valid
+and a citation list that names its repository once is read to its end. Other
+legitimate literal uses need a scoped override.
 
 None of those arguments should stand between anyone and `process-residue`. The
 binary answers "what is in it" directly:

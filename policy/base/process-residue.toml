@@ -125,9 +125,13 @@ issues. Keep logs, bug reports, and benchmark results in issues, and edit
 chronology in Git history.
 """
 # Unqualified repository names require a lowercase letter, and bare numbers
-# require a lowercase prose word or an opening delimiter. This avoids treating
-# uppercase standards designators as repositories or task-tracking prose.
-regexp = 'github\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\b|(?:^|\b[a-z]+[\t ]+|\(|\[)#[0-9]+\b'
+# require a lowercase prose word, an opening delimiter, or a list separator
+# (comma, semicolon, slash) before them. This avoids treating uppercase
+# standards designators as repositories or task-tracking prose. The separators
+# are admitted because a citation list names its repository once and leaves
+# every later item bare, and a comma directly before a hash number in a
+# comment is such a list far more often than anything else.
+regexp = 'github\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\b|(?:^|\b[a-z]+[\t ]+|\(|\[|[,;/][\t ]*)#[0-9]+\b'
 files.include = ["."]
 files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "**/testdata/**"]
 
