@@ -360,7 +360,7 @@ it refuses** so the name predicts the rule list:
 | set | refuses |
 |---|---|
 | `process-residue` | authoring and process residue in committed content — conflict markers, home paths, dated and status metadata, tracker and thread references, private data paths — and the residue a process leaves in the policy file itself: a rule transcribed out of a set. **Installs `pre-commit` and `manual`**, and the two report different things |
-| `credentials` | credential material — private keys and service tokens, literal credential values, populated environment files, browser profile and session stores |
+| `credentials` | credential material — private keys and service tokens, literal credential values, populated environment files, browser profile and session stores. A literal credential value is two rules split on the quote: in source the value half must be a quoted literal, so `password: modem_config.password.clone()` and `token = raw.trim_start_matches('v')` are expressions and not findings; in a config file — `.env`, INI, YAML, TOML, JSON, XML, properties — the text after the separator is the value whether quoted or not, and `-in-config` reads it unquoted |
 | `unmanaged-pins` | a version pinned where no manifest holds it — a shell install line, a `releases/download/vX.Y.Z` URL, a versioned `curl` or `wget` |
 | `host-identity` | the machine the author is standing on — its username, home path, hostname and default route, read at scan time and searched for in content |
 | `broken-links` | a markdown link naming a path that does not exist or leaving the repository, and a selection that yields no links at all |

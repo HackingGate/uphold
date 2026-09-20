@@ -219,7 +219,18 @@
             "**/test/**",
             "**/*_test.go",
             "policy/**",
-            "README.md"
+            "README.md",
+            "**/*.env",
+            "**/.env*",
+            "**/*.ini",
+            "**/*.cfg",
+            "**/*.conf",
+            "**/*.properties",
+            "**/*.yml",
+            "**/*.yaml",
+            "**/*.toml",
+            "**/*.json",
+            "**/*.xml"
           ],
           "exclude_cfg_test": false,
           "include": [
@@ -230,6 +241,39 @@
         },
         "id": "no-committed-auth-key-values",
         "message": "Do not commit literal credential, cookie, session, token, or secret values. Use\nenvironment-variable names or explicit redacted placeholders.\n",
+        "regexp": "(?i)\\b(?:cookie|session|password|passwd|token|credential|secret)\\b\\s*[=:]\\s*[\"'][A-Za-z0-9_./+=:@-]{16,}"
+      },
+      {
+        "files": {
+          "exclude": [
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go",
+            "policy/**",
+            "README.md"
+          ],
+          "exclude_cfg_test": false,
+          "glob": [
+            "*.env",
+            ".env*",
+            "*.ini",
+            "*.cfg",
+            "*.conf",
+            "*.properties",
+            "*.yml",
+            "*.yaml",
+            "*.toml",
+            "*.json",
+            "*.xml"
+          ],
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-committed-auth-key-values-in-config",
+        "message": "Do not commit literal credential, cookie, session, token, or secret values in\nconfiguration. Use environment-variable names or explicit redacted placeholders.\n",
         "regexp": "(?i)\\b(?:cookie|session|password|passwd|token|credential|secret)\\b\\s*[=:]\\s*[\"']?[A-Za-z0-9_./+=:@-]{16,}"
       },
       {
