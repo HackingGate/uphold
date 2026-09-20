@@ -29,6 +29,7 @@
 
 mod support;
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -190,9 +191,53 @@ const CORPUS: &[Case] = &[
     Case {
         set: "credentials",
         rule: "no-committed-auth-key-values",
-        path: "sample.conf",
-        refuses: &["token = \"abcdefghijklmnopqrstuvwx\"\n"],
+        path: "sample.rs",
+        refuses: &[
+            "token = \"abcdefghijklmnopqrstuvwx\"\n",
+            "password: \"hunter2hunter2hunter2\"\n",
+            "token = 'abcdef0123456789abcd'\n",
+        ],
+        allows: &[
+            "token = ${SERVICE_TOKEN}\n",
+            // What the mandatory quote bought. Each of these was a finding on
+            // a file holding no credential: a field access, a method chain, a
+            // call, and a path resolved at runtime are all sixteen characters
+            // of the value class, and none of them is quoted.
+            "password: modem_config.password.clone()\n",
+            "let token = raw.trim_start_matches('v')\n",
+            "token = debs_mod.resolve_token()\n",
+            "token = probe_output.strip()\n",
+            "secret: config::secrets::load()\n",
+            "token = read_token(&path)?\n",
+        ],
+    },
+    Case {
+        set: "credentials",
+        rule: "no-committed-auth-key-values-in-config",
+        path: ".env",
+        refuses: &["TOKEN=abcdef0123456789abcd\n"],
+        // Nothing here: a placeholder in a `.env` is `no-env-secret-values`'s
+        // finding, and a sample it lets through says nothing about this rule.
+        allows: &[],
+    },
+    Case {
+        set: "credentials",
+        rule: "no-committed-auth-key-values-in-config",
+        path: "sample.ini",
+        refuses: &[
+            "token = abcdef0123456789abcd\n",
+            "token = \"abcdefghijklmnopqrstuvwx\"\n",
+        ],
         allows: &["token = ${SERVICE_TOKEN}\n"],
+    },
+    // The same unquoted line, in a source file: outside the config globs the
+    // only rule left is the quoted one, and it does not read an unquoted value.
+    Case {
+        set: "credentials",
+        rule: "no-committed-auth-key-values-in-config",
+        path: "sample.rs",
+        refuses: &[],
+        allows: &["TOKEN=abcdef0123456789abcd\n"],
     },
     Case {
         set: "credentials",
@@ -579,6 +624,46 @@ fn tracker_references_are_refused_in_configuration_and_source() {
 }
 
 #[test]
+fn a_quoted_credential_in_a_config_file_is_one_finding_and_not_two() {
+    // The source rule's exclude and the config rule's glob have to name the
+    // same shapes, and nothing in the loader checks that they do. This is what
+    // does: one quoted value, once per shape, refused by the config rule and
+    // by nothing else. The label is matched with its line end because the
+    // source rule's id is a prefix of the config rule's.
+    for path in [
+        "settings.env",
+        ".env.local",
+        "sample.ini",
+        "sample.cfg",
+        "sample.conf",
+        "sample.properties",
+        "sample.yml",
+        "sample.yaml",
+        "sample.toml",
+        "sample.json",
+        "sample.xml",
+    ] {
+        let case = Case {
+            set: "credentials",
+            rule: "no-committed-auth-key-values-in-config",
+            path,
+            refuses: &[],
+            allows: &[],
+        };
+        let (code, report) = verdict(&case, "token = \"abcdefghijklmnopqrstuvwx\"\n");
+        assert_eq!(code, 1, "{path}: {report}");
+        assert!(
+            report.contains("policy check failed: no-committed-auth-key-values-in-config\n"),
+            "{path}: not refused by the config rule.\n{report}"
+        );
+        assert!(
+            !report.contains("policy check failed: no-committed-auth-key-values\n"),
+            "{path}: refused by the source rule too, so the partition is not exact.\n{report}"
+        );
+    }
+}
+
+#[test]
 fn volatile_content_rules_preserve_programs_and_synthetic_fixtures() {
     for (path, sample) in [
         (
@@ -680,11 +765,13 @@ fn every_content_rule_in_every_bundled_set_is_in_the_corpus() {
         missing.join(", ")
     );
     // The count is asserted because "nothing was missing" and "nothing was
-    // looked at" print the same.
+    // looked at" print the same. Counted by rule and not by case, because a
+    // rule scoped by glob needs one case per path it must and must not select.
+    let described: BTreeSet<&str> = CORPUS.iter().map(|case| case.rule).collect();
     assert!(
-        checked >= CORPUS.len(),
-        "the sets ship {checked} content rules and the corpus holds {}, so the corpus is \
+        checked >= described.len(),
+        "the sets ship {checked} content rules and the corpus describes {}, so the corpus is \
          describing rules the binary no longer has",
-        CORPUS.len()
+        described.len()
     );
 }
