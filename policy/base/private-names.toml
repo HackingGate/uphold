@@ -42,17 +42,20 @@
 # perfectly good answer: it says the condition does not hold here, which is a
 # decision somebody made rather than a question nobody asked.
 #
-# WHAT THIS SET DELIBERATELY DOES NOT SHIP.
+# WHERE THE OWNER LIST COMES FROM. The two lines this file carries outside
+# `[set]`, below these comments, are the default for every repository that
+# inherits the set:
 #
-# * `private_owners_from`. Ten of the ten repositories that declared it declared
-#   the SAME command -- a `cat` of a file outside the tree -- and it is a
-#   workspace fact rather than a repository one. But a bundled set that shipped
-#   a shell command would run that command in every inheriting repository on the
-#   strength of a version bump, with nothing in any of those trees to review.
-#   So it is a top-level policy field instead, beside `visibility`, and each
-#   workspace writes its own line. Write one: without a declared owner list the
-#   guards do LESS than they look like they do, and this was measured rather
-#   than assumed --
+#   private_owners_file = "xdg:principles/private-owners"
+#   private_owners_optional = true
+#
+# The first is read by this binary with no shell in between -- `xdg:` is
+# `$XDG_CONFIG_HOME`, else `$HOME/.config` -- and it names the one file that 97
+# `cat` lines across 87 policy files had all been naming. A workspace whose list
+# lives elsewhere writes its own `private_owners_file` (or `private_owners_from`)
+# at the top of its policy file, beside `visibility`, and that line overrides
+# this one. Without a readable list the guards do LESS than they look like they
+# do, and this was measured rather than assumed --
 #
 #     form in the text                      declared list   no list
 #     https://github.com/<owner>/<repo>     refused         refused
@@ -60,13 +63,21 @@
 #     <other owner>/<repo>, bare            refused         NOT SEEN
 #     an organisation named on its own      refused         NOT SEEN
 #
-#   The bottom two need a declared owner because a bare `owner/repo` is
-#   otherwise indistinguishable from a relative path, and treating every path in
-#   every document as a name would be one forge lookup per path. Everything else
-#   reaches the forge on its own. A repository whose policy is CLONED -- where
-#   the source will be absent on somebody else's machine -- writes
-#   `private_owners_optional = true` as well, which turns an unreadable source
-#   from exit 2 into a report naming those two rows.
+# The bottom two need a declared owner because a bare `owner/repo` is otherwise
+# indistinguishable from a relative path, and treating every path in every
+# document as a name would be one forge lookup per path. Everything else reaches
+# the forge on its own. The second line is what makes the first safe to inherit
+# into a repository other people clone: on a machine without the file, the
+# absence is REPORTED on stderr, naming those two rows, and the commit proceeds.
+#
+# WHAT THIS SET DELIBERATELY DOES NOT SHIP.
+#
+# * `private_owners_from`, the shell form of the same declaration. A bundled set
+#   that shipped a shell command would run that command in every inheriting
+#   repository on the strength of a version bump, with nothing in any of those
+#   trees to review, and the loader refuses a set that tries. A file spec is not
+#   a shell line: nothing runs, the path is read by this binary, and what it may
+#   name is one of three forms a reader can resolve in their head.
 # * `command.before`. The `gh` and `git push` seam is where the triggering leak
 #   actually happened -- text reaching a forge API with no git hook in its path.
 #   It is not here because a `command.before` entry names a `[[shim]]`, and a
@@ -121,14 +132,19 @@
 #   repository sets `refuse_unknown` -- because every `host.tld/a/b` in a
 #   document has that shape and most of them are a DOI or a licence URL.
 #
-#   What quiets a host entirely is a declaration, and the set ships none: which
-#   hosts carry a repository worth an answer is a fact about the repository.
-#   Write it at the top of the policy file beside `visibility`:
+#   What quiets a host entirely is a declaration, and which hosts carry a
+#   repository worth an answer is a fact about the repository, so the set ships
+#   none. The BINARY quiets `claude.ai`, which is a forge for nobody: the
+#   session link a commit written with an assistant carries has the shape of a
+#   name and is not one, and 84 policy files had each written the same one-item
+#   list to say so. Write the repository's own at the top of the policy file
+#   beside `visibility`:
 #
 #     foreign_hosts = ["git.acme-internal.example", "*.sr.ht"]
 #
-#   Host globs, matched case-insensitively. A rule may write its own list, which
-#   replaces this one for that rule rather than extending it.
+#   Host globs, matched case-insensitively, added to the built-in list. A rule
+#   may write its own, which replaces the policy's for that rule rather than
+#   extending it; the built-in list stays under both.
 
 # WHAT TAKING THIS SET REQUIRES, beyond the `visibility` line: an authenticated
 # `gh` wherever these rules run, CI included. A forge that cannot be asked is
@@ -145,6 +161,11 @@
 # distinct name it does not already know. That is too slow for a commit, which
 # is why it is at `pre-merge-commit`, `pre-push` and `manual` rather than at
 # `pre-commit`; the staged rule reads only the diff.
+
+# The default owner source, explained under WHERE THE OWNER LIST COMES FROM.
+# Before `[set]` because TOML reads a bare key after a table as that table's.
+private_owners_file = "xdg:principles/private-owners"
+private_owners_optional = true
 
 # WHAT THIS SET MAY INSTALL. `stages` is the ceiling and it is wide here,
 # because the point of the set is that every seam publishing text has one of

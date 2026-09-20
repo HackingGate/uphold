@@ -772,6 +772,17 @@ fn rules_command(name: &str) -> Result<Exit> {
     } else {
         println!("  may install at: {}", set.stages.join(", "));
     }
+    if let Some(declared) = &set.private_owners {
+        println!(
+            "  reads private owners from {}{}",
+            declared.source,
+            if declared.optional {
+                " (absent is a notice, not a refusal)"
+            } else {
+                ""
+            }
+        );
+    }
     for rule in set.rules {
         let check = rule.kind();
         println!("  {}  ({check})", rule.id);
@@ -811,12 +822,27 @@ fn set_json_command(only: Option<&str>) -> Result<Exit> {
                 .iter()
                 .map(|rule| pruned(serde_json::to_value(rule).unwrap_or(serde_json::Value::Null)))
                 .collect();
-            serde_json::json!({
+            let mut document = serde_json::json!({
                 "set": set.name,
                 "stages": set.stages,
                 "commands": set.commands,
                 "rules": rules,
-            })
+            });
+            // The default owner source, where the set ships one. Under the
+            // field names a policy file writes, so the lock's diff is the
+            // line a consumer would otherwise have had to write.
+            if let (Some(declared), Some(object)) = (&set.private_owners, document.as_object_mut())
+            {
+                object.insert(
+                    "private_owners_file".to_owned(),
+                    serde_json::Value::String(declared.source.to_string()),
+                );
+                object.insert(
+                    "private_owners_optional".to_owned(),
+                    serde_json::Value::Bool(declared.optional),
+                );
+            }
+            document
         })
         .collect();
     let text = serde_json::to_string_pretty(&document)

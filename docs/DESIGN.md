@@ -327,9 +327,10 @@ only the kind tells them apart.
 
 A public repository cannot hold the list of what must not be published, and
 neither can a command string with a name written into it — it travels with the
-policy exactly as a list would. So `private_owners_from` reads from outside the
-tree. A literal `private_owners` list is right for a repository staying private,
-and the audit reports it as a finding for one being published.
+policy exactly as a list would. So `private_owners_file` (or the command form,
+`private_owners_from`) reads from outside the tree. A literal `private_owners`
+list is right for a repository staying private, and the audit reports it as a
+finding for one being published.
 
 `uphold audit --for-publication` is one shot rather than a hook because the
 event it fires on happens once and is not a commit.

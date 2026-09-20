@@ -763,6 +763,8 @@
   },
   {
     "commands": [],
+    "private_owners_file": "xdg:principles/private-owners",
+    "private_owners_optional": true,
     "rules": [
       {
         "builtin": "no-private-repo-names",

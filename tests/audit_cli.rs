@@ -189,8 +189,10 @@ fn a_literal_list_of_private_owners_is_itself_a_finding() {
 
     let output = audit(&root);
     assert_eq!(code(&output), 1, "{}", text(&output));
+    // The cure named is the file form, which a set may ship and a shell may
+    // not touch.
     assert!(
-        text(&output).contains("private_owners_from"),
+        text(&output).contains("private_owners_file"),
         "{}",
         text(&output)
     );

@@ -547,7 +547,7 @@ pub(crate) fn evaluate(request: &Request<'_>) -> Result<Option<Refusal>> {
 
 /// The parameters each built-in reads, and the only statement of it.
 ///
-/// The nine parameter fields sit flat on the rule struct, so without this list
+/// The parameter fields sit flat on the rule struct, so without this list
 /// a `private_owners` beside `regexp` -- or beside the wrong built-in --
 /// loaded, looked enforced, and was read by nothing. `Rule::validate` refuses
 /// a written parameter that is not in the declaring built-in's row, the same
@@ -568,6 +568,7 @@ pub(crate) fn parameters(builtin: &str) -> &'static [&'static str] {
             "visibility_required",
             "private_owners",
             "private_owners_from",
+            "private_owners_file",
             "public_repos",
             "refuse_unknown",
             "foreign_hosts",

@@ -43,40 +43,11 @@ owner = "HackingGate"
 # not. The remaining copy is the forge's to remove, not a rewrite's.
 visibility = "public"
 
-# Where the private-owner list comes from. Declared, not looked up: a forge
-# lookup answers for `owner/repo`, and these are organisations -- the form that
-# got past a hand audit of this repository was an organisation named on its own,
-# in a sentence about what it carries. A declaration is also the only thing that
-# can answer for an owner whose existence is itself the thing not to disclose.
-#
-# Read from OUTSIDE the repository, which is the whole point: a list of names
-# that must not be published cannot live in a file that is about to be
-# published, and neither can a command string with a name written into it. The
-# policy stays committed and reviewable; the names do not travel with it.
-private_owners_from = "cat ${XDG_CONFIG_HOME:-$HOME/.config}/principles/private-owners"
-
-# ...and the line that makes the line above safe to commit in a repository other
-# people clone. This is measured rather than assumed:
-#
-#   form in the text                        with the source   without it
-#   https://github.com/<owner>/<repo>       refused           refused
-#   <this repository's owner>/<repo>        refused           refused
-#   <other owner>/<repo>, bare              refused           NOT SEEN
-#   an organisation named on its own        refused           NOT SEEN
-#
-# The bottom two need a DECLARED owner: a bare `owner/repo` is otherwise
-# indistinguishable from a relative path, so it is extracted only for declared
-# owners and for this repository's own. Everything else reaches the forge on its
-# own and is judged there.
-#
-# So the source is worth having, and the file it reads is one operator's and
-# will not exist in a clone. Without this line a missing source is exit 2 --
-# every clone refused on its first commit, over a worked example that runs
-# nowhere but the author's laptop. With a command that swallowed its own failure
-# it would be exit 0 and the bottom two rows would be lost in silence, in every
-# clone, permanently. This is the third answer: the failure is REPORTED, on
-# stderr, naming those two rows, and the commit proceeds.
-private_owners_optional = true
+# The private-owner list is not declared here. The `private-names` set below
+# ships `private_owners_file = "xdg:principles/private-owners"` as its default,
+# with the absence of that file on a clone reported rather than refused, and
+# this repository reads the same file the set names. A line here would be the
+# 98th copy of the one the set was given to end.
 
 [inherit]
 # The shared process-residue set -- conflict markers, home paths, dated and
