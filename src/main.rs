@@ -1107,7 +1107,9 @@ fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result
     // asks the forge a question by running `gh`, PATH answers with this binary,
     // and judging that probe means making it again. Run the real command and
     // say so; see `shim::INNER` for the run that ended at a load average of
-    // three thousand.
+    // three thousand. Or it is this process's own hand-off coming back, through
+    // a shim of somebody else's that resolved the name to the link; see
+    // `shim::HANDED` for the one that fork-bombed under load.
     //
     // Not asked on the editor pass: argv there is an editor's -- one file
     // path -- so handing it to the real command would give `gh` a path where a

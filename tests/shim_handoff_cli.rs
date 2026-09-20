@@ -1415,3 +1415,129 @@ fn a_consulted_scope_that_could_not_be_told_is_not_a_pass() {
         stderr(&output)
     );
 }
+
+// ── a PATH shim that is not ours, standing between the link and the command ──
+
+/// A shim in the shape of mise's: a file named for the command that walks
+/// PATH for the command itself, skipping only its own directory, and execs
+/// what it finds. The uphold link is what it finds, and the uphold link, having
+/// walked PATH past itself, is what found it.
+const PATH_WALKING_SHIM: &str = "#!/bin/sh\nhere=$(cd \"$(dirname \"$0\")\" && pwd)\nIFS=:\nfor dir in $PATH; do\n  [ \"$dir\" = \"$here\" ] && continue\n  [ -x \"$dir/faux\" ] && exec \"$dir/faux\" \"$@\"\ndone\nexit 127\n";
+
+/// The workspace with three `faux` on PATH, in the order the incident had them:
+/// the uphold link first, the PATH-walking shim second, the real command last.
+/// The real one records each run, because "it ran" and "it ran once" are
+/// different claims and the loop under test makes exactly the second one false.
+fn path_shim_workspace(real: &str) -> (PathBuf, String) {
+    let root = workspace(
+        &format!(
+            r#"{MARKER_RULE}
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-t", "--title"]
+scope = "always"
+"#
+        ),
+        &[("faux", real)],
+    );
+    for directory in ["front", "walker"] {
+        std::fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_uphold"), root.join("front/faux")).unwrap();
+    let walker = root.join("walker/faux");
+    std::fs::write(&walker, PATH_WALKING_SHIM).unwrap();
+    let mut permissions = std::fs::metadata(&walker).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&walker, permissions).unwrap();
+    // Written out rather than inherited, so the only shims on this PATH are the
+    // two this case planted. A machine with mise installed would otherwise add
+    // a third.
+    let path = format!(
+        "{}:{}:{}:/usr/bin:/bin",
+        root.join("front").display(),
+        root.join("walker").display(),
+        root.join("bin").display()
+    );
+    (root, path)
+}
+
+#[test]
+fn a_path_shim_that_hands_the_command_back_is_stepped_past_rather_than_looped_through() {
+    // The 2026-09-20 fork bomb. The shim walks PATH past its own file and past
+    // any link that lands on another uphold, and mise's shim is neither: a link
+    // to a binary called `mise`, so the walk returned it as the real command
+    // and exec'd it. mise walked PATH itself, found the uphold link first, and
+    // exec'd it -- with nothing set, because nothing in that loop is an uphold
+    // probe. Each arrival was a brand-new invocation, checked again, and the
+    // alias probe each one made spawned the same loop underneath it: about
+    // twenty-nine thousand `gh alias list` processes when it was killed.
+    let (root, path) = path_shim_workspace(
+        "#!/bin/sh\necho ran >> \"$(dirname \"$0\")/../faux-runs.log\"\necho \"faux ran: $*\"\n",
+    );
+    let output = Run {
+        args: &["faux", "pr", "create", "-t", "An ordinary title"],
+        envs: &[("PATH", &path)],
+        ..Run::default()
+    }
+    .go(&root);
+
+    // 124 is `timeout` reporting a run that never finished, which is what the
+    // loop looked like from here.
+    assert_ne!(code(&output), 124, "the shim looped through the PATH shim");
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("faux ran: pr create -t An ordinary title"),
+        "{}",
+        stdout(&output)
+    );
+    let runs = std::fs::read_to_string(root.join("faux-runs.log")).unwrap_or_default();
+    assert_eq!(
+        runs, "ran\n",
+        "the real command ran other than once: {runs:?}"
+    );
+    // Said out loud, so the next person does not read the extra hop as a slow
+    // gate -- and said with the path, so they can see which shim it was.
+    let walker = root.join("walker/faux");
+    assert!(
+        stderr(&output).contains(&format!("stepped past {}", walker.display())),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_nested_use_of_the_command_is_not_mistaken_for_the_loop() {
+    // The other shape that arrives carrying the hand-off's environment: the
+    // real command runs a hook, and the hook runs the command again. That is
+    // a fork, so it is a new process, and a new process is judged -- the
+    // nested invocation here carries a marker the rule refuses, and it has to
+    // be refused rather than handed through as the loop's second arrival.
+    let (root, path) = path_shim_workspace(
+        "#!/bin/sh\necho \"faux ran: $*\"\nif [ -z \"$FAUX_NESTED\" ]; then\n  if FAUX_NESTED=1 faux pr create -t \"Generated with Claude Code\"; then\n    echo \"nested ran unchecked\"\n  else\n    echo \"nested refused\"\n  fi\nfi\n",
+    );
+    let output = Run {
+        args: &["faux", "pr", "create", "-t", "An ordinary title"],
+        envs: &[("PATH", &path)],
+        ..Run::default()
+    }
+    .go(&root);
+
+    assert_ne!(code(&output), 124, "the shim looped through the PATH shim");
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("faux ran: pr create -t An ordinary title"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("nested refused") && !stdout(&output).contains("unchecked"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("Nothing was published"),
+        "{}",
+        stderr(&output)
+    );
+}
