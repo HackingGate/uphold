@@ -843,6 +843,12 @@ message = "use neutral placeholders"
 files.include = ["."]
 ```
 
+Every source is asked once per process. The guard judges each argument, body
+and file a shim run collected as its own text, and a command that answers a
+question about the host answers it the same for all of them, so the first
+text runs the command and every later one reads its output — or its failure.
+The built-in sources shell out to `uname` and `ip` on the same terms.
+
 **The default ignore list.** Some literals are never searched for, because
 they describe a machine's *kind* rather than its owner and would fire on every
 legitimate mention. The suppression is a documented list rather than a

@@ -5,8 +5,10 @@
 //! None of them can be written into a policy file, because writing them there
 //! is the leak the rule exists to prevent.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use crate::error::{Fatal, Result};
 
@@ -350,27 +352,27 @@ fn running_default_route() -> Vec<Needle> {
 /// problem, and can be written in whatever the repository already builds with.
 ///
 /// A line may be `label<TAB>value`; a bare line is its own label.
-fn command_source(
-    run: &str,
-    root: &std::path::Path,
-    word: bool,
-    label: &str,
-) -> Result<Vec<Needle>> {
+///
+/// The needles come back with `word` unset and a failure comes back without
+/// the rule's name, because the table in [`ask`] keeps one answer per command
+/// and more than one rule may read it: how a rule matches the lines and what
+/// the rule is called are the rule's own, put on in [`resolve`] on the way out.
+fn command_source(run: &str, root: &Path) -> Answer {
     let output = Command::new("sh")
         .arg("-c")
         .arg(run)
         .current_dir(root)
         .output()
-        .map_err(|error| Fatal::new(format!("{label}: could not run {run:?}: {error}")))?;
+        .map_err(|error| format!("could not run {run:?}: {error}"))?;
     if !output.status.success() {
         // Not silently empty. A source that failed produced no needles, and a
         // rule with no needles passes -- which would report a clean tree
         // because the check could not be made.
-        return Err(Fatal::new(format!(
-            "{label}: source command {run:?} exited {}: {}",
+        return Err(format!(
+            "source command {run:?} exited {}: {}",
             output.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&output.stderr).trim()
-        )));
+        ));
     }
     let text = String::from_utf8_lossy(&output.stdout);
     let mut needles = Vec::new();
@@ -383,9 +385,57 @@ fn command_source(
             Some((named, value)) => (named.trim(), value.trim()),
             None => (line.trim(), line.trim()),
         };
-        push(&mut needles, needle_label, Some(value.to_owned()), word);
+        push(&mut needles, needle_label, Some(value.to_owned()), false);
     }
     Ok(needles)
+}
+
+/// One question a rule puts to the running host.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Question {
+    OsIdentity,
+    DefaultRoute,
+    Command(String),
+}
+
+/// What the host said, or why it could not be asked.
+///
+/// The reason is text rather than a [`Fatal`] because the table keeps it, and
+/// a rule that asks later is owed the same reason under its own name.
+type Answer = std::result::Result<Vec<Needle>, String>;
+
+/// Put a question to the host once per process, and repeat the answer after.
+///
+/// A source answers a question about the host -- what addresses it has, whose
+/// account is running -- and the guard asks it once per text it judges: every
+/// argument, body and file a shim run collected goes through `failures_in` on
+/// its own. Measured before this table, a `gh pr create` through the shim
+/// spawned a repository's `uv run` source hundreds of times, forty
+/// milliseconds each, and took four to five minutes. The answer is a fact
+/// about the host at the moment the run started; a run that asked again half
+/// way through would be reading a host that changed under it, and no verdict
+/// wants that.
+///
+/// A failure is remembered as firmly as an answer. A source that could not
+/// answer once could not answer for this run, and spawning it again to
+/// confirm that only delays the exit 2 the first attempt already owes.
+///
+/// The lock is held across the spawn on purpose: two callers with the same
+/// question at once get one spawn and one answer, not a race to insert.
+fn ask(question: &Question, root: &Path) -> Answer {
+    static ANSWERS: OnceLock<Mutex<HashMap<(Question, PathBuf), Answer>>> = OnceLock::new();
+    let mut answers = ANSWERS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    answers
+        .entry((question.clone(), root.to_owned()))
+        .or_insert_with(|| match question {
+            Question::OsIdentity => Ok(running_os_identity()),
+            Question::DefaultRoute => Ok(running_default_route()),
+            Question::Command(run) => command_source(run, root),
+        })
+        .clone()
 }
 
 /// Resolve a source name to its needles.
@@ -398,19 +448,18 @@ fn command_source(
 pub(crate) fn resolve(
     source: &str,
     run: Option<&str>,
-    root: &std::path::Path,
+    root: &Path,
     word: bool,
     label: &str,
     ignore: &[String],
 ) -> Result<Vec<Needle>> {
-    let needles = match source {
-        "running-os-identity" => running_os_identity(),
-        "running-default-route" => running_default_route(),
-        "running-os-metadata" => {
-            let mut all = running_os_identity();
-            all.extend(running_default_route());
-            all
-        }
+    let answered = match source {
+        "running-os-identity" => ask(&Question::OsIdentity, root),
+        "running-default-route" => ask(&Question::DefaultRoute, root),
+        "running-os-metadata" => ask(&Question::OsIdentity, root).and_then(|mut all| {
+            all.extend(ask(&Question::DefaultRoute, root)?);
+            Ok(all)
+        }),
         "command" => {
             let run = run.ok_or_else(|| {
                 Fatal::new(format!(
@@ -418,7 +467,12 @@ pub(crate) fn resolve(
                      `forbidden_literals_from`"
                 ))
             })?;
-            command_source(run, root, word, label)?
+            ask(&Question::Command(run.to_owned()), root).map(|needles| {
+                needles
+                    .into_iter()
+                    .map(|needle| Needle { word, ..needle })
+                    .collect()
+            })
         }
         unknown => {
             return Err(Fatal::new(format!(
@@ -427,6 +481,7 @@ pub(crate) fn resolve(
             )));
         }
     };
+    let needles = answered.map_err(|reason| Fatal::new(format!("{label}: {reason}")))?;
 
     let ignored: BTreeSet<String> = ignore.iter().map(|entry| entry.to_lowercase()).collect();
 
@@ -515,21 +570,14 @@ mod tests {
 
     #[test]
     fn an_unknown_source_names_what_it_knows() {
-        let error = resolve("nope", None, std::path::Path::new("."), false, "r", &[]).unwrap_err();
+        let error = resolve("nope", None, Path::new("."), false, "r", &[]).unwrap_err();
         assert!(error.to_string().contains("running-os-identity"), "{error}");
     }
 
     #[test]
     fn a_failing_command_source_is_an_error_and_not_an_empty_result() {
-        let error = resolve(
-            "command",
-            Some("exit 3"),
-            std::path::Path::new("."),
-            false,
-            "r",
-            &[],
-        )
-        .unwrap_err();
+        let error =
+            resolve("command", Some("exit 3"), Path::new("."), false, "r", &[]).unwrap_err();
         assert!(error.to_string().contains("exited 3"), "{error}");
     }
 
@@ -538,7 +586,7 @@ mod tests {
         let needles = resolve(
             "command",
             Some("printf 'box\\tsecret-host\\nplain\\n'"),
-            std::path::Path::new("."),
+            Path::new("."),
             true,
             "r",
             &[],
@@ -549,5 +597,63 @@ mod tests {
         assert_eq!(needles[0].value, "secret-host");
         assert!(needles[0].word);
         assert_eq!(needles[1].label, "plain");
+    }
+
+    /// The guard asks a rule's source once per text it judges, and a shim run
+    /// judges every argument, body and file it collected as its own text. A
+    /// command that answers a question about the host gives the same answer to
+    /// each of them, so the process asks it once and hands the answer back
+    /// after that -- with the asking rule's own `word` on it, since the table
+    /// holds the lines and the rule decides how they match.
+    #[test]
+    fn a_command_source_is_run_once_per_process_and_answers_every_rule() {
+        let root = crate::fixture::scratch("source-once");
+        std::fs::create_dir_all(&root).unwrap();
+        let run = "echo asked >> asked.log && echo box";
+
+        let first = resolve("command", Some(run), &root, false, "first", &[]).unwrap();
+        let second = resolve("command", Some(run), &root, true, "second", &[]).unwrap();
+
+        let asked = std::fs::read_to_string(root.join("asked.log")).unwrap();
+        assert_eq!(asked.lines().count(), 1, "the command ran once:\n{asked}");
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_eq!(first[0].value, "box");
+        assert!(!first[0].word);
+        assert!(
+            second[0].word,
+            "the second rule's `word` is applied to the shared answer"
+        );
+
+        // The same command in another root is another question. What a
+        // command prints depends on where it runs, so the directory is part of
+        // the key and not a detail the table may forget.
+        let elsewhere = crate::fixture::scratch("source-once");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        resolve("command", Some(run), &elsewhere, false, "third", &[]).unwrap();
+        let asked_elsewhere = std::fs::read_to_string(elsewhere.join("asked.log")).unwrap();
+        assert_eq!(asked_elsewhere.lines().count(), 1);
+        assert_eq!(
+            std::fs::read_to_string(root.join("asked.log")).unwrap(),
+            asked
+        );
+    }
+
+    /// A failure is remembered as firmly as an answer, and the rule that asks
+    /// second reads it under its own name.
+    #[test]
+    fn a_failing_command_source_fails_the_same_way_for_the_run() {
+        let root = crate::fixture::scratch("source-once-failing");
+        std::fs::create_dir_all(&root).unwrap();
+        let run = "echo asked >> asked.log; exit 4";
+
+        let first = resolve("command", Some(run), &root, false, "first", &[]).unwrap_err();
+        let second = resolve("command", Some(run), &root, false, "second", &[]).unwrap_err();
+
+        let asked = std::fs::read_to_string(root.join("asked.log")).unwrap();
+        assert_eq!(asked.lines().count(), 1, "the command ran once:\n{asked}");
+        assert!(first.to_string().starts_with("first: "), "{first}");
+        assert!(second.to_string().starts_with("second: "), "{second}");
+        assert!(second.to_string().contains("exited 4"), "{second}");
     }
 }
