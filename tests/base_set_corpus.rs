@@ -125,8 +125,24 @@ const CORPUS: &[Case] = &[
             "Fixed in #451.\n",
             "# See widget#711.\n",
             "# See acme/widget#711.\n",
+            "Split across two (widget#7, #225).\n",
+            // A hit is one line, so the list form above cannot show that its
+            // second item was read: nothing else on these lines can match, and
+            // each one is refused by the separator alone.
+            "Two more landed beside it, #225.\n",
+            "The first half is in the estate; #8 has the rest.\n",
+            "#7/#8 are the pair.\n",
+            "Under the widget/#8 as well.\n",
         ],
-        allows: &["The rule is stated here rather than in a tracker.\n"],
+        allows: &[
+            "The rule is stated here rather than in a tracker.\n",
+            // The forms the bare arm stays narrow for: a heading level, a
+            // colour, a unit, and a number a capitalised word introduces.
+            "## Heading\n",
+            "color: #fff\n",
+            "border: 1px, #1px wide\n",
+            "The #4 seed plays first.\n",
+        ],
     },
     Case {
         set: "process-residue",

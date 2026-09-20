@@ -164,7 +164,7 @@
         },
         "id": "no-task-tracker-references",
         "message": "Source, configuration, and documentation must not depend on volatile\nissue or PR records. State the durable contract and rationale here, or link to\nrepository documentation. Issues may link to code; code must not depend on\nissues. Keep logs, bug reports, and benchmark results in issues, and edit\nchronology in Git history.\n",
-        "regexp": "github\\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\\b|(?:^|\\b[a-z]+[\\t ]+|\\(|\\[)#[0-9]+\\b"
+        "regexp": "github\\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\\b|(?:^|\\b[a-z]+[\\t ]+|\\(|\\[|[,;/][\\t ]*)#[0-9]+\\b"
       },
       {
         "files": {
