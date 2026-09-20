@@ -3304,12 +3304,23 @@ mod tests {
              [[shim]]\ncommand = \"git\"\nmatch = [\"push:*\"]\n",
         )
         .unwrap();
-        let arrived = policy
+        let arrived: Vec<&str> = policy
             .rules
             .iter()
             .filter(|rule| rule.origin == Origin::Set(String::from("published-text")))
-            .count();
-        assert_eq!(arrived, 3, "{:?}", policy.rules);
+            .map(|rule| rule.id.as_str())
+            .collect();
+        assert_eq!(
+            arrived,
+            [
+                "no-published-host-identity",
+                "no-published-markers",
+                "no-published-private-repo-names",
+                "unowned-forge-target",
+            ],
+            "{:?}",
+            policy.rules
+        );
     }
 
     #[test]

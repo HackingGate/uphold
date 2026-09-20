@@ -1,9 +1,10 @@
 # Base rule set: published-text (the text a command is about to publish)
 #
-# The three checkers for the seam no git hook is in: a pull-request body, an
-# issue title, a release note, a branch name in a push. Each reaches a forge
-# API the moment the command runs, from a surface that was composed in an
-# editor or on a command line and was never a file in the tree. Pull in with:
+# The checkers for the seam no git hook is in: a pull-request body, an issue
+# title, a release note, a branch name in a push, and the repository each of
+# those is bound for. Each reaches a forge API the moment the command runs,
+# from a surface that was composed in an editor or on a command line and was
+# never a file in the tree. Pull in with:
 #
 #   [inherit]
 #   sets = ["published-text"]
@@ -44,9 +45,12 @@
 # --text` and `uphold scan --text` run, reached without a process, a PATH, or
 # a version skew.
 #
-# WHAT EACH RULE READS. The shim hands these the SUBJECTS of an invocation --
-# the body a flag or an editor supplied, a title, a branch name -- one at a
-# time, with the kind in the label.
+# WHAT EACH RULE READS. The shim hands the first three the SUBJECTS of an
+# invocation -- the body a flag or an editor supplied, a title, a branch name --
+# one at a time, with the kind in the label. The fourth is handed the
+# DESTINATION, once per invocation, and is asked even where no subject was
+# collected at all: `--repo other-owner/their-repo` with an empty body still
+# publishes to somewhere.
 
 # WHAT THIS SET MAY INSTALL. No git hook at all: these run at the shim seam
 # and nowhere else. `commands` is the ceiling for that seam, verbatim lines --
@@ -111,3 +115,40 @@ command.scope = "always"
 builtin = "no-private-repo-names"
 visibility = "public"
 command.before = ["gh", "git push"]
+
+# The one rule here that reads no subject. The three above judge the TEXT an
+# invocation carries; this one judges WHERE the invocation was told to publish
+# it, which nothing at this seam asked until it existed: an invocation carrying
+# blameless prose and `--repo other-owner/their-repo` satisfied every checker
+# standing in front of `gh` and opened text on somebody else's tracker.
+# `guard::push::unowned` is the one predicate, reached from `pre-push` by
+# `prevent-public-push` and from here by this rule, so a push and a `gh`
+# invocation cannot disagree about whose a destination is. Promoted after a
+# sweep found it declared by hand in 84 consumer policies, 74 of them
+# byte-identical in every field.
+#
+# `owner_required = true`, because without it the only owner available is the
+# one read off `origin`, and origin is the remote a destination guard exists to
+# catch being wrong. A repository that inherits this and has not said who it is
+# hears so, once, instead of being told its publications are fine by a rule
+# that read the answer off the thing it is guarding.
+#
+# `command.scope = "always"`, overriding a `public-target` table, and the
+# override is the whole reason the rule works. Whether a repository is YOURS is
+# a fact about the destination and not about its visibility: a private
+# repository belonging to somebody else is still not yours. And `public-target`
+# stands a rule down when the forge does not answer, which is exactly the
+# invocation that most needs asking about -- a lookup that failed told nobody
+# anything. Being in scope costs no round trip: the destination is read off
+# `--repo` or off the remote, and the forge is asked only about a destination
+# the allow-list has already refused.
+#
+# `gh` alone, not `glab`: `gh` is the line every hand copy named, and the
+# `commands` ceiling above admits nothing wider. A repository whose shim tables
+# also stand in front of `glab` shadows this id with the same built-in and the
+# wider `command.before`, which is the override ADR 0006 documents.
+[rule.unowned-forge-target]
+builtin = "prevent-unowned-target"
+owner_required = true
+command.before = ["gh"]
+command.scope = "always"

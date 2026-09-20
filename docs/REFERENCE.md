@@ -378,7 +378,7 @@ it refuses** so the name predicts the rule list:
 | `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |
 | `private-names` | a private organisation or repository named in a commit message, a staged diff, or the tracked tree of a **public** repository — **installs five stages**, and refuses to run until the repository says whether it is published |
 | `stale-visibility` | a policy declaring `private` over a repository the forge serves as **public** — **installs `pre-push` and `manual`**, and reaches the network. Refuses that one direction only; it can never confirm privacy |
-| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push. **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [ADR 0006](adr/0006-what-a-bundled-set-may-attach-to-a-command.md) |
+| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push — and, as `unowned-forge-target`, a `gh` invocation bound for a repository this workspace does not own, which refuses to run until the repository says who it is. **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [ADR 0006](adr/0006-what-a-bundled-set-may-attach-to-a-command.md) |
 | `prose-shapes` | four sentence shapes that carry nothing — a sentence announcing what the next one will say, a clause behind a dash restating the one in front of it, a hedge admitting no uncertainty, an objection nobody raised being answered. **Installs no git hook**: its rules run in `uphold scan` and at the shim seam (`gh`, `git push`), and like `published-text` it refuses to load until the repository has declared the `[[shim]]` tables itself. `UPHOLD_ALLOW=<rule-id>` is the waiver for the sentence a rule is wrong about |
 
 The nine before it install git hooks. Taking one is a decision about what will be
@@ -1218,7 +1218,7 @@ stamped on it, the range about to be pushed.
 | `no-private-repo-names-staged` | the same, in the lines a commit adds |
 | `no-private-repo-names-in-files` | the same, anywhere in what is being introduced — content, **path names**, and at a push the **commit messages** the push publishes |
 | `prevent-public-push` | a push to somewhere off the allow-list **and off the forge's own answer** — a GitHub destination the allow-list refused is put to `gh`, and a forge that could not be asked is exit `2` |
-| `prevent-unowned-target` | a **command** told to publish to a repository this workspace does not own. The same decision as the row above, reached from the shim seam instead of a hook — so it registers with `command.before` and never `git.hooks`, and a destination it could not resolve is exit `2` |
+| `prevent-unowned-target` | a **command** told to publish to a repository this workspace does not own. The same decision as the row above, reached from the shim seam instead of a hook — so it registers with `command.before` and never `git.hooks`, and a destination it could not resolve is exit `2`. Carried by `published-text` as `unowned-forge-target`, with `owner_required` and `command.scope = "always"` in the bundled declaration |
 | `no-local-merge` | a merge that would make a merge commit |
 | `no-merge-commit` | a commit finishing a merge or a squash merge |
 | `no-stale-hook-pins` | a pin left behind its upstream, or naming no ref — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree; a pin it **could not check** is exit `2` |
@@ -1853,15 +1853,23 @@ answer and is never folded into either of the others.
 from an invocation: the **subjects** it is about to publish, and the
 **destination** it was told to publish them to. Those are two questions, and a
 checker answers one of them. Every kind above judges a subject; a rule whose
-built-in is `prevent-unowned-target` judges the destination:
+built-in is `prevent-unowned-target` judges the destination. `published-text`
+carries one, so a repository that inherits the set and declares its `gh` table
+has it already; written out, it is:
 
 ```toml
 [rule.unowned-forge-target]
 builtin = "prevent-unowned-target"
 owner_required = true
-command.before = ["gh", "glab"]
+command.before = ["gh"]
 command.scope = "always"
 ```
+
+A repository whose tables also stand in front of `glab` shadows the id with the
+same built-in and `command.before = ["gh", "glab"]` — the set's `commands`
+ceiling admits `gh` and `git push` and nothing wider, and the override is the
+documented one: same id, same check, a wider reach said in the one file that
+can say it.
 
 The distinction is not decorative. A destination is a property of the
 **invocation** and not of any subject it carries, so a target-judging checker is
