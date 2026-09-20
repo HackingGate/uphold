@@ -1631,7 +1631,15 @@ impl Rule {
         let Some(parameters) = self.parameters() else {
             return Ok(());
         };
-        parameters.refuse_unread(&self.id, self.kind().as_str(), self.builtin())
+        parameters.refuse_unread(&self.id, self.kind().as_str(), self.builtin())?;
+        // The message guard's `allow` is read here as well as at each
+        // judgement, so an entry that names no character, carries a glob, or
+        // names a character no allowance may admit is refused when the policy
+        // loads and not on the first commit somebody writes under it.
+        if self.builtin() == Some("prevent-unusual-unicode") {
+            crate::guard::message::allowances(self)?;
+        }
+        Ok(())
     }
 
     /// Hold `commands-resolve` to the one field it cannot work without.

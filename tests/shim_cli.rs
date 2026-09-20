@@ -1076,6 +1076,56 @@ fn a_text_guards_builtin_judges_the_subject_without_a_subprocess() {
     assert!(stdout(&clean).contains("faux ran:"), "{}", stdout(&clean));
 }
 
+/// The consultation with the message guard behind it, declared the way a
+/// consumer declares it: `allow` on the rule, and the consultation reading
+/// that rule rather than a bare id.
+const UNICODE_ALLOWANCE_POLICY: &str = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+builtin = "text-guards"
+
+[rule.no-published-markers.command]
+before = ["faux"]
+
+[rule.prevent-unusual-unicode]
+builtin = "prevent-unusual-unicode"
+allow = ["U+FF01"]
+
+[rule.prevent-unusual-unicode.git]
+hooks = ["commit-msg"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+text_flags = ["-t", "--title", "-b", "--body"]
+scope = "always"
+"#;
+
+/// The allowance a consumer writes on `prevent-unusual-unicode` is what the
+/// consultation honours for a pull-request body, because the consultation runs
+/// the rule as the effective policy holds it. Before this the field did not
+/// exist on the message guard, and the consumer's only lever was `UPHOLD_ALLOW`
+/// on the rule id in its exec line -- the whole guard off, invisibles included.
+#[test]
+fn a_text_guards_consultation_honours_the_allowance_declared_on_the_message_guard() {
+    let root = workspace(UNICODE_ALLOWANCE_POLICY);
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+
+    let listed = shim(&root, &["faux", "pr", "create", "-b", "Ship it\u{FF01}"]);
+    assert_eq!(code(&listed), 0, "{}", stderr(&listed));
+    assert!(stdout(&listed).contains("faux ran:"), "{}", stdout(&listed));
+
+    // The list admits what it names and nothing that draws nothing.
+    let hidden = shim(&root, &["faux", "pr", "create", "-b", "Ship\u{200B} it"]);
+    assert_eq!(code(&hidden), 1, "{}", stderr(&hidden));
+    assert!(stderr(&hidden).contains("U+200B"), "{}", stderr(&hidden));
+    assert!(
+        !stdout(&hidden).contains("faux ran:"),
+        "{}",
+        stdout(&hidden)
+    );
+}
+
 // ── per-rule scope: the rule says when it applies ────────────────────
 
 /// A table whose own scope never holds, and one rule that applies anyway.

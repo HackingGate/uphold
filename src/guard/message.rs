@@ -112,26 +112,69 @@ pub(crate) fn ai_author_in(rule: &crate::config::Rule, label: &str, text: &str) 
     })
 }
 
+/// The codepoints a message rule's `allow` admits past the whitelist.
+///
+/// Read at load, where a bad entry is refused with the rule's id on it, and
+/// again at each judgement, so the guard reads the declaration and never a
+/// copy of it. The file guard's `allow` takes a path glob after the codepoint;
+/// a message has no path, so an entry carrying one here would be a glob read
+/// by nothing, and it is refused rather than dropped.
+///
+/// What no entry can admit is a character that draws nothing. The file guard
+/// lets a fixture earn one of those, because a captured page or an emoji
+/// corpus is DATA; a message is prose somebody typed, and a listed zero-width
+/// joiner or bidirectional override would be the exact hole a consumer opened
+/// by switching the whole guard off with `UPHOLD_ALLOW` -- which is what this
+/// field exists to make unnecessary.
+pub(crate) fn allowances(rule: &crate::config::Rule) -> Result<Vec<char>> {
+    rule.allow()
+        .iter()
+        .map(|token| {
+            if token.contains(':') {
+                return Err(Fatal::new(format!(
+                    "rule {:?}: allow entry {token:?} carries a path glob, and a message \
+                     has no path for it to select. Write the codepoint alone",
+                    rule.id
+                )));
+            }
+            let codepoint = crate::guard::unicode::parse_codepoint(token)
+                .map_err(|error| Fatal::new(format!("rule {:?}: {error}", rule.id)))?;
+            if crate::guard::unicode::is_invisible(codepoint) {
+                return Err(Fatal::new(format!(
+                    "rule {:?}: allow lists U+{:04X} {}, which draws nothing, and a \
+                     character that draws nothing is what this guard exists to refuse. \
+                     No allowance admits one; delete the entry",
+                    rule.id,
+                    codepoint as u32,
+                    unicode_names2::name(codepoint)
+                        .map_or_else(|| String::from("UNKNOWN"), |name| name.to_string()),
+                )));
+            }
+            Ok(codepoint)
+        })
+        .collect()
+}
+
 pub(crate) fn unusual_unicode_in(
     rule: &crate::config::Rule,
     label: &str,
     text: &str,
-) -> Option<Refusal> {
-    let findings = unusual_findings(label, text);
+) -> Result<Option<Refusal>> {
+    let findings = unusual_findings(label, text, &allowances(rule)?);
     if findings.is_empty() {
-        return None;
+        return Ok(None);
     }
-    Some(Refusal {
+    Ok(Some(Refusal {
         id: rule.id.clone(),
         report: format!(
             "{}\n\nThis is prose somebody typed. Retype the character, or describe it in \
              words.",
             findings.join("\n")
         ),
-    })
+    }))
 }
 
-fn unusual_findings(label: &str, text: &str) -> Vec<String> {
+fn unusual_findings(label: &str, text: &str, allowed: &[char]) -> Vec<String> {
     let mut findings = Vec::new();
     // Read off the WHOLE message and not the line, because the line where a
     // mark is refused is the line least likely to carry the letters that vouch
@@ -140,7 +183,9 @@ fn unusual_findings(label: &str, text: &str) -> Vec<String> {
     let written = scripts_written_in(text);
     for (index, line) in text.split('\n').enumerate() {
         for (column, character) in line.chars().enumerate() {
-            if message_character_is_ordinary(character, &written) {
+            if message_character_is_ordinary(character, &written)
+                || admitted_by_allowance(character, allowed)
+            {
                 continue;
             }
             findings.push(format!(
@@ -295,9 +340,22 @@ fn message_character_is_ordinary(character: char, written: &[Script]) -> bool {
     mark_belongs_to_a_written_script(character, written)
 }
 
+/// Whether a listed codepoint is the one being read.
+///
+/// The invisibility test is asked here as well as at load, and not as a second
+/// copy of one decision: the load-time refusal is the sentence a policy author
+/// reads, and this is what holds for a `Rule` that never met `validate` -- one
+/// a test builds by hand, or one a later loader admits by another route. A
+/// list is a fact about the policy; that nothing on it can admit a character
+/// that draws nothing is a fact about the guard, and it is kept where the
+/// guard is.
+fn admitted_by_allowance(character: char, allowed: &[char]) -> bool {
+    allowed.contains(&character) && !crate::guard::unicode::is_invisible(character)
+}
+
 pub(crate) fn prevent_unusual_unicode(request: &Request<'_>) -> Result<Option<Refusal>> {
     for (label, text) in message_subjects(request)? {
-        if let Some(refusal) = unusual_unicode_in(request.rule, &label, &text) {
+        if let Some(refusal) = unusual_unicode_in(request.rule, &label, &text)? {
             return Ok(Some(refusal));
         }
     }
@@ -323,7 +381,68 @@ mod tests {
     const CYRILLIC: &str = "\u{043A}\u{044D}\u{0448}"; // "kesh"
 
     fn findings(text: &str) -> Vec<String> {
-        unusual_findings("m", text)
+        unusual_findings("m", text, &[])
+    }
+
+    /// The message rule as a policy loads it, with `allow` written out.
+    ///
+    /// Through the loader rather than a struct literal, because the load is
+    /// where a bad entry is refused and that refusal is one of the subjects
+    /// below.
+    fn loaded(name: &str, allow: &str) -> Result<Option<Refusal>> {
+        let root = crate::fixture::scratch(name);
+        std::fs::create_dir_all(root.join("policy")).unwrap();
+        let path = root.join("policy/principles.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "[rule.prevent-unusual-unicode]\nbuiltin = \"prevent-unusual-unicode\"\n\
+                 allow = {allow}\n\n[rule.prevent-unusual-unicode.git]\nhooks = [\"commit-msg\"]\n"
+            ),
+        )
+        .unwrap();
+        let policy = crate::config::load(&root, &path)?;
+        let rule = policy
+            .rules
+            .iter()
+            .find(|rule| rule.id == "prevent-unusual-unicode")
+            .expect("the fixture rule did not survive the load");
+        // A fullwidth exclamation mark in an English sentence: nothing in the
+        // message vouches for it, so only the allowance can.
+        unusual_unicode_in(rule, "m", "Fix the parser\u{FF01}\n")
+    }
+
+    #[test]
+    fn a_listed_codepoint_is_admitted_and_an_unlisted_one_is_not() {
+        assert!(
+            loaded("message-allow-listed", "[\"U+FF01\"]")
+                .unwrap()
+                .is_none()
+        );
+        let refused = loaded("message-allow-unlisted", "[\"U+3000\"]")
+            .unwrap()
+            .expect("an unlisted mark passed");
+        assert!(refused.report.contains("U+FF01"), "{}", refused.report);
+    }
+
+    #[test]
+    fn an_invisible_on_the_list_is_refused_at_load_and_never_admitted() {
+        let error = loaded("message-allow-invisible", "[\"U+200B\"]").unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("U+200B"), "{text}");
+        assert!(text.contains("draws nothing"), "{text}");
+        // And past the loader, the guard itself holds the line: a list that
+        // somehow carries one admits nothing.
+        assert_eq!(
+            unusual_findings("m", "a\u{200B}b\n", &['\u{200B}']).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_glob_on_a_message_allowance_is_refused_at_load() {
+        let error = loaded("message-allow-glob", "[\"U+FF01:docs/**\"]").unwrap_err();
+        assert!(error.to_string().contains("no path"), "{error}");
     }
 
     #[test]
