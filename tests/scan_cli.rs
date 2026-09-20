@@ -1913,6 +1913,44 @@ fn the_effective_rules_are_what_inheritance_resolved_to() {
     );
 }
 
+/// An `[override.<id>]` moves where an inherited rule reads and nothing else.
+///
+/// The fact under test is the rule's identity after the narrowing. The one
+/// spelling before this was an own `[rule.<id>]`, which replaces the inherited
+/// rule whole, so the message the finding prints here is the proof: the policy
+/// never wrote it, and only the set's own rule could have.
+#[test]
+fn an_override_narrows_an_inherited_rule_without_restating_it() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [inherit]
+        sets = ["process-residue"]
+
+        [override.no-task-tracker-references]
+        files.exclude = ["src/**"]
+"#,
+    );
+    let line = "Fixed in acme/widget#451.\n";
+    write(&root, "docs/notes.md", line);
+    write(&root, "src/lib.rs", line);
+    repository(&root);
+    add(&root);
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("no-task-tracker-references"), "{text}");
+    assert!(
+        text.contains("Source, configuration, and documentation must not depend on volatile"),
+        "the set's message, which this policy did not write: {text}"
+    );
+    assert!(text.contains("docs/notes.md:1:"), "{text}");
+    assert!(!text.contains("src/lib.rs"), "{text}");
+}
+
 // --- a guard's own file scope is not the scan's to fail on -----------------
 
 #[test]

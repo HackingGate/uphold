@@ -263,6 +263,7 @@ const SERDE_FACING: &[&str] = &[
     "Git",
     "CommandWhere",
     "Inherit",
+    "Override",
     "Written",
     "PolicyFile",
     "SetHeader",

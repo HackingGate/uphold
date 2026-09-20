@@ -338,6 +338,116 @@ pub(crate) struct Inherit {
     pub disabled_rules: Vec<String>,
 }
 
+/// The three `files` keys an `[override.<id>]` table may replace.
+const OVERRIDE_FIELDS: [&str; 3] = ["include", "exclude", "glob"];
+
+/// A narrowing of one inherited rule's file selection: `[override.<id>]`.
+///
+/// The other spelling of "read fewer files", an own `[rule.<id>]` under the
+/// inherited id, replaces the inherited rule WHOLE. A repository that wants one
+/// directory left out that way restates the set's `regexp` and `message` byte
+/// for byte, and a tightening the set ships later never reaches the copy --
+/// nothing reports the drift, because the id resolves and the copy is, by
+/// every check here, a rule. This table is the spelling for the narrowing
+/// alone: the inherited rule is kept, provenance and all, and only the fields
+/// written here move.
+///
+/// Three fields and no fourth, by construction. `include`, `exclude` and
+/// `glob` decide WHERE a rule reads and nothing about what it reads for; an
+/// override that could reach the check would be the private copy
+/// [`report_reshaped_shadows`] exists to report, spelled so as to escape it.
+/// A field the override does not name keeps the inherited value, which is what
+/// makes `files.exclude` alone a complete sentence.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Override {
+    pub include: Option<Vec<String>>,
+    pub exclude: Option<Vec<String>>,
+    pub glob: Option<Vec<String>>,
+}
+
+impl Override {
+    /// The override a policy file wrote under `id`, read from the raw table so
+    /// every refusal can name the section and list what it may carry.
+    ///
+    /// Read by hand rather than through `deny_unknown_fields`, because the
+    /// deserializer's refusal names the key and not the reason: a reader who
+    /// wrote `regexp` here has to be told that the check is not the override's
+    /// to change, and where to write it instead.
+    fn of_table(id: &str, table: toml::Table) -> Result<Self> {
+        let may_carry = || {
+            let [first, second, last] = OVERRIDE_FIELDS;
+            format!("`files.{first}`, `files.{second}` and `files.{last}`")
+        };
+        let mut files = None;
+        for (key, value) in table {
+            if key != "files" {
+                return Err(Fatal::new(format!(
+                    "`[override.{id}]` carries `{key}`, and an override may carry only {}. \
+                     It keeps the inherited rule whole and moves where the rule reads; a \
+                     change to anything else is a rule of this repository's own, written \
+                     as `[rule.{id}]` in full",
+                    may_carry()
+                )));
+            }
+            files = Some(value);
+        }
+        let files = match files {
+            None => toml::Table::new(),
+            Some(toml::Value::Table(files)) => files,
+            Some(_) => {
+                return Err(Fatal::new(format!(
+                    "`[override.{id}]` `files` is not a table. Write {} as keys under it",
+                    may_carry()
+                )));
+            }
+        };
+        let mut this = Self::default();
+        for (key, value) in files {
+            if !OVERRIDE_FIELDS.contains(&key.as_str()) {
+                return Err(Fatal::new(format!(
+                    "`[override.{id}]` carries `files.{key}`, and an override may carry \
+                     only {}. It keeps the inherited rule whole and moves where the rule \
+                     reads; a change to anything else is a rule of this repository's own, \
+                     written as `[rule.{id}]` in full",
+                    may_carry()
+                )));
+            }
+            let list: Vec<String> = value.try_into().map_err(|error| {
+                Fatal::new(format!(
+                    "`[override.{id}]` `files.{key}`: {}",
+                    error.message()
+                ))
+            })?;
+            match key.as_str() {
+                "include" => this.include = Some(list),
+                "exclude" => this.exclude = Some(list),
+                _ => this.glob = Some(list),
+            }
+        }
+        if this.include.is_none() && this.exclude.is_none() && this.glob.is_none() {
+            return Err(Fatal::new(format!(
+                "`[override.{id}]` sets none of {}, so it changes nothing about the \
+                 inherited rule. Drop the table",
+                may_carry()
+            )));
+        }
+        Ok(this)
+    }
+
+    /// Replace the named fields on `files` and leave the rest as inherited.
+    fn apply(&self, files: &mut Files) {
+        if let Some(include) = &self.include {
+            files.include = Some(include.clone());
+        }
+        if let Some(exclude) = &self.exclude {
+            files.exclude.clone_from(exclude);
+        }
+        if let Some(glob) = &self.glob {
+            files.glob.clone_from(glob);
+        }
+    }
+}
+
 /// Where a rule in a loaded policy came from.
 ///
 /// Not a field either -- nothing in a file says it, because a file cannot: the
@@ -511,6 +621,16 @@ pub(crate) struct PolicyFile {
     /// The same sections, each read as exactly one check.
     #[serde(skip)]
     pub rules: BTreeMap<String, Rule>,
+    /// `[override.<id>]` sections, raw, for the reason `written` is: the id is
+    /// the section header, and every refusal about one names it. See
+    /// [`Override`].
+    #[serde(default, rename = "override")]
+    written_overrides: BTreeMap<String, toml::Table>,
+    /// The same sections, each held to the three fields it may carry. Read by
+    /// `load` and by nothing outside this file: once applied, an override is
+    /// the inherited rule's own `files` table.
+    #[serde(skip)]
+    overrides: BTreeMap<String, Override>,
     #[serde(default, rename = "shim")]
     pub shims: Vec<crate::shim::Shim>,
     /// Whether every path-baseline entry must say who excused it and why.
@@ -764,6 +884,10 @@ fn parse(path: &Path, text: &str) -> Result<PolicyFile> {
         let rule = Rule::of_written(&id, written)?;
         file.rules.insert(id, rule);
     }
+    for (id, table) in std::mem::take(&mut file.written_overrides) {
+        let narrowing = Override::of_table(&id, table).map_err(|error| Fatal::at(path, error))?;
+        file.overrides.insert(id, narrowing);
+    }
     Ok(file)
 }
 
@@ -858,6 +982,28 @@ fn refuse_set_header(path: &Path, file: &PolicyFile) -> Result<()> {
     Ok(())
 }
 
+/// A file that is read on somebody else's `[inherit]` line may not narrow
+/// what that somebody inherits.
+///
+/// An `[override.<id>]` in a bundled set or an `inherit.paths` file would
+/// have to reach across into the inheriting repository's other sets to find
+/// the rule it names, and the loader merges only `.rules` from such a file.
+/// Refused rather than dropped, for the reason an inherited `[[shim]]` is: a
+/// table read by nothing looks like configuration that works.
+fn refuse_inherited_override(path: &Path, file: &PolicyFile, kind: &str) -> Result<()> {
+    if let Some(id) = file.overrides.keys().next() {
+        return Err(Fatal::at(
+            path,
+            format!(
+                "`[override.{id}]` narrows a rule this file inherits, and {kind} inherits \
+                 nothing: an override belongs in the policy whose `[inherit]` line brings \
+                 the rule in. Move the table there"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Parse one bundled set and hold it to its own declared ceiling.
 ///
 /// The one place a bundled set is read, so the ceiling cannot be skipped by a
@@ -867,6 +1013,7 @@ fn parse_bundled(name: &str, text: &str) -> Result<PolicyFile> {
     let path = Path::new("<bundled>").join(format!("{name}.toml"));
     let file = parse(&path, text)?;
     refuse_inherited_declaration(&path, &file, "a bundled set")?;
+    refuse_inherited_override(&path, &file, "a bundled set")?;
     // A set supplies checkers and never shims. A `[[shim]]` is a program
     // standing in front of a real command, and only `.rules` is adopted from a
     // set -- so a shim written here would vanish silently, which is worse than
@@ -1089,6 +1236,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         let parsed = parse(&path, &extended)?;
         refuse_set_header(&path, &parsed)?;
         refuse_inherited_declaration(&path, &parsed, "an inherited file")?;
+        refuse_inherited_override(&path, &parsed, "an inherited file")?;
         // Refused rather than merged, and refused rather than ignored. Only
         // `.rules` is merged below, so an inherited `[[shim]]` used to vanish --
         // and vanish in the worst possible way, because the `exec` rule that
@@ -1144,6 +1292,48 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         .into_iter()
         .filter(|rule| !disabled.contains(&rule.id) && !own_ids.iter().any(|own| *own == rule.id))
         .collect();
+
+    // Applied to what survived the two filters above, so an override of an id
+    // the repository also wrote out, or also dropped, finds nothing -- and
+    // says so, because each is two statements about one id that are free to
+    // disagree. The own rule replaces the inherited one whole and the override
+    // keeps it; a reader cannot tell from the file which one won.
+    for (id, narrowing) in &file.overrides {
+        if own_ids.contains(&id.as_str()) {
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "`[override.{id}]` and `[rule.{id}]` are both written here. The rule \
+                     replaces the inherited one whole and the override keeps it, so one of \
+                     them is not doing what it says. Keep the rule if the check changes; \
+                     keep the override if only where it reads does"
+                ),
+            ));
+        }
+        if disabled.contains(id) {
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "`[override.{id}]` narrows a rule `inherit.disabled_rules` drops, so it \
+                     narrows nothing. Drop the override, or stop disabling the rule"
+                ),
+            ));
+        }
+        let mut narrowed = rules.iter_mut().filter(|rule| rule.id == *id).peekable();
+        if narrowed.peek().is_none() {
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "`[override.{id}]` names an id nothing inherited defines. An override \
+                     narrows where an inherited rule reads; a rule of this repository's own \
+                     is written as `[rule.{id}]`"
+                ),
+            ));
+        }
+        for rule in narrowed {
+            narrowing.apply(rule.files.get_or_insert_with(Files::default));
+        }
+    }
     rules.extend(file.rules.values().cloned());
 
     // A permission over a source that does not exist. It reads as though the
@@ -2903,6 +3093,154 @@ mod tests {
             .collect();
         assert_eq!(shadowed.len(), 1);
         assert_eq!(shadowed[0].message(), "local");
+    }
+
+    /// The rule the set ships, with its file selection moved and nothing
+    /// else: the message, the check and the provenance are the set's, and a
+    /// `files` field the override does not name keeps the set's value.
+    #[test]
+    fn an_override_narrows_the_inherited_rule_and_keeps_the_rest() {
+        let policy = policy_from(
+            r#"
+            [inherit]
+            sets = ["process-residue"]
+
+            [override.no-task-tracker-references]
+            files.exclude = ["src/**"]
+            "#,
+        )
+        .unwrap();
+        let shipped = bundled_set("process-residue")
+            .unwrap()
+            .rules
+            .into_iter()
+            .find(|rule| rule.id == "no-task-tracker-references")
+            .unwrap();
+        let narrowed: Vec<&Rule> = policy
+            .rules
+            .iter()
+            .filter(|rule| rule.id == "no-task-tracker-references")
+            .collect();
+        assert_eq!(narrowed.len(), 1);
+        let narrowed = narrowed[0];
+        assert_eq!(narrowed.origin, Origin::Set("process-residue".into()));
+        assert_eq!(narrowed.message(), shipped.message());
+        assert_eq!(narrowed.kind(), shipped.kind());
+        assert_eq!(narrowed.files().exclude, vec!["src/**".to_owned()]);
+        // `include` was not named, so it is the set's, and not the
+        // deserializer's default for an absent key.
+        assert_eq!(narrowed.files().include, shipped.files().include);
+        assert!(shipped.files().include.is_some());
+        assert_eq!(narrowed.files().glob, shipped.files().glob);
+    }
+
+    #[test]
+    fn an_override_carrying_a_field_outside_files_is_refused_naming_what_it_may_carry() {
+        for (body, field) in [
+            ("regexp = 'x'", "`regexp`"),
+            ("files.multiline = true", "`files.multiline`"),
+        ] {
+            let error = policy_from(&format!(
+                "[inherit]\nsets = [\"process-residue\"]\n\n\
+                 [override.no-task-tracker-references]\n{body}\n"
+            ))
+            .unwrap_err();
+            let text = error.to_string();
+            assert!(
+                text.contains(&format!(
+                    "`[override.no-task-tracker-references]` carries {field}"
+                )),
+                "{text}"
+            );
+            assert!(
+                text.contains("only `files.include`, `files.exclude` and `files.glob`"),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_override_of_an_id_nothing_inherited_defines_is_refused() {
+        let error = policy_from(
+            r#"
+            [inherit]
+            sets = ["process-residue"]
+
+            [override.no-such-rule]
+            files.exclude = ["src/**"]
+            "#,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("`[override.no-such-rule]` names an id nothing inherited defines"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_override_beside_an_own_rule_of_the_same_id_is_refused() {
+        let error = policy_from(
+            r#"
+            [inherit]
+            sets = ["process-residue"]
+
+            [override.no-task-tracker-references]
+            files.exclude = ["src/**"]
+
+            [rule.no-task-tracker-references]
+            message = "local"
+            regexp = "local"
+            files.include = ["src"]
+            "#,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "`[override.no-task-tracker-references]` and \
+                 `[rule.no-task-tracker-references]` are both written here"
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_override_that_sets_none_of_its_three_fields_is_refused() {
+        let error = policy_from(
+            "[inherit]\nsets = [\"process-residue\"]\n\n[override.no-task-tracker-references]\n",
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("changes nothing about the inherited rule"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_override_in_an_inherited_file_is_refused_rather_than_ignored() {
+        let dir = crate::fixture::scratch("config-inherited-override");
+        std::fs::create_dir_all(dir.join("policy")).unwrap();
+        std::fs::write(
+            dir.join("policy/extra.toml"),
+            "[override.no-task-tracker-references]\nfiles.exclude = [\"src/**\"]\n",
+        )
+        .unwrap();
+        let path = dir.join("policy/principles.toml");
+        std::fs::write(
+            &path,
+            "[inherit]\nsets = [\"process-residue\"]\npaths = [\"policy/extra.toml\"]\n",
+        )
+        .unwrap();
+        let error = load(&dir, &path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("an inherited file inherits nothing"),
+            "{error}"
+        );
     }
 
     #[test]
