@@ -419,7 +419,7 @@ pub(crate) fn text_refusal(
     }
     Ok(match builtin {
         "prevent-ai-author" => message::ai_author_in(rule, label, text),
-        "prevent-unusual-unicode" => message::unusual_unicode_in(rule, label, text),
+        "prevent-unusual-unicode" => message::unusual_unicode_in(rule, label, text)?,
         "no-private-repo-names" => names::in_text(root, policy, rule, label, text)?,
         // The consultations. Each folds what it ran into one refusal under this
         // rule's id, naming each inner rule, so the reader is told which check
@@ -576,7 +576,12 @@ pub(crate) fn parameters(builtin: &str) -> &'static [&'static str] {
         // compares it to the forge, and every other field in the family is
         // about judging names in text, which this one never does.
         "no-stale-visibility" => &["visibility"],
-        "prevent-unusual-unicode-in-files" => &["allow"],
+        // One field, two readings. The file guard takes a path glob after the
+        // codepoint and lets a fixture earn an invisible; the message guard
+        // takes the codepoint alone and admits no invisible whatever is
+        // listed -- see `message::allowances` for why the second reading is
+        // the narrower one.
+        "prevent-unusual-unicode" | "prevent-unusual-unicode-in-files" => &["allow"],
         _ => &[],
     }
 }

@@ -50,9 +50,30 @@ struct Allowance {
 /// upstream markup, and only the second is usually meant.
 fn parse_allowance(token: &str) -> Result<Allowance> {
     let (codepoint, glob) = match token.split_once(':') {
-        Some((codepoint, glob)) => (codepoint.trim(), Some(glob.trim())),
-        None => (token.trim(), None),
+        Some((codepoint, glob)) => (codepoint, Some(glob.trim())),
+        None => (token, None),
     };
+    let allowed = parse_codepoint(codepoint)?;
+    let under = match glob.filter(|glob| !glob.is_empty()) {
+        Some(glob) => Some(
+            Glob::new(glob)
+                .map_err(|error| Fatal::new(format!("allow: glob {glob:?}: {error}")))?
+                .compile_matcher(),
+        ),
+        None => None,
+    };
+    Ok(Allowance {
+        codepoint: allowed,
+        under,
+    })
+}
+
+/// `U+00A0`: the codepoint half of an allowance.
+///
+/// Shared with the message guard, whose `allow` is only ever this half: a
+/// message has no path for a glob to select.
+pub(crate) fn parse_codepoint(token: &str) -> Result<char> {
+    let codepoint = token.trim();
     let hex = codepoint
         .strip_prefix("U+")
         .or_else(|| codepoint.strip_prefix("u+"))
@@ -66,20 +87,8 @@ fn parse_allowance(token: &str) -> Result<Allowance> {
             "allow: {codepoint:?} is not a hexadecimal codepoint"
         ))
     })?;
-    let allowed = char::from_u32(value)
-        .ok_or_else(|| Fatal::new(format!("allow: U+{value:04X} is not a character")))?;
-    let under = match glob.filter(|glob| !glob.is_empty()) {
-        Some(glob) => Some(
-            Glob::new(glob)
-                .map_err(|error| Fatal::new(format!("allow: glob {glob:?}: {error}")))?
-                .compile_matcher(),
-        ),
-        None => None,
-    };
-    Ok(Allowance {
-        codepoint: allowed,
-        under,
-    })
+    char::from_u32(value)
+        .ok_or_else(|| Fatal::new(format!("allow: U+{value:04X} is not a character")))
 }
 
 /// Whether a character renders as nothing.

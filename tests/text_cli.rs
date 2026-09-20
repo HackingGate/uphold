@@ -414,3 +414,79 @@ fn a_schema_id_passes_the_text_seam_and_a_repository_name_does_not() {
         stderr(&alone)
     );
 }
+
+// ── the message guard's allowance reaches the text seam ──────────────
+
+/// The message guard as a consumer declares it, allowance and all.
+///
+/// The character under test is a fullwidth exclamation mark in an English
+/// sentence: no East Asian letter in the body vouches for it, so the whitelist
+/// refuses it and only the allowance can admit it. U+3000 would not do here --
+/// `is_whitespace` admits it with or without a list.
+const MESSAGE_ALLOWANCE_POLICY: &str = r#"
+[rule.prevent-unusual-unicode]
+builtin = "prevent-unusual-unicode"
+allow = ["U+FF01"]
+
+[rule.prevent-unusual-unicode.git]
+hooks = ["commit-msg"]
+"#;
+
+const MESSAGE_POLICY: &str = r#"
+[rule.prevent-unusual-unicode]
+builtin = "prevent-unusual-unicode"
+
+[rule.prevent-unusual-unicode.git]
+hooks = ["commit-msg"]
+"#;
+
+const FULLWIDTH_BODY: &[u8] = "Ship it\u{FF01}\n".as_bytes();
+const ZERO_WIDTH_BODY: &[u8] = "Ship\u{200B} it\n".as_bytes();
+
+/// The lever the consumer lacked. Before this, a pull-request body carrying
+/// one such character had `UPHOLD_ALLOW` on the whole rule as its only way
+/// out, and the consumer wrote that into its policy file.
+#[test]
+fn a_listed_codepoint_passes_guard_text_and_an_unlisted_body_is_refused() {
+    let allowed = workspace(MESSAGE_ALLOWANCE_POLICY);
+    let listed = guard_text(&allowed, FULLWIDTH_BODY, EXAMPLE_HOME, None);
+    assert_eq!(code(&listed), 0, "{}", stderr(&listed));
+
+    let bare = workspace(MESSAGE_POLICY);
+    let unlisted = guard_text(&bare, FULLWIDTH_BODY, EXAMPLE_HOME, None);
+    assert_eq!(code(&unlisted), 1, "{}", stderr(&unlisted));
+    let report = stderr(&unlisted);
+    assert!(report.contains("prevent-unusual-unicode"), "{report}");
+    assert!(report.contains("U+FF01"), "{report}");
+}
+
+/// What the allowance cannot open. The exec-line workaround switched the
+/// guard off for zero-width and bidirectional characters too; a list admits
+/// what it names and nothing that draws nothing.
+#[test]
+fn a_zero_width_space_is_refused_with_or_without_an_allowance() {
+    for policy in [MESSAGE_ALLOWANCE_POLICY, MESSAGE_POLICY] {
+        let root = workspace(policy);
+        let output = guard_text(&root, ZERO_WIDTH_BODY, EXAMPLE_HOME, None);
+        assert_eq!(code(&output), 1, "{}", stderr(&output));
+        assert!(stderr(&output).contains("U+200B"), "{}", stderr(&output));
+    }
+}
+
+/// And listing one is refused where the policy is read, naming it, so the
+/// allowance cannot be widened into the hole by writing the codepoint down.
+#[test]
+fn an_invisible_on_the_allow_list_is_refused_at_load() {
+    let root = workspace(
+        "[rule.prevent-unusual-unicode]\n\
+         builtin = \"prevent-unusual-unicode\"\n\
+         allow = [\"U+200B\"]\n\n\
+         [rule.prevent-unusual-unicode.git]\n\
+         hooks = [\"commit-msg\"]\n",
+    );
+    let output = guard_text(&root, b"Ship it\n", EXAMPLE_HOME, None);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let report = stderr(&output);
+    assert!(report.contains("U+200B"), "{report}");
+    assert!(report.contains("draws nothing"), "{report}");
+}

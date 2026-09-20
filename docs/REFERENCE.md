@@ -1242,6 +1242,24 @@ rule exists for. A character belonging to no script is refused whatever the
 message is written in: an em dash, a curly quote, and everything
 `prevent-unusual-unicode-in-files` bans for drawing nothing.
 
+Where the message is right and the rule is wrong about one character, `allow`
+names it: `allow = ["U+FF01"]` admits a fullwidth exclamation mark in an English
+sentence, an em dash inside quoted text, an emoji. The codepoint alone — a
+message has no path for the file guard's glob half to select, and an entry
+carrying one is refused at load. Before writing one, check that the character
+is not already ordinary: **every Unicode whitespace passes** (`is_whitespace`,
+so U+3000 IDEOGRAPHIC SPACE needs no allowance), and since 1.17.0 so does the
+punctuation of any script whose letters are in the same message. What no
+allowance admits is a character that draws nothing: a zero-width joiner, a
+bidirectional override, a Hangul filler. Listing one is refused at load,
+naming the codepoint, and a list that somehow carried one would admit nothing
+by it — the file guard lets a fixture earn an invisible because a captured page
+is data; a message is prose, and the only thing an invisible can do in prose is
+hide. The field is read wherever the rule runs: at `commit-msg`, at the pushed
+range, and through the `text-guards` consultation for a pull-request body, so
+a repository that declares (or inherits) the allowance has it honoured at the
+text seam without an `UPHOLD_ALLOW` on the rule's whole id.
+
 ```toml
 [rule.prevent-public-push]
 builtin = "prevent-public-push"
@@ -1310,6 +1328,7 @@ enforced and is not.
 | `refuse_unknown` | the `no-private-repo-names` family | treat a name whose visibility could not be determined as private |
 | `foreign_hosts` | the `no-private-repo-names` family | host globs carrying no repository this rule needs resolved — replaces the top-level list for this rule |
 | `allow` | `prevent-unusual-unicode-in-files` | codepoints admitted, optionally under one glob — `"U+00A0:docs/captured/**"` |
+| `allow` | `prevent-unusual-unicode` | codepoints admitted in a message, the codepoint alone — `"U+FF01"`; never one that draws nothing, which is refused at load |
 
 The "family" is `no-private-repo-names`, `-staged` and `-in-files`. No other
 built-in reads any parameter. The first four rows are **one row twice**:
