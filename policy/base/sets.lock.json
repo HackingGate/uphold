@@ -864,6 +864,17 @@
         },
         "id": "no-published-private-repo-names",
         "visibility": "public"
+      },
+      {
+        "builtin": "prevent-unowned-target",
+        "command": {
+          "before": [
+            "gh"
+          ],
+          "scope": "always"
+        },
+        "id": "unowned-forge-target",
+        "owner_required": true
       }
     ],
     "set": "published-text",

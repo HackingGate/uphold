@@ -2653,6 +2653,171 @@ fn a_gitlab_project_id_is_the_same_destination_with_its_separator_escaped() {
     );
 }
 
+// ── the destination guard, arriving from a set ───────────────────────
+
+/// What a consuming repository writes once `published-text` carries the
+/// destination guard: an `owner`, the inherit line, and its own shim tables.
+/// Nothing in this file declares `unowned-forge-target`; the set does.
+///
+/// The `gh` table is scoped `public-target` on purpose. The set's rule
+/// carries `command.scope = "always"`, and this fixture is where that override
+/// is shown to arrive with the rule: a destination the forge calls private is
+/// still judged for whose it is.
+const INHERITED_TARGET_POLICY: &str = r#"
+owner = "example-user"
+
+[inherit]
+sets = ["published-text"]
+
+[[shim]]
+command = "gh"
+match = ["pr:create"]
+text_flags = ["-b", "--body"]
+target_flags = ["-R", "--repo"]
+target = "forge-repo"
+scope = "public-target"
+
+[[shim]]
+command = "git"
+match = ["push:*"]
+"#;
+
+/// A `gh` that answers every question the seam can put to it with a no: the
+/// destination is private, the login is somebody else's, and the token does
+/// not administer it. Anything else is the real command running.
+fn stub_gh_says_private_and_no(root: &Path) {
+    stub(
+        root,
+        "gh",
+        "#!/bin/sh\n\
+         case \"$*\" in\n\
+         'api user --jq .login') echo not-the-owner ;;\n\
+         'api repos/'*' --jq .permissions.admin') echo false ;;\n\
+         'api repos/'*' --jq .visibility') echo private ;;\n\
+         *) echo \"gh ran: $*\" ;;\n\
+         esac\n",
+    );
+}
+
+#[test]
+fn the_destination_guard_arrives_from_published_text_and_names_the_set_when_it_refuses() {
+    // The promotion. This policy declares no destination rule of its own, so a
+    // reader who greps it for the id that refused them finds nothing -- which
+    // is why the refusal names the set beside the id.
+    let root = workspace(INHERITED_TARGET_POLICY);
+    stub_gh_says_private_and_no(&root);
+    let refused = shim(
+        &root,
+        &[
+            "gh",
+            "pr",
+            "create",
+            "--repo",
+            "other-owner/their-repo",
+            "-b",
+            "An ordinary sentence about an ordinary thing.",
+        ],
+    );
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        !stdout(&refused).contains("gh ran:"),
+        "{}",
+        stdout(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("unowned-forge-target [set: published-text]"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("other-owner/their-repo"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("pinned to example-user"),
+        "{}",
+        stderr(&refused)
+    );
+
+    // The same verb under this workspace's own owner runs, which is what says
+    // the set brought a destination check and not a refusal of `gh pr create`.
+    let ours = shim(
+        &root,
+        &[
+            "gh",
+            "pr",
+            "create",
+            "-R",
+            "example-user/widget",
+            "-b",
+            "An ordinary sentence.",
+        ],
+    );
+    assert_eq!(code(&ours), 0, "{}", stderr(&ours));
+    assert!(stdout(&ours).contains("gh ran:"), "{}", stdout(&ours));
+}
+
+#[test]
+fn the_inherited_destination_guard_refuses_to_guess_who_this_repository_is() {
+    // `owner_required = true` is in the bundled declaration, so a repository
+    // that inherits the set and has not said who it is hears so -- exit 2,
+    // naming the line to write -- rather than being told its publications are
+    // fine by a rule that read the owner off `origin`.
+    let root = workspace(&INHERITED_TARGET_POLICY.replace("owner = \"example-user\"\n", ""));
+    stub_gh_says_private_and_no(&root);
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "pr",
+            "create",
+            "--repo",
+            "other-owner/their-repo",
+            "-b",
+            "An ordinary sentence.",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("owner_required"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("owner = \""),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn inheriting_the_destination_guard_without_a_gh_shim_is_refused_at_load() {
+    // ADR 0006: the set supplies the checker and never the shim, and a
+    // repository that inherits it without the `gh` table is refused before
+    // anything runs, with the cure that is actually available to it -- there
+    // is no `command.before` entry in this file to drop.
+    let root = workspace(
+        &INHERITED_TARGET_POLICY
+            .replace(
+                "[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\", \"--body\"]\ntarget_flags = [\"-R\", \"--repo\"]\ntarget = \"forge-repo\"\nscope = \"public-target\"\n\n",
+                "",
+            ),
+    );
+    stub_gh_says_private_and_no(&root);
+    let output = shim(
+        &root,
+        &["gh", "pr", "create", "-R", "example-user/widget", "-b", "x"],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    let text = stderr(&output);
+    assert!(text.contains("published-text"), "{text}");
+    assert!(text.contains("command = \"gh\""), "{text}");
+    assert!(text.contains("[[shim]]"), "{text}");
+}
+
 // ── a visibility this repository already declared ────────────────────
 
 /// A `public-target` shim over a repository that says what it is.

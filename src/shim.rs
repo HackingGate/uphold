@@ -3275,7 +3275,15 @@ pub(crate) fn run(
                     &mut asked,
                 )? {
                     destination_refusals += 1;
-                    refusals.push(refusal.report);
+                    // Named the way a hook names a refusal, set and all. This
+                    // rule ships in `published-text`, so the reader who greps
+                    // their policy for the id that refused them finds nothing
+                    // -- the set name is what tells them where to look.
+                    refusals.push(format!(
+                        "{}: {}",
+                        crate::guard::refused_by(policy, &refusal),
+                        refusal.report
+                    ));
                 }
             }
         }
