@@ -33,7 +33,7 @@
 //!   first two examples.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -1028,7 +1028,13 @@ impl Shim {
         } else {
             &["alias", "list"]
         };
-        let mut command = Command::new(&real);
+        // Marked as a probe although it is run by path rather than by name,
+        // because "the real command" is what PATH said and PATH can say a shim
+        // of somebody else's, which resolves the name again and reaches this
+        // binary. Unmarked, that arrival was a fresh invocation asking the same
+        // question, and the twenty-nine thousand `gh alias list` processes
+        // `HANDED` describes were this line.
+        let mut command = inner_tool(&real);
         command.args(query).current_dir(root);
         if self.command == "git" {
             command.arg(format!("alias.{word}"));
@@ -2165,16 +2171,21 @@ fn consult(root: &Path, rule: &Rule, subject: &Subject) -> Result<Option<String>
 /// comparison would call a hard-linked shim "the real command". Metadata
 /// follows symlinks, so both spellings of a link land on the same identity.
 #[cfg(unix)]
-fn file_identity(path: &Path) -> Option<(u64, u64)> {
+fn file_identity(path: &Path) -> Option<Identity> {
     use std::os::unix::fs::MetadataExt;
     let metadata = std::fs::metadata(path).ok()?;
     Some((metadata.dev(), metadata.ino()))
 }
 
 #[cfg(not(unix))]
-fn file_identity(path: &Path) -> Option<PathBuf> {
+fn file_identity(path: &Path) -> Option<Identity> {
     path.canonicalize().ok()
 }
+
+#[cfg(unix)]
+type Identity = (u64, u64);
+#[cfg(not(unix))]
+type Identity = PathBuf;
 
 /// How this process was reached, which is the only thing that differs when
 /// nothing here declares the command.
@@ -2252,14 +2263,15 @@ fn inner_depth() -> Option<u32> {
 const INNER_LIMIT: u32 = 2;
 
 /// A `git`, `gh` or `glab` this process is about to run to answer its OWN
-/// question, marked as such.
+/// question, marked as such -- by name, or by the path a PATH walk resolved
+/// the name to.
 ///
 /// Every internal spawn of those three goes through here, because the marker
 /// has to be on the child rather than in this process's environment: setting it
 /// on ourselves would hand it to the real command at the exec too, and a `git
 /// push` that runs a hook that runs this tool would arrive already excused.
-pub(crate) fn inner_tool(name: &str) -> Command {
-    let mut command = Command::new(name);
+pub(crate) fn inner_tool(program: impl AsRef<OsStr>) -> Command {
+    let mut command = Command::new(program);
     command.env(
         INNER,
         (inner_depth().unwrap_or(0).saturating_add(1)).to_string(),
@@ -2267,18 +2279,150 @@ pub(crate) fn inner_tool(name: &str) -> Command {
     command
 }
 
-/// The answer for an invocation that is uphold's own probe rather than a user's
-/// command, where it is one.
+/// The marker one shim sets on the exec of the real command, so that the exec
+/// coming back to this binary is recognised as the same hand-off and not as a
+/// new invocation.
 ///
-/// `Ok(None)` means the marker is not set and the ordinary path applies.
+/// `real_command` walks PATH past this binary's own file and past any link that
+/// lands on another uphold, and a third kind of file is neither: a shim that
+/// belongs to somebody else and resolves the command the same way, by walking
+/// PATH. mise installs one named for every tool it has ever heard of, a link
+/// to a binary called `mise`, and it walks PATH skipping only its own
+/// directory. On 2026-09-20, with that directory ahead of the shim's, the walk
+/// returned it as the real `gh` and exec'd it; it found the uphold link first
+/// and exec'd that; and every arrival was a fresh invocation, because nothing
+/// in the loop was an uphold probe and `INNER` was never set. Each round ran
+/// the checks again, and the alias probe each round made spawned the same loop
+/// under itself: about twenty-nine thousand `gh alias list` processes in one
+/// process group when it was killed by hand.
 ///
-/// Two layers, and the second is only ever reached if the first has been
-/// undone. The first is the passthrough: the command runs with nothing standing
-/// in front of it, which is the whole point -- a probe that is checked is a
-/// probe that probes. The second is the depth: if the marker says this process
-/// is further inside itself than any real chain reaches, the loop is named and
-/// nothing runs, because a probe that got that far is not answering a question.
+/// The value is keyed on what the loop repeats and a genuine nested use cannot:
+/// the process id. An exec keeps the pid, so the shim, the foreign shim and the
+/// shim again are one process, while a hook that the real command runs, which
+/// runs this command again, is a fork and arrives under a pid of its own. So a
+/// marker that names this process's own pid, under this command's name, is the
+/// hand-off having come back around -- and the identities it carries are the
+/// files the walk already tried, to be stepped past on the next walk. The name
+/// is part of the key because a wrapper exec'd as `gh` that turns around and
+/// execs `git` keeps the pid too, and that `git` is a new command that has not
+/// been checked.
+///
+/// Read only where the pid matches, so a value inherited by any descendant of
+/// the real command is inert there. A pid that wraps around to the same number
+/// inside one descendant's lifetime is the bound on that, and it is not a bound
+/// this tool can tighten from the environment alone.
+pub(crate) const HANDED: &str = "UPHOLD_SHIM_HANDED";
+
+/// One hand-off as its marker records it.
+#[derive(Debug, PartialEq, Eq)]
+struct HandOff {
+    pid: u32,
+    name: String,
+    tried: Vec<Identity>,
+}
+
+impl HandOff {
+    /// The marker's text: the pid and the name on the first line, then one
+    /// identity per line. Newlines, because a file identity is two numbers on
+    /// Unix and a path everywhere else, and a path can carry any separator but
+    /// this one.
+    fn marker(&self) -> String {
+        let mut text = format!("{} {}", self.pid, self.name);
+        for identity in &self.tried {
+            text.push('\n');
+            text.push_str(&identity_token(identity));
+        }
+        text
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        let (head, tried) = text.split_once('\n').unwrap_or((text, ""));
+        let (pid, name) = head.split_once(' ')?;
+        Some(Self {
+            pid: pid.parse().ok()?,
+            name: name.to_owned(),
+            tried: tried.lines().filter_map(identity_of_token).collect(),
+        })
+    }
+
+    /// Whether this is the hand-off THIS process made, for `name`.
+    fn came_back_here(&self, name: &str) -> bool {
+        self.pid == std::process::id() && self.name == name
+    }
+}
+
+/// The files this process already handed `name` off to, where this invocation
+/// IS that hand-off having come back.
+///
+/// `None` is the ordinary case: no marker, a marker some other process set, or
+/// a marker this process set for a different command.
+fn handed_back(name: &str) -> Option<Vec<Identity>> {
+    let handed = HandOff::parse(&nonempty_env(HANDED)?)?;
+    handed.came_back_here(name).then_some(handed.tried)
+}
+
+/// The real command, as the command about to be exec'd: built on the path the
+/// walk found, and marked so that the file at that path is stepped past if it
+/// hands the command back to this process.
+fn handing_off(real: &Path, name: &str) -> Command {
+    let mut tried = handed_back(name).unwrap_or_default();
+    tried.extend(file_identity(real));
+    let handed = HandOff {
+        pid: std::process::id(),
+        name: name.to_owned(),
+        tried,
+    };
+    let mut command = Command::new(real);
+    command.env(HANDED, handed.marker());
+    command
+}
+
+#[cfg(unix)]
+fn identity_token(identity: &Identity) -> String {
+    format!("{}.{}", identity.0, identity.1)
+}
+
+#[cfg(unix)]
+fn identity_of_token(token: &str) -> Option<Identity> {
+    let (device, inode) = token.split_once('.')?;
+    Some((device.parse().ok()?, inode.parse().ok()?))
+}
+
+#[cfg(not(unix))]
+fn identity_token(identity: &Identity) -> String {
+    identity.to_string_lossy().into_owned()
+}
+
+#[cfg(not(unix))]
+fn identity_of_token(token: &str) -> Option<Identity> {
+    Some(PathBuf::from(token))
+}
+
+/// The answer for an invocation that is uphold's own rather than a user's
+/// command, where it is one: a probe this tool made, or the hand-off it already
+/// made coming back to it.
+///
+/// `Ok(None)` means neither marker names this invocation and the ordinary path
+/// applies.
+///
+/// The hand-off is asked first, because it is the more exact claim: this very
+/// process checked the command, exec'd what PATH said was the real one, and is
+/// here again. The checks are not run twice -- the editor variable this
+/// process installed would now name itself, and the stdin it read is the file
+/// it replayed -- and the walk that follows steps past the file that sent it
+/// back.
+///
+/// The probe has two layers, and the second is only ever reached if the first
+/// has been undone. The first is the passthrough: the command runs with
+/// nothing standing in front of it, which is the whole point -- a probe that
+/// is checked is a probe that probes. The second is the depth: if the marker
+/// says this process is further inside itself than any real chain reaches, the
+/// loop is named and nothing runs, because a probe that got that far is not
+/// answering a question.
 pub(crate) fn inner_passthrough(name: &str, argv: &[OsString]) -> Result<Option<Exit>> {
+    if handed_back(name).is_some() {
+        return exec_through(name, argv).map(Some);
+    }
     let Some(depth) = inner_depth() else {
         return Ok(None);
     };
@@ -2317,7 +2461,7 @@ pub(crate) fn exec_through(name: &str, argv: &[OsString]) -> Result<Exit> {
             "nothing here stands in front of {name}, and there is no {name} on PATH to run"
         )));
     };
-    let mut command = Command::new(&real);
+    let mut command = handing_off(&real, name);
     command.args(argv);
     hand_off(&mut command, name, None)
 }
@@ -2329,20 +2473,35 @@ pub(crate) fn exec_through(name: &str, argv: &[OsString]) -> Result<Exit> {
 /// somewhere else entirely -- so a directory comparison skips nothing, finds
 /// the link, and execs it, which is this program again. The result is not a
 /// wrong answer; it is a fork bomb that ends in EAGAIN.
+///
+/// Past ourselves, past any other uphold, and past whatever this process
+/// already handed the command to: a file that took the hand-off and exec'd its
+/// way back here is a shim of somebody else's, and the walk that returned it
+/// once says so and does not return it again. See `HANDED`.
 fn real_command(name: &str, own: Option<&Path>) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     let ourselves = own.and_then(file_identity);
+    let tried = handed_back(name).unwrap_or_default();
     for directory in std::env::split_paths(&path) {
         let candidate = directory.join(name);
         if !candidate.is_file() {
             continue;
         }
+        let identity = file_identity(&candidate);
         // Same identity means this is us, however the name is spelt --
         // symlink, hard link, or the binary under its own name.
-        if ourselves.is_some() && file_identity(&candidate) == ourselves {
+        if ourselves.is_some() && identity == ourselves {
             continue;
         }
         if lands_on_uphold(&candidate) {
+            continue;
+        }
+        if identity.is_some_and(|identity| tried.contains(&identity)) {
+            eprintln!(
+                "uphold shim: the PATH walk for {name} stepped past {}, a shim that handed \
+                 {name} back to this one",
+                candidate.display()
+            );
             continue;
         }
         return Some(candidate);
@@ -3266,7 +3425,7 @@ pub(crate) fn run(
             "checked {name} and then could not find the real one on PATH"
         )));
     };
-    let mut command = Command::new(&real);
+    let mut command = handing_off(&real, name);
     command.args(argv);
     // Everything the command needs that this shim took from it, arranged before
     // the hand-off because after it there is no arranging anything: the body
@@ -4482,6 +4641,44 @@ mod tests {
         // And a name nothing on PATH spells has no real command at all, which
         // is what keeps the transparent path from running something else.
         assert_eq!(real_command("uphold-no-such-command-4b1f", None), None);
+    }
+
+    #[test]
+    fn a_hand_off_marker_is_read_back_as_it_was_written() {
+        let Some(shell) = real_command("sh", None) else {
+            return;
+        };
+        let handed = HandOff {
+            pid: std::process::id(),
+            name: "gh".to_owned(),
+            tried: file_identity(&shell).into_iter().collect(),
+        };
+        assert_eq!(HandOff::parse(&handed.marker()), Some(handed));
+        // A name is whatever the link was called, and the first space in the
+        // marker is the only one that separates anything.
+        let odd = HandOff {
+            pid: 7,
+            name: "a name with spaces".to_owned(),
+            tried: Vec::new(),
+        };
+        assert_eq!(HandOff::parse(&odd.marker()), Some(odd));
+        assert_eq!(HandOff::parse("nothing that was written here"), None);
+    }
+
+    #[test]
+    fn a_hand_off_is_this_ones_only_under_the_same_pid_and_the_same_name() {
+        // The pid is what an exec keeps and a fork does not, and the name is
+        // what a wrapper that execs a different command changes: a `gh` that
+        // hands off to something that execs `git` has not checked that `git`.
+        let own = std::process::id();
+        let handed = |pid: u32, name: &str| HandOff {
+            pid,
+            name: name.to_owned(),
+            tried: Vec::new(),
+        };
+        assert!(handed(own, "gh").came_back_here("gh"));
+        assert!(!handed(own, "gh").came_back_here("git"));
+        assert!(!handed(own.wrapping_add(1), "gh").came_back_here("gh"));
     }
 
     #[test]

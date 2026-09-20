@@ -1936,6 +1936,38 @@ For the same reason the shim will not hand off to a link that lands on another
 release binary beside a build under test — are two different files, so each one
 reads the other as "the real `git`" and execs it back.
 
+A third file the walk can meet is neither: **a shim of somebody else's** that
+resolves the command the same way, by walking `PATH`. mise installs one named
+for every tool it has ever heard of — `~/.local/share/mise/shims/gh` is a link
+to `mise` whether or not any mise tool provides `gh` — and it walks `PATH`
+skipping only its own directory. With that directory ahead of the shim's, the
+walk returned it as the real `gh` and exec'd it, it found the uphold link first
+and exec'd that, and every arrival was a fresh invocation: nothing in the loop
+was an uphold probe, so `UPHOLD_SHIM_INNER` was never set. Each round ran the
+checks again, and the alias probe each round made spawned the same loop under
+itself — on 2026-09-20 that was about twenty-nine thousand `gh alias list`
+processes in one process group before it was killed by hand, and every `gh pr
+create` and pre-push hook that ran through it stalled for the length of its
+timeout.
+
+So the exec of the real command is marked too. `UPHOLD_SHIM_HANDED` names the
+shim's own pid, the command's name, and the file identities the walk has handed
+that command to. An exec keeps the pid, so the shim, the foreign shim and the
+shim again are one process, and a `gh` that arrives carrying its own pid under
+its own name is the hand-off having come back around: it is not checked a
+second time — the editor variable this process installed would now name itself
+— and the walk it makes steps past every file the marker lists, printing one
+line on stderr with the path it stepped past, so the extra hop is not read as a
+slow gate. A hook that the real command runs, which runs `gh` again, is a fork
+and arrives under a pid of its own, so it is judged like any other invocation;
+the name is part of the key because a wrapper exec'd as `gh` that turns around
+and execs `git` keeps the pid, and that `git` has not been checked. The alias
+probe is marked `UPHOLD_SHIM_INNER` like every other probe, although it is run
+by the path the walk resolved rather than by name, because that path can be the
+foreign shim and the foreign shim resolves the name again. Nothing is named:
+the loop is detected rather than the manager, and the next shim manager needs
+no entry here.
+
 Where `current_exe()` cannot be resolved there is nothing to install as the
 editor, and the invocation is refused with exit `2`. It warned and execed anyway,
 on the argument that a guard which stops work gets removed — but that argument
