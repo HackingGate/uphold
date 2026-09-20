@@ -45,6 +45,41 @@ struct Case {
     allows: &'static [&'static str],
 }
 
+/// The lines both tracker rules refuse: the one `process-residue` runs over
+/// documentation and the one `code-residue` runs over everything else. One
+/// list, because the two compile the same expression and a sample added to one
+/// scope and not the other would be the drift between them nobody sees.
+const TRACKER_REFUSES: &[&str] = &[
+    "See github.com/acme/widget/issues/12 for the argument.\n",
+    "Fixed in #451.\n",
+    "# See widget#711.\n",
+    "# See acme/widget#711.\n",
+    "Split across two (widget#7, #225).\n",
+    // A hit is one line, so the list form above cannot show that its second
+    // item was read: nothing else on these lines can match, and each one is
+    // refused by the separator alone.
+    "Two more landed beside it, #225.\n",
+    "The first half is in the estate; #8 has the rest.\n",
+    "#7/#8 are the pair.\n",
+    "Under the widget/#8 as well.\n",
+    // The capitalised forms, which the lowercase prose-word arm reads past.
+    // They were the history rule's until its record-naming arms moved here,
+    // and a sample for each is what says the move lost nothing.
+    "Issue #5 has the measurement.\n",
+    "PR #7 landed the rest.\n",
+];
+
+/// The near misses the tracker pattern was written to let through.
+const TRACKER_ALLOWS: &[&str] = &[
+    "The rule is stated here rather than in a tracker.\n",
+    // The forms the bare arm stays narrow for: a heading level, a colour, a
+    // unit, and a number a capitalised word introduces.
+    "## Heading\n",
+    "color: #fff\n",
+    "border: 1px, #1px wide\n",
+    "The #4 seed plays first.\n",
+];
+
 /// What a set needs written beside `[inherit]` before it will load.
 ///
 /// A set that supplies checkers and never shims is refused in a repository that
@@ -117,33 +152,16 @@ const CORPUS: &[Case] = &[
         refuses: &["Status: draft\n"],
         allows: &["The status of a record is a field in the record.\n"],
     },
+    // The tracker rule, over documentation. The same lines under `code-residue`
+    // below are the same pattern over every other file, and `TRACKER_REFUSES`
+    // and `TRACKER_ALLOWS` are shared so the two cannot drift apart a sample at
+    // a time.
     Case {
         set: "process-residue",
         rule: "no-task-tracker-references",
         path: "sample.md",
-        refuses: &[
-            "See github.com/acme/widget/issues/12 for the argument.\n",
-            "Fixed in #451.\n",
-            "# See widget#711.\n",
-            "# See acme/widget#711.\n",
-            "Split across two (widget#7, #225).\n",
-            // A hit is one line, so the list form above cannot show that its
-            // second item was read: nothing else on these lines can match, and
-            // each one is refused by the separator alone.
-            "Two more landed beside it, #225.\n",
-            "The first half is in the estate; #8 has the rest.\n",
-            "#7/#8 are the pair.\n",
-            "Under the widget/#8 as well.\n",
-        ],
-        allows: &[
-            "The rule is stated here rather than in a tracker.\n",
-            // The forms the bare arm stays narrow for: a heading level, a
-            // colour, a unit, and a number a capitalised word introduces.
-            "## Heading\n",
-            "color: #fff\n",
-            "border: 1px, #1px wide\n",
-            "The #4 seed plays first.\n",
-        ],
+        refuses: TRACKER_REFUSES,
+        allows: TRACKER_ALLOWS,
     },
     Case {
         set: "process-residue",
@@ -151,10 +169,20 @@ const CORPUS: &[Case] = &[
         path: "notes.rst",
         refuses: &[
             "as discussed in a thread, this is the answer\n",
-            "issue #12 covers it\n",
-            "https://github.com/acme/widget/pull/7 has the detail\n",
+            "As discussed in PR, the count is taken once.\n",
         ],
+        // The record-naming forms this rule used to refuse as well are still
+        // refused in this file, by the tracker rule and once; the test on a
+        // single id below is where that is asserted, because an `allows` line
+        // here would be asking the SET to pass them.
         allows: &["The decision and its reason are both written down here.\n"],
+    },
+    Case {
+        set: "code-residue",
+        rule: "no-task-tracker-references-in-code",
+        path: "src/estate.rs",
+        refuses: TRACKER_REFUSES,
+        allows: TRACKER_ALLOWS,
     },
     Case {
         set: "process-residue",
@@ -598,8 +626,8 @@ fn tracker_references_are_refused_in_configuration_and_source() {
         "scripts/build",
     ] {
         let case = Case {
-            set: "process-residue",
-            rule: "no-task-tracker-references",
+            set: "code-residue",
+            rule: "no-task-tracker-references-in-code",
             path,
             refuses: &[],
             allows: &[],
@@ -620,6 +648,81 @@ fn tracker_references_are_refused_in_configuration_and_source() {
             let (code, report) = verdict(&case, sample);
             assert_eq!(code, 0, "{path}: {report}");
         }
+    }
+}
+
+/// The lines of a report that open a finding under exactly this id.
+///
+/// Counted against the whole line, because one tracker id is a prefix of the
+/// other: `contains` on the shorter id is satisfied by a report that names only
+/// the longer one, which is the confusion this test exists to rule out.
+fn findings_under(report: &str, rule: &str) -> usize {
+    let opener = format!("policy check failed: {rule}");
+    report.lines().filter(|line| *line == opener).count()
+}
+
+#[test]
+fn a_tracker_reference_is_under_exactly_one_rule_whichever_file_holds_it() {
+    // A repository that inherits both sets. The docs rule and the code rule
+    // compile the same expression and exclude each other's files, so the same
+    // line is reported once under the id for the file it is in -- never under
+    // both, which was the doubled report that had consumers disabling one.
+    for (path, refused_by, not_by) in [
+        (
+            "notes.md",
+            "no-task-tracker-references",
+            "no-task-tracker-references-in-code",
+        ),
+        (
+            "src/estate.rs",
+            "no-task-tracker-references-in-code",
+            "no-task-tracker-references",
+        ),
+    ] {
+        let root = repository("[inherit]\nsets = [\"process-residue\", \"code-residue\"]\n");
+        let file = root.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "Fixed in #451.\n").unwrap();
+        support::git(&root, &["add", "-A"]);
+        let output = scan(&root);
+        let report = String::from_utf8_lossy(&output.stderr).into_owned();
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(output.status.code().unwrap(), 1, "{path}: {report}");
+        assert_eq!(findings_under(&report, refused_by), 1, "{path}: {report}");
+        assert_eq!(findings_under(&report, not_by), 0, "{path}: {report}");
+    }
+}
+
+#[test]
+fn a_docs_line_naming_a_record_is_reported_once_and_under_the_tracker_id() {
+    // The de-duplication inside `process-residue`. Each of these was refused
+    // by both rules of the set, so a reader saw the same line twice under two
+    // ids; the record-naming arms now live in the tracker rule alone and the
+    // history rule keeps the narrative form nothing else reads.
+    for sample in [
+        "issue #12 covers it\n",
+        "Issue #5 is where the measurement lives\n",
+        "https://github.com/acme/widget/pull/7 has the detail\n",
+    ] {
+        let case = Case {
+            set: "process-residue",
+            rule: "no-task-tracker-references",
+            path: "notes.rst",
+            refuses: &[],
+            allows: &[],
+        };
+        let (code, report) = verdict(&case, sample);
+        assert_eq!(code, 1, "{sample:?}: {report}");
+        assert_eq!(
+            findings_under(&report, case.rule),
+            1,
+            "{sample:?}: {report}"
+        );
+        assert_eq!(
+            findings_under(&report, "no-process-history-references"),
+            0,
+            "{sample:?}: {report}"
+        );
     }
 }
 

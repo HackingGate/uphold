@@ -1,0 +1,86 @@
+# Base rule set: code-residue (a tracker reference in a source, configuration,
+# build or packaging file -- the every-file scope of the rule that
+# `process-residue` runs over documentation)
+#
+# The pattern `no-task-tracker-references` reads over Markdown, reST and plain
+# text, read here over everything else a repository tracks: source, unit
+# files, scripts, manifests, lockfiles. Pull in with:
+#
+#   [inherit]
+#   sets = ["code-residue"]
+#
+# WHY THIS IS ITS OWN SET rather than the scope of the rule in
+# `process-residue`. For one release it was: the documentation glob came off
+# the tracker rule and the rule read every tracked file, in every repository
+# that inherited the set, with no diff in any of them. Two consumers under one
+# superproject measured what that cost. The first run under the wider scope
+# reported 27 findings on a pointer bump that touched none of the reported
+# lines; a sibling counted 276 across its source, packaging and scripts on a
+# commit that touched none of them either. Both shadowed the rule with a
+# docs-only copy under the same id, which is one release's widening undone by
+# hand in every tree that noticed. A third superproject, whose source comments
+# cite an issue as the place a measurement lives, disabled the rule in every
+# policy it has. Each of those was a consumer choosing between a rule that
+# refuses every commit and no rule at all, because a scope is not something
+# `[inherit]` lets a repository choose: it inherits SETS, whole, and disables
+# rules by id. Splitting the scope across two sets is what puts the choice
+# back where the consumer can make it.
+#
+# WHO TAKES IT. A tree whose comments have already been rewritten to cite
+# durable contracts -- a document in the repository, a named constant, the
+# test that proves the behaviour -- rather than the tracker item that once
+# argued for them. There the rule finds nothing on the day it is taken and
+# refuses the next comment that reaches for an issue number instead of an
+# explanation. A tree that has not done that rewriting takes `process-residue`
+# alone and keeps the tracker rule on its documentation, which is the scope
+# the rule shipped with and the one it is back on.
+#
+# THE TWO RULES ARE DISJOINT BY FILE, not by pattern. Both compile the same
+# expression; this one excludes the three documentation globs the other
+# selects, and both exclude the same test directories and fixture trees. So a
+# line is under exactly one of them, a repository that inherits both sets
+# never sees the same line reported under two ids, and a pattern edit lands in
+# both or in neither.
+#
+# THE FIXTURE EXCLUSIONS ARE THE ONES `process-residue` STATES. A Go test
+# sits beside its subject as `<name>_test.go`, a Python or JavaScript test
+# under `tests/`, and a synthetic fixture under `testdata/`; each legitimately
+# carries example-bad content and each is left out here for the reason argued
+# at the head of that set.
+
+# WHAT THIS SET MAY INSTALL. `stages` is the ceiling on the hooks a rule here
+# may declare, and it is the ceiling `process-residue` carries, because this
+# set is one of that set's rules under another scope and a rule that moves
+# between the two -- which is how this set came to exist -- must find the same
+# ceiling on both sides. Nothing here reaches it: the one rule is a content
+# rule the scan owns, and it declares no hook. A rule added to this set that
+# reached past this line would be refused at load.
+[set]
+stages = ["pre-commit", "manual"]
+
+[rule.no-task-tracker-references-in-code]
+message = """
+Source, configuration, and build files must not depend on volatile issue or
+PR records. State the durable contract and rationale in a comment, or link to
+repository documentation. Issues may link to code; code must not depend on
+issues. Keep logs, bug reports, and benchmark results in issues, and edit
+chronology in Git history.
+"""
+# The expression is the one `no-task-tracker-references` compiles, arm for
+# arm, and the argument for each arm is written above that rule: what an
+# unqualified repository name needs, what a bare number needs before it, why a
+# list separator counts, and why the words `issue` and `pr` are read in any
+# case. It is duplicated rather than referenced because a rule is a table of
+# its own and there is nothing in the policy language to point one rule's
+# pattern at another's; the corpus holds the two to the same samples.
+regexp = 'github\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\b|(?:^|\b[a-z]+[\t ]+|(?i:\b(?:issue|pr)[\t ]+)|\(|\[|[,;/][\t ]*)#[0-9]+\b'
+files.include = ["."]
+files.exclude = [
+    "*.md",
+    "*.rst",
+    "*.txt",
+    "**/tests/**",
+    "**/test/**",
+    "**/*_test.go",
+    "**/testdata/**",
+]

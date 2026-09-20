@@ -108,7 +108,7 @@
         },
         "id": "no-process-history-references",
         "message": "Do not reference process-history records (issue/PR/thread numbers) in final\ndocs. Extract the durable rule or final state instead.\n",
-        "regexp": "(?i)\\b(?:issue|pr)\\s+#[0-9]+\\b|\\bas discussed in (?:an? )?(?:issue|thread|pr)\\b|(?:https?://)?github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull)/[0-9]+\\b"
+        "regexp": "(?i)\\bas discussed in (?:an? )?(?:issue|thread|pr)\\b"
       },
       {
         "files": {
@@ -156,6 +156,11 @@
             "**/testdata/**"
           ],
           "exclude_cfg_test": false,
+          "glob": [
+            "*.md",
+            "*.rst",
+            "*.txt"
+          ],
           "include": [
             "."
           ],
@@ -164,7 +169,7 @@
         },
         "id": "no-task-tracker-references",
         "message": "Source, configuration, and documentation must not depend on volatile\nissue or PR records. State the durable contract and rationale here, or link to\nrepository documentation. Issues may link to code; code must not depend on\nissues. Keep logs, bug reports, and benchmark results in issues, and edit\nchronology in Git history.\n",
-        "regexp": "github\\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\\b|(?:^|\\b[a-z]+[\\t ]+|\\(|\\[|[,;/][\\t ]*)#[0-9]+\\b"
+        "regexp": "github\\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\\b|(?:^|\\b[a-z]+[\\t ]+|(?i:\\b(?:issue|pr)[\\t ]+)|\\(|\\[|[,;/][\\t ]*)#[0-9]+\\b"
       },
       {
         "files": {
@@ -186,6 +191,38 @@
       }
     ],
     "set": "process-residue",
+    "stages": [
+      "pre-commit",
+      "manual"
+    ]
+  },
+  {
+    "commands": [],
+    "rules": [
+      {
+        "files": {
+          "exclude": [
+            "*.md",
+            "*.rst",
+            "*.txt",
+            "**/tests/**",
+            "**/test/**",
+            "**/*_test.go",
+            "**/testdata/**"
+          ],
+          "exclude_cfg_test": false,
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-task-tracker-references-in-code",
+        "message": "Source, configuration, and build files must not depend on volatile issue or\nPR records. State the durable contract and rationale in a comment, or link to\nrepository documentation. Issues may link to code; code must not depend on\nissues. Keep logs, bug reports, and benchmark results in issues, and edit\nchronology in Git history.\n",
+        "regexp": "github\\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\\b|(?:^|\\b[a-z]+[\\t ]+|(?i:\\b(?:issue|pr)[\\t ]+)|\\(|\\[|[,;/][\\t ]*)#[0-9]+\\b"
+      }
+    ],
+    "set": "code-residue",
     "stages": [
       "pre-commit",
       "manual"

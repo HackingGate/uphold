@@ -39,6 +39,15 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
         "process-residue",
         include_str!("../policy/base/process-residue.toml"),
     ),
+    // The tracker rule of `process-residue` over every file that is not
+    // documentation. Its own name because a scope is not something `[inherit]`
+    // lets a repository choose -- it takes sets whole and disables rules by id
+    // -- and the release that widened the rule in place was undone by hand in
+    // every tree that measured what it reported.
+    (
+        "code-residue",
+        include_str!("../policy/base/code-residue.toml"),
+    ),
     (
         "credentials",
         include_str!("../policy/base/credentials.toml"),

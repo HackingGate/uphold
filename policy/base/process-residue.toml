@@ -130,9 +130,20 @@ chronology in Git history.
 # standards designators as repositories or task-tracking prose. The separators
 # are admitted because a citation list names its repository once and leaves
 # every later item bare, and a comma directly before a hash number in a
-# comment is such a list far more often than anything else.
-regexp = 'github\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\b|(?:^|\b[a-z]+[\t ]+|\(|\[|[,;/][\t ]*)#[0-9]+\b'
+# comment is such a list far more often than anything else. The words `issue`
+# and `pr` are admitted in any case, because a sentence that opens with one of
+# them capitalised is the commonest way a document cites a tracker, and the
+# lowercase prose-word arm reads past it.
+#
+# THE GLOB IS THE SCOPE THIS RULE HAD BEFORE IT WAS WIDENED, AND IT IS BACK ON
+# PURPOSE. For one release the rule read every tracked file, and what that cost
+# the consumers who measured it is written at the head of `code-residue`, the
+# set that now carries the every-file scope under its own id. That rule and
+# this one exclude each other's files, so a line is under exactly one of them,
+# and a repository takes the wider one by name rather than by version bump.
+regexp = 'github\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\b|(?:^|\b[a-z]+[\t ]+|(?i:\b(?:issue|pr)[\t ]+)|\(|\[|[,;/][\t ]*)#[0-9]+\b'
 files.include = ["."]
+files.glob = ["*.md", "*.rst", "*.txt"]
 files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "**/testdata/**"]
 
 [rule.no-process-history-references]
@@ -140,7 +151,14 @@ message = """
 Do not reference process-history records (issue/PR/thread numbers) in final
 docs. Extract the durable rule or final state instead.
 """
-regexp = '(?i)\b(?:issue|pr)\s+#[0-9]+\b|\bas discussed in (?:an? )?(?:issue|thread|pr)\b|(?:https?://)?github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull)/[0-9]+\b'
+# One arm, the narrative form: a sentence that points at a conversation rather
+# than at a record. The forms that name a record -- a tracker URL, and the word
+# `issue` or `pr` before a hash number -- are `no-task-tracker-references`
+# above, over the same files, and used to be here as well, so a line in either
+# form was reported twice under two ids. A consumer reading a doubled report
+# disables one of the rules, and the disabled one was this set's whole coverage
+# of the number-free form. What each rule refuses is now disjoint.
+regexp = '(?i)\bas discussed in (?:an? )?(?:issue|thread|pr)\b'
 files.include = ["."]
 files.glob = ["*.md", "*.rst", "*.txt"]
 files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go"]

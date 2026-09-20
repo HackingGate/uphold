@@ -353,13 +353,14 @@ files.glob = ["*.yml", "*.yaml"]
 
 `inherit.sets` names bundled sets to inherit; it does not add settings. There
 is no `true` shorthand — naming the sets is cheap, and what a repository
-inherits should be written in the repository. Twenty-one are compiled into the
+inherits should be written in the repository. Twenty-two are compiled into the
 binary and mirrored in [`policy/base/`](../policy/base), each **named by what
 it refuses** so the name predicts the rule list:
 
 | set | refuses |
 |---|---|
-| `process-residue` | authoring and process residue in committed content — conflict markers, home paths, dated and status metadata, tracker and thread references, private data paths — and the residue a process leaves in the policy file itself: a rule transcribed out of a set. **Installs `pre-commit` and `manual`**, and the two report different things |
+| `process-residue` | authoring and process residue in committed content — conflict markers, home paths, dated and status metadata, tracker and thread references in documentation, private data paths — and the residue a process leaves in the policy file itself: a rule transcribed out of a set. **Installs `pre-commit` and `manual`**, and the two report different things |
+| `code-residue` | a tracker reference in a source, configuration, build or packaging file: the tracker rule of `process-residue` over every file that is not Markdown, reST or plain text, under its own id. Its own set because a scope is not something `[inherit]` lets a repository choose, and the release that widened the rule in place was undone by hand in every tree that measured what it reported. For a tree whose comments already cite durable contracts. **Installs `pre-commit` and `manual`**, the same ceiling as the set it was split from |
 | `credentials` | credential material — private keys and service tokens, literal credential values, populated environment files, browser profile and session stores. A literal credential value is two rules split on the quote: in source the value half must be a quoted literal, so `password: modem_config.password.clone()` and `token = raw.trim_start_matches('v')` are expressions and not findings; in a config file — `.env`, INI, YAML, TOML, JSON, XML, properties — the text after the separator is the value whether quoted or not, and `-in-config` reads it unquoted |
 | `unmanaged-pins` | a version pinned where no manifest holds it — a shell install line, a `releases/download/vX.Y.Z` URL, a versioned `curl` or `wget` |
 | `host-identity` | the machine the author is standing on — its username, home path, hostname and default route, read at scan time and searched for in content |
@@ -567,18 +568,37 @@ Each is named separately because taking one is a separate decision:
 has on purpose, `host-identity` shells out to read the running machine, and
 `captured-fixtures` refuses the script a parser's own test corpus is made of.
 The `process-residue` set rejects GitHub issue and PR URLs and numbered tracker
-references in source, configuration, and documentation, including
-systemd `Documentation=` fields. Keep the durable explanation in the repository;
-issues can point to code, but code must not require an issue to explain it.
-Captured logs, bug reports, and benchmark results belong in issues. Benchmark
-programs and synthetic fixtures belong in the repository. Git history owns edit
-dates and change history; tracked files describe the current contract.
+references in documentation — Markdown, reST and plain text — under
+`no-task-tracker-references`. The same pattern over every other tracked file —
+source, configuration, scripts, packaging, including systemd `Documentation=`
+fields — is `no-task-tracker-references-in-code`, the one rule of the
+`code-residue` set, and the two exclude each other's files so a line is under
+exactly one of them. The scopes are two sets rather than one rule because a
+scope is not something `[inherit]` lets a repository choose: it takes sets
+whole and disables rules by id. The release that widened the docs rule to every
+file in place was undone by hand in every tree that measured what it reported,
+a docs-only copy under the same id in each; a set is the opt-in a copy was
+standing in for. Keep the durable explanation in the repository; issues can
+point to code, but code must not require an issue to explain it. Captured
+logs, bug reports, and benchmark results belong in issues. Benchmark programs
+and synthetic fixtures belong in the repository. Git history owns edit dates
+and change history; tracked files describe the current contract.
+
+`no-process-history-references`, in the same set and over the same
+documentation globs, refuses the narrative form alone — a sentence that says a
+point was settled in a discussion, in an issue, a thread or a PR, and names no
+record — and nothing the tracker rule reads. It used to carry the tracker URL
+and the `issue #N` form too, so a
+documentation line in either was reported twice under two ids, and a consumer
+reading a doubled report disabled one of the rules. The two are disjoint now:
+the record-naming forms, in any case of `issue` and `pr`, are the tracker
+rule's.
 
 The static checks recognize tracker references, authoring-date headers,
 changelog filenames, and log filenames. Identifying a pasted bug report,
 benchmark result, or narrative edit history requires review; these checks do
-not claim to recognize arbitrary prose. The tracker rule retains the set's test
-directory and Go test exclusions for synthetic examples, and excludes `testdata`.
+not claim to recognize arbitrary prose. Both tracker rules retain the set's test
+directory and Go test exclusions for synthetic examples, and exclude `testdata`.
 Date and log rules exclude `tests/fixtures`, `test/fixtures`, and `testdata`.
 Unqualified all-uppercase identifiers are not treated as repository shorthand,
 and bare numbers need prose context, an opening delimiter, or a list separator
