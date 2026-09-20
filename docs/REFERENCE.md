@@ -524,11 +524,16 @@ foreign_hosts = ["git.acme-internal.example", "*.sr.ht"]
 ```
 
 Host globs, matched case-insensitively. It is a top-level policy field for the
-reason `private_owners_from` is one -- a rule arriving from a bundled set cannot
+reason `private_owners_file` is one -- a rule arriving from a bundled set cannot
 be handed a parameter -- and a rule may write its own list, which **replaces**
-the policy's for that rule rather than extending it. Nothing is quieted by
-default: which hosts carry a repository worth an answer is a fact about the
-repository, not about this tool.
+the policy's for that rule rather than extending it. What neither list replaces
+is the built-in one: `claude.ai` is quiet in every policy, because the session
+link a commit or pull request written with an assistant carries has the shape
+`host/owner/repo` and is a forge for nobody, and 84 policy files in one fleet
+had each written the same one-item list to say so. Which *forges* carry a
+repository worth an answer is still a fact about the repository, so the built-in
+list holds only hosts that serve no `owner/repo` path for anybody, and a
+policy's `foreign_hosts` **extends** it rather than starting over.
 
 `doc-claims` is the one set whose rule needs the author to write something
 beside the prose, so its grammar is here rather than only in the set. A
@@ -613,6 +618,11 @@ commands = ["gh", "git push"]       # empty (the default) means: no command at a
 ```
 
 A rule in a bundled set declaring a hook outside that list is refused at load.
+Beside the ceiling, a set's top level may carry one default for the policies
+that inherit it: `private_owners_file`, with `private_owners_optional`, which
+the policy's own top-level line overrides — see
+[where the owner list lives](#where-the-owner-list-lives). No other top-level
+field is adopted from a set.
 `commands` is the same ceiling for the shim seam: the `command.before` lines
 the set's rules may name, matched **verbatim** — `"git push"` does not admit
 `"git"` — so a set cannot widen its reach without editing the line that says
@@ -1358,9 +1368,10 @@ enforced and is not.
 | `visibility_required` | the `no-private-repo-names` family | exit `2` rather than fall back to the forge when nothing has declared a visibility |
 | `private_owners` | the `no-private-repo-names` family | owners whose repositories are private regardless of what a forge says |
 | `private_owners_from` | the `no-private-repo-names` family | a command whose stdout is one private owner per line |
+| `private_owners_file` | the `no-private-repo-names` family | a file holding one private owner per line, as `xdg:<path>`, `home:<path>` or an absolute path, read with no shell |
 | `public_repos` | the `no-private-repo-names` family | names treated as public without asking a forge |
 | `refuse_unknown` | the `no-private-repo-names` family | treat a name whose visibility could not be determined as private |
-| `foreign_hosts` | the `no-private-repo-names` family | host globs carrying no repository this rule needs resolved — replaces the top-level list for this rule |
+| `foreign_hosts` | the `no-private-repo-names` family | host globs carrying no repository this rule needs resolved — replaces the top-level list for this rule, on top of the built-in one |
 | `allow` | `prevent-unusual-unicode-in-files` | codepoints admitted, optionally under one glob — `"U+00A0:docs/captured/**"` |
 | `allow` | `prevent-unusual-unicode` | codepoints admitted in a message, the codepoint alone — `"U+FF01"`; never one that draws nothing, which is refused at load |
 
@@ -1372,7 +1383,7 @@ two seams, and who this workspace is means the same thing whether a push or a
 nothing else — everything else in that row is about judging names in text, which
 the falsifier never does.
 
-**Four of these are also top-level policy fields**, and that is not a
+**Five of these are also top-level policy fields**, and that is not a
 convenience. A rule arriving from a bundled set cannot be handed a parameter —
 the only way to give it one is to write the rule out again, which is the
 transcription `no-hand-copied-base-rule` refuses — so the facts that belong to
@@ -1382,21 +1393,64 @@ file, and every rule that needs one reads it from there:
 ```toml
 owner = "your-org"          # read by prevent-public-push and prevent-unowned-target
 visibility = "public"       # read by the no-private-repo-names family
-private_owners_from = "cat ~/.config/private-owners"
+private_owners_file = "home:.private-owners"   # or private_owners_from, a command
 private_owners_optional = true    # only where this policy is cloned; see below
 foreign_hosts = ["doi.org"]       # hosts that are not forges this repository cites
 ```
 
-A rule's own field wins where both are written.
+A rule's own field wins where both are written. `private_owners_from` beside
+`private_owners_file`, at the top of the file or on one rule, is refused at
+load: they are two statements of where one list lives, free to disagree with
+nothing to notice when they do.
+
+### Where the owner list lives
+
+`private_owners_file` names a file this binary reads itself, one owner per
+line, `#` comments and blank lines dropped — the same reading
+`private_owners_from` gives a command's stdout. Three spellings and no fourth:
+
+| spec | resolves to |
+|---|---|
+| `xdg:principles/private-owners` | `$XDG_CONFIG_HOME/principles/private-owners`, else `$HOME/.config/principles/private-owners` |
+| `home:.private-owners` | `$HOME/.private-owners` |
+| `/etc/uphold/private-owners` | itself |
+
+A bare relative path is refused: it would resolve against whichever directory
+the hook ran in, and a list of names that must not be published is the one file
+that must not be looked for inside the tree that publishes.
+
+**A bundled set may ship the file form**, and `private-names` does. The
+objection to a set carrying `private_owners_from` was never to the declaration
+— measured across one fleet, 97 copies of one `cat` line across 87 policy
+files, every one naming the same file under `$XDG_CONFIG_HOME` — but to the
+shell: a command arriving through a set runs in every inheriting repository on
+the strength of a version bump. A path runs nothing. So the set's top level
+carries
+
+```toml
+private_owners_file = "xdg:principles/private-owners"
+private_owners_optional = true
+```
+
+and a policy inheriting it that writes no `private_owners_*` line of its own
+reads that file. The policy's own top-level line, in either spelling, overrides
+the set's; a rule's own line overrides both for that rule. The set's
+`private_owners_optional` is about the set's file and reaches no further: a
+source the policy writes itself answers to the policy's own line. The default
+appears in `uphold rules --set private-names` and, field for field, in
+`sets.lock.json`, so a set changing where every inheriting repository reads its
+owner list from is a diff somebody reviews. A set carrying the command form is
+refused where it is parsed, and so is one carrying `private_owners_optional`
+with no file for it to be about.
 
 ### Reading a repository fact from a command
 
 `owner` and `visibility` are each written once per repository, and across one
 fleet that is 78 `owner` lines carrying seven distinct values — 41 copies of one
 string inside a single organisation. `owner_from` and `visibility_from` are the
-same move `private_owners_from` already makes: a command whose stdout is the
-value, run in the repository root, so a workspace fact is written once outside
-the tree instead of once per tree.
+same move `private_owners_from` makes: a command whose stdout is the value, run
+in the repository root, so a workspace fact is written once outside the tree
+instead of once per tree.
 
 ```toml
 owner_from = "cat ${XDG_CONFIG_HOME:-$HOME/.config}/uphold/owner"
@@ -1437,10 +1491,11 @@ Two further refusals, both at load:
   anywhere to notice when they do — which is the defect the field exists to
   remove, arriving through the field.
 - **Neither may arrive by inheritance.** A bundled set or an `inherit.paths`
-  file carrying one is refused, for the reason `private-names` gives for not
-  shipping `private_owners_from`: a command arriving that way runs in every
-  inheriting repository on the strength of a version bump, with nothing in any
-  of those trees to review.
+  file carrying one is refused, as one carrying `private_owners_from` is: a
+  command arriving that way runs in every inheriting repository on the strength
+  of a version bump, with nothing in any of those trees to review. There is no
+  file form for these two, because the owner list is the one fact whose
+  absence degrades to a narrower check rather than to a wrong answer.
 
 The command runs at most once per process, on the first ask — the private-name
 family asks about visibility three times, once per variant — and the answer is
@@ -1472,16 +1527,19 @@ no slash in it, so `<Owner>/<repo>` under a declared owner is refused exactly as
 before, and so is the organisation written on its own in a sentence -- there
 being no id after the name is the whole difference.
 
-An unreadable source is exit `2`, because a rule with no owners refuses nothing
-and would report a clean tree over a list it could not read.
+An unreadable source is exit `2`, whichever spelling declared it — a command
+that exits non-zero, or a file that is not there — because a rule with no owners
+refuses nothing and would report a clean tree over a list it could not read.
 `private_owners_optional = true` is the one exemption and it is for one shape: a
 policy in a repository other people **clone**, naming a source that is one
 operator's. There the default refuses every clone's first commit, and the usual
 workaround — a command that swallows its own failure — loses the bottom two rows
 silently and permanently. With the field, the failure is reported on stderr,
-naming those two rows, and the run proceeds. Setting it with no
-`private_owners_from` anywhere is refused at load: it would permit a failure
-that cannot happen. `visibility` is held to
+naming those two rows, and the run proceeds; where the source is a set's
+default, the notice names the set, because no file in the reader's tree carries
+the line. Setting it with no `private_owners_file` or `private_owners_from`
+anywhere — not at the top, not on a rule, not in an inherited set — is refused
+at load: it would permit a failure that cannot happen. `visibility` is held to
 `public`, `private` or `internal` **at load**, not when a hook fires: a misspelt
 visibility is a fact about the file, and a guard that hears about it months
 later has been reporting a clean tree the whole way. The same mechanism holds beside the checks:
@@ -2180,7 +2238,7 @@ the list of what must not be published:
 ```toml
 [rule.no-private-repo-names]
 builtin = "no-private-repo-names"
-private_owners_from = "cat ${XDG_CONFIG_HOME:-$HOME/.config}/principles/private-owners"
+private_owners_file = "xdg:principles/private-owners"
 git.hooks = ["commit-msg"]
 ```
 

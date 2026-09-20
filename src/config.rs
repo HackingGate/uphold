@@ -561,10 +561,32 @@ pub(crate) struct PolicyFile {
     /// `private_owners_from` and every one of them declared the SAME command.
     /// That is one workspace-level fact written out ten times, and a rule
     /// arriving from a set has no other way to reach it.
+    ///
+    /// The shell form. It is refused in a bundled set and in an inherited file
+    /// for the reason [`refuse_inherited_declaration`] gives, which is why the
+    /// fleet went on writing it: [`PolicyFile::private_owners_file`] is the
+    /// form a set may ship.
     #[serde(default)]
     pub private_owners_from: Option<String>,
+    /// A file listing the owners this workspace treats as private, one per
+    /// line, read by this binary with no shell in between.
+    ///
+    /// A [`FileSpec`]: `xdg:principles/private-owners` for a file under
+    /// `$XDG_CONFIG_HOME` (else `$HOME/.config`), `home:<path>` for one under
+    /// `$HOME`, or an absolute path. Measured before it existed: 97 copies of
+    /// one `cat` line across 87 policy files, every one naming the same file
+    /// under the same directory, because the objection to a set shipping the
+    /// line was to the SHELL and not to the declaration. A path is not a
+    /// command, so a bundled set may carry this one at its top level as the
+    /// default for every policy inheriting it; the policy's own line, in
+    /// either form, overrides that default.
+    ///
+    /// Refused beside `private_owners_from` at the same level: two statements
+    /// of where one list lives. See [`refuse_two_statements_of_one_fact`].
+    #[serde(default)]
+    pub private_owners_file: Option<String>,
     /// Whether the machine running this policy may legitimately not have the
-    /// source `private_owners_from` names.
+    /// source `private_owners_from` or `private_owners_file` names.
     ///
     /// `false` -- the default -- makes an unreadable source exit 2, because a
     /// rule with no owners refuses nothing and would report a clean tree over a
@@ -591,6 +613,10 @@ pub(crate) struct PolicyFile {
     /// is NOT named here and is not GitHub is could-not-look and exits 2,
     /// because the tool cannot tell whether `git.acme.example/acme/secret` is
     /// private and silence would read as clean.
+    ///
+    /// Extends [`FOREIGN_HOSTS_DEFAULT`] rather than replacing it: a host that
+    /// serves no `owner/repo` path for anybody is not a fact about this
+    /// repository, and the fleet had said so in 84 identical lines.
     #[serde(default)]
     pub foreign_hosts: Vec<String>,
     #[serde(default)]
@@ -650,6 +676,179 @@ pub(crate) struct PolicyFile {
     /// having it.
     #[serde(default)]
     pub baselines_signed: bool,
+}
+
+/// Hosts that serve no `owner/repo` path for anybody, quieted in every policy.
+///
+/// `foreign_hosts` used to start empty, on the argument that which hosts a
+/// repository cites is a fact about the repository. It is -- for a forge. This
+/// list is the hosts that are not a forge for anybody: the session link every
+/// commit and pull request written with an assistant carries has the shape
+/// `host/owner/repo` and names no repository, and 84 policy files in one fleet
+/// had each written the same one-item list under the same comment to say so.
+/// A policy's own `foreign_hosts` extends this list; nothing replaces it.
+pub(crate) const FOREIGN_HOSTS_DEFAULT: &[&str] = &["claude.ai"];
+
+/// Where a file this binary reads natively lives, in a spelling that survives
+/// being committed to a repository other people clone.
+///
+/// Three forms and no fourth. `xdg:<path>` is under `$XDG_CONFIG_HOME`, else
+/// `$HOME/.config`, which is where the fleet's one `cat` line had always
+/// looked; `home:<path>` is under `$HOME`; an absolute path is itself. A bare
+/// relative path is refused rather than resolved against the repository root
+/// or the working directory, because a list of names that must not be
+/// published cannot live in the tree that publishes it, and "relative to
+/// wherever the hook ran" is the spelling that puts it there by accident.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FileSpec {
+    Xdg(PathBuf),
+    Home(PathBuf),
+    Absolute(PathBuf),
+}
+
+impl FileSpec {
+    /// Read one spec, refusing every spelling that is not one of the three.
+    pub(crate) fn parse(spec: &str) -> Result<Self> {
+        let refuse = || {
+            Fatal::new(format!(
+                "{spec:?} is not a file spec. Write `xdg:<path>` for a file under \
+                 `$XDG_CONFIG_HOME` (else `$HOME/.config`), `home:<path>` for one under \
+                 `$HOME`, or an absolute path. A bare relative path is not accepted: it \
+                 would resolve against whichever directory the hook happened to run in"
+            ))
+        };
+        let relative = |rest: &str| -> Result<PathBuf> {
+            let path = Path::new(rest);
+            if rest.is_empty() || path.is_absolute() || rest.starts_with('~') {
+                return Err(refuse());
+            }
+            Ok(path.to_path_buf())
+        };
+        if let Some(rest) = spec.strip_prefix("xdg:") {
+            return Ok(Self::Xdg(relative(rest)?));
+        }
+        if let Some(rest) = spec.strip_prefix("home:") {
+            return Ok(Self::Home(relative(rest)?));
+        }
+        if Path::new(spec).is_absolute() {
+            return Ok(Self::Absolute(PathBuf::from(spec)));
+        }
+        Err(refuse())
+    }
+
+    /// The path this spec names on this machine.
+    pub(crate) fn path(&self) -> Result<PathBuf> {
+        self.resolve(|name| std::env::var_os(name).map(PathBuf::from))
+    }
+
+    /// The same, against an environment the caller supplies.
+    ///
+    /// The environment is a parameter so a test can hand in one of its own: the
+    /// process environment is shared by every test in the binary, and a test
+    /// that set `HOME` would be setting it for whichever test read it next.
+    pub(crate) fn resolve(&self, env: impl Fn(&str) -> Option<PathBuf>) -> Result<PathBuf> {
+        let home = || {
+            env("HOME").ok_or_else(|| {
+                Fatal::new(format!(
+                    "{self} names a file under the home directory and `HOME` is not set"
+                ))
+            })
+        };
+        match self {
+            Self::Absolute(path) => Ok(path.clone()),
+            Self::Home(rest) => Ok(home()?.join(rest)),
+            Self::Xdg(rest) => {
+                // An empty `XDG_CONFIG_HOME` is unset, which is what the
+                // specification says and what the `${XDG_CONFIG_HOME:-...}`
+                // line this replaces did.
+                let base = match env("XDG_CONFIG_HOME") {
+                    Some(base) if !base.as_os_str().is_empty() => base,
+                    _ => home()?.join(".config"),
+                };
+                Ok(base.join(rest))
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for FileSpec {
+    /// The spec as it was written, so a refusal quotes the line to edit.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Xdg(rest) => write!(formatter, "xdg:{}", rest.display()),
+            Self::Home(rest) => write!(formatter, "home:{}", rest.display()),
+            Self::Absolute(path) => write!(formatter, "{}", path.display()),
+        }
+    }
+}
+
+/// Where a private-owner list is read from: the two spellings of one source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OwnersSource {
+    /// `private_owners_from`: a command whose stdout is one owner per line.
+    Command(String),
+    /// `private_owners_file`: a file holding one owner per line.
+    File(FileSpec),
+}
+
+impl OwnersSource {
+    /// The field a reader edits: the name a refusal about this source uses.
+    pub(crate) const fn field(&self) -> &'static str {
+        match self {
+            Self::Command(_) => "private_owners_from",
+            Self::File(_) => "private_owners_file",
+        }
+    }
+
+    /// Both spellings of one rule or one file, read as at most one source.
+    ///
+    /// Refused where both are written: they are two statements of where one
+    /// list lives, and nothing reconciles them. `whose` prefixes the refusal
+    /// with the rule it is about, or nothing for the policy's own top level.
+    pub(crate) fn of(
+        command: Option<&str>,
+        file: Option<&str>,
+        whose: &str,
+    ) -> Result<Option<Self>> {
+        match (command, file) {
+            (Some(_), Some(_)) => Err(Fatal::new(format!(
+                "{whose}`private_owners_from` and `private_owners_file` are both declared, \
+                 and they are two statements of where one list lives -- free to \
+                 disagree, with nothing here to notice when they do. Keep \
+                 `private_owners_file` where a path reaches the list, or \
+                 `private_owners_from` where only a command can. Delete the other"
+            ))),
+            (Some(command), None) => Ok(Some(Self::Command(command.to_owned()))),
+            (None, Some(spec)) => Ok(Some(Self::File(FileSpec::parse(spec).map_err(
+                |error| Fatal::new(format!("{whose}`private_owners_file` is {error}")),
+            )?))),
+            (None, None) => Ok(None),
+        }
+    }
+}
+
+impl std::fmt::Display for OwnersSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Command(command) => write!(formatter, "{command:?}"),
+            Self::File(spec) => write!(formatter, "{spec}"),
+        }
+    }
+}
+
+/// The policy-level private-owner source, with what a reader needs to know
+/// about where it came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwnersDeclaration {
+    pub source: OwnersSource,
+    /// Whether the source may be absent on this machine: the policy's own
+    /// `private_owners_optional`, or the set's where the set shipped the source.
+    pub optional: bool,
+    /// The bundled set that shipped this default, when the policy file wrote
+    /// no line of its own. Named in the notice an absent file prints, because
+    /// that notice is the first a stranger hears of a source that appears in no
+    /// file in their tree.
+    pub set: Option<String>,
 }
 
 /// The ceiling on what one bundled set may install, declared in the set.
@@ -740,13 +939,19 @@ pub(crate) struct Policy {
     pub resolved_owner: OnceLock<String>,
     /// What `visibility_from` answered. See [`Policy::resolved_owner`].
     pub resolved_visibility: OnceLock<String>,
-    /// Where the private-owner list comes from, from the policy file's own
-    /// `private_owners_from`. See [`PolicyFile::private_owners_from`].
-    pub private_owners_from: Option<String>,
+    /// Where the private-owner list comes from, for a rule that names no source
+    /// of its own: the policy file's own top-level line, else the default a
+    /// bundled set it inherits shipped. See [`OwnersDeclaration`].
+    pub private_owners: Option<OwnersDeclaration>,
     /// Whether an unreadable private-owner source is a reported gap rather than
-    /// exit 2. See [`PolicyFile::private_owners_optional`].
+    /// exit 2, as the policy file's own line says it. Read for a source a RULE
+    /// names; the policy-level source carries its own answer in
+    /// [`OwnersDeclaration::optional`]. See [`PolicyFile::private_owners_optional`].
     pub private_owners_optional: bool,
-    /// The hosts no name lookup is owed for. See [`PolicyFile::foreign_hosts`].
+    /// The hosts no name lookup is owed for, as this policy declared them.
+    /// [`FOREIGN_HOSTS_DEFAULT`] is added where the list is compiled, so a
+    /// rule's own list extends the default too. See
+    /// [`PolicyFile::foreign_hosts`].
     pub foreign_hosts: Vec<String>,
     /// Whether a finding prints its matched text. See
     /// [`PolicyFile::redact_matches`].
@@ -938,36 +1143,74 @@ fn refuse_two_statements_of_one_fact(path: &Path, file: &PolicyFile) -> Result<(
 /// Refuse a command that speaks for a repository from a file that repository
 /// did not write.
 ///
-/// `owner_from` and `visibility_from` run a shell command. A bundled set
-/// carrying one would run it in every inheriting repository on the strength of a
-/// version bump, with nothing in any of those trees to review -- which is the
-/// reason `private-names` already gives for not shipping `private_owners_from`,
-/// and it is not weakened by the command being one line shorter.
+/// `owner_from`, `visibility_from` and `private_owners_from` run a shell
+/// command. A bundled set carrying one would run it in every inheriting
+/// repository on the strength of a version bump, with nothing in any of those
+/// trees to review -- the reason `private-names` gives for shipping the owner
+/// list as a `private_owners_file` path and never as the command, and it is not
+/// weakened by the command being one line shorter.
 ///
 /// Refused rather than dropped. `owner` and `visibility` in an inherited file
 /// are read by nothing and say nothing about it, which is the shape this
 /// repository refuses everywhere else; those two are load-bearing in trees that
-/// already exist, and these two are new and can start correct.
+/// already exist, and these three can start correct.
 fn refuse_inherited_declaration(path: &Path, file: &PolicyFile, kind: &str) -> Result<()> {
-    for field in ["owner_from", "visibility_from"] {
-        let declared = match field {
-            "owner_from" => file.owner_from.is_some(),
-            _ => file.visibility_from.is_some(),
-        };
+    for (field, declared) in [
+        ("owner_from", file.owner_from.is_some()),
+        ("visibility_from", file.visibility_from.is_some()),
+        ("private_owners_from", file.private_owners_from.is_some()),
+    ] {
         if declared {
+            let instead = if field == "private_owners_from" {
+                ", or as `private_owners_file`, a path this binary reads with no shell \
+                 in between, which a bundled set may carry"
+            } else {
+                ""
+            };
             return Err(Fatal::at(
                 path,
                 format!(
                     "`{field}` runs a shell command and this file is {kind}. A command \
                      arriving that way runs in every repository that inherits it on the \
                      strength of a version bump, with nothing in any of those trees to \
-                     review -- which is why a set does not ship `private_owners_from` \
-                     either. Write the line in the repository's own policy file"
+                     review. Write the line in the repository's own policy file{instead}"
                 ),
             ));
         }
     }
     Ok(())
+}
+
+/// The private-owner source a bundled set ships for every policy inheriting it,
+/// if it ships one.
+///
+/// A set's top-level `private_owners_file` and `private_owners_optional`, read
+/// as one declaration. The file form only: the command form is refused above
+/// this. `private_owners_optional` on its own is refused for the reason it is
+/// refused in a policy file -- it permits a failure that cannot happen -- and
+/// the spec is held to its three forms here, where a wrong one is a diff in the
+/// repository that owns the set rather than a load failure in every repository
+/// that inherits it.
+fn set_owners_default(name: &str, file: &PolicyFile) -> Result<Option<OwnersDeclaration>> {
+    let path = &bundled_path(name);
+    let Some(spec) = file.private_owners_file.as_deref() else {
+        if file.private_owners_optional {
+            return Err(Fatal::at(
+                path,
+                "`private_owners_optional` is set and the set declares no \
+                 `private_owners_file`, so it permits a failure that cannot happen. \
+                 Declare the file, or drop the line",
+            ));
+        }
+        return Ok(None);
+    };
+    let file_spec = FileSpec::parse(spec)
+        .map_err(|error| Fatal::at(path, format!("`private_owners_file` is {error}")))?;
+    Ok(Some(OwnersDeclaration {
+        source: OwnersSource::File(file_spec),
+        optional: file.private_owners_optional,
+        set: Some(name.to_owned()),
+    }))
 }
 
 fn refuse_set_header(path: &Path, file: &PolicyFile) -> Result<()> {
@@ -1009,11 +1252,16 @@ fn refuse_inherited_override(path: &Path, file: &PolicyFile, kind: &str) -> Resu
 /// The one place a bundled set is read, so the ceiling cannot be skipped by a
 /// caller that forgot it existed -- `load`, `bundled_set` and `bundled_ids` all
 /// arrive here.
+fn bundled_path(name: &str) -> PathBuf {
+    Path::new("<bundled>").join(format!("{name}.toml"))
+}
+
 fn parse_bundled(name: &str, text: &str) -> Result<PolicyFile> {
-    let path = Path::new("<bundled>").join(format!("{name}.toml"));
+    let path = bundled_path(name);
     let file = parse(&path, text)?;
     refuse_inherited_declaration(&path, &file, "a bundled set")?;
     refuse_inherited_override(&path, &file, "a bundled set")?;
+    set_owners_default(name, &file)?;
     // A set supplies checkers and never shims. A `[[shim]]` is a program
     // standing in front of a real command, and only `.rules` is adopted from a
     // set -- so a shim written here would vanish silently, which is worse than
@@ -1185,6 +1433,14 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     let file = parse(policy_path, &text)?;
     refuse_set_header(policy_path, &file)?;
     refuse_two_statements_of_one_fact(policy_path, &file)?;
+    // Both spellings of the owner source are held to one statement, and the
+    // file form to its three spellings, at the same moment for the same reason.
+    let own_owners = OwnersSource::of(
+        file.private_owners_from.as_deref(),
+        file.private_owners_file.as_deref(),
+        "",
+    )
+    .map_err(|error| Fatal::at(policy_path, error))?;
     // Checked here rather than where a guard reads it. A misspelt visibility is
     // a fact about the file, and hearing about it when a hook fires means
     // hearing about it from whichever seam happened to run first, months after
@@ -1204,6 +1460,10 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     let inherit = file.inherit.clone().unwrap_or_default();
 
     let mut inherited: Vec<Rule> = Vec::new();
+    // The owner source a set ships, if one does. Two sets each shipping one is
+    // refused rather than resolved by list order: which of two defaults a
+    // policy meant is not something the order of an `[inherit]` line says.
+    let mut set_owners: Option<OwnersDeclaration> = None;
 
     for name in &inherit.sets {
         let bundled = BUNDLED
@@ -1219,15 +1479,26 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
                     ),
                 )
             })?;
-        inherited.extend(
-            parse_bundled(name, bundled.1)?
-                .rules
-                .into_values()
-                .map(|mut rule| {
-                    rule.origin = Origin::Set(name.clone());
-                    rule
-                }),
-        );
+        let parsed = parse_bundled(name, bundled.1)?;
+        if let Some(default) = set_owners_default(name, &parsed)? {
+            if let Some(earlier) = &set_owners {
+                return Err(Fatal::at(
+                    policy_path,
+                    format!(
+                        "the bundled sets {:?} and {name:?} each ship a default \
+                         `private_owners_file`, and nothing here says which this policy \
+                         meant. Write `private_owners_file` at the top of this file, which \
+                         overrides both",
+                        earlier.set.as_deref().unwrap_or_default()
+                    ),
+                ));
+            }
+            set_owners = Some(default);
+        }
+        inherited.extend(parsed.rules.into_values().map(|mut rule| {
+            rule.origin = Origin::Set(name.clone());
+            rule
+        }));
     }
 
     for relative in &inherit.paths {
@@ -1237,6 +1508,22 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         refuse_set_header(&path, &parsed)?;
         refuse_inherited_declaration(&path, &parsed, "an inherited file")?;
         refuse_inherited_override(&path, &parsed, "an inherited file")?;
+        // Only `.rules` is merged from an inherited file, and a top-level line
+        // that would vanish is refused rather than dropped. A bundled set's
+        // default is adopted because the set is reviewed in the one repository
+        // that can review it; a file in THIS tree has no such reason to speak
+        // from anywhere but the policy file.
+        if parsed.private_owners_file.is_some() {
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "{} declares `private_owners_file` at its top level, and an inherited \
+                     file's top-level declarations are not adopted. Write the line at the \
+                     top of this file",
+                    path.display()
+                ),
+            ));
+        }
         // Refused rather than merged, and refused rather than ignored. Only
         // `.rules` is merged below, so an inherited `[[shim]]` used to vanish --
         // and vanish in the worst possible way, because the `exec` rule that
@@ -1348,18 +1635,34 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     // of exactly the shape it refused. The question is about the whole resolved
     // policy, so it has to be asked of the whole resolved policy.
     if file.private_owners_optional
-        && file.private_owners_from.is_none()
-        && !rules
-            .iter()
-            .any(|rule| rule.private_owners_from().is_some())
+        && own_owners.is_none()
+        && set_owners.is_none()
+        && !rules.iter().any(Rule::names_private_owners_source)
     {
         return Err(Fatal::at(
             policy_path,
-            "`private_owners_optional` is set and no `private_owners_from` is declared \
-             anywhere in this policy -- not here, not in an inherited file -- so it permits \
-             a failure that cannot happen. Declare the source, or drop the line",
+            "`private_owners_optional` is set and no `private_owners_file` or \
+             `private_owners_from` is declared anywhere in this policy -- not here, not on \
+             a rule, not in a set it inherits -- so it permits a failure that cannot \
+             happen. Declare the source, or drop the line",
         ));
     }
+
+    // The policy's own line first, whichever spelling; the set's default only
+    // where the policy wrote none. The set's `optional` does not reach a
+    // source the policy wrote itself: it is the set's statement about the
+    // set's file.
+    let private_owners = match own_owners {
+        Some(source) => Some(OwnersDeclaration {
+            source,
+            optional: file.private_owners_optional,
+            set: None,
+        }),
+        None => set_owners.map(|default| OwnersDeclaration {
+            optional: default.optional || file.private_owners_optional,
+            ..default
+        }),
+    };
 
     // A disabled id that names nothing is the same failure as a stale baseline
     // entry: it reads as a decision that is doing something and it is doing
@@ -1412,7 +1715,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         visibility_from: file.visibility_from.clone(),
         resolved_owner: OnceLock::new(),
         resolved_visibility: OnceLock::new(),
-        private_owners_from: file.private_owners_from.clone(),
+        private_owners,
         private_owners_optional: file.private_owners_optional,
         foreign_hosts: file.foreign_hosts.clone(),
         redact_matches: file.redact_matches,
@@ -1475,6 +1778,11 @@ pub(crate) struct BundledSet {
     /// The `command.before` lines this set is allowed to name. See
     /// [`SetHeader`].
     pub commands: Vec<String>,
+    /// The private-owner source this set ships as a default, if it ships one.
+    /// In the lock document beside the rules, because a set changing where
+    /// every inheriting repository reads its owner list from is a behaviour
+    /// change with no diff anywhere else.
+    pub private_owners: Option<OwnersDeclaration>,
     pub rules: Vec<Rule>,
 }
 
@@ -1497,10 +1805,12 @@ pub(crate) fn bundled_set(name: &str) -> Result<BundledSet> {
     };
     let file = parse_bundled(name, bundled)?;
     let header = file.set.clone().unwrap_or_default();
+    let private_owners = set_owners_default(name, &file)?;
     Ok(BundledSet {
         name: name.to_owned(),
         stages: header.stages,
         commands: header.commands,
+        private_owners,
         rules: file
             .rules
             .into_values()
@@ -3689,5 +3999,253 @@ sets = [\"invented\"]
         // And the error carries the list, so the cure is in the message rather
         // than in a document the reader has to go and find.
         assert!(text.contains("process-residue"), "{text}");
+    }
+
+    // -- the owner list's file form, and the default a set may ship ---------
+
+    #[test]
+    fn a_file_spec_has_three_forms_and_no_fourth() {
+        assert_eq!(
+            FileSpec::parse("xdg:principles/private-owners").unwrap(),
+            FileSpec::Xdg(PathBuf::from("principles/private-owners"))
+        );
+        assert_eq!(
+            FileSpec::parse("home:.private-owners").unwrap(),
+            FileSpec::Home(PathBuf::from(".private-owners"))
+        );
+        assert_eq!(
+            FileSpec::parse("/etc/uphold/private-owners").unwrap(),
+            FileSpec::Absolute(PathBuf::from("/etc/uphold/private-owners"))
+        );
+        // A bare relative path resolves against wherever the hook ran, which is
+        // the one place a list of unpublishable names must not be looked for.
+        // The rest are the same mistake in a prefix's clothing.
+        for wrong in [
+            "principles/private-owners",
+            "",
+            "xdg:",
+            "xdg:/etc/private-owners",
+            "home:~/private-owners",
+            "~/private-owners",
+        ] {
+            let text = FileSpec::parse(wrong).unwrap_err().to_string();
+            assert!(text.contains("not a file spec"), "{wrong:?}: {text}");
+            assert!(text.contains("xdg:<path>"), "{wrong:?}: {text}");
+        }
+    }
+
+    #[test]
+    fn a_file_spec_resolves_against_the_environment_it_is_given() {
+        let env = |xdg: Option<&str>, home: Option<&str>| {
+            let (xdg, home) = (xdg.map(PathBuf::from), home.map(PathBuf::from));
+            move |name: &str| match name {
+                "XDG_CONFIG_HOME" => xdg.clone(),
+                "HOME" => home.clone(),
+                _ => None,
+            }
+        };
+        let xdg = FileSpec::parse("xdg:principles/private-owners").unwrap();
+        assert_eq!(
+            xdg.resolve(env(Some("/x/config"), Some("/srv/example/me")))
+                .unwrap(),
+            PathBuf::from("/x/config/principles/private-owners")
+        );
+        assert_eq!(
+            xdg.resolve(env(None, Some("/srv/example/me"))).unwrap(),
+            PathBuf::from("/srv/example/me/.config/principles/private-owners")
+        );
+        // Empty is unset, as the specification and the `${XDG_CONFIG_HOME:-...}`
+        // line this replaces both read it.
+        assert_eq!(
+            xdg.resolve(env(Some(""), Some("/srv/example/me"))).unwrap(),
+            PathBuf::from("/srv/example/me/.config/principles/private-owners")
+        );
+        assert_eq!(
+            FileSpec::parse("home:.private-owners")
+                .unwrap()
+                .resolve(env(None, Some("/srv/example/me")))
+                .unwrap(),
+            PathBuf::from("/srv/example/me/.private-owners")
+        );
+        assert_eq!(
+            FileSpec::parse("/etc/private-owners")
+                .unwrap()
+                .resolve(env(None, None))
+                .unwrap(),
+            PathBuf::from("/etc/private-owners")
+        );
+        let text = xdg.resolve(env(None, None)).unwrap_err().to_string();
+        assert!(text.contains("`HOME` is not set"), "{text}");
+    }
+
+    #[test]
+    fn the_two_spellings_of_the_owner_source_are_refused_together() {
+        // At the top of the file...
+        let text = policy_from(
+            r#"
+            visibility = "public"
+            private_owners_from = "cat list"
+            private_owners_file = "home:list"
+
+            [rule.names]
+            builtin = "no-private-repo-names"
+
+            [rule.names.git]
+            hooks = ["commit-msg"]
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            text.contains("`private_owners_from` and `private_owners_file`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("two statements of where one list lives"),
+            "{text}"
+        );
+
+        // On a rule the refusal has to say which rule, because the two lines
+        // are inside a table the top of the file does not show.
+        let on_rule = policy_from(
+            r#"
+            visibility = "public"
+
+            [rule.names]
+            builtin = "no-private-repo-names"
+            private_owners_from = "cat list"
+            private_owners_file = "home:list"
+
+            [rule.names.git]
+            hooks = ["commit-msg"]
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(on_rule.contains("rule \"names\""), "{on_rule}");
+        assert!(
+            on_rule.contains("`private_owners_from` and `private_owners_file`"),
+            "{on_rule}"
+        );
+
+        // A spec in a fourth form is a fact about the file too.
+        let fourth = policy_from(
+            r#"
+            visibility = "public"
+            private_owners_file = "principles/private-owners"
+
+            [rule.names]
+            builtin = "no-private-repo-names"
+
+            [rule.names.git]
+            hooks = ["commit-msg"]
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(fourth.contains("`private_owners_file` is"), "{fourth}");
+        assert!(fourth.contains("not a file spec"), "{fourth}");
+    }
+
+    #[test]
+    fn a_set_default_is_read_where_the_policy_writes_no_line_and_not_where_it_does() {
+        let inherited =
+            policy_from("visibility = \"public\"\n\n[inherit]\nsets = [\"private-names\"]\n")
+                .unwrap();
+        assert_eq!(
+            inherited.private_owners,
+            Some(OwnersDeclaration {
+                source: OwnersSource::File(FileSpec::Xdg(PathBuf::from(
+                    "principles/private-owners"
+                ))),
+                optional: true,
+                set: Some(String::from("private-names")),
+            })
+        );
+
+        // The policy's own line, in the other spelling, and its own answer to
+        // whether the source may be absent: the set's permission is about the
+        // set's file.
+        let own = policy_from(
+            "visibility = \"public\"\nprivate_owners_from = \"cat list\"\n\n\
+             [inherit]\nsets = [\"private-names\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            own.private_owners,
+            Some(OwnersDeclaration {
+                source: OwnersSource::Command(String::from("cat list")),
+                optional: false,
+                set: None,
+            })
+        );
+
+        // And `private_owners_optional` over the set's default is permitted,
+        // because there is a source for it to be about.
+        assert!(
+            policy_from(
+                "visibility = \"public\"\nprivate_owners_optional = true\n\n\
+                 [inherit]\nsets = [\"private-names\"]\n",
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_bundled_set_may_ship_the_file_form_and_never_the_shell_form() {
+        // The objection was always to the shell. A path is read by this binary,
+        // and a set carrying the command is refused where it is parsed.
+        let text = parse_bundled("x", "private_owners_from = \"cat list\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            text.contains("`private_owners_from` runs a shell command"),
+            "{text}"
+        );
+        assert!(text.contains("a bundled set"), "{text}");
+        assert!(text.contains("`private_owners_file`"), "{text}");
+
+        // A permission with nothing to permit, and a spec in no form, are each
+        // a diff in the repository that owns the set.
+        let unpermitted = parse_bundled("x", "private_owners_optional = true\n")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            unpermitted.contains("permits a failure that cannot happen"),
+            "{unpermitted}"
+        );
+        let fourth = parse_bundled("x", "private_owners_file = \"list\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(fourth.contains("not a file spec"), "{fourth}");
+
+        let set = bundled_set("private-names").unwrap();
+        let declared = set.private_owners.expect("the set ships a default");
+        assert_eq!(declared.source.to_string(), "xdg:principles/private-owners");
+        assert!(declared.optional);
+    }
+
+    #[test]
+    fn an_inherited_file_may_not_carry_the_owner_file_at_its_top_level() {
+        // Only `.rules` is adopted from an inherited file, and a line that would
+        // vanish is refused rather than dropped.
+        let dir = crate::fixture::scratch("config");
+        std::fs::create_dir_all(dir.join("policy")).unwrap();
+        std::fs::write(
+            dir.join("policy/shared.toml"),
+            "private_owners_file = \"home:list\"\n\n\
+             [rule.names]\nbuiltin = \"no-private-repo-names\"\n\n\
+             [rule.names.git]\nhooks = [\"commit-msg\"]\n",
+        )
+        .unwrap();
+        let path = dir.join("rg-policy.toml");
+        std::fs::write(
+            &path,
+            "visibility = \"public\"\n\n[inherit]\npaths = [\"policy/shared.toml\"]\n",
+        )
+        .unwrap();
+        let text = load(&dir, &path).unwrap_err().to_string();
+        assert!(text.contains("not adopted"), "{text}");
+        assert!(text.contains("`private_owners_file`"), "{text}");
     }
 }

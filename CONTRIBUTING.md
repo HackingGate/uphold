@@ -53,13 +53,17 @@ declaration falls back to is the owner read off `origin` and the forge's view of
 a visibility that is about to change. See
 [REFERENCE.md](docs/REFERENCE.md#reading-a-repository-fact-from-a-command).
 
-A third line is about *your machine* rather than your fork.
-`private_owners_from` reads a file that is one operator's and will not exist in
-your clone, so the policy also sets `private_owners_optional = true`: the
-missing source is reported on stderr, naming what is not being checked, and your
-commit proceeds. You do not have to create anything. If you keep a list of
-organisations whose names must not be published, point the command at it and the
-two forms the note names start being checked as well.
+A third fact is about *your machine* rather than your fork, and no line in the
+policy file carries it. The `private-names` set the policy inherits reads
+`$XDG_CONFIG_HOME/principles/private-owners` (else
+`$HOME/.config/principles/private-owners`) for the organisations whose names
+must not be published, and it says the file may be absent: on a clone without
+it, the guard reports on stderr that the file is not there and what is not being
+checked without it, and your commit proceeds. You do not have to create
+anything. If you keep such a list, put it at that path, or point
+`private_owners_file` at it from the top of the policy file, and the two forms
+the note names start being checked as well. See
+[REFERENCE.md](docs/REFERENCE.md#where-the-owner-list-lives).
 
 ## Working on the engine
 

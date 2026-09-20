@@ -35,11 +35,23 @@ fn repository(policy: &str) -> PathBuf {
     root
 }
 
+/// The configuration directory a fixture's guard runs see as `$XDG_CONFIG_HOME`.
+///
+/// Beside the fixture rather than under the developer's home, because the
+/// `private-names` set reads `xdg:principles/private-owners` by default and the
+/// developer's machine has that file: a suite that inherited the real
+/// environment would judge every fixture message against a real owner list,
+/// and a fixture name colliding with one entry would fail for one person only.
+fn xdg_home(root: &Path) -> PathBuf {
+    root.with_extension("xdg")
+}
+
 fn guard(root: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_uphold"))
         .arg("guard")
         .args(args)
         .current_dir(root)
+        .env("XDG_CONFIG_HOME", xdg_home(root))
         .env_remove("UPHOLD_ALLOW")
         .stdin(Stdio::null())
         .output()
@@ -114,6 +126,7 @@ fn guard_with_stub_gh(root: &Path, body: &str, args: &[&str]) -> Output {
         .args(args)
         .current_dir(root)
         .env("PATH", path)
+        .env("XDG_CONFIG_HOME", xdg_home(root))
         .env_remove("UPHOLD_ALLOW")
         .stdin(Stdio::null())
         .output()
@@ -637,10 +650,13 @@ fn an_unreadable_owner_source_is_exit_two_unless_the_policy_said_it_may_be_absen
 #[test]
 fn permitting_an_absent_owner_source_that_no_rule_reads_is_refused_at_load() {
     // A permission over a source that does not exist reads as though somebody
-    // thought about it, and there is nothing for it to permit.
+    // thought about it, and there is nothing for it to permit. The rule is
+    // written out rather than inherited, because `private-names` ships a
+    // source of its own and a policy inheriting it has one to be absent.
     let root = repository(
         "visibility = \"public\"\nprivate_owners_optional = true\n\n\
-         [inherit]\nsets = [\"private-names\"]\n",
+         [rule.no-private-repo-names-staged]\nbuiltin = \"no-private-repo-names-staged\"\n\n\
+         [rule.no-private-repo-names-staged.git]\nhooks = [\"pre-commit\"]\n",
     );
     commit_one(&root);
 
@@ -650,6 +666,101 @@ fn permitting_an_absent_owner_source_that_no_rule_reads_is_refused_at_load() {
         stderr(&output).contains("permits a failure that cannot happen"),
         "{}",
         stderr(&output)
+    );
+}
+
+#[test]
+fn a_repository_inheriting_private_names_reads_the_owner_file_the_set_names() {
+    // The line 97 policy files had each written, shipped once. A policy that
+    // says nothing about where its owner list lives reads
+    // `$XDG_CONFIG_HOME/principles/private-owners`, because the set said so
+    // -- and a bare `owner/repo` under an owner in that file is refused with
+    // no forge asked, which is the form only a declared owner reaches.
+    let root = repository("visibility = \"public\"\n\n[inherit]\nsets = [\"private-names\"]\n");
+    commit_one(&root);
+    let owners = xdg_home(&root).join("principles/private-owners");
+    std::fs::create_dir_all(owners.parent().unwrap()).unwrap();
+    // Comments and blank lines are the file's to have, as they were the
+    // command's stdout's.
+    std::fs::write(
+        &owners,
+        "# owners whose repositories are private\n\nsecretcorp\n",
+    )
+    .unwrap();
+    write(&root, "msg.txt", "see secretcorp/thing\n");
+
+    let refused = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("secretcorp/thing"),
+        "{}",
+        stderr(&refused)
+    );
+
+    // And on a machine without the file -- every clone of a repository that
+    // inherits the set -- the absence is a notice that names the set, because
+    // no file in the reader's tree carries the line that named the source.
+    std::fs::remove_file(&owners).unwrap();
+    let allowed = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&allowed), 0, "{}", stderr(&allowed));
+    let text = stderr(&allowed);
+    assert!(text.contains("private_owners_optional"), "{text}");
+    assert!(text.contains("`private-names` set's default"), "{text}");
+    assert!(text.contains("NOT checked here"), "{text}");
+}
+
+#[test]
+fn a_policy_that_writes_its_own_source_is_not_read_through_the_set_default() {
+    // The policy's own line wins, in either spelling, and its own
+    // `private_owners_optional` -- absent here -- governs it. The set's
+    // permission is about the set's file and reaches no further.
+    let root = repository(
+        "visibility = \"public\"\nprivate_owners_file = \"home:no-such-list\"\n\n\
+         [inherit]\nsets = [\"private-names\"]\n",
+    );
+    commit_one(&root);
+    write(&root, "msg.txt", "a message\n");
+
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(
+        text.contains("private_owners_file home:no-such-list"),
+        "{text}"
+    );
+    assert!(text.contains("private_owners_optional"), "{text}");
+}
+
+#[test]
+fn a_policy_list_of_foreign_hosts_extends_the_built_in_one() {
+    // `claude.ai` is quieted by the binary, and writing a `foreign_hosts` line
+    // adds to that rather than starting over: 84 policy files had each
+    // re-declared the one host that is a forge for nobody. `refuse_unknown`
+    // is what makes an unquieted host visible in the exit code.
+    let root = repository(
+        "visibility = \"public\"\nforeign_hosts = [\"example.test\"]\n\n\
+         [rule.no-private-repo-names]\nbuiltin = \"no-private-repo-names\"\n\
+         refuse_unknown = true\n\n\
+         [rule.no-private-repo-names.git]\nhooks = [\"commit-msg\"]\n",
+    );
+    commit_one(&root);
+    write(
+        &root,
+        "msg.txt",
+        "https://claude.ai/code/session-abc and https://example.test/acme/widget\n",
+    );
+    let quiet = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&quiet), 0, "{}", stderr(&quiet));
+
+    // The same shape on a host nothing quieted, so the pass above is the
+    // quieting and not the rule failing to look.
+    write(&root, "msg.txt", "https://other.test/acme/widget\n");
+    let refused = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("other.test/acme/widget"),
+        "{}",
+        stderr(&refused)
     );
 }
 

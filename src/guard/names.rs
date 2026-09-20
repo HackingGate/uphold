@@ -39,7 +39,7 @@ use regex::Regex;
 
 use super::scope;
 use super::{Refusal, Request, Stage};
-use crate::config::{Policy, Rule};
+use crate::config::{FOREIGN_HOSTS_DEFAULT, OwnersSource, Policy, Rule};
 use crate::error::{Fatal, Result};
 use crate::git;
 use crate::shim::Silence;
@@ -156,26 +156,35 @@ fn is_github_host(host: &str) -> bool {
 /// repositories at all. Which hosts a repository's own documents cite is a fact
 /// about that repository, so it is policy and lives in the policy file --
 /// `parameterize-do-not-enumerate`, which the hand list was the standing
-/// violation of.
+/// violation of. What is NOT a fact about any repository is a host that serves
+/// no `owner/repo` path for anybody, and that short list is compiled in as
+/// [`FOREIGN_HOSTS_DEFAULT`] under every declaration rather than declared 84
+/// times over.
 ///
 /// Globs rather than literal hostnames because globs are the selection language
 /// this config already speaks: `*.sr.ht` is one line where the enumeration
 /// needed a special case.
 pub(crate) struct ForeignHosts {
-    matcher: Option<globset::GlobSet>,
+    matcher: globset::GlobSet,
 }
 
 impl ForeignHosts {
-    /// Compile the declared host globs, refusing one that will not parse.
+    /// Compile the declared host globs on top of the compiled-in ones,
+    /// refusing a declared glob that will not parse.
     ///
     /// Refused rather than skipped, because a glob nobody could compile is a
     /// host nobody quieted, and the run that drops it looks exactly like the
-    /// run where the declaration worked.
+    /// run where the declaration worked. [`FOREIGN_HOSTS_DEFAULT`] is added
+    /// here, under whichever list arrives -- the policy's or a rule's own --
+    /// because a host that is a forge for nobody is not something either list
+    /// is in a position to un-declare.
     pub(crate) fn new(patterns: &[String]) -> Result<Self> {
-        if patterns.is_empty() {
-            return Ok(Self { matcher: None });
-        }
         let mut builder = globset::GlobSetBuilder::new();
+        for pattern in FOREIGN_HOSTS_DEFAULT {
+            builder.add(globset::Glob::new(pattern).map_err(|error| {
+                Fatal::new(format!("foreign_hosts: built-in {pattern:?}: {error}"))
+            })?);
+        }
         for pattern in patterns {
             let glob = globset::Glob::new(&pattern.to_lowercase()).map_err(|error| {
                 Fatal::new(format!("foreign_hosts: {pattern:?} is not a glob: {error}"))
@@ -185,15 +194,11 @@ impl ForeignHosts {
         let matcher = builder
             .build()
             .map_err(|error| Fatal::new(format!("foreign_hosts: {error}")))?;
-        Ok(Self {
-            matcher: Some(matcher),
-        })
+        Ok(Self { matcher })
     }
 
     fn quiets(&self, host: &str) -> bool {
-        self.matcher
-            .as_ref()
-            .is_some_and(|matcher| matcher.is_match(host.to_lowercase()))
+        self.matcher.is_match(host.to_lowercase())
     }
 }
 
@@ -537,71 +542,154 @@ fn own_name(root: &Path) -> Option<String> {
     Some(format!("{owner}/{repo}").to_lowercase())
 }
 
-/// Every declared private owner: the literal list, plus whatever the command
+/// What reading an owner source produced: the lines it gave, and how it
+/// failed if it did.
+///
+/// Both halves, because a command that exits non-zero may still have printed
+/// -- `cat a b` with `b` absent prints `a` -- and dropping what it printed
+/// would narrow the list further than the failure did.
+struct Reading {
+    text: String,
+    /// How the source failed, in the words a notice or a refusal prints, or
+    /// nothing where it did not.
+    failure: Option<String>,
+}
+
+/// Read one owner source, in whichever spelling it was declared.
+///
+/// A file is read here with no shell in between, which is the property that
+/// lets a bundled set ship the spelling. It is resolved on every read rather
+/// than at load because the environment is a fact about this process and load
+/// has no reason to know what `HOME` is.
+fn read_owners_source(root: &Path, rule: &Rule, source: &OwnersSource) -> Result<Reading> {
+    match source {
+        OwnersSource::Command(command) => {
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(command)
+                .current_dir(root)
+                .output()
+                .map_err(|error| {
+                    Fatal::new(format!("{}: private_owners_from: {error}", rule.id))
+                })?;
+            let failure = (!output.status.success()).then(|| {
+                format!(
+                    "{command:?} exited {}: {}",
+                    output.status.code().unwrap_or(-1),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )
+            });
+            Ok(Reading {
+                text: String::from_utf8_lossy(&output.stdout).into_owned(),
+                failure,
+            })
+        }
+        OwnersSource::File(spec) => {
+            let path = match spec.path() {
+                Ok(path) => path,
+                Err(error) => {
+                    return Ok(Reading {
+                        text: String::new(),
+                        failure: Some(error.to_string()),
+                    });
+                }
+            };
+            Ok(match std::fs::read_to_string(&path) {
+                Ok(text) => Reading {
+                    text,
+                    failure: None,
+                },
+                Err(error) => {
+                    // Where the spec resolved to, for the two forms whose
+                    // spelling is not already the path.
+                    let at = match spec {
+                        crate::config::FileSpec::Absolute(_) => String::new(),
+                        _ => format!(" at {}", path.display()),
+                    };
+                    Reading {
+                        text: String::new(),
+                        failure: Some(format!("{spec} could not be read{at}: {error}")),
+                    }
+                }
+            })
+        }
+    }
+}
+
+/// Every declared private owner: the literal list, plus whatever the source
 /// produced.
 pub(crate) fn declared_owners(root: &Path, policy: &Policy, rule: &Rule) -> Result<Vec<String>> {
     let mut owners = rule.private_owners().to_vec();
     // The rule's own source first, then the policy's. Same precedence as
     // `visibility` and for the same reason: the policy-level declaration is
     // what a rule arriving from a set can reach, and a rule that names its own
-    // source is saying something narrower on purpose.
-    if let Some(command) = rule
-        .private_owners_from()
-        .or(policy.private_owners_from.as_deref())
-    {
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(command)
-            .current_dir(root)
-            .output()
-            .map_err(|error| Fatal::new(format!("{}: private_owners_from: {error}", rule.id)))?;
-        if !output.status.success() {
-            // Not silently empty. A source that failed produced no owners, and
-            // a rule with no owners refuses nothing -- reporting a clean tree
-            // because the list could not be read.
-            //
-            // `private_owners_optional` is the one way out, and it is a
-            // DECLARATION rather than a fallback: it exists because a policy in
-            // a repository other people clone names a source that resolves on
-            // one machine, and the choice there is between refusing every
-            // clone's first commit and losing the check silently. Neither is
-            // acceptable, so the third answer is losing it OUT LOUD.
-            if !policy.private_owners_optional {
-                return Err(Fatal::new(format!(
-                    "{}: private_owners_from exited {}: {}\n\nA source that failed produced \
-                     no owners, and a rule with no owners refuses nothing. If this source is \
-                     expected to be absent on some machines -- because this policy is \
-                     cloned -- say so with `private_owners_optional = true` at the top of \
-                     the policy file, and the failure becomes a reported gap instead of \
-                     this.",
-                    rule.id,
-                    output.status.code().unwrap_or(-1),
-                    String::from_utf8_lossy(&output.stderr).trim()
-                )));
-            }
-            // Exactly what stopped being checked, because "degraded" without a
-            // list of what degraded is a sentence a reader skips. The two forms
-            // named here are the ones that need a DECLARED owner: every other
-            // form reaches the forge on its own.
-            eprintln!(
-                "uphold: {}: the private-owner source produced nothing ({} exited {}), and \
-                 `private_owners_optional` allows that. Names in URL form, and names under \
-                 this repository's own owner, are still checked. NOT checked here: a bare \
-                 `owner/repo` under an owner nothing declared, and a private organisation \
-                 named on its own.",
+    // source is saying something narrower on purpose. The policy-level one
+    // carries its own `optional`, because it may be a set's default and the
+    // set said whether its file may be absent; a rule's own source answers to
+    // the policy's line.
+    let (source, optional, from_set) = match rule.private_owners_source()? {
+        Some(source) => (source, policy.private_owners_optional, None),
+        None => match &policy.private_owners {
+            Some(declared) => (
+                declared.source.clone(),
+                declared.optional,
+                declared.set.as_deref(),
+            ),
+            None => return Ok(owners),
+        },
+    };
+    let reading = read_owners_source(root, rule, &source)?;
+    if let Some(failure) = reading.failure {
+        // Not silently empty. A source that failed produced no owners, and a
+        // rule with no owners refuses nothing -- reporting a clean tree
+        // because the list could not be read.
+        //
+        // `private_owners_optional` is the one way out, and it is a
+        // DECLARATION rather than a fallback: it exists because a policy in a
+        // repository other people clone names a source that resolves on one
+        // machine, and the choice there is between refusing every clone's
+        // first commit and losing the check silently. Neither is acceptable,
+        // so the third answer is losing it OUT LOUD.
+        if !optional {
+            return Err(Fatal::new(format!(
+                "{}: {} {failure}\n\nA source that could not be read produced no owners, \
+                 and a rule with no owners refuses nothing. If this source is expected to \
+                 be absent on some machines -- because this policy is cloned -- say so \
+                 with `private_owners_optional = true` at the top of the policy file, and \
+                 the failure becomes a reported gap instead of this.",
                 rule.id,
-                command,
-                output.status.code().unwrap_or(-1)
-            );
+                source.field(),
+            )));
         }
-        owners.extend(
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                .map(str::to_owned),
+        // Where the declaration lives, for the reader whose tree holds no line
+        // naming it: a set's default appears in no file they can open.
+        let declared_by = from_set.map_or(String::new(), |set| {
+            format!(
+                "; the source is the `{set}` set's default, and a `private_owners_file` \
+                 line at the top of the policy file overrides it"
+            )
+        });
+        // Exactly what stopped being checked, because "degraded" without a
+        // list of what degraded is a sentence a reader skips. The two forms
+        // named here are the ones that need a DECLARED owner: every other
+        // form reaches the forge on its own.
+        eprintln!(
+            "uphold: {}: the private-owner source produced nothing ({failure}), and \
+             `private_owners_optional` allows that{declared_by}. Names in URL form, and \
+             names under this repository's own owner, are still checked. NOT checked here: \
+             a bare `owner/repo` under an owner nothing declared, and a private \
+             organisation named on its own.",
+            rule.id,
         );
     }
+    owners.extend(
+        reading
+            .text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(str::to_owned),
+    );
     Ok(owners)
 }
 
@@ -1460,6 +1548,85 @@ mod tests {
     fn a_host_glob_that_will_not_compile_is_refused_rather_than_dropped() {
         assert!(ForeignHosts::new(&["doi.org".to_owned()]).is_ok());
         assert!(ForeignHosts::new(&["{".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn the_built_in_foreign_hosts_are_quiet_under_any_declared_list() {
+        // The session link a commit written with an assistant carries has the
+        // shape of a name, and 84 policy files had each declared the one host
+        // to say it is not one. Quiet with no list, and still quiet under a
+        // list that does not name it -- a declaration extends the built-in
+        // list rather than starting from nothing.
+        let text = "see https://claude.ai/code/session-abc";
+        assert!(unanswerable_names(text, &ForeignHosts::new(&[]).unwrap()).is_empty());
+        let declared = ForeignHosts::new(&["example.test".to_owned()]).unwrap();
+        assert!(unanswerable_names(text, &declared).is_empty());
+        assert_eq!(
+            unanswerable_names("https://other.test/acme/widget", &declared).len(),
+            1
+        );
+    }
+
+    /// A policy in a scratch tree, with one message guard reading the owner
+    /// source the text declares.
+    fn policy_reading_owners(top: &str) -> (std::path::PathBuf, Policy) {
+        let dir = crate::fixture::scratch("names");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("policy.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "visibility = \"public\"\n{top}\n\
+                 [rule.names]\nbuiltin = \"no-private-repo-names\"\n\n\
+                 [rule.names.git]\nhooks = [\"commit-msg\"]\n"
+            ),
+        )
+        .unwrap();
+        let policy = crate::config::load(&dir, &path).unwrap();
+        (dir, policy)
+    }
+
+    #[test]
+    fn an_owner_file_is_read_as_the_command_form_reads_its_stdout() {
+        // One owner per line, trimmed, with comments and blank lines dropped:
+        // the same reading the command's stdout gets, so a file that `cat` used
+        // to print reads the same when read without it.
+        let list = crate::fixture::scratch("owners");
+        std::fs::create_dir_all(&list).unwrap();
+        let file = list.join("private-owners");
+        std::fs::write(&file, "# organisations\n\n  acme  \nsecretcorp\n# end\n").unwrap();
+        let (dir, policy) =
+            policy_reading_owners(&format!("private_owners_file = {:?}\n", file.display()));
+        let rule = policy.rules.iter().find(|rule| rule.id == "names").unwrap();
+        assert_eq!(
+            declared_owners(&dir, &policy, rule).unwrap(),
+            vec!["acme".to_owned(), "secretcorp".to_owned()]
+        );
+
+        // Absent, the file is exit 2 naming the line that makes it a notice...
+        std::fs::remove_file(&file).unwrap();
+        let text = declared_owners(&dir, &policy, rule)
+            .unwrap_err()
+            .to_string();
+        assert!(text.contains("private_owners_file"), "{text}");
+        assert!(text.contains("could not be read"), "{text}");
+        assert!(text.contains("private_owners_optional = true"), "{text}");
+
+        // ...and with that line, an empty list and the run goes on.
+        let (permitted_dir, permitted) = policy_reading_owners(&format!(
+            "private_owners_file = {:?}\nprivate_owners_optional = true\n",
+            file.display()
+        ));
+        let permitted_rule = permitted
+            .rules
+            .iter()
+            .find(|candidate| candidate.id == "names")
+            .unwrap();
+        assert!(
+            declared_owners(&permitted_dir, &permitted, permitted_rule)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

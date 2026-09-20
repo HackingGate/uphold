@@ -197,6 +197,7 @@ pub(crate) struct Written {
     pub command_sources: Option<Vec<String>>,
     pub private_owners: Option<Vec<String>>,
     pub private_owners_from: Option<String>,
+    pub private_owners_file: Option<String>,
     pub public_repos: Option<Vec<String>>,
     pub refuse_unknown: Option<bool>,
     pub foreign_hosts: Option<Vec<String>>,
@@ -266,6 +267,9 @@ pub(crate) struct Parameters {
     pub private_owners: Option<Vec<String>>,
     /// A command whose stdout is one private owner per line.
     pub private_owners_from: Option<String>,
+    /// A file holding one private owner per line, as a `FileSpec` this binary
+    /// reads with no shell in between. See [`crate::config::FileSpec`].
+    pub private_owners_file: Option<String>,
     /// Names to treat as public without asking a forge.
     pub public_repos: Option<Vec<String>>,
     /// Treat a name whose visibility could not be determined as private.
@@ -276,7 +280,9 @@ pub(crate) struct Parameters {
     /// habits -- a bibliography under `docs/` that the tree-wide rule need not
     /// quiet everywhere. Replaces rather than extends, for the reason a scoped
     /// `allowed_scripts` list does: what is declared beside the rule is the
-    /// whole truth for that rule, and nothing invisible reaches in.
+    /// whole truth for that rule, and nothing invisible reaches in. What it
+    /// does not replace is [`crate::config::FOREIGN_HOSTS_DEFAULT`], which is
+    /// not a declaration of the policy's but a fact about the hosts.
     pub foreign_hosts: Option<Vec<String>>,
     /// This repository's visibility, when it should not be looked up.
     pub visibility: Option<String>,
@@ -368,6 +374,9 @@ impl Parameters {
             self.private_owners_from
                 .is_some()
                 .then_some("private_owners_from"),
+            self.private_owners_file
+                .is_some()
+                .then_some("private_owners_file"),
             self.public_repos.is_some().then_some("public_repos"),
             self.refuse_unknown.is_some().then_some("refuse_unknown"),
             self.foreign_hosts.is_some().then_some("foreign_hosts"),
@@ -727,6 +736,7 @@ impl Check {
         let parameters = Parameters {
             private_owners: written.private_owners.take(),
             private_owners_from: written.private_owners_from.take(),
+            private_owners_file: written.private_owners_file.take(),
             public_repos: written.public_repos.take(),
             refuse_unknown: written.refuse_unknown.take(),
             foreign_hosts: written.foreign_hosts.take(),
@@ -1059,9 +1069,26 @@ impl Rule {
             .unwrap_or(&[])
     }
 
-    pub(crate) fn private_owners_from(&self) -> Option<&str> {
-        self.parameters()
-            .and_then(|parameters| parameters.private_owners_from.as_deref())
+    /// The source this rule names for its own owner list, in either spelling.
+    ///
+    /// Both written is refused, and a file spec that is not one of the three
+    /// forms is refused; `validate` asks this first so both happen at load.
+    pub(crate) fn private_owners_source(&self) -> Result<Option<crate::config::OwnersSource>> {
+        let Some(parameters) = self.parameters() else {
+            return Ok(None);
+        };
+        crate::config::OwnersSource::of(
+            parameters.private_owners_from.as_deref(),
+            parameters.private_owners_file.as_deref(),
+            &format!("rule {:?}: ", self.id),
+        )
+    }
+
+    /// Whether this rule names an owner source of its own, in either spelling.
+    pub(crate) fn names_private_owners_source(&self) -> bool {
+        self.parameters().is_some_and(|parameters| {
+            parameters.private_owners_from.is_some() || parameters.private_owners_file.is_some()
+        })
     }
 
     pub(crate) fn public_repos(&self) -> &[String] {
@@ -1479,6 +1506,11 @@ impl Rule {
                 )));
             }
         }
+
+        // And for the source: two spellings of one source, or a file spec in a
+        // fourth form, are facts about the file and are refused where a diff
+        // can fix them.
+        self.private_owners_source()?;
 
         // The same argument for the host globs: a glob nobody could compile is
         // a host nobody quieted, and the run that drops it looks exactly like

@@ -616,6 +616,7 @@ pub(crate) fn for_publication(root: &Path, policy: &Policy) -> Result<Exit> {
     if let Some(parameters) = published.parameters_mut() {
         parameters.private_owners = Some(owners);
         parameters.private_owners_from = None;
+        parameters.private_owners_file = None;
     }
 
     println!("audit --for-publication in {}", root.display());
@@ -673,9 +674,9 @@ pub(crate) fn for_publication(root: &Path, policy: &Policy) -> Result<Exit> {
             report: format!(
                 "the rule declares {} private owner(s) literally, in a file this flip \
                  would publish. A public repository cannot hold the list of what must not \
-                 be published. Move them out with `private_owners_from = \"...\"`, a \
-                 command whose stdout is one owner per line, and keep the rule committed \
-                 without the names.",
+                 be published. Move them out with `private_owners_file = \"xdg:...\"`, a \
+                 file outside the tree holding one owner per line, and keep the rule \
+                 committed without the names.",
                 literal.len()
             ),
         });
