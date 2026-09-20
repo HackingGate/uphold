@@ -86,6 +86,12 @@ private_owners_optional = true
 # rules.
 sets = [
     "process-residue",
+    # The tracker rule over source, scripts and policy files, which
+    # `process-residue` keeps to documentation. Taken here because this tree's
+    # comments already cite the durable thing -- an ADR, a test, a named
+    # constant -- and the tree was clean under the every-file scope on the day
+    # the split shipped it as a set of its own.
+    "code-residue",
     "host-identity",
     "broken-links",
     "doc-claims",
