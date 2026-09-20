@@ -579,10 +579,11 @@ collect = "npm-package"
 # The set this repository ships, taken by this repository, because a rule whose
 # only consumer is somebody else is a rule nobody here has ever watched refuse.
 #
-# An override that NARROWS an inherited rule is the documented shape and stays
-# silent; what gets reported at load is an override that changes the CHECK, so
-# `builtin` is restated here exactly as the set ships it and only the selection
-# moves.
+# An override rather than a same-id rule, because only the selection moves:
+# the rule that runs is the set's, `builtin` and message and all, and this
+# table replaces its `files.exclude` and nothing else. A same-id copy restates
+# the message and drifts from it the next time the set's is edited, which an
+# override cannot do.
 #
 # EVERY EXCLUSION IS A SYNTAX EXAMPLE, which is the first trap a repository hits
 # on inheriting this set and the reason the set's own comment names it. A
@@ -595,15 +596,7 @@ collect = "npm-package"
 # This is not a way of switching the rule off. No other file in this tree
 # declares an anchor, so what stays selected is every document that could
 # acquire one.
-[rule.no-stale-anchored-fact]
-builtin = "anchors-resolve"
-message = """
-A document states a fact that has moved. The anchor beside the sentence names
-where the value lives, and the file it names now says something else -- or no
-longer has the key, or is gone. Re-read the source and correct the sentence, or
-drop the anchor if the sentence no longer needs the value inline.
-"""
-files.include = ["."]
+[override.no-stale-anchored-fact]
 files.exclude = [
     "docs/REFERENCE.md",
     "policy/base/doc-claims.toml",

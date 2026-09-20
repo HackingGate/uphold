@@ -635,17 +635,51 @@ A repository's own rule of the same `id` shadows the inherited one;
 is an error rather than a line that quietly does nothing. `inherit.paths`
 merges extra policy files, repository-relative, after the bundled sets.
 
+An own rule of the same `id` replaces the inherited one **whole**, so it is
+the spelling for a rule that checks something different. To move only
+**where** an inherited rule reads, write an override:
+
+```toml
+[override.no-task-tracker-references]
+files.exclude = ["src/**"]
+```
+
+The inherited rule is kept — `regexp`, `message`, `builtin`, provenance and
+all — and the `files` keys written here replace the set's. An override may
+carry `files.include`, `files.exclude` and `files.glob`, and nothing else; a
+key the override does not name keeps the set's value, so `files.exclude` alone
+leaves the set's `include` and `glob` standing. A tightening the set ships
+later reaches the narrowed rule on the next pin bump, which is what a full copy
+under the same `id` cannot promise: it pins the pattern at whatever the set
+shipped the day it was pasted.
+
+Three shapes are refused at load, each naming the table:
+
+- an override carrying any other key — `regexp`, `message`, `files.multiline`
+  — with the three it may carry listed. A copy that changes the check is a rule
+  of the repository's own and is written as `[rule.<id>]` in full, where the
+  shadow note below reports it;
+- an override of an `id` nothing inherited defines, or one that
+  `inherit.disabled_rules` drops;
+- an override beside an own `[rule.<id>]` of the same `id`: the rule replaces
+  the inherited one and the override keeps it, so one of the two is not doing
+  what it says.
+
+An `[override]` table in a bundled set or an `inherit.paths` file is refused
+too: it belongs in the policy whose `[inherit]` line brings the rule in.
+
 Two things a set says out loud, because a set is the one place a rule can run
 from without appearing in any file in the repository it runs in:
 
 - **A refusal names the set it came from**: `guard refused: no-merge-commit
   [set: unreviewed-history]`. A reader greps their policy for that id and finds
   nothing, because the whole declaration is one word in an `[inherit]` line.
-- **An override that changes the CHECK is reported at load**, on stderr, as a
-  note and not a refusal. Narrowing an inherited rule is supported; replacing a
-  compiled-in `builtin` with a `regexp` of your own under the same id is a
-  private copy of somebody else's rule, and it is invisible to everything else
-  here — the id resolves, so every claim naming it reconciles green.
+- **A same-id rule that changes the CHECK is reported at load**, on stderr, as
+  a note and not a refusal. Narrowing where an inherited rule reads is the
+  `[override.<id>]` table above; replacing a compiled-in `builtin` with a
+  `regexp` of your own under the same id is a private copy of somebody else's
+  rule, and it is invisible to everything else here — the id resolves, so
+  every claim naming it reconciles green.
 
 The same argument in the other direction is a check: `no-hand-copied-base-rule`
 (shipped in `process-residue`) refuses a rule written out by hand under an id a
