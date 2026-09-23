@@ -76,16 +76,18 @@ repos:
 
 One id per stage because the stage is an argument. Pinning all five costs
 nothing: which guards fire is decided by `policy/principles.toml`. The
-scanners are two more ids, unpinned above because they need a host toolchain:
-`uphold-supply-chain` at `pre-push`, which scans what the push changed, and
-`uphold-supply-chain-all` at `manual`, which scans everything. Each scanner
-must be at least the release its output reader was measured against (the
-floors are listed in [docs/REFERENCE.md](docs/REFERENCE.md#uphold-supply-chain--six-scanners-one-verdict));
+scanners are three more ids, unpinned above because they need a host toolchain:
+`uphold-supply-chain` at `pre-push`, which scans what the push changed,
+`uphold-supply-chain-all` at `manual`, which scans everything, and
+`uphold-supply-chain-staged` at `pre-commit`, gitleaks alone over the staged
+diff. Each scanner must be at least the release its output reader was
+measured against (the floors are listed in
+[docs/REFERENCE.md](docs/REFERENCE.md#uphold-supply-chain--six-scanners-one-verdict));
 an older one is exit 2 for its section, so an uphold upgrade that raises a
 floor can newly refuse a push on a host with an old scanner.
 
-A policy inheriting `credentials` also gets **gitleaks** in both, over the
-pushed commits and over every commit. gitleaks owns secret shapes: its rule
+A policy inheriting `credentials` also gets **gitleaks** in the first two, over
+the pushed commits and over every commit. gitleaks owns secret shapes: its rule
 list, entropy thresholds and allowlists replace what the set's regexes did by
 hand. It must be on PATH at the one version this uphold pins, because its rule
 list is compiled into it; a missing gitleaks or another version is exit 2 and
@@ -98,6 +100,23 @@ refuses the push. With mise:
 
 A `.gitleaks.toml` at the root is handed to gitleaks in place of the bundled
 default, and a `.gitleaksignore` holds the fingerprints of accepted findings.
+
+`uphold-supply-chain-staged` is the same gitleaks at `pre-commit`, over the
+staged diff (`uphold supply-chain --staged`), so a secret is refused before it
+is in local history rather than at the push. It reads no network, so unlike
+the other scanners it costs a commit nothing but the scan. A finding there has
+no commit yet, and its fingerprint is `file:rule:line`; that form in
+`.gitleaksignore` also silences the same finding in the range scan.
+
+Three `credentials` rules are **deprecated**, because gitleaks owns their job:
+`no-committed-secret-material`, `no-committed-auth-key-values` and
+`no-committed-auth-key-values-in-config`. They still run, their messages say
+so, and a `policy/upheld.toml` naming one by id still loads; they go in the
+release after the one that marked them. Before that release, run
+`uphold supply-chain --all` once and put each accepted finding's fingerprint in
+`.gitleaksignore`, and point any claim on those ids at `uphold-supply-chain`
+or `uphold-supply-chain-staged`. `no-env-secret-values` and
+`no-browser-profile-artifacts` stay.
 
 **lefthook** — no manifest format, so include the config this repo ships, then
 `lefthook install`. It runs commands rather than bootstrapping a language, so

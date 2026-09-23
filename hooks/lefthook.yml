@@ -155,6 +155,10 @@ pre-push:
 # matrix on the day it was added. A lefthook consumer opts in by writing the
 # command in its own file, where the decision is visible:
 #
+#   pre-commit:
+#     commands:
+#       uphold-supply-chain-staged:
+#         run: uphold supply-chain --staged
 #   pre-push:
 #     commands:
 #       uphold-supply-chain:
@@ -170,7 +174,9 @@ pre-push:
 # reason the guard above needs it -- without it the command sees no push and
 # refuses rather than guessing. `--all` is the whole tree, which belongs to a
 # schedule: it is the only form that can find an advisory published against a
-# dependency this push did not touch.
+# dependency this push did not touch. `--staged` is gitleaks alone over the
+# index, and needs no stdin: it is the commit-time half of the secret scan, for
+# a policy that inherits `credentials`.
 #
 # .pre-commit-hooks.yaml still publishes the id, because that file is a
 # MANIFEST: nothing runs from it until a consumer names the id in their own

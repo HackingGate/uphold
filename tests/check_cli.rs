@@ -287,6 +287,44 @@ fn a_rule_from_a_bundled_base_set_is_supplied() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
+/// Deprecated is not removed: a consumer's claim naming one of the three
+/// `credentials` rules gitleaks now owns still resolves for the release that
+/// marks them, and the rule says, in the words it refuses with, who owns the
+/// job now.
+#[test]
+fn a_claim_on_a_deprecated_credentials_rule_still_resolves() {
+    for id in [
+        "no-committed-secret-material",
+        "no-committed-auth-key-values",
+        "no-committed-auth-key-values-in-config",
+    ] {
+        let root = workspace();
+        write(
+            &root,
+            "policy/principles.toml",
+            "[inherit]\nsets = [\"credentials\"]\n",
+        );
+        write(&root, ".pre-commit-config.yaml", PRE_COMMIT);
+        write(
+            &root,
+            "policy/upheld.toml",
+            &format!("[[enforce]]\nprinciple = \"defense-in-depth\"\nrule = \"{id}\"\n"),
+        );
+        let output = check(&root, &[]);
+        assert_eq!(code(&output), 0, "{id}: {}", stderr(&output));
+    }
+    let listed = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["rules", "--set", "credentials"])
+        .output()
+        .unwrap();
+    let listed = stdout(&listed);
+    assert_eq!(
+        listed.matches("Deprecated: gitleaks owns").count(),
+        3,
+        "{listed}"
+    );
+}
+
 #[test]
 fn a_rule_inherited_through_inherit_paths_is_supplied() {
     let root = workspace();

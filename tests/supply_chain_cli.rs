@@ -1538,3 +1538,129 @@ fn a_range_touching_no_manifest_still_runs_gitleaks_over_that_range() {
     assert!(!ran.contains("osv-scanner"), "{ran}");
     assert!(!ran.contains("guarddog"), "{ran}");
 }
+
+// ── gitleaks over the staged diff ────────────────────────────────────────
+
+/// `--staged`, with the stub directory as the whole of `PATH` so a scanner
+/// run by mistake is a missing one and says so.
+fn staged(root: &Path, tools: &Path, extra: &[&str]) -> Output {
+    let mut args = vec!["--staged"];
+    args.extend_from_slice(extra);
+    invoke(root, tools.as_os_str(), &args, &[])
+}
+
+/// Every stub a range scan would reach, so the assertion that none of the
+/// five dependency scanners ran is about the command and not about PATH.
+fn every_scanner(gitleaks: &str) -> PathBuf {
+    stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        ("zizmor", &recording("exit 0")),
+        ("cargo", &recording("exit 0")),
+        ("guarddog", &recording(GUARDDOG_CLEAN)),
+        ("gitleaks", gitleaks),
+    ])
+}
+
+#[test]
+fn staged_runs_gitleaks_alone_over_the_index_with_the_bundled_config() {
+    let root = inheriting_credentials();
+    let tools = every_scanner(&gitleaks_stub(GITLEAKS_PINNED, "exit 0"));
+    let output = staged(&root, &tools, &[]);
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(said.contains("the staged diff"), "{said}");
+    let ran = journal(&root);
+    assert!(ran.starts_with("gitleaks git "), "{ran}");
+    assert!(ran.contains(" --staged"), "{ran}");
+    assert!(ran.contains("--exit-code=3"), "{ran}");
+    assert!(ran.contains("--redact"), "{ran}");
+    assert!(!ran.contains("--log-opts"), "{ran}");
+    assert_eq!(ran.lines().count(), 1, "one scanner, once: {ran}");
+    let config = std::fs::read_to_string(root.join("stub.log.config")).unwrap();
+    assert!(config.contains("useDefault = true"), "{config}");
+}
+
+#[test]
+fn a_staged_finding_is_exit_1_and_its_words_are_shown() {
+    let root = inheriting_credentials();
+    let tools = every_scanner(&gitleaks_stub(
+        GITLEAKS_PINNED,
+        "echo 'Fingerprint: leak.rs:github-pat:1'\nexit 3",
+    ));
+    let output = staged(&root, &tools, &[]);
+    let said = text(&output);
+    assert_eq!(code(&output), 1, "{said}");
+    assert!(said.contains("leak.rs:github-pat:1"), "{said}");
+    assert!(said.contains(".gitleaksignore"), "{said}");
+    assert!(!said.contains("passed"), "{said}");
+}
+
+/// The commit path is where a missing scanner would be most tempting to
+/// pass: it is exit 2, as at the push.
+#[test]
+fn staged_with_no_gitleaks_installed_is_exit_2() {
+    let root = inheriting_credentials();
+    let tools = stubs(&[("osv-scanner", &recording("exit 0"))]);
+    let output = staged(&root, &tools, &[]);
+    let said = text(&output);
+    assert_eq!(code(&output), 2, "{said}");
+    assert!(said.contains("gitleaks is not on PATH"), "{said}");
+    assert!(!said.contains("passed"), "{said}");
+    assert!(journal(&root).is_empty(), "{}", journal(&root));
+}
+
+#[test]
+fn staged_with_a_gitleaks_at_another_version_is_exit_2_and_scans_nothing() {
+    let root = inheriting_credentials();
+    let tools = every_scanner(&gitleaks_stub("8.29.0", "exit 0"));
+    let output = staged(&root, &tools, &[]);
+    let said = text(&output);
+    assert_eq!(code(&output), 2, "{said}");
+    assert!(
+        said.contains(&format!("pinned to {GITLEAKS_PINNED}")),
+        "{said}"
+    );
+    assert!(journal(&root).is_empty(), "{}", journal(&root));
+}
+
+#[test]
+fn staged_exit_1_from_gitleaks_is_a_scan_that_did_not_finish() {
+    let root = inheriting_credentials();
+    let tools = every_scanner(&gitleaks_stub(
+        GITLEAKS_PINNED,
+        "echo 'partial scan completed' >&2\nexit 1",
+    ));
+    let output = staged(&root, &tools, &[]);
+    let said = text(&output);
+    assert_eq!(code(&output), 2, "{said}");
+    assert!(said.contains("NOT CHECKED: gitleaks exited 1"), "{said}");
+}
+
+#[test]
+fn staged_in_a_policy_that_does_not_inherit_credentials_asks_nothing() {
+    let root = repository();
+    let tools = every_scanner(&gitleaks_stub(GITLEAKS_PINNED, "exit 3"));
+    let output = staged(&root, &tools, &[]);
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(
+        said.contains("does not inherit the `credentials` set"),
+        "{said}"
+    );
+    assert!(journal(&root).is_empty(), "{}", journal(&root));
+}
+
+/// A range and the index are two subjects; naming both would leave one of
+/// them silently unscanned.
+#[test]
+fn staged_with_a_range_flag_is_a_usage_error() {
+    for extra in [&["--all"][..], &["--base", "HEAD"][..]] {
+        let root = inheriting_credentials();
+        let tools = every_scanner(&gitleaks_stub(GITLEAKS_PINNED, "exit 0"));
+        let output = staged(&root, &tools, extra);
+        let said = text(&output);
+        assert_eq!(code(&output), 2, "{extra:?}: {said}");
+        assert!(said.contains("--staged]"), "{said}");
+        assert!(journal(&root).is_empty(), "{}", journal(&root));
+    }
+}
