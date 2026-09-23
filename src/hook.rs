@@ -217,16 +217,6 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
         )));
     };
 
-    let mut collected = Vec::new();
-    strings(subject, &mut collected);
-    // Read, and carrying no text this binary has a rule about.
-    if collected.is_empty() {
-        return Ok(Exit::Clean);
-    }
-    let text = collected.join("\n");
-
-    let mut report = String::new();
-
     // Everything a piece of published text is judged by, from the one place
     // that knows what that is. The host-identity rules run wherever the call
     // was made from, policy or no policy: `text::load_for` carries an empty
@@ -237,7 +227,24 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
     // it. The guards and the prose rules are declarations, so an empty policy
     // is an empty list of them rather than a fallback -- which is the same
     // sentence as "they did not run", said below.
+    //
+    // Loaded before the subject is looked at, not after. A policy that does not
+    // load is exit 2 on every call, and one that loaded only when the call
+    // carried text would pass every string-free call through a broken
+    // configuration at exit 0 -- a gate whose failure is visible only on the
+    // calls that happen to publish something.
     let (root, policy) = text::load_for(found)?;
+
+    let mut collected = Vec::new();
+    strings(subject, &mut collected);
+    // Read, and carrying no text this binary has a rule about.
+    if collected.is_empty() {
+        return Ok(Exit::Clean);
+    }
+    let text = collected.join("\n");
+
+    let mut report = String::new();
+
     for verdict in text::judged(text::Seam::Hook, &root, &policy, label, &text)? {
         match verdict {
             Verdict::Rule(failure) => writeln!(

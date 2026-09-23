@@ -2216,10 +2216,13 @@ with a complaint attached. The refusal travels in the document:
 ```
 
 It is printed to stderr as well, so a person running `uphold hook` by hand reads
-the report rather than a line of JSON. `2` keeps its meaning for the two things
+the report rather than a line of JSON. `2` keeps its meaning for the things
 that are uphold's own: a harness name the binary does not describe, an event that
-is not JSON, and an event carrying nothing at all where the subject pointer says
-it should be. None was examined, and none is reported as allowed.
+is not JSON, an event carrying nothing at all where the subject pointer says it
+should be, and a policy that does not load. None was examined, and none is
+reported as allowed. The policy is loaded before the subject is read, so a broken
+one is `2` on every call, including one carrying no strings; no policy found is
+not a broken one, and loads as empty.
 
 That third one is the case that does not announce itself. The JSON parses, the
 run exits, and what the call was about to send was never read -- which is what a
