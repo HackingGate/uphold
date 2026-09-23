@@ -130,10 +130,15 @@ chronology in Git history.
 # standards designators as repositories or task-tracking prose. The separators
 # are admitted because a citation list names its repository once and leaves
 # every later item bare, and a comma directly before a hash number in a
-# comment is such a list far more often than anything else. The words `issue`
-# and `pr` are admitted in any case, because a sentence that opens with one of
-# them capitalised is the commonest way a document cites a tracker, and the
-# lowercase prose-word arm reads past it.
+# comment is such a list far more often than anything else. The one thing
+# after a separator the arm reads past is a colour: three or six digits that
+# a closing paren, a semicolon, a comma, a percent sign or a percentage
+# follows, which is a colour in a `color-mix` or gradient argument list. The
+# regex engine has no lookahead, so the arm is split in two: every digit count
+# a colour cannot have, and a colour's count followed by something none of
+# those is. The words `issue` and `pr` are admitted in any case, because a
+# sentence that opens with one of them capitalised is the commonest way a
+# document cites a tracker, and the lowercase prose-word arm reads past it.
 #
 # THE GLOB IS THE SCOPE THIS RULE HAD BEFORE IT WAS WIDENED, AND IT IS BACK ON
 # PURPOSE. For one release the rule read every tracked file, and what that cost
@@ -141,7 +146,7 @@ chronology in Git history.
 # set that now carries the every-file scope under its own id. That rule and
 # this one exclude each other's files, so a line is under exactly one of them,
 # and a repository takes the wider one by name rather than by version bump.
-regexp = 'github\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\b|(?:^|\b[a-z]+[\t ]+|(?i:\b(?:issue|pr)[\t ]+)|\(|\[|[,;/][\t ]*)#[0-9]+\b'
+regexp = 'github\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\b|(?:^|\b[a-z]+[\t ]+|(?i:\b(?:issue|pr)[\t ]+)|\(|\[)#[0-9]+\b|[,;/][\t ]*#(?:[0-9]{1,2}|[0-9]{4,5}|[0-9]{7,})\b|[,;/][\t ]*#(?:[0-9]{3}|[0-9]{6})(?:[^\w\t ),;%]|[\t ]*$|[\t ]+(?:[^\t ),;%0-9]|[0-9]+(?:[^0-9%]|$)))'
 files.include = ["."]
 files.glob = ["*.md", "*.rst", "*.txt"]
 files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "**/testdata/**"]
