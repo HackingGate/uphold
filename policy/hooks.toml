@@ -91,7 +91,7 @@ allows = "a line with none\n"
 [[waive]]
 id = "ruff-check"
 findings = ["forked"]
-reason = "this repository runs ruff with --fix at commit time, where a workspace whose Python is a handful of scripts runs it check-only over a files scope. Autofixing somebody else's tree on their commit is not a default to share, and the scope is a fact about where each repository keeps its Python"
+reason = "this repository runs ruff with --fix at commit time, where a workspace whose Python is a small number of scripts runs it check-only over a files scope. Applying fixes to another repository's files at commit time is not a default to share, and the scope is a fact about where each repository keeps its Python"
 
 [[waive]]
 id = "ruff-format"
@@ -101,4 +101,4 @@ reason = "the same decision as ruff-check, and it travels with it: a repository 
 [[waive]]
 id = "shellcheck"
 findings = ["forked"]
-reason = "a workspace whose shell scripts stand up lab images runs shellcheck at four stages and at --severity=style; this repository has a handful of scripts and runs the default at commit time. Worth revisiting if these scripts grow, which is why the difference is recorded rather than hidden"
+reason = "a workspace whose shell scripts stand up lab images runs shellcheck at four stages and at --severity=style; this repository has a small number of scripts and runs the default at commit time. Revisit this if the script count grows, which is why the difference is recorded rather than hidden"

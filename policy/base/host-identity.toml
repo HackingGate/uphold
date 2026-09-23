@@ -45,7 +45,7 @@
 # match itself. Nothing in this rule can match itself: there is no pattern in
 # the file, only a source that reads the machine. A hostname in a README is a
 # published hostname; a home path in a fixture is a published home path; and
-# both are the exact defect, not an artefact of where the rule is written. An
+# both are the exact defect, not an artifact of where the rule is written. An
 # exclude here would exempt the three places the leak most often lands.
 #
 # `files.word = true` because a hostname segment or a username inside a longer

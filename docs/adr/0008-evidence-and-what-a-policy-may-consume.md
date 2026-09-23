@@ -3,10 +3,10 @@
 Status: Accepted
 
 This record answers what a rule in this binary is allowed to read. Every other
-guard in this crate reads its artifact directly -- `prevent-ai-author` opens the
-message file, `no-private-repo-names-staged` runs `git diff` -- and decides on
-the spot. That is fine for a rule about bytes. It is the wrong shape for a rule
-about what a change MEANS, because the tool that establishes meaning is the
+guard in this crate reads its artifact directly — `prevent-ai-author` opens the
+message file, `no-private-repo-names-staged` runs `git diff` — and decides on
+the spot. That suffices for a rule about bytes. It is the wrong shape for a rule
+about what a change *means*, because the tool that establishes meaning is the
 part most likely to be replaced: a regex today, a parser tomorrow, a compiler's
 graph after that.
 A rule written against the reader is rewritten with it. Issue 165 asks for the
@@ -15,7 +15,7 @@ building it.
 
 ## The separation
 
-Three things, and the names are the ones the code uses.
+Three components, named as the code names them.
 
 A **provider** reads one artifact and reports facts in one shape. Three are
 compiled in: `git` over the commit message, as git records it and not as the
@@ -61,10 +61,9 @@ A fact carries who established it, how, and over what.
 The **name** is for the reader of a refusal. `lib.rs: drop_me is removed by
 this change and the commit message does not name it (seen by tree-sitter)` is a
 sentence somebody can act on; the same sentence with the name removed is one
-they have to go and reconstruct.
+they have to reconstruct.
 
-The **strength** is a variant and not a number, and the order is the whole
-point of it:
+The **strength** is a variant and not a number, and its purpose is the order:
 
 ```rust
 pub(crate) enum Strength { Inferred, Heuristic, Proven }   // Proven > Heuristic > Inferred
@@ -72,8 +71,8 @@ pub(crate) enum Strength { Inferred, Heuristic, Proven }   // Proven > Heuristic
 
 `Proven` is a parser or git reporting the fact. `Heuristic` is a text pattern
 having matched. `Inferred` is a model or an agent asserting it. A variant rather
-than a confidence score because the issue's requirement -- AI confidence alone
-must never be sufficient -- is a thing a threshold cannot promise and a variant
+than a confidence score because the issue's requirement — AI confidence alone
+must never be sufficient — is a thing a threshold cannot promise and a variant
 cannot break: there is no value of `Inferred` that compares greater than
 `Heuristic`.
 
@@ -88,8 +87,8 @@ than conventions a policy is asked to remember:
    `Proven` provider that read the file and reported none is still reported to
    the policy, which refuses on it.
 2. **Weaker evidence may never supply a clean verdict where a stronger
-   provider could not look.** This is the one the whole record is for, and it
-   is the next section.
+   provider could not look.** This is the rule this record exists for, and it
+   is the subject of the next section.
 3. **Weaker evidence may never cancel a stronger provider's refusal.** An
    `Inferred` `FunctionAdded` beside a `Proven` `FunctionRemoved` for the same
    subject changes nothing; the unit test drives exactly that pair.
@@ -107,7 +106,7 @@ pub(crate) enum Established<'a> {
 
 `Inferred` facts are in the body for a reader and in no variant. An `Inferred`
 item alone yields `Unavailable` with nothing unread, which the policy turns
-into exit 2 -- nothing deterministic read the change -- and never into a
+into exit 2 — nothing deterministic read the change — and never into a
 refusal. No provider produces `Inferred` today. The variant is exercised by a
 test double, because the seam has to exist before the first agent-native
 provider arrives, not be retrofitted around it.
@@ -137,7 +136,7 @@ sexp=(source_file (ERROR (identifier) (parameters) (function_item name: ...)))
 The walk lists one function of the two the file declares; `keep` is inside an
 `ERROR` node and the walk does not see it. Put that file at `HEAD` and stage a
 version with `keep` deleted, and a provider that compared the two lists would
-report nothing removed -- `keep` was in neither list -- which is the verdict
+report nothing removed — `keep` was in neither list — which is the verdict
 from a change that removes nothing. The same walk over the same file with an
 unterminated string literal instead:
 
@@ -209,8 +208,8 @@ other built-in, and `removed-function-named` is a function in
 **Not a plugin API.** ADR 0005 found that what providers share is three
 questions, not an interface, and that an interface covering all of them would
 describe none of them. The `Source` trait here is two methods, and it is the
-shape of an answer to the third question -- "can it say I could not look, and
-does it" -- for providers that live INSIDE this binary. `ast-grep`, `zizmor`
+shape of an answer to the third question — "can it say I could not look, and
+does it" — for providers that live *inside* this binary. `ast-grep`, `zizmor`
 and `cargo-deny` are still claimed through the local tier exactly as before;
 nothing external implements this trait, and nothing is loaded.
 

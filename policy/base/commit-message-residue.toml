@@ -28,7 +28,7 @@
 # well as the message being written, because `commit-msg` fires only when
 # `git commit` writes a message: not for `commit-tree`, a rebase, a cherry-pick,
 # `git am`, `--no-verify`, or a fast import. That is one rule with two
-# artefacts, and it is why neither declares `pre-push` here -- the guard reaches
+# artifacts, and it is why neither declares `pre-push` here -- the guard reaches
 # the pushed messages from its own stage list in `policy/principles.toml` where
 # a repository wants it, and this set stays at the stage all sixty-five agreed
 # on.

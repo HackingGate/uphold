@@ -9,8 +9,12 @@ namespace — that is what lets a claim in
 - [`uphold guard` — the guards](#uphold-guard--the-guards)
 - [`uphold shim` — the shims](#uphold-shim--the-shims)
   - [The links, and what reaches them](#the-links-and-what-reaches-them)
+  - [When the policy itself will not load](#when-the-policy-itself-will-not-load)
+- [`uphold hook` — the caller that spawns no process](#uphold-hook--the-caller-that-spawns-no-process)
 - [`uphold audit --for-publication`](#uphold-audit---for-publication)
+- [`uphold supply-chain` — six scanners, one verdict](#uphold-supply-chain--six-scanners-one-verdict)
 - [`uphold hooks --identity` — across repositories](#uphold-hooks---identity--across-repositories)
+- [`uphold hooks --install` — the hooks git actually runs](#uphold-hooks---install--the-hooks-git-actually-runs)
 - [`uphold probe` — can each hook refuse?](#uphold-probe--can-each-hook-refuse)
 - [`uphold check --coverage` and `--oscal`](#uphold-check---coverage-and---oscal)
 - [The review tier](#the-review-tier)
@@ -116,13 +120,13 @@ that publishes text to a forge, and only that one.
 ### One command, more than one flag vocabulary
 
 A `[[shim]]` names one `text_flags` for a whole command, and a command's flags do
-not all mean one thing. On `gh`, `-c` is a **boolean** on `pr review` -- "Comment
-on a pull request" -- and **takes a value** on `issue close` -- "Leave a closing
+not all mean one thing. On `gh`, `-c` is a **boolean** on `pr review` — "Comment
+on a pull request" — and **takes a value** on `issue close` — "Leave a closing
 comment". Name it once for the table and one of the two is read wrong:
 
-* named -- `gh pr review -c -b "body"` reads `-c` as consuming `-b`, and the body
+* named — `gh pr review -c -b "body"` reads `-c` as consuming `-b`, and the body
   being published goes unread;
-* not named -- `gh issue close --comment "text"` publishes with nothing in front
+* not named — `gh issue close --comment "text"` publishes with nothing in front
   of it.
 
 Both are false negatives in the seam that exists to prevent one. A second
@@ -145,15 +149,15 @@ title_flags = ["-t", "--title"]
 ```
 
 `match` takes the same `verb:noun` and `verb:*` spellings the table's own does,
-and every entry must name a verb the table matches -- a vocabulary for an
+and every entry must name a verb the table matches — a vocabulary for an
 invocation the shim does not stand in front of classifies nothing, and is refused
 at load.
 
 **The entry's lists replace the table's** for the verbs it names, rather than
 adding to them. Same rule as `allowed_scripts`, for the same reason: what is
 declared beside the narrower thing is the whole truth for it. A union would mean
-a vocabulary nobody wrote -- here `issue close --body`, a flag the real command
-does not accept -- and reading a flag a command will not take is the shim
+a vocabulary nobody wrote — here `issue close --body`, a flag the real command
+does not accept — and reading a flag a command will not take is the shim
 claiming to have checked a subject that was never published.
 
 `text_flags`, `title_flags`, `file_flags`, `path_flags`, `skip_flags` and
@@ -164,19 +168,19 @@ to publish somewhere the table did not expect.
 ### A baseline entry may be asked to say who excused it and why
 
 `files.baseline` names a file of repository-relative paths a rule excuses, and
-an entry that no longer matches is reported as stale -- an exemption that has
+an entry that no longer matches is reported as stale — an exemption that has
 stopped describing the tree is the rule switched off for that path.
 
 A baseline holds two different things and the format could only express one:
 
-* **debt** -- eight modules awaiting the same migration. One reason at the top
+* **debt** — eight modules awaiting the same migration. One reason at the top
   of the file covers every entry, and the file's header is the right place for
   it.
-* **exceptions** -- the places a rule is simply wrong. `.ljust(` building a
+* **exceptions** — the places a rule is simply wrong. `.ljust(` building a
   five-column table should take the dependency; `.ljust(` building a two-column
   key/value list is correct and a table would read worse. No pattern separates
-  those, so the entry excusing the second has to carry the judgement, and the
-  whole line was the path.
+  those, so the entry excusing the second has to carry the judgment, and an
+  unsigned entry holds only the path.
 
 So an entry may be signed:
 
@@ -185,7 +189,7 @@ So an entry may be signed:
 src/cli/top.py | alice | a two-column key/value list; a table reads worse
 ```
 
-`path | owner | reason`, with `|` as the separator -- whitespace already
+`path | owner | reason`, with `|` as the separator — whitespace already
 separates the size baseline's count and a path may hold it, and `#` at line
 start already means a comment.
 
@@ -204,8 +208,8 @@ signed entry still goes stale.
 `files.min_selected = N` fails the rule when its selection comes in under `N`
 files, naming the floor, the count and the keys that produced the count.
 
-The defect it closes is the quietest one here. A rule that selects nothing runs
-cleanly over nothing, and every check kind reports that the same way:
+Without a floor, a rule that selects nothing passes, and every check kind
+reports it the same way:
 
 | check | with zero files selected | reported |
 |---|---|---|
@@ -214,14 +218,13 @@ cleanly over nothing, and every check kind reports that the same way:
 | `max_lines` | nothing to be too long | `policy checks passed` |
 | `prose_regexp` | nothing whose prose could be read | `policy checks passed` |
 
-`require_regexp` is the sharpest of the three, because its whole job is to
-insist that something is there. Rename the directory its `include` names, or
-narrow its `glob` past the files it was written for, and the rule stops
-insisting — permanently, silently, and with a green run every time. An
-`include` root that is not there is already named on stderr, but stderr is not
-an exit code, and a `glob` that stops matching is not reported at all.
+`require_regexp` is the most exposed, because its purpose is to insist that
+something is there. Rename the directory its `include` names, or narrow its
+`glob` past the files it was written for, and the rule passes on every run. A
+missing `include` root is named on stderr without changing the exit code, and a
+`glob` that stops matching is not reported at all.
 
-So the floor is written down, and the count is measured against it:
+The floor is declared, and the count is measured against it:
 
 ```toml
 [rule.workflows-declare-permissions]
@@ -239,21 +242,15 @@ selected 0 file(s), and `files.min_selected = 1` requires at least 1.
 The keys that selected them: include = [".github/workflows"], glob = ["*.yml", "*.yaml"]
 ```
 
-**A number rather than a `require_selection = true`**, because one is a value
-and not a kind of floor: a repository whose selection must cover four workflow
-files writes `4`, and no second field has to be invented for it. `1` is the
-smallest claim the field can make — *this rule still selects something* — and
-is what most rules want. `0` is refused at load, because every selection there
-is meets it, the empty one included: the line would declare a floor and enforce
-nothing.
+**A number rather than a boolean**, so a repository whose selection must cover
+four workflow files writes `4`. `1` states *this rule still selects something*
+and is what most rules want. `0` is refused at load, because every selection
+meets it, the empty one included.
 
-**Every check whose selection this scan builds reads it**, and that is a
-decision rather than a convenience. Zero *findings* is the goal state for a
-match-forbidding rule; zero *files* is the goal state for none of them, so
-"this rule still covers something" is as live a claim under `regexp` as it is
-under `require_regexp`. The floor is measured at the one place every rule's
-selection passes through, so a check kind added later carries it without its
-author having to know the field exists.
+**Every check whose selection the scan builds reads it.** Zero *findings* is
+the goal state for a match-forbidding rule; zero *files* is the goal state for
+none of them. The floor is measured at the one place every rule's selection
+passes through, so a check kind added later carries it automatically.
 
 Where it is refused is a **guard** built-in carrying `[rule.files]` —
 `prevent-unusual-unicode-in-files` scoped to `docs/`, say. There the table is a
@@ -296,34 +293,32 @@ exclude = ["policy/**"]     # 1. exclude the policy file
 2. narrow `files.include` to what the rule is actually about;
 3. anchor the pattern, so it cannot match the key it is written under.
 
-The third is worth knowing before reaching for the first. `^Status:` does not
-match `regexp = '^Status:...'`, because that line begins with `regexp` — so an
-anchored pattern needs nothing, and a one-character class written to dodge a
-self-match it never had (`^Sta[t]us:`) is a defensive edit that can be deleted.
+Check the third before reaching for the first. `^Status:` does not match
+`regexp = '^Status:...'`, because that line begins with `regexp`, so an
+anchored pattern needs no cure, and a one-character class written to avoid a
+self-match (`^Sta[t]us:`) is unnecessary.
 
 Own rules only. A bundled set's rule is declared inside the binary and an
 `inherit.paths` rule in a file the rule may not select; neither has a
 declaration in this policy file to match.
-
-Exit codes: `0` clean, `1` violations, `2` the check could not be made.
-
-There is no fourth. A reader that closes a pipe — `uphold scan | head` — is a
-reader's decision and not a failed check: the rest of the output is dropped and
-the code stays whatever the run decided. A write that fails for any other reason
-is `2`, because the report is then not where it was sent and a caller holding
-half a file must not read `0` as a clean tree.
 
 ## `uphold scan` — the content policy
 
 Evaluates every rule over the repository's own files, using ripgrep's search
 libraries rather than a second regex engine.
 
+Exit codes: `0` clean, `1` violations, `2` the check could not be made. A
+reader that closes the pipe (`uphold scan | head`) is not a failure: the rest of
+the output is dropped and the exit code is unchanged. A write that fails for
+any other reason is `2`, because the report did not reach its destination and a
+caller holding half of it must not read `0` as a clean tree.
+
 **What "the repository's own files" means is what git tracks.** The globs in
 `[rule.files]` are applied to `git ls-files`, not to a directory walk. A tracked
 file that some ignore pattern also matches — a `.gitignore` line, a
 `.git/info/exclude` entry, or the operator's *global* ignore file, which is not
 in the repository at all — is still tracked, still pushed, and still read by
-everyone who clones it, and a walker that honoured those patterns could not see
+everyone who clones it, and a walker that honored those patterns could not see
 it. In a directory git has no index for, the tree is walked instead with **no**
 ignore file consulted, which selects a superset of what would be tracked.
 Over-reporting is the direction a checker may fail in; hiding a file is not.
@@ -360,7 +355,7 @@ it refuses** so the name predicts the rule list:
 | set | refuses |
 |---|---|
 | `process-residue` | authoring and process residue in committed content — conflict markers, home paths, dated and status metadata, tracker and thread references in documentation, private data paths — and the residue a process leaves in the policy file itself: a rule transcribed out of a set. **Installs `pre-commit` and `manual`**, and the two report different things |
-| `code-residue` | a tracker reference in a source, configuration, build or packaging file: the tracker rule of `process-residue` over every file that is not Markdown, reST, plain text or a stylesheet, under its own id. Its own set because a scope is not something `[inherit]` lets a repository choose, and the release that widened the rule in place was undone by hand in every tree that measured what it reported. For a tree whose comments already cite durable contracts. **Installs `pre-commit` and `manual`**, the same ceiling as the set it was split from |
+| `code-residue` | a tracker reference in a source, configuration, build or packaging file: the tracker rule of `process-residue` over every file that is not Markdown, reST, plain text or a stylesheet, under its own id, for a tree whose comments already cite durable contracts. **Installs `pre-commit` and `manual`**, the same ceiling as the set it was split from |
 | `credentials` | credential material a commit scanner does not own — populated environment files, browser profile and session stores. Secret shapes (private keys, service tokens, literal credential values) are gitleaks' job: inheriting it also turns on the gitleaks section of [`uphold supply-chain`](#gitleaks-which-owns-secret-shapes), the tool that owns secret shapes |
 | `unmanaged-pins` | a version pinned where no manifest holds it — a shell install line, a `releases/download/vX.Y.Z` URL, a versioned `curl` or `wget` |
 | `host-identity` | the machine the author is standing on — its username, home path, hostname and default route, read at scan time and searched for in content |
@@ -369,7 +364,7 @@ it refuses** so the name predicts the rule list:
 | `doc-claims` | a document whose anchored fact disagrees with the record it names — a value the record does not hold, a key that is not there, a source or captured artifact that is absent |
 | `default-token-grant` | a GitHub Actions workflow with no top-level `permissions:` block, whose `GITHUB_TOKEN` is therefore scoped by a repository setting rather than by the workflow |
 | `hand-rolled-toolchain` | a host tool installed by hand where a version manager was available — a `curl \| tar` download-and-unpack, and the `$HOME/.local` symlink that puts its output on PATH. Deliberately silent on `curl \| sh` (a version manager's own bootstrap has nowhere else to live), on a host-prerequisite manifest beside it (a resolver provisions, a doctor verifies), and on distro packages |
-| `comment-facts` | a measurement of your own data stated in a source comment, where no anchor can ever recount it — `# 60 s timeout`, `// ~127 MB of rlib`, `# 3 of 5 done`. The other half of `doc-claims`: that one checks a fact somebody anchored, this one refuses the shape of a fact nobody can anchor. Scoped to lines whose first token opens a comment, in source files by extension, so a string literal and a markdown bullet are never read. Lets through a version (`v1.14.1`, `Go 1.25`), a date (`2026-09-04`) and a citation (`ADR 0005`, `issue 101`), none of which is followed by a unit. Cannot tell your data from a number that is not yours — a platform constant, a limit the code enforces, a worked example — so it refuses the shape and the reader decides. Installs no git hook; the fix is to drop the measurement (or move it to the commit or pull-request body), and for a number that is not a measurement to give the code a named constant the comment points at. Never spell the digits out as words. Its second rule refuses a comment that says only what the next line says — `# the runner is ubuntu-latest` over `runner = "ubuntu-latest"` — by the `trivial_comments` test, over every file kind that check can read, tests excluded because a test's comment names the case rather than the code; the fix is a why, a constraint or a consequence, or deletion |
+| `comment-facts` | a measurement of your own data stated in a source comment, where no anchor can ever recount it — `# 60 s timeout`, `// ~127 MB of rlib`, `# 3 of 5 done`. The complement of `doc-claims`, which checks an anchored fact. Scoped to lines whose first token opens a comment, in source files by extension, so a string literal and a markdown bullet are never read. Lets through a version (`v1.14.1`, `Go 1.25`), a date (`2026-09-04`) and a citation (`ADR 0005`, `issue 101`), none of which is followed by a unit. It cannot tell your data from a platform constant, an enforced limit or a worked example, so it refuses the shape and the reader decides. Installs no git hook; the fix is to drop the measurement (or move it to the commit or pull-request body), and for a number that is not a measurement to give the code a named constant the comment points at. Never spell the digits out as words. Its second rule refuses a comment that says only what the next line says — `# the runner is ubuntu-latest` over `runner = "ubuntu-latest"` — by the `trivial_comments` test, over every file kind that check can read, tests excluded because a test's comment names the case rather than the code; the fix is a why, a constraint or a consequence, or deletion |
 | `commit-message-residue` | authorship markers and unusual characters in the message a commit records — **installs `commit-msg`** |
 | `unnamed-removal` | a function the change removes and the commit message does not name — **installs `commit-msg`**. The one set whose guard reads no artifact of its own: it judges what the parser, the diff and the message reported, and a file the parser could not read is exit `2` unless the diff saw the removal anyway |
 | `unreviewed-history` | a merge made locally rather than through a pull request — **installs `pre-commit` and `pre-merge-commit`** |
@@ -377,17 +372,16 @@ it refuses** so the name predicts the rule list:
 | `invisible-characters` | characters that draw nothing, in committed content and in the paths that carry it — **installs four stages**, and reads the whole tree at each |
 | `stale-pins` | a hook pinned at a revision its upstream has left, or at none — **installs `manual`** alone, and reaches the network |
 | `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |
-| `private-names` | a private organisation or repository named in a commit message, a staged diff, or the tracked tree of a **public** repository — **installs five stages**, and refuses to run until the repository says whether it is published |
+| `private-names` | a private organization or repository named in a commit message, a staged diff, or the tracked tree of a **public** repository — **installs five stages**, and refuses to run until the repository says whether it is published |
 | `stale-visibility` | a policy declaring `private` over a repository the forge serves as **public** — **installs `pre-push` and `manual`**, and reaches the network. Refuses that one direction only; it can never confirm privacy |
 | `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push — and, as `unowned-forge-target`, a `gh` invocation bound for a repository this workspace does not own, which refuses to run until the repository says who it is. **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [ADR 0006](adr/0006-what-a-bundled-set-may-attach-to-a-command.md) |
 | `prose-shapes` | four sentence shapes that carry nothing — a sentence announcing what the next one will say, a clause behind a dash restating the one in front of it, a hedge admitting no uncertainty, an objection nobody raised being answered. **Installs no git hook**: its rules run in `uphold scan` and at the shim seam (`gh`, `git push`), and like `published-text` it refuses to load until the repository has declared the `[[shim]]` tables itself. `UPHOLD_ALLOW=<rule-id>` is the waiver for the sentence a rule is wrong about |
 
-The nine before it install git hooks. Taking one is a decision about what will be
-refused and when, so each is named and argued separately: `stale-pins` reaches
-the network and cannot answer on a train, `invisible-characters` reads the tree
-at four stages and is the slowest thing in a hook, `unreviewed-history` stands
-in front of every commit, and two of them demand one line before they will run
-at all:
+The nine sets from `commit-message-residue` through `stale-visibility` install
+git hooks, so each is a separate decision about what is refused and when:
+`stale-pins` needs the network, `invisible-characters` reads the tree at four
+stages and is the slowest hook, `unreviewed-history` runs before every commit,
+and two of them require a top-level declaration before they run:
 
 ```toml
 owner = "your-org"          # at the top of the policy file
@@ -397,10 +391,9 @@ visibility = "public"       # ditto
 sets = ["unowned-push", "private-names"]
 ```
 
-Both are top-level fields rather than rule parameters because a rule arriving
-from a set cannot be handed one — the only way would be to write the rule out
-again, which is the transcription `no-hand-copied-base-rule` refuses — and
-because neither fact was ever a property of one rule.
+Both are top-level fields rather than rule parameters: neither is a property of
+one rule, and a rule arriving from a set cannot be handed a parameter (see
+[built-in parameters](#built-in-parameters)).
 
 `owner_required = true` on the rule is what makes the omission an exit `2`
 rather than a guard that quietly reads the answer off `origin`, which is the
@@ -436,21 +429,20 @@ what catches the leak.
 | `private` / `internal` | nothing it could be asked | **exit `2`** — never "confirmed private" |
 | nothing declared | not asked | **exit `2`** — no claim to check |
 
-The last two rows are the design. If a failed lookup could settle the answer,
-an offline laptop would flip the guards to `private` and disarm a disclosure
-check in silence, which is fail-open on the one family where fail-open is
-unacceptable. The declaration stays the input; the probe only ever refuses.
+The last two rows are deliberate. If a failed lookup could settle the answer,
+an offline machine would switch the guards to `private` and disable a
+disclosure check silently. The declaration stays the input; the probe only
+ever refuses.
 
-It installs at `pre-push` and `manual` and never at `pre-commit`, for the reason
-`stale-pins` gives: a guard that adds a network round trip to every commit is
-one somebody comments out.
+It installs at `pre-push` and `manual` and never at `pre-commit`, for the same
+reason as `stale-pins`: a network round trip on every commit invites disabling
+the guard.
 
 **Two different "unknowns", and only one of them is `refuse_unknown`'s.** A
-forge that *answers* `404` has told you something about the name: no repository
-it will show you is called that. A forge that could not be asked — no `gh`, no
-credentials, a rate limit, no network — has told you nothing, and the guard did
-not run. These were one state, which meant an unauthenticated `gh` printed a
-line per name and then permitted the commit. They are separate now:
+forge that *answers* `404` has said something about the name: no repository
+visible to this client has it. A forge that could not be asked — no `gh`, no
+credentials, a rate limit, no network — has said nothing, and the guard did
+not run. The two are reported differently:
 
 | what happened | outcome |
 |---|---|
@@ -459,46 +451,27 @@ line per name and then permitted the commit. They are separate now:
 | forge answers `404` | reported; refused only under `refuse_unknown` |
 | forge could not be asked | **exit `2`** — always, whatever `refuse_unknown` says |
 
-The shim seam asks the same forge the same question, for a different purpose —
-`scope = "public-target"` is "do these checks apply here at all" — and it now
-gives the bottom row the same answer. A scope that could not be *evaluated* is
-neither "in scope" nor "out of scope", and reading it as out of scope stood the
-checkers down exactly where the lookup failed. That is exit `2` before the
-command runs, and `unresolved = "run"` on the `[[shim]]` table is the opt-out —
-see [the shims](#uphold-shim--the-shims).
-
-The rows above are what the forge said, and the shim reaches them only where it
-had to ask at all. A repository that declares its own `visibility` in its policy
-file has answered the question already, so `public-target` reads the declaration
-and asks nobody — `public` puts the checks in scope, `private` and `internal`
-stand them down, and no `gh` runs. That declaration speaks for this repository
-and for no other, so it is read for one destination only: the one the shim took
-from `origin` because nothing on the command line named another. A `gh -R
-owner/repo` goes to the forge exactly as it always did, and it does so **even
-where the name it carries is this repository's own** — a typed `owner/repo`
-has no host in it, so under a `--hostname` or a `GH_HOST` the same two names
-are a different forge's repository with its own visibility, and two matching
-path segments cannot tell the two apart. So the `2` above is still the answer
-for a named destination the forge could not be asked about, and for a repository
-that declares nothing; what is bought offline is the case the cost was actually
-in — the push that names nothing and means `origin`, which no longer needs an
-authenticated `gh` to be told what the policy already said.
+The shim seam's `scope = "public-target"` asks the forge the same question and
+gives the bottom row the same answer: a scope that could not be evaluated is
+exit `2` before the command runs, and `unresolved = "run"` on the `[[shim]]`
+table opts out. A repository that declares its own `visibility` answers the
+question offline for a destination taken from `origin`; a destination named on
+the command line is always put to the forge. Both are described under
+[the shims](#uphold-shim--the-shims).
 
 So **`gh` must be authenticated wherever these rules run**, CI included. In a
 GitHub Actions job that means `GH_TOKEN: ${{ github.token }}`; the job token
 reads this repository and public ones and answers `404` for everything else,
-which is the right answer for an invented name. This is a real behaviour change:
-a run with no token used to report every name as unresolved and pass, so a job
-without one was running the family and reaching a verdict on nothing.
+which is the right answer for an invented name. A job without a token exits
+`2` rather than passing.
 
 `private-names` does not turn `refuse_unknown` on. What is left fail-open under
-that default is the `404` alone, and a `404` is what every invented name in
-every document produces: measured on the tree that ships the set, fifteen names
-answer `404` and every one is a documentation or test fixture. Turn it on per
-repository after naming those in `public_repos`.
+that default is the `404` alone, and a `404` is what every invented name in a
+document or test fixture produces. Turn it on per repository after naming those
+in `public_repos`.
 
 **A name on a host that is not GitHub.** `gh` answers for github.com and for
-nothing else -- a GitHub Enterprise host is a different forge that happens to
+nothing else — a GitHub Enterprise host is a different forge that happens to
 share the software, and asking github.com about a name seen on
 `github.acme.com` answers about somebody else's repository. Every other
 `host.tld/owner/repo` is therefore a name this tool has no answer for, and which
@@ -506,16 +479,14 @@ of two answers it gets depends on **whose name it is**:
 
 | the owner segment | outcome |
 |---|---|
-| a declared `private_owners` owner, or the policy's own `owner` | **exit `2`** -- could-not-look, printed beside any finding |
+| a declared `private_owners` owner, or the policy's own `owner` | **exit `2`** — could-not-look, printed beside any finding |
 | anybody else | reported as unresolved; refused only under `refuse_unknown` |
 
-The split is the whole of it. A repository under an owner this policy has named
-is the case the rule exists for, and silence about it is not a pass. Every other
-`host.tld/a/b` is a DOI, a licence URL or an encyclopaedia article -- the shape
-of a repository name and not one -- and calling those could-not-look would make
-the cure "enumerate every host you cite" in every consuming repository, which is
-`parameterize-do-not-enumerate` with the enumeration moved out of the binary and
-into every policy file.
+A repository under an owner this policy has named is the case the rule exists
+for, so silence about it is not a pass. Any other `host.tld/a/b` is usually a
+DOI, a license URL or an article with the shape of a repository name, and
+treating those as could-not-look would require every consuming repository to
+enumerate every host it cites.
 
 `foreign_hosts` is how a repository says a host is not a forge at all, which
 quiets both rows:
@@ -525,16 +496,13 @@ foreign_hosts = ["git.acme-internal.example", "*.sr.ht"]
 ```
 
 Host globs, matched case-insensitively. It is a top-level policy field for the
-reason `private_owners_file` is one -- a rule arriving from a bundled set cannot
-be handed a parameter -- and a rule may write its own list, which **replaces**
-the policy's for that rule rather than extending it. What neither list replaces
-is the built-in one: `claude.ai` is quiet in every policy, because the session
-link a commit or pull request written with an assistant carries has the shape
-`host/owner/repo` and is a forge for nobody, and 84 policy files in one fleet
-had each written the same one-item list to say so. Which *forges* carry a
-repository worth an answer is still a fact about the repository, so the built-in
-list holds only hosts that serve no `owner/repo` path for anybody, and a
-policy's `foreign_hosts` **extends** it rather than starting over.
+same reason as `private_owners_file` (see [built-in
+parameters](#built-in-parameters)), and a rule may write its own list, which
+**replaces** the policy's for that rule rather than extending it. Neither list
+replaces the built-in one: `claude.ai` is quiet in every policy, because an
+assistant session link has the shape `host/owner/repo` and is not a forge. The
+built-in list holds only hosts that serve no `owner/repo` path for anybody, and
+a policy's `foreign_hosts` **extends** it.
 
 `doc-claims` is the one set whose rule needs the author to write something
 beside the prose, so its grammar is here rather than only in the set. A
@@ -572,14 +540,11 @@ references in documentation — Markdown, reST and plain text — under
 `no-task-tracker-references`. The same pattern over every other tracked file —
 source, configuration, scripts, packaging, including systemd `Documentation=`
 fields, but not CSS, Sass, Less or Stylus, where a hash and digits is a
-colour — is `no-task-tracker-references-in-code`, the one rule of the
+color — is `no-task-tracker-references-in-code`, the one rule of the
 `code-residue` set, and the two exclude each other's files so a line is under
-exactly one of them. The scopes are two sets rather than one rule because a
-scope is not something `[inherit]` lets a repository choose: it takes sets
-whole and disables rules by id. The release that widened the docs rule to every
-file in place was undone by hand in every tree that measured what it reported,
-a docs-only copy under the same id in each; a set is the opt-in a copy was
-standing in for. Keep the durable explanation in the repository; issues can
+exactly one of them. The scopes are two sets rather than one rule because
+`[inherit]` takes sets whole and disables rules by id; it cannot narrow a
+scope. Keep the durable explanation in the repository; issues can
 point to code, but code must not require an issue to explain it. Captured
 logs, bug reports, and benchmark results belong in issues. Benchmark programs
 and synthetic fixtures belong in the repository. Git history owns edit dates
@@ -588,12 +553,9 @@ and change history; tracked files describe the current contract.
 `no-process-history-references`, in the same set and over the same
 documentation globs, refuses the narrative form alone — a sentence that says a
 point was settled in a discussion, in an issue, a thread or a PR, and names no
-record — and nothing the tracker rule reads. It used to carry the tracker URL
-and the `issue #N` form too, so a
-documentation line in either was reported twice under two ids, and a consumer
-reading a doubled report disabled one of the rules. The two are disjoint now:
-the record-naming forms, in any case of `issue` and `pr`, are the tracker
-rule's.
+record — and nothing the tracker rule reads. The two rules are disjoint: the
+record-naming forms, in any case of `issue` and `pr`, belong to the tracker
+rule, so no line is reported twice.
 
 The static checks recognize tracker references, authoring-date headers,
 changelog filenames, and log filenames. Identifying a pasted bug report,
@@ -606,12 +568,11 @@ and bare numbers need prose context, an opening delimiter, or a list separator
 (a comma, semicolon, or slash) before them, so standards citations remain valid
 and a citation list that names its repository once is read to its end. After a
 separator, three or six digits followed by a closing paren, a semicolon, a
-comma, a percent sign or a percentage are a colour, as in
+comma, a percent sign or a percentage are a color, as in
 `color-mix(in srgb, #000 20%, white)`, and are not read. Other legitimate
 literal uses need a scoped override.
 
-None of those arguments should stand between anyone and `process-residue`. The
-binary answers "what is in it" directly:
+The binary lists what a set contains:
 
 ```sh
 uphold rules --set process-residue           # the set's rules, one per line
@@ -664,13 +625,12 @@ and is a one-line diff that says so. `[set]` in a repository's own policy, or in
 an `inherit.paths` file, is refused — nothing there ships compiled in, so
 nothing there has the problem the ceiling exists for.
 
-A repository's own rule of the same `id` shadows the inherited one;
-`inherit.disabled_rules` drops it, and naming an id nothing inherited defines
-is an error rather than a line that quietly does nothing. `inherit.paths`
-merges extra policy files, repository-relative, after the bundled sets.
+`inherit.disabled_rules` drops an inherited rule, and naming an id nothing
+inherited defines is an error. `inherit.paths` merges extra policy files,
+repository-relative, after the bundled sets.
 
-An own rule of the same `id` replaces the inherited one **whole**, so it is
-the spelling for a rule that checks something different. To move only
+A repository's own rule of the same `id` replaces the inherited one **whole**,
+so it is the spelling for a rule that checks something different. To move only
 **where** an inherited rule reads, write an override:
 
 ```toml
@@ -729,18 +689,13 @@ It runs at two stages and they answer different questions:
 | `pre-commit` | only the ids **this change adds**, against the policy file at `HEAD` |
 | `manual` | **every** transcription in the policy — the sweep |
 
-The split is why it can sit at a hook at all. It shipped at `manual` alone, and
-a sweep of 77 repositories then measured what that bought: 76 of them inherited
-the set, so the check was *loaded* almost everywhere, and roughly forty carried
-a transcription it had never once reported — nothing runs a manual stage on its
-own. A report nobody asks for is coverage of zero. Refusing the *addition*
-rather than the *state* costs nothing in a repository that adds none, so the
-hook arrives with no commit to be surprised by, while a transcription written
-after it cannot be committed silently.
+A `manual` stage runs only when someone asks for it, so the sweep alone reports
+nothing in practice. Refusing the *addition* rather than the *state* lets the
+hook arrive without refusing any existing commit, while a new transcription
+cannot be committed silently.
 
-Those five fields interact, so "which rules does this repository run" is not a
-question anyone can answer by reading the `[rule.*]` tables. The loader answers
-it:
+These fields interact, so "which rules does this repository run" cannot be
+answered by reading the `[rule.*]` tables. The loader answers it:
 
 ```sh
 uphold rules --effective          # every resolved rule, and where it fires
@@ -748,17 +703,13 @@ uphold rules --effective --json   # the same, for a program
 ```
 
 The JSON is one array of `{"id": ..., "git_hooks": [...], "seams": [...]}`, in
-the order the engine resolved them. It exists so that nothing has to
-re-implement the loader to find out what runs — a second reader of these fields
-is a reader free to disagree with the engine, and it will disagree exactly where
-somebody used a field it does not know about.
+the order the engine resolved them, so no other tool has to re-implement the
+loader to find out what runs.
 
 `seams` is `scan`, `guard`, `shim`, or more than one, and it is the half
-`git_hooks` cannot express. An empty hook list is true of a content rule and of
-a checker standing in front of a command alike, so a reader with only the hooks
-has to guess between two unrelated places — and the reconciler guessed `scan`,
-which credited a shim-only rule to a seam that never touches it. An empty
-`seams` means nothing runs the rule at all, which the loader refuses.
+`git_hooks` cannot express: an empty hook list is true of a content rule and of
+a checker standing in front of a command alike. An empty `seams` means nothing
+runs the rule at all, which the loader refuses.
 
 The two requests this shape exists to make writable:
 
@@ -1056,7 +1007,7 @@ The extractor is chosen by the file's kind:
 | `.toml`, `.yaml`, `.yml`, `.sh`, `.bash`, `.zsh`, `.ini`, `.cfg`, and a dotfile with no extension (`.gitignore`) | the lines whose first non-space character is `#`, with the `#` stripped |
 | anything else | nothing |
 
-Two consequences worth writing down. **A wrapped sentence still matches**: the
+Two consequences. **A wrapped sentence still matches**: the
 lines of a paragraph are joined before the pattern sees them, which is why
 `files.multiline` is refused beside `prose_regexp` — the span is already one
 line and there is nothing left to span. And **a file of any other kind
@@ -1140,30 +1091,15 @@ charset, exclude the file, or mark it not text in `.gitattributes`.
 
 **What this catches is a script with no business in the text** — a Cyrillic
 small a, `U+0430`, sitting inside an otherwise ASCII word and rendering as one
-of its letters. It is not a check on which language the prose is written in —
-it never was: `en` and `de` would both admit exactly Latin, which is why the
-field names scripts and not languages.
+of its letters. It is not a check on which language the prose is written in:
+`en` and `de` would both admit exactly Latin, which is why the field names
+scripts and not languages.
 
 ### `commands-resolve` — a command a reader would run
 
-The third resolver, and the last of the three things a document asserts about a
-tree. `links-resolve` resolves a path a reader would **click**;
-`anchors-resolve` a value a reader would **believe**; this one a command a
-reader would **run**. All three are prose that happens to be checkable, and
-before they existed all three failed the same way: silently, forever, with every
-gate in every repository still green.
-
-The defect it was built from, measured rather than imagined. A `README.md`
-opened with
-
-```text
-fg-registry credentials
-```
-
-for as long as the file existed. That command has two verbs and `credentials`
-was never one of them — the binary's own error names the alternatives — so the
-answer was one invocation away, and nobody invoked it: a reader who trusts the
-README has no reason to, and a reader who does not is not reading the README.
+The third resolver. `links-resolve` checks a path a reader would **click**,
+`anchors-resolve` a value a reader would **believe**, and this one a command a
+reader would **run**: a documented verb the command does not dispatch on.
 
 ```toml
 [rule.doc-commands-resolve]
@@ -1175,8 +1111,7 @@ command_sources = ["cmd/{}/*.go", "scripts/{}.rs"]
 glob = ["*.md"]
 ```
 
-**`command_sources` is a pattern, not a table of names**, and that is the whole
-design. `{}` stands for the command's name and is captured out of the path, so
+**`command_sources` is a pattern, not a table of names.** `{}` stands for the command's name and is captured out of the path, so
 the convention stays in the repository that has one and nothing about any
 workspace's layout is compiled into the binary. A list of command names would be
 a second copy of the tree, free to go stale, which is the class of defect this
@@ -1184,27 +1119,18 @@ rule exists to refuse in documents. The capture also **bounds** the union: a
 command's verbs are read from the files its own pattern selected and no others,
 so a sibling binary in the same repository cannot lend it verbs.
 
-**It parses the dispatch. It does not run `--help`.** Running the binary needs a
-build — warm locally, cold in CI, and a gate that needs the network is one that
-gets skipped — and it invites the far worse mistake of resolving a verb by
-*running* it: `fg-registry sync` in a document would be "verified" by
-fast-forwarding thirty-nine submodules. Only the help text is safe to execute
-for, and help text is prose too; a doc comment drifts from the switch below it
-exactly as the README drifted. The switch **is** the verb list: `case "sync":`
-is not a description of what the command accepts, it is the mechanism by which
-it accepts it, and it cannot be stale without also being broken.
+**It parses the dispatch; it does not run `--help`.** Running the binary needs
+a build and risks resolving a verb by executing it, and help text is prose that
+drifts like any other. The switch **is** the verb list: `case "sync":` is the
+mechanism by which the command accepts the verb, so it cannot be stale without
+also being broken.
 
 **A command must agree with itself before it judges anyone.** A verb list read
-wrong is worse than no verb list: it produces confident findings against
-documents that were right. Measured — the first run of the implementation this
-ports reported 38 findings, one binary supplied 22 of them by dispatching in a
-form the parser could not read, and every one of those was false and read as
-real. So a command judges documents only when two independent readings of its
-own sources agree: the string labels of its dispatch, and the verbs its own
-usage block names about itself. When they disagree the command is **counted,
-named and skipped**, never guessed at — and the count is printed every run,
-because a check that read four commands out of a hundred otherwise reads exactly
-like one that read them all.
+wrong produces confident findings against correct documents. So a command
+judges documents only when two independent readings of its own sources agree:
+the string labels of its dispatch, and the verbs its own usage block names.
+When they disagree the command is **counted, named and skipped**, never guessed
+at, and the count is printed every run so partial coverage is visible.
 
 ```text
 doc-commands-resolve: 3 command(s) discovered, 2 judged, 1 skipped
@@ -1217,7 +1143,7 @@ without this they are indistinguishable from a tree whose every documented verb
 resolves.
 
 A dispatch is read with tree-sitter — already in this binary for the comment
-checks — and is recognised structurally rather than by a list of subject
+checks — and is recognized structurally rather than by a list of subject
 spellings:
 
 | condition | what it rejects |
@@ -1226,39 +1152,34 @@ spellings:
 | a catch-all branch exists | a lookup that never has to answer for a word it does not know |
 | where it dispatches on nothing, **every** branch names a literal | a Go tagless `switch { case ready(): }`, whose arms are booleans and not verbs |
 
-"Dispatches on something" is deliberately **not** one of the conditions, and
-that was measured rather than reasoned. Go spells a dispatch that also guards its
-own argument count as `switch { case len(args) > 0 && args[0] == "serve": }`, and
-refusing to read it left a real command judged against a *sub*-dispatch found in
-another file of the same package — which produced three confident findings
-against a README that was right. "Every branch names a literal" is the property
-that separates the two.
+Whether the switch has a subject is deliberately **not** a condition. Go spells
+a dispatch that also checks its argument count as
+`switch { case len(args) > 0 && args[0] == "serve": }`, and "every branch names
+a literal" is what separates that from a boolean switch.
 
-Go and Rust. A third language is a grammar dependency and one row.
+Supported languages: Go and Rust.
 
 `command_sources` accepts `*`, `**`, `/` and literal text, and **refuses the
 rest of the glob syntax at load** — `?`, bracket classes and brace alternation.
 The pattern is used twice, once as a glob to select the files and once as a
 regex to read the command's name out of the path, and a construct only the first
-of those understands would select a file the second cannot name. That file would
-then vanish from the discovered count with nothing said, which is the failure
-this rule exists to refuse. A path selected and not nameable is reported and
-counted anyway, in case one ever gets past the refusal.
+of those understands would select a file the second cannot name, and that file
+would drop out of the discovered count unreported. A path selected and not
+nameable is reported and counted anyway.
 
 What it deliberately does not do:
 
 - **Only code spans**, fenced or inline, and only where the command is the
   **first token** of the span. An invocation begins with the binary; a sentence
   that happens to contain the same two words in a row does not, and neither does
-  a column of an ASCII diagram. Both were false findings on the first run, and
-  narrowing to the shape of an actual instruction is what keeps a gate from
-  crying wrong — a gate that cries wrong gets waived.
+  a column of an ASCII diagram. Restricting the check to that shape avoids false
+  findings, which would otherwise lead to the rule being waived.
 - **No bundled set ships it.** The rule needs a `command_sources` pattern that
   describes one tree's layout, and a rule arriving from a set cannot be handed a
   parameter. A set carrying a layout would either impose one workspace's
   convention on every inheriting repository or ship a rule that refuses to run.
 
-Two limits worth knowing before adopting it:
+Known limits:
 
 - A flag that takes a **separate** value hides the verb behind it:
   `fg-registry --workspace here sync` reads `here`. Nothing in the text
@@ -1292,7 +1213,7 @@ stamped on it, the range about to be pushed.
 | `no-stale-hook-pins` | a pin naming no ref, or a branch — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree — and a lefthook ref left behind its upstream. Whether a pre-commit `rev:` is the newest tag is `prek update --check`'s, run as the consumer's own `prek-pins-current` hook; a pin it **could not check** is exit `2` |
 | `no-hand-copied-base-rule` | a rule this policy writes out by hand under an id a bundled set already ships, from a set it does not inherit. Reads the **policy**, not the tree. At `pre-commit` only what the change adds; at `manual` the whole sweep |
 | `no-stale-visibility` | a declared `private` the forge no longer serves. Reads the **declaration** and the forge, not the tree; a forge that did not answer is exit `2` and never "confirmed private", and it says which silence it met — a 404 reads differently from a rate limit |
-| `removed-function-named` | a commit that removes a function -- a Rust `fn`, a Python `def`, a Go `func` or method -- whose message does not name it. Reads no artifact itself: it judges **evidence** from the compiled-in providers (the parser over `HEAD` and the index, a pattern over the staged diff, the message), and the refusal names the file, the function and which provider saw it go. A staged file the parser could not read is exit `2` unless the diff pattern found a removal in it, and two parsers disagreeing about one function is a refusal naming both. See [ADR 0008](adr/0008-evidence-and-what-a-policy-may-consume.md) |
+| `removed-function-named` | a commit that removes a function — a Rust `fn`, a Python `def`, a Go `func` or method — whose message does not name it. Reads no artifact itself: it judges **evidence** from the compiled-in providers (the parser over `HEAD` and the index, a pattern over the staged diff, the message), and the refusal names the file, the function and which provider saw it go. A staged file the parser could not read is exit `2` unless the diff pattern found a removal in it, and two parsers disagreeing about one function is a refusal naming both. See [ADR 0008](adr/0008-evidence-and-what-a-policy-may-consume.md) |
 
 Declared like any other rule, in the same file and the same id namespace.
 **`git.hooks` is the whole registration.**
@@ -1305,7 +1226,7 @@ message**, which is what makes a Japanese subject line, with the `。`, `、` an
 actually type. The fullwidth forms (`！`, `（`) name no script in Unicode at all
 and are admitted on the presence of an East Asian one instead.
 The same `。` in an English sentence is still refused, because nothing in that
-message is written in a script that uses it, and that is the paste artefact the
+message is written in a script that uses it, and that is the paste artifact the
 rule exists for. A character belonging to no script is refused whatever the
 message is written in: an em dash, a curly quote, and everything
 `prevent-unusual-unicode-in-files` bans for drawing nothing.
@@ -1325,7 +1246,7 @@ by it — the file guard lets a fixture earn an invisible because a captured pag
 is data; a message is prose, and the only thing an invisible can do in prose is
 hide. The field is read wherever the rule runs: at `commit-msg`, at the pushed
 range, and through the `text-guards` consultation for a pull-request body, so
-a repository that declares (or inherits) the allowance has it honoured at the
+a repository that declares (or inherits) the allowance has it honored at the
 text seam without an `UPHOLD_ALLOW` on the rule's whole id.
 
 ```toml
@@ -1362,13 +1283,12 @@ the pinned owner, `allowed_owners`, `allowed_repos` — passes exactly as before
 with no network call. Only a destination the list refused, and only on GitHub,
 is put to `gh`: whether `gh api user` is the destination's owner, and failing
 that whether `gh api repos/<owner>/<repo>` reports `permissions.admin`. Either
-is ownership and the run exits `0` with nothing extra printed. This is what a
-pin cannot express — a bundled rule takes no parameter, so an operator who owns
-two forges had no lever short of `UPHOLD_ALLOW`, which switches the guard off
-rather than answering it — and it is not the tautology `owner` exists to refuse,
-because ownership is a fact the forge holds and editing a remote cannot move it.
+is ownership and the run exits `0` with nothing extra printed. This covers what
+a pin cannot, since a bundled rule takes no parameter, and it is not the
+tautology `owner` exists to refuse: ownership is held by the forge, and editing
+a remote cannot change it.
 
-A forge that answers **no** is today's refusal, exit `1`, with one line saying
+A forge that answers **no** is a refusal, exit `1`, with one line saying
 the forge was asked and disagreed too. A forge that **could not be asked** — no
 `gh`, not authenticated, no network, output that is neither a yes nor a no — is
 exit `2` with the same report and a line saying why: a question that could not
@@ -1407,8 +1327,17 @@ two seams, and who this workspace is means the same thing whether a push or a
 nothing else — everything else in that row is about judging names in text, which
 the falsifier never does.
 
-**Five of these are also top-level policy fields**, and that is not a
-convenience. A rule arriving from a bundled set cannot be handed a parameter —
+The same refusal applies to check-specific fields outside this table:
+`exclude_cfg_test` is read only by the content searches (`regexp`, `values` —
+it drops a matched *line* inside a `#[cfg(test)]` block, and no other check has
+one), `require_any_link` / `allow_outside_repo` only by `links-resolve`,
+`require_any_anchor` only by `anchors-resolve`, and `command_sources` only by
+`commands-resolve`. `files.min_selected` goes the other way: every check whose
+selection the scan builds reads it, and it is refused only on a guard built-in
+whose `[rule.files]` is a scope rather than a selection.
+
+**Five of these are also top-level policy fields.** A rule arriving from a
+bundled set cannot be handed a parameter —
 the only way to give it one is to write the rule out again, which is the
 transcription `no-hand-copied-base-rule` refuses — so the facts that belong to
 the repository rather than to any one rule are declared once, at the top of the
@@ -1443,13 +1372,10 @@ A bare relative path is refused: it would resolve against whichever directory
 the hook ran in, and a list of names that must not be published is the one file
 that must not be looked for inside the tree that publishes.
 
-**A bundled set may ship the file form**, and `private-names` does. The
-objection to a set carrying `private_owners_from` was never to the declaration
-— measured across one fleet, 97 copies of one `cat` line across 87 policy
-files, every one naming the same file under `$XDG_CONFIG_HOME` — but to the
-shell: a command arriving through a set runs in every inheriting repository on
-the strength of a version bump. A path runs nothing. So the set's top level
-carries
+**A bundled set may ship the file form**, and `private-names` does. A set may
+not carry `private_owners_from`, because a command arriving through a set runs
+in every inheriting repository on a version bump; a path runs nothing. So the
+set's top level carries
 
 ```toml
 private_owners_file = "xdg:principles/private-owners"
@@ -1469,12 +1395,10 @@ with no file for it to be about.
 
 ### Reading a repository fact from a command
 
-`owner` and `visibility` are each written once per repository, and across one
-fleet that is 78 `owner` lines carrying seven distinct values — 41 copies of one
-string inside a single organisation. `owner_from` and `visibility_from` are the
-same move `private_owners_from` makes: a command whose stdout is the value, run
-in the repository root, so a workspace fact is written once outside the tree
-instead of once per tree.
+`owner` and `visibility` are otherwise written once per repository.
+`owner_from` and `visibility_from` work like `private_owners_from`: a command
+whose stdout is the value, run in the repository root, so a workspace fact is
+written once outside the tree instead of once per tree.
 
 ```toml
 owner_from = "cat ${XDG_CONFIG_HOME:-$HOME/.config}/uphold/owner"
@@ -1486,7 +1410,7 @@ visibility_from = "cat .workspace/visibility-cache"
 else's remote is the exact accident `prevent-public-push` exists to catch, and a
 derived allow-list is repointed by the same command. The same applies to
 visibility: a command that asks a forge what a repository is *today* hands three
-guards' one scope condition to a network call, which answers nothing on a train,
+guards' one scope condition to a network call, which answers nothing offline,
 nothing in CI without a token, and answers about the visibility a repository is
 in the middle of changing. What the command reads must be a value somebody
 decided, not the state being guarded.
@@ -1526,8 +1450,7 @@ family asks about visibility three times, once per variant — and the answer is
 never cached to disk. A declaration exists to avoid a stale answer, and a cache
 outliving the run is a stale answer with a longer life.
 
-**Why the owner list is worth declaring**, measured rather than asserted. A
-forge lookup only *adjudicates* names something already extracted, and a bare
+**Why the owner list is worth declaring.** A forge lookup only *adjudicates* names something already extracted, and a bare
 `owner/repo` is extracted only for declared owners and for this repository's
 own — anything else is indistinguishable from a relative path, and treating
 every path in every document as a name would be one lookup per path:
@@ -1537,18 +1460,18 @@ every path in every document as a name would be one lookup per path:
 | `https://github.com/owner/repo` | refused | refused |
 | `<your own owner>/repo` | refused | refused |
 | `otherowner/repo`, bare | refused | **not seen** |
-| an organisation named on its own | refused | **not seen** |
+| an organization named on its own | refused | **not seen** |
 | `<owner>.<document>.v<N>`, a schema id | **passed** | **not seen** |
 
 **A schema id is not a repository name**, and the last row is where that is
-decided. An organisation that publishes document formats writes its own name
+decided. An organization that publishes document formats writes its own name
 into every id it publishes, so the bare-owner search read each of them as the
-organisation named on its own and no pull request could quote the id of the
+organization named on its own and no pull request could quote the id of the
 schema it was changing. The id is told from the name by what follows the owner:
 one or more dotted segments and then a version segment, `acme.widget_state.v1`
 and the `.schema.json` file that carries it. Nothing else moves. A schema id has
 no slash in it, so `<Owner>/<repo>` under a declared owner is refused exactly as
-before, and so is the organisation written on its own in a sentence -- there
+before, and so is the organization written on its own in a sentence — there
 being no id after the name is the whole difference.
 
 An unreadable source is exit `2`, whichever spelling declared it — a command
@@ -1566,15 +1489,7 @@ anywhere — not at the top, not on a rule, not in an inherited set — is refus
 at load: it would permit a failure that cannot happen. `visibility` is held to
 `public`, `private` or `internal` **at load**, not when a hook fires: a misspelt
 visibility is a fact about the file, and a guard that hears about it months
-later has been reporting a clean tree the whole way. The same mechanism holds beside the checks:
-`exclude_cfg_test` is read only by the content searches (`regexp`, `values` —
-its job is dropping a matched *line* inside a `#[cfg(test)]` block, and no
-other check has one), `require_any_link` / `allow_outside_repo` are read only
-by `links-resolve`, `require_any_anchor` only by `anchors-resolve`, and
-`command_sources` only by `commands-resolve`. `files.min_selected` is the one
-that goes the other way — every check whose selection the scan builds reads it,
-and it is refused only on a guard built-in whose `[rule.files]` is a scope
-rather than a selection.
+later has been reporting a clean tree the whole way.
 
 **Which bytes a guard reads: the index, unless a push says otherwise.** At a
 push there is no index at all — the artifact is the pushed commit's whole tree
@@ -1589,8 +1504,8 @@ the same `allow` list means something slightly stricter there. At a push the
 guards also read the **commit messages** the push publishes, which no earlier
 seam can reach for a commit written under `--no-verify`.
 
-**A blob a guard could not read is exit `2`, never a skip.** The one honest
-skip is a genuinely binary file — a NUL in the first 8000 bytes. Anything else
+**A blob a guard could not read is exit `2`, never a skip.** The only skip is
+a binary file — a NUL in the first 8000 bytes. Anything else
 that will not decode is a surface this run did not examine, and saying so is
 the whole contract. A submodule is enumerated by path and never read as a blob:
 its content is another repository's.
@@ -1616,10 +1531,10 @@ Three trees that look alike from the outside and are three different answers:
 |---|---|
 | a lefthook config and no `.pre-commit-config.yaml` | `0` with a note. That is the documented lefthook-only install path, and any `remotes:` the lefthook config pins *were* read |
 | a hook config naming no remote pin — every entry `repo: local` or `repo: meta`, or a lefthook config with no `remotes:` | `0` with a note. These files were read, and what they say is that this repository pins nothing remote |
-| no hook configuration of **either** manager, anywhere under the root | `2`. Zero pins found is not zero pins to find: a config renamed, moved above this root, or added to `.gitignore` — ignored files are not walked — arrives here as an empty tree, and used to read as clean |
+| no hook configuration of **either** manager, anywhere under the root | `2`. Zero pins found is not zero pins to find: a config renamed, moved above this root, or added to `.gitignore` — ignored files are not walked — arrives here as an empty tree |
 
-A pin whose remote could not be reached is exit `2` for the same reason: a
-runner with no network fails this guard where it used to pass it.
+A pin whose remote could not be reached is exit `2` for the same reason, so a
+runner with no network fails this guard.
 `UPHOLD_ALLOW=no-stale-hook-pins` is the deliberate bypass in each of those
 cases, and every refusal names it.
 
@@ -1718,61 +1633,48 @@ unresolved = "refuse"                             # the default; "run" is the op
 ```
 
 `title_flags` is `text_flags` for the subject a forge shows above the body,
-and a separate kind for both directions of the difference: a format rule with
-`subjects = ["title"]` is never asked about a body, and a title given alone no
-longer reads as "the body was supplied" — under `text_flags` it did, which
-told the shim not to install itself as the editor, so the body the command was
-about to open an editor *for* closed unread.
+kept separate for two reasons: a format rule with `subjects = ["title"]` is
+never asked about a body, and a title given alone is not taken as a supplied
+body, so the shim still installs itself as the editor and reads the body.
 
 `target` is `forge-repo` or `git-remote`, both built-in resolvers. `scope` is
 `public-target | public-registry | always`, with
 `scope = { command = { command = "..." } }` as the escape hatch — exit `0` to
-be in scope, for a question that is none of the other three. (The doubly
-nested form is the enum's own spelling; the flatter one this page used to show
-never parsed.) `collect = "git-refs"` replaces the argv walk for `git`, whose
-published text is positional.
+be in scope, for a question that is none of the other three (the doubly nested
+form is the enum's own spelling). `collect = "git-refs"` replaces the argv walk
+for `git`, whose published text is positional.
 
-**`public-target` asks this repository before it asks anybody else.** The
-policy's own top-level `visibility` is a statement of the fact the predicate
-needs, so where there is one it settles the question offline: `public` is in
-scope, `private` and `internal` are out of it, and nothing is spawned. The
-narrowing that makes reading it safe is that a declaration is about ONE
-repository, and the only destination this seam can be sure of is the one it
-derived itself. So the declaration is read where a `target_flags` value is
-absent — where the destination came from `origin` — and nowhere else. A named
-destination goes to the forge whatever it names: `gh -R other/repo` obviously,
-and `gh -R this-owner/this-repo` too, because the name carries no host and
-`--hostname` and `GH_HOST` both make `owner/repo` a different repository on a
-different forge. A tree whose `origin` cannot be read has no destination for a
-declaration to be about, and a policy that declares nothing changes nothing.
+**`public-target` asks this repository before it asks anybody else.** Where the
+policy declares a top-level `visibility`, it settles the question offline:
+`public` is in scope, `private` and `internal` are out of it, and nothing is
+spawned. A declaration is about one repository, so it is read only where no
+`target_flags` value is present and the destination came from `origin`. A named
+destination always goes to the forge, including `gh -R this-owner/this-repo`,
+because the name carries no host and `--hostname` or `GH_HOST` can make
+`owner/repo` a repository on a different forge. A tree whose `origin` cannot be
+read has no destination for the declaration to describe, and a policy that
+declares nothing changes nothing.
 The guard seam does the same thing one step less strictly (see
 `guard::names::target_is_public`), and the difference is deliberate: a guard
 reads text belonging to this repository, while a shim stands in front of a
 command that may be publishing somewhere else entirely.
 
 **A scope that could not be evaluated is not a scope that said no.** Where the
-question does reach a forge, `public-target` is the one predicate that asks
-somebody else, and `gh`
-unauthenticated, a rate limit, no network, or a repository with no `origin` all
-answer nothing. That was read as "out of scope", which stood every checker
-behind the table down — including `prevent-unowned-target`, whose own contract
-two sections below is exit `2` on a destination it could not resolve. So the
-predicate has three answers now, and the third is **exit `2` before the command
-runs**, naming what could not be asked. `unresolved = "run"` on the table opts
-back into the old behaviour: the command runs and the shim says on stderr that
-no checker did. The field is refused at load on a table no reading of which can
-reach `public-target` — neither the table's own `scope` nor the `command.scope`
-of any rule naming the command — because a parameter nothing reads is
-configuration that looks like it works.
+question reaches a forge and gets no answer (`gh` unauthenticated, a rate limit,
+no network, or a repository with no `origin`), the predicate's third answer is
+**exit `2` before the command runs**, naming what could not be asked. Reading it
+as out of scope would stand down every checker behind the table, including
+`prevent-unowned-target`, whose own contract is exit `2` on a destination it
+could not resolve. `unresolved = "run"` on the table opts out: the command runs
+and the shim says on stderr that no checker did. The field is refused at load on
+a table that cannot reach `public-target` through its own `scope` or the
+`command.scope` of any rule naming the command, because nothing would read it.
 
-**A silence is told apart from the other silences.** "The forge did not say" was
-one sentence for four different situations, and the one thing the reader needed
-in order to act was the one thing it left out: a 404, an unauthenticated `gh`, a
-rate limit and a `gh` that is not installed are four instructions, not one. So a
-failed forge call is classified once — in `shim::Silence`, which the shim seam,
-`no-stale-visibility` and `prevent-public-push` all read, because three
-classifiers would be free to disagree about one exit code and only one of them
-could be right — and the refusal carries the cause:
+**Forge failures are classified.** A 404, an unauthenticated `gh`, a rate limit
+and a `gh` that is not installed each call for a different action. A failed
+forge call is classified once, in `shim::Silence`, which the shim seam,
+`no-stale-visibility` and `prevent-public-push` all share so they cannot
+disagree about one exit code, and the refusal carries the cause:
 
 ```text
 uphold shim: the forge did not say whether acme/widget is public, so whether the
@@ -1782,20 +1684,17 @@ answer about the repository -- it is the same silence for a public one and a
 private one.
 ```
 
-The reset time is the one question this tool asks in reply to a failure, and it
-asks the one endpoint GitHub exempts from the limit it is reporting, so the ask
-cannot deepen the hole it is describing. **None of this changes a verdict.**
-Every one of these is still exit `2`, still not a pass, and still not a cached
-answer — a wait somebody can sit out is worth naming precisely because the
-alternative on offer is `UPHOLD_ALLOW`, and a reader who cannot tell a rate limit
-from a deleted repository reaches for the bypass either way.
+For a rate limit, the reset time is read from the one endpoint GitHub exempts
+from that limit, so asking does not consume more of it. **None of this changes
+a verdict**: each case is still exit `2`, never a pass and never cached. Naming
+the cause matters because a reader who cannot tell a rate limit from a deleted
+repository is left with `UPHOLD_ALLOW` as the only option.
 
 **An alias is expanded before the `match` list is consulted.** `match` names
 verbs literally, and every one of these commands lets a person rename one:
 `git -c alias.p=push p origin HEAD:refs/heads/x`, a persisted `[alias] p =
-push`, `gh alias set` and `glab alias set` all present a verb no list contains,
-which used to mean a push to a public forge exec'd unexamined at exit `0` with
-nothing printed. Where — and only where — nothing matched, the shim asks the
+push`, `gh alias set` and `glab alias set` all present a verb no list contains.
+Where — and only where — nothing matched, the shim asks the
 real command what the word expands to (`git config --get alias.<word>`,
 `<command> alias list`) and matches again against the expansion, with the global
 options left in front of it. A **shell alias** (`!…`) and a lookup that failed
@@ -1805,7 +1704,7 @@ pays no process for this — a `match` hit is already the answer.
 
 **`git push` reads its refspecs under both readings of the grammar.** The
 matcher tries an unclassifiable option both ways and matches under either; the
-positional collector now does the same, because an option in front of the
+positional collector does the same, because an option in front of the
 refspecs shifts every one of them by one. Where the two readings disagree about
 which names are being published — `git --attr-source HEAD push origin` reads
 `origin` under one and the current branch under the other — the answer is exit
@@ -1814,11 +1713,9 @@ warning-on-every-command failure the [stand-downs](#the-stand-downs) exist to
 avoid.
 
 **`--all`, `--mirror` and `--tags` name no refspec and publish many.** They are
-enumerated with `git for-each-ref` and every name is checked; before that the
-collector fell back to `HEAD`, so a mirror push of forty branches was checked as
-one. A leading `+` is the force marker and no part of a name — `+fix/acme-outage`
-was a name no rule recognised, which made the force-push the way past a rule
-standing in front of the branch it names.
+enumerated with `git for-each-ref` and every name is checked. A leading `+` is
+the force marker and is stripped, so `+fix/acme-outage` is checked as
+`fix/acme-outage`.
 
 **A rule may carry its own scope.** The table's `scope` answers for the
 command — is this push going somewhere public — and one answer cannot fit
@@ -1835,12 +1732,9 @@ command.scope = "always"     # this rule reads every egress the shim collects
 A private-name check belongs only where the destination is public, and the
 table's `public-target` says so once for it. Host identity in a pull-request
 body is worth refusing whatever the destination — a private forge repository
-is still somebody else's infrastructure with its own retention — and before
-this field, a workspace whose every repository is private had a
-`public-target` table standing down on every invocation, with the checkers it
-declared never consulted. Two workspaces closed that with a hand-rolled agent
-hook standing outside the shim, re-invoking this binary for the same rules
-the policy already declared; this field is that hook retired. Each distinct
+is still somebody else's infrastructure with its own retention. Without a
+per-rule scope, a workspace of private repositories would have its
+`public-target` table stand every checker down. Each distinct
 scope is evaluated once per invocation, the editor checkpoint stays open when
 any rule's scope holds, and the editor pass consults only the rules whose
 scope held.
@@ -1850,10 +1744,8 @@ scope**, exactly as when the shim reaches it directly: `text-guards` scoped
 `always` runs the guards the policy declares, and each of those that names
 this command in its own `command.before` is asked under its own
 `command.scope` where it wrote one and the table's where it did not. So a
-`text-guards` rule that reads every egress no longer drags a `public-target`
-rule along with it to a private destination — before this, the only way past
-that was `UPHOLD_ALLOW` on the consultation, which switched off the checks it
-was there for. A guard the consultation reaches that this command does not
+`text-guards` rule that reads every egress does not carry a `public-target`
+rule with it to a private destination. A guard the consultation reaches that this command does not
 name — one standing at a git hook, say — is consulted as before, because no
 scope was ever written about it here. A scope that could not be told is exit
 `2` on this path too: an inner rule whose destination question the forge could
@@ -1866,24 +1758,17 @@ is nothing to re-enter through, and the shim can only say it did not see the
 body.
 
 The shim finds the subcommand by walking argv for the first two words that are
-neither an option nor an option's *value*, honouring `--`, `--flag=value`, and
+neither an option nor an option's *value*, honoring `--`, `--flag=value`, and
 its own `text_flags`/`file_flags`/`skip_flags` as value-taking. `gh --repo
 owner/name issue create` matches `issue:create`; where a release puts its flags
 is not something a policy author should have to track.
 
-**`gh api` and `glab api` are matched when the call carries a body.** `gh pr
-edit` was unavailable to an agent whose token lacked `read:org`, so it ran
+**`gh api` and `glab api` are matched when the call carries a body.**
+`gh api -X PATCH repos/OWNER/REPO/pulls/N -F body=@file` publishes the same body
+to the same tracker as `gh pr edit`, so the tables list `api:*` on both `gh`
+and `glab`.
 
-```
-gh api -X PATCH repos/OWNER/REPO/pulls/N -F body=@file
-```
-
-— the same body, the same account, the same public tracker — and no `match`
-list named `api`, so the shim exec'd it with nothing printed. The tables ship
-`api:*` now, on both `gh` and `glab`.
-
-The verb is not a verb like the others, and the two ways it differs are both in
-the table above's `match` list only by name. **It is read with its own
+`api` differs from the other verbs in two ways. **It is read with its own
 grammar**: `-F` is `--body-file` on `gh pr create` and `--field` on `gh api`, so
 the table's flag lists answer for neither and the `api` walk reads `-X`/`--method`,
 `-f`/`-F`/`--field`/`--raw-field`, `--input`, and the value-taking options
@@ -1905,8 +1790,8 @@ verb, so `prevent-unowned-target` and a `public-target` scope read a `gh api`
 call exactly as they read a `gh pr create` one — `gh api -X POST
 repos/other-owner/their-repo/issues -f title=…` is refused by the destination
 guard on ordinary prose. A path naming no repository (`gh api graphql`, `gh api
-user`) falls through to the table's own `target` resolver, which is the honest
-bound: the destination of a GraphQL mutation is inside its query, and nothing in
+user`) falls through to the table's own `target` resolver, because the
+destination of a GraphQL mutation is inside its query, and nothing in
 a path can say. A JSON body is judged one string value at a time because the
 encoding otherwise hides the text — a prose rule reading the raw document reads
 the escapes rather than the sentence — and "JSON" means a document that starts
@@ -1930,10 +1815,9 @@ pass.` on a terminal is reading one of them.
 
 The first is bounded on purpose. **One** unclassifiable option is not a doubt —
 the two readings are then the whole space, both are asked, and both missing is a
-conclusion; that case is silent, and making it loud cost nine of sixteen
-ordinary git invocations a refusal line while `git push` itself stayed quiet. A
-warning printed over every command trains its reader to ignore the one where the
-doubt is real.
+conclusion. That case is silent, because a warning there would fire on most
+ordinary git invocations, and a warning printed over every command trains its
+reader to ignore the one where the doubt is real.
 
 The second is asked **before** the policy is read, which is what makes it the
 way out of a policy file that will not parse — see [when the policy itself will
@@ -1941,33 +1825,27 @@ not load](#when-the-policy-itself-will-not-load). An empty `UPHOLD_ALLOW=`
 switches nothing off, and `UPHOLD_ALLOW=<rule-id>` stands one rule down rather
 than the seam.
 
-The fourth is uphold getting out of its own way, and it is documented here
-rather than left implicit because a reader who meets the line deserves to know
-what set it. A `public-target` scope asks whether the destination is public, and
+The fourth keeps uphold from shimming its own probes. A `public-target` scope asks whether the destination is public, and
 where this repository has not declared its own `visibility` — or where the
 command named a destination, which a declaration does not speak for — it asks
 by running `gh api repos/<owner>/<repo> --jq .visibility`; a `git-remote` target
 asks by running `git remote get-url origin`, which is how an unnamed destination
 is resolved in the first place and so runs either way. PATH answers
 `gh` and `git` with the shim, so **every question this tool asks on the way to a
-verdict is a command it stands in front of**. On 2026-09-02 that closed into a
-loop against the released binary inside this repository's own checkout: the
-`gh` table listed `api:*`, the visibility probe matched itself, and asking the
-question was asking the question -- around two hundred and fifty processes a
-second, a load average of three thousand, and nothing under `kill -9` on the
-process group stopped it. A bodyless `GET` is exempt from `api:*` now, so that
-particular trigger is gone; the marker is what stops the next one, because any
-`match` entry, or a binary and a policy that disagree about which entries exist,
-reopens the same shape.
+verdict is a command it stands in front of**. A `match` entry that covers a
+probe turns it into an unbounded process loop: with `api:*` listed, the
+visibility probe matched itself. A bodyless `GET` is exempt from `api:*`, and
+the marker below guards the general case, since any `match` entry, or a binary
+and a policy that disagree about which entries exist, can reopen it.
 
 So uphold sets `UPHOLD_SHIM_INNER=<depth>` on every `git`, `gh` and `glab` it
-spawns for its own probes, and a shim that sees it resolves the real command --
-walking PATH past its own file, the same walk the final exec does -- and hands
+spawns for its own probes, and a shim that sees it resolves the real command —
+walking PATH past its own file, the same walk the final exec does — and hands
 over without judging.
 
 It is **not a bypass**, and the reason is not that it is hidden. It is set only
 by uphold's own processes, on the children they spawn for their own questions,
-and never on the exec that runs the command a person typed -- so a `git push`
+and never on the exec that runs the command a person typed — so a `git push`
 that fires a hook that re-enters this tool arrives unmarked and is checked.
 Exported by hand it is `UPHOLD_ALLOW=all` under another name, it buys nothing
 that one does not, and it is printed on stderr exactly the way that one is,
@@ -1977,9 +1855,9 @@ line, so the notice a person sees on a terminal is one they set themselves.
 
 The value is a depth rather than a flag, and past `2` the seam refuses with exit
 `2` and names the loop instead of running anything. Nothing legitimate goes that
-deep -- a shim probes, the probe execs the real command, and the real command
-does not probe -- so a marker deeper than that is a chain calling itself, and
-the honest answer to it is not to publish.
+deep — a shim probes, the probe execs the real command, and the real command
+does not probe — so a marker deeper than that is a chain calling itself, and
+the seam does not publish.
 
 Everything else this seam cannot establish is exit `2` and no command at all: a
 non-UTF-8 argument on a matched invocation, a body file that is not there, an
@@ -2024,15 +1902,12 @@ ceiling admits `gh` and `git push` and nothing wider, and the override is the
 documented one: same id, same check, a wider reach said in the one file that
 can say it.
 
-The distinction is not decorative. A destination is a property of the
-**invocation** and not of any subject it carries, so a target-judging checker is
-consulted **once per invocation**, outside the per-subject loop — and it is
-consulted even where the invocation collected no subject at all, since `gh issue
-create --repo other-owner/their-repo` with an empty body still publishes to
-somewhere. Before this kind existed, an invocation carrying blameless prose and
-somebody else's `--repo` satisfied every checker standing in front of `gh` and
-published: nothing was wrong with the text, and no rule was looking at where it
-was going.
+A destination is a property of the **invocation** and not of any subject it
+carries, so a target-judging checker is consulted **once per invocation**,
+outside the per-subject loop, and even where the invocation collected no
+subject at all: `gh issue create --repo other-owner/their-repo` with an empty
+body still publishes somewhere. Without it, clean text sent to somebody else's
+`--repo` would pass every subject checker.
 
 It is the same decision `prevent-public-push` makes at `pre-push`, and it is
 **the same rule body** — one predicate, reached from both seams, so a push and a
@@ -2041,7 +1916,7 @@ parameters are the ones in that guard's row: `owner`, `owner_required`,
 `allowed_owners`, `allowed_repos`.
 
 `command.scope = "always"` is the scope to write here, and `public-target` is
-the wrong one twice over. It stands the rule down exactly where the forge lookup
+wrong for two reasons. It stands the rule down exactly where the forge lookup
 failed, which is the invocation that most needs asking about; and whether a
 destination is *yours* is a fact about the destination, not about its
 visibility — a private repository belonging to somebody else is still not yours.
@@ -2054,7 +1929,7 @@ command line and no remote to read one off is a could-not-look, not a pass —
 
 **A checker must read stdin to the end.** One that exits 0 having consumed part
 of a long subject — a bare `grep -q`, a `head -c` — is answering about text it
-did not finish reading, and the short write is now exit `2` rather than a pass.
+did not finish reading, so the short write is exit `2` rather than a pass.
 A refusal after a short read still stands as a refusal: the checker saw enough
 to say no. Both shipped checkers (`uphold guard --text -`, `uphold scan --text
 -`) read to EOF.
@@ -2083,8 +1958,8 @@ the data it then needs, both set by the shim on the command it execs:
 `command.before` rules apply). Neither routes anything, so a process that
 inherits them does nothing with them.
 
-Routing an editor re-entry through the environment is a defect, and the reason
-is worth holding: an environment is inherited by every descendant, and the
+Routing an editor re-entry through the environment would be a defect: an
+environment is inherited by every descendant, and the
 descendants of the editor pass include the `git` its own checkers run — which,
 after the install above, *is this binary* under a link. A child that reads such
 a marker takes itself for somebody's editor, opens the user's editor on whatever
@@ -2097,19 +1972,14 @@ For the same reason the shim will not hand off to a link that lands on another
 release binary beside a build under test — are two different files, so each one
 reads the other as "the real `git`" and execs it back.
 
-A third file the walk can meet is neither: **a shim of somebody else's** that
-resolves the command the same way, by walking `PATH`. mise installs one named
-for every tool it has ever heard of — `~/.local/share/mise/shims/gh` is a link
-to `mise` whether or not any mise tool provides `gh` — and it walks `PATH`
-skipping only its own directory. With that directory ahead of the shim's, the
-walk returned it as the real `gh` and exec'd it, it found the uphold link first
-and exec'd that, and every arrival was a fresh invocation: nothing in the loop
-was an uphold probe, so `UPHOLD_SHIM_INNER` was never set. Each round ran the
-checks again, and the alias probe each round made spawned the same loop under
-itself — on 2026-09-20 that was about twenty-nine thousand `gh alias list`
-processes in one process group before it was killed by hand, and every `gh pr
-create` and pre-push hook that ran through it stalled for the length of its
-timeout.
+A third file the walk can meet is **another tool's shim** that resolves the
+command the same way, by walking `PATH`. mise installs a link named for every
+tool it knows (`~/.local/share/mise/shims/gh` points at `mise` whether or not
+any mise tool provides `gh`) and walks `PATH` skipping only its own directory.
+With that directory ahead of the uphold shim's, each hands the command to the
+other, and every arrival is a fresh invocation rather than an uphold probe, so
+`UPHOLD_SHIM_INNER` is never set: the checks and the alias probe repeat without
+bound.
 
 So the exec of the real command is marked too. `UPHOLD_SHIM_HANDED` names the
 shim's own pid, the command's name, and the file identities the walk has handed
@@ -2130,14 +2000,28 @@ the loop is detected rather than the manager, and the next shim manager needs
 no entry here.
 
 Where `current_exe()` cannot be resolved there is nothing to install as the
-editor, and the invocation is refused with exit `2`. It warned and execed anyway,
-on the argument that a guard which stops work gets removed — but that argument
-belongs to a guard that *looked* and found nothing, and this one never looked.
-The body does not exist yet, so it cannot be checked now, and after the hand-off
-there is no process left here to check it later. The text would be published
+editor, and the invocation is refused with exit `2` rather than warning and
+continuing. The body does not exist yet, so it cannot be checked now, and after
+the hand-off there is no process left here to check it later. The text would be published
 unexamined by the one path the editor re-entry exists to close. This is the only
 place the shim refuses without having read anything, and `explicit-unknown` is
 why: an unobserved property must not resolve to success.
+
+### When the policy itself will not load
+
+A policy that exists and cannot be read is fatal for every command the shim
+stands in front of, because the declaration that could not be read might have
+been the one standing in front of *this* invocation. The `git checkout` that
+would restore the file is itself a shimmed command, so the way out is:
+
+```sh
+UPHOLD_ALLOW=all git checkout policy/principles.toml
+```
+
+`UPHOLD_ALLOW=all` is asked **before** the policy is read, so it works when
+nothing else does. It is not a pass — the shim says on stderr that the command
+ran unchecked, every time, so a bypass that becomes habit is visible in a shell
+history and in a CI log. An empty `UPHOLD_ALLOW=` switches nothing off.
 
 ## `uphold hook` — the caller that spawns no process
 
@@ -2225,7 +2109,7 @@ one is `2` on every call, including one carrying no strings; no policy found is
 not a broken one, and loads as empty.
 
 That third one is the case that does not announce itself. The JSON parses, the
-run exits, and what the call was about to send was never read -- which is what a
+run exits, and what the call was about to send was never read — which is what a
 harness renaming its field looks like from here. **Absent is not empty.** A
 subject that is present and holds no strings is a call carrying only numbers and
 flags: read, and clean. A subject that is a bare string rather than an object is
@@ -2281,7 +2165,7 @@ the audit reports it as a finding for one being published.
 What it reads is **every blob reachable** from `HEAD`, from `origin`'s branches
 and from the retained pull-request refs — not `HEAD`'s tree. A name committed
 and deleted before `HEAD` is served by the forge forever and survives the
-default-branch rewrite, so a tree-only audit answered the wrong question. On the
+default-branch rewrite, so a tree-only audit would miss it. On the
 forge side it reads issue and pull-request **titles** as well as bodies, plus
 review bodies and review-thread comments, and a listing that comes back at the
 request cap is reported as truncated rather than quietly cut short.
@@ -2293,45 +2177,24 @@ A fetch of `refs/pull/*/head` that brings back nothing is asked about rather
 than assumed: `git ls-remote origin 'refs/pull/*/head'` separates "the forge
 retains none", which is a fact about a repository that has never opened a pull
 request and leaves the run able to exit `0`, from "the fetch matched nothing",
-which is a published surface that went unread. Reading both as unread meant no
-such repository could reach a clean answer through this path.
+which is a published surface that went unread.
 
 The reachable blobs are read by **one** `git cat-file --batch`, and a run over
-more than a couple of thousand objects prints what it is reading and how far it
-has got, on stderr. It read one object per process and said nothing until it
-finished, which from outside makes a slow audit and a hung one look alike.
+more than a couple of thousand objects prints its progress on stderr, so a slow
+audit can be told from a hung one.
 
-An object the batch names without content -- the ordinary case in a shallow or
-partial clone -- is reported as a surface this run could not read, and so is exit
+An object the batch names without content — the ordinary case in a shallow or
+partial clone — is reported as a surface this run could not read, and so is exit
 `2`. It is not skipped: an object the audit could not open is not an object the
 audit found clean.
 
 The edit history is a **standing caveat**, not an unreadable surface. It is true
 of every run, on every repository, and nothing about this run could change it —
 so it is stated in the body of every report and is *not* counted as something
-this run failed to read. Counting it there makes the unreadable list
-unconditionally non-empty, which makes exit `0` unreachable and takes away the
-clean answer this command exists to be able to give. Exit `1` for something
+this run failed to read; counting it would make exit `0` unreachable. Exit `1` for something
 found, `2` where a surface this run tried to read could not be read, `0` when
 every surface a flip would republish was read and was clean — subject to the
 standing caveats, which the clean line says.
-
-### When the policy itself will not load
-
-A policy that exists and cannot be read is fatal for every command the shim
-stands in front of, because the declaration that could not be read might have
-been the one standing in front of *this* invocation. That leaves one problem to
-solve rather than to argue with: the `git checkout` that would put the file back
-is itself a shimmed command.
-
-```sh
-UPHOLD_ALLOW=all git checkout policy/principles.toml
-```
-
-`UPHOLD_ALLOW=all` is asked **before** the policy is read, so it works when
-nothing else does. It is not a pass — the shim says on stderr that the command
-ran unchecked, every time, so a bypass that becomes habit is visible in a shell
-history and in a CI log. An empty `UPHOLD_ALLOW=` switches nothing off.
 
 ## `uphold supply-chain` — six scanners, one verdict
 
@@ -2341,22 +2204,18 @@ uphold supply-chain --base REV  # what REV..HEAD changed
 uphold supply-chain --all       # every manifest in the tree
 ```
 
-Orchestrates the five external scanners a fleet had been driving from a
-~100-line shell task copied into seven repositories: **osv-scanner** (known
+Runs five external scanners: **osv-scanner** (known
 vulnerabilities and reported-malicious packages), **zizmor** (workflow
 security), **cargo-deny** (origin, advisories, bans, licenses), **cargo-vet**
 (has anyone looked at this dependency) and **guarddog** (publisher identity
 and typosquats — the half OSV cannot reach, scoring an *unknown* package on
-how closely its name shadows a popular one). The copies had already diverged:
-one grew a failure-output dump the others lack, so the same red printed a
-reason on one machine and a bare FAILED on the rest.
+how closely its name shadows a popular one), plus gitleaks
+([below](#gitleaks-which-owns-secret-shapes)).
 
 The scanners come from the host's own toolchain; none is built or fetched
-here. What this command adds over the shell it replaces is the third answer:
-a tool that is not on PATH is **could not look** — reported by name, exit `2`
-through the same verdict ranking every other command here uses — where the
-shell spelled it exactly like a refusal, and a wrapper less careful would
-spell it like a pass.
+here. A tool that is not on PATH is **could not look**: reported by name, exit
+`2` through the same verdict ranking every other command here uses, and never
+a refusal or a pass.
 
 Each of the five also has a **version floor**. Several sections read a
 scanner's own output to learn that it did not look — guarddog's timed-out
@@ -2390,8 +2249,8 @@ against — and the release notes name every floor that moved, so a consumer
 upgrades the scanner in the same step as uphold.
 
 Per section: `vendor/`, `upstream/`, `target/`, `node_modules/` and `.git/`
-are never descended into — somebody else's manifests are somebody else's
-backlog. cargo-deny runs once per crate or workspace root against the root
+are never descended into, because vendored and third-party manifests are out of
+scope. cargo-deny runs once per crate or workspace root against the root
 `deny.toml` (no `deny.toml`, and the section says so and stands down);
 cargo-vet runs only where a `supply-chain/` store exists, because a store
 created automatically is a store nobody owns; guarddog reads each `uv.lock`
@@ -2400,21 +2259,34 @@ section with nothing to read says so — "no workflows here" and "checked and
 clean" must never look the same.
 
 zizmor is handed the repository's own `zizmor.yml` where one exists, and a
-**bundled default** — `ref-pin`, the policy six repositories carried
-byte-identically — where none does. `--config` is always named explicitly:
-zizmor resolves a discovered config relative to a single input path and finds
-none when handed several, then silently falls back to its hash-pin default
-and invents a backlog.
+**bundled default** (`ref-pin`) where none does. `--config` is always named
+explicitly: zizmor resolves a discovered config relative to a single input path
+and finds none when handed several, then silently falls back to its hash-pin
+default and reports findings the repository never opted into.
 
 Each scanner's own exit code decides; findings are shown, never re-judged.
 The one filter applied is cargo-deny's headline lines, dropping the four
 classes that describe `deny.toml` rather than a dependency.
 
+Three hook ids ship it in `.pre-commit-hooks.yaml`. The five dependency
+scanners never run at `pre-commit`, because each reaches the network.
+`uphold-supply-chain` at `pre-push` scans the range; `uphold-supply-chain-all`
+at `manual` carries `--all`, since one entry cannot vary its arguments by
+stage. Pin the first for the push gate and the second for a schedule — only
+the full sweep can find an advisory published against a dependency no commit
+touched. `uphold-supply-chain-staged` at `pre-commit` carries `--staged`
+([below](#gitleaks-which-owns-secret-shapes)). All three are deliberately absent
+from `hooks/lefthook.yml`: that file is merged into a consumer's own config
+wholesale, so a command there would arrive with a `ref:` bump in every consuming
+repository and refuse every push with exit `2` on any machine without the
+scanners installed. A lefthook consumer opts in by writing the command in its
+own file.
+
 ### gitleaks, which owns secret shapes
 
-The sixth section is **gitleaks**, and it is the tool that owns secret shapes:
-token formats, a per-rule entropy threshold, and path and regex allowlists,
-maintained upstream. It is the only secret-shape check: the `credentials`
+The sixth section is **gitleaks**, the only secret-shape check: token formats,
+a per-rule entropy threshold, and path and regex allowlists, maintained
+upstream. The `credentials`
 set's shape and key/value regexes, which approximated the same job by hand with
 no entropy test, were deprecated in v1.20.0 and removed in the release after.
 What the set keeps is what a commit scanner does not own: `no-env-secret-values`
@@ -2454,8 +2326,7 @@ for the `pre-commit` id `uphold-supply-chain-staged`. The range scan sees a
 secret at `pre-push`, after it is in local history and can only be rewritten
 out; the staged scan sees it while unstaging is the fix. gitleaks reads no
 network, so the cost that keeps the other five scanners off the commit is not
-paid here, and they are not run. It is the only secret-shape check a commit
-meets. The same gate applies: only where the policy inherits `credentials`, the
+paid here, and they are not run. The same gate applies: only where the policy inherits `credentials`, the
 same pin, the same config and exit codes, and a missing gitleaks is exit `2`. `--staged` with `--all` or
 `--base` is a usage error rather than one flag winning. A staged finding has no
 commit, so its fingerprint is `file:rule:line`; gitleaks matches that form in
@@ -2514,7 +2385,7 @@ name:
 ```
 
 **The asymmetry is the tooling's, not a preference.** Actions is not the CI
-system uphold favours; it is the one somebody wrote a scanner for, and a job
+system uphold favors; it is the one somebody wrote a scanner for, and a job
 that mints a token, pulls an unpinned action or orb, or runs a command over
 untrusted input is the same defect whichever vendor's file it lives in. The
 rest are enumerated by name because their file names are what identifies them:
@@ -2529,26 +2400,19 @@ like six. The paths are in the changed set for the same reason, so a push
 carrying only a `.gitlab-ci.yml` is told the file went unscanned rather than
 that there was nothing here.
 
-**Why declared rather than filled.** [checkov][checkov] is the one scanner
-found that reads a CircleCI config, and it fails open: a YAML parse error is
-logged at debug level, the parser returns no model, and the run exits `0` with
-`"parsing_errors": 0`, so a config it could not read is indistinguishable from
-a clean one — this command's third verdict imported as a silent pass. Its
-CircleCI check set is thin besides (nine checks, one testing for a misspelled
-`@volitile` orb tag since 2022), and no scanner surveyed works from a
-normalised pipeline model, so there is no vendor-neutral tool to reach for
-instead. It is named here, not recommended. Should a scanner appear that reads
-one of these vendors the way zizmor reads Actions, the change is
-`interesting()` and a sixth entry in the section array.
+**Why declared rather than filled.** [checkov][checkov], the one scanner found
+that reads a CircleCI config, fails open: on a YAML parse error it exits `0`
+with `"parsing_errors": 0`, so a config it could not read is indistinguishable
+from a clean one. It is named here, not recommended. A scanner that reads one of
+these vendors the way zizmor reads Actions would be added through
+`interesting()` and a new entry in the section array.
 
 [checkov]: https://github.com/bridgecrewio/checkov
 
 ### guarddog, which cannot answer in its exit code at all
 
 `guarddog verify` **exits 0 whether it found three high-severity risks or
-none**, in both ecosystems. For as long as this section answered by exit code,
-every guarddog finding was reported clean — a false negative on the one
-scanner here whose subject is malware and typosquats.
+none**, in both ecosystems, so its exit code cannot carry a verdict.
 
 `--exit-non-zero-on-finding` is not the remedy. It counts `issues`, which
 includes capability matches: `six` reports `issues: 2` with `risks: []` and
@@ -2556,9 +2420,8 @@ guarddog's own label `no_risks_detected`, so the flag fails a package guarddog
 itself calls clean. It trades a false negative for a false positive.
 
 So guarddog is run with `--output-format json` and its own `risks` list is
-counted. This is the one scanner whose findings are read here, and the choice
-is to read them or to run it for nothing. The count is reported, never
-recomputed.
+counted. This is the one scanner whose findings are read here. The count is
+reported, never recomputed.
 
 The same report carries the could-not-look. A dependency guarddog could not
 download populates `errors` and drops `results` while still exiting 0, and a
@@ -2568,7 +2431,7 @@ exit 0 — the two email-domain rules time out routinely — is still read, and
 still names the packages and how many rules. None of that is a finding: it is
 the record that the question was asked and nobody answered.
 
-### The other three that confuse a verdict with a refusal
+### How the other three report could-not-look
 
 `tool_read()` hands each scanner's exit code, stdout and stderr to a reader
 that may name a could-not-look. A tool whose exit code already separates the
@@ -2601,25 +2464,8 @@ it did not do, cargo-vet exits `255` on work it could not start.
 The exit code is the only place the two are confused. They separate cleanly on
 the stream: a vetting failure prints `Vetting Failed!` to stdout and leaves
 stderr empty, while a run that could not start prints `ERROR` to stderr and
-leaves stdout empty. `cargo vet --output-format=json` is the other half. So
-this is a section that has not been taught to read its tool yet, the way the
-guarddog section was, rather than a fact about cargo-vet that cannot be
-recovered.
-
-Three hook ids ship it in `.pre-commit-hooks.yaml`. The five dependency
-scanners never run at `pre-commit`: each reaches the network, and a check that
-adds a network round trip to a commit is a check somebody switches off.
-`uphold-supply-chain` at `pre-push` scans the range; `uphold-supply-chain-all`
-at `manual` carries `--all`, since one entry cannot vary its arguments by
-stage. Pin the first for the push gate and the second for a schedule — only
-the full sweep can find an advisory published against a dependency no commit
-touched. `uphold-supply-chain-staged` at `pre-commit` carries `--staged`, and
-is described below. All three are deliberately absent from `hooks/lefthook.yml`:
-that file is merged into a consumer's own config wholesale, so a command there
-arrives with a `ref:` bump in every consuming repository — and on any machine
-without the scanners installed it refuses every push with exit `2`. A
-lefthook consumer opts in by writing the command in its own file, where the
-decision is visible.
+leaves stdout empty, and `cargo vet --output-format=json` separates them too.
+The section does not read these yet; the information is available.
 
 ## `uphold hooks --identity` — across repositories
 
@@ -2688,7 +2534,7 @@ reason = "the hooks repository cannot pin itself"
 One file holds both halves: the waivers this command reads and the `[[probe]]`
 fixtures `uphold probe` drives. Each reader names the other's table, so neither
 refuses a well-formed file, and both still refuse a misspelled field of their
-own -- which is what `deny_unknown_fields` is for.
+own — which is what `deny_unknown_fields` is for.
 
 `reason` is required and an empty one is refused: a waiver with no reason is a
 check switched off with nobody's name on it. A waiver naming a finding that does
@@ -2713,8 +2559,8 @@ default) and points `core.hooksPath` at it. The hook git runs is then a file a
 diff can review, and a rerun of the runner's own `install` cannot quietly take
 its place.
 
-The file that earns the inversion is `pre-push`. Measured 2026-08-16, prek
-0.3.13: prek computes the pushed range as `<local sha> --not --remotes` and,
+The file that justifies the inversion is `pre-push`. As of prek 0.3.13, prek
+computes the pushed range as `<local sha> --not --remotes` and,
 when that range comes back empty, skips the whole pre-push stage —
 `always_run: true` included. The empty range is the dangerous case, not the
 boring one: repointing `origin` at somebody else's remote is a URL edit, not a
@@ -2722,12 +2568,10 @@ commit, so the push that publishes the entire history hands the runner a range
 of zero commits. The written `pre-push` runs `uphold guard --stage pre-push`
 unconditionally, reading the destination off argv — where git puts it, and
 where a `git config` lookup would answer with the very thing that was just
-changed — and only then delegates to the runner. One fleet carried this file
-by hand, byte-identical in ten trees and wrapped differently in three, with a
-script whose whole job was to notice when a copy drifted.
+changed — and only then delegates to the runner.
 
-git itself does run the hook for an empty range. Measured 2026-09-20, git
-2.55.0: a push whose every ref is already up to date starts the pre-push hook
+git itself does run the hook for an empty range (checked with git 2.55.0): a
+push whose every ref is already up to date starts the pre-push hook
 with the remote's name and url on argv and **nothing** on stdin. That is why
 the delegate reads the destination off argv, and it is the push `uphold probe`
 drives with `push = "empty"` (below).
@@ -2760,9 +2604,8 @@ and reported as `adopted`; from then on it is an ordinary install. Lines that
 differ mean somebody decided something, and the run refuses (exit `2`) naming
 every file that differs, each with a unified diff of the two. Every file is
 judged before any is written, so a refusal writes nothing: not the files that
-matched, not the absent ones, not `core.hooksPath`. That is how the trees that
-carried the delegate by hand move onto the command without moving their files
-aside first.
+matched, not the absent ones, not `core.hooksPath`. This lets a tree with a
+hand-written delegate adopt the command without moving its files aside first.
 
 **`--check`** writes nothing and says, for each of the four files, whether it
 is absent, written by this command and matching this binary, written by this
@@ -2781,8 +2624,8 @@ uphold probe --runner lefthook     # or named
 
 A hook that **cannot fail** reports the same green tick as a hook that keeps
 finding nothing, run after run, for as long as nobody plants what it is supposed
-to catch. The case this exists for is not hypothetical: an entry declared as
-`gofmt -l .` can never exit non-zero, because `gofmt -l` *prints* its findings
+to catch. For example, an entry declared as `gofmt -l .` can never exit
+non-zero, because `gofmt -l` *prints* its findings
 and exits 0.
 
 So each probe drives one hook to both verdicts, in a throwaway `git worktree` at
@@ -2829,10 +2672,9 @@ the refusal had been pinned.
 `timeout_seconds` is a declaration rather than a constant compiled in, because
 where it sits is an operator's call about the machines this runs on: long
 enough that a probe pulling a container image on a cold runner is not called a
-timeout, short enough that a hook which has wedged is not waited on all
-afternoon. The nearest declaration wins — `--timeout` for one run, the probe's
-own field, then the file's — and with none of the three the run waits, which
-is what it always did. A hook killed at its deadline is **unmeasured**: exit
+timeout, short enough that a hung hook is not waited on indefinitely. The
+nearest declaration wins — `--timeout` for one run, the probe's own field, then
+the file's — and with none of the three the run waits without limit. A hook killed at its deadline is **unmeasured**: exit
 `2`, never a pass, and `--timeout` is how a suite proves that a timeout is a
 failure rather than a silent green. `timeout_seconds = 0` is refused wherever
 it is written.
@@ -2876,14 +2718,13 @@ The six verdicts are the runner probe's, read off the push's exit code and
 output exactly as they are read off a runner's. The one worth naming: a tree
 with no delegate — nothing installed, or a directory `core.hooksPath` does not
 point at — reports **ACCEPTED what it is declared to refuse**, because that
-push went through. That is the state every consumer was in before the
-delegate existed, and the probe is what shows a tree has left it. `expect` is
+push went through, so the probe shows whether a tree has the delegate. `expect` is
 what keeps a red from somewhere else from counting: the delegate refuses every
 push when `uphold` is not on PATH, and that refusal does not name the guard.
 
 Fixtures are written down rather than generated. uphold knows what its own rules
-match and knows nothing about `gofmt`, `ruff`, or a hook somebody wrote this
-morning — and the hooks worth probing are exactly the ones it knows nothing
+match and knows nothing about `gofmt`, `ruff`, or a locally written hook — and
+the hooks worth probing are exactly the ones it knows nothing
 about. A fixture in a file is also reviewable, which matters more than the
 typing it saves.
 

@@ -107,7 +107,7 @@
           "word": false
         },
         "id": "no-process-history-references",
-        "message": "Do not reference process-history records (issue/PR/thread numbers) in final\ndocs. Extract the durable rule or final state instead.\n",
+        "message": "Do not reference process-history records (issue, pull request, or thread\nnumbers) in final docs. Extract the durable rule or final state instead.\n",
         "regexp": "(?i)\\bas discussed in (?:an? )?(?:issue|thread|pr)\\b"
       },
       {
@@ -168,7 +168,7 @@
           "word": false
         },
         "id": "no-task-tracker-references",
-        "message": "Source, configuration, and documentation must not depend on volatile\nissue or PR records. State the durable contract and rationale here, or link to\nrepository documentation. Issues may link to code; code must not depend on\nissues. Keep logs, bug reports, and benchmark results in issues, and edit\nchronology in Git history.\n",
+        "message": "Source, configuration, and documentation must not depend on volatile\nissue or pull request records. State the durable contract and rationale here,\nor link to repository documentation. Issues may link to code; code must not\ndepend on issues. Keep logs, bug reports, and benchmark results in issues, and\nedit chronology in Git history.\n",
         "regexp": "github\\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\\b|(?:^|\\b[a-z]+[\\t ]+|(?i:\\b(?:issue|pr)[\\t ]+)|\\(|\\[)#[0-9]+\\b|[,;/][\\t ]*#(?:[0-9]{1,2}|[0-9]{4,5}|[0-9]{7,})\\b|[,;/][\\t ]*#(?:[0-9]{3}|[0-9]{6})(?:[^\\w\\t ),;%]|[\\t ]*$|[\\t ]+(?:[^\\t ),;%0-9]|[0-9]+(?:[^0-9%]|$)))"
       },
       {
@@ -223,7 +223,7 @@
           "word": false
         },
         "id": "no-task-tracker-references-in-code",
-        "message": "Source, configuration, and build files must not depend on volatile issue or\nPR records. State the durable contract and rationale in a comment, or link to\nrepository documentation. Issues may link to code; code must not depend on\nissues. Keep logs, bug reports, and benchmark results in issues, and edit\nchronology in Git history.\n",
+        "message": "Source, configuration, and build files must not depend on volatile issue or\npull request records. State the durable contract and rationale in a comment, or\nlink to repository documentation. Issues may link to code; code must not depend\non issues. Keep logs, bug reports, and benchmark results in issues, and edit\nchronology in Git history.\n",
         "regexp": "github\\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\\b|(?:^|\\b[a-z]+[\\t ]+|(?i:\\b(?:issue|pr)[\\t ]+)|\\(|\\[)#[0-9]+\\b|[,;/][\\t ]*#(?:[0-9]{1,2}|[0-9]{4,5}|[0-9]{7,})\\b|[,;/][\\t ]*#(?:[0-9]{3}|[0-9]{6})(?:[^\\w\\t ),;%]|[\\t ]*$|[\\t ]+(?:[^\\t ),;%0-9]|[0-9]+(?:[^0-9%]|$)))"
       }
     ],
@@ -352,7 +352,7 @@
           "word": false
         },
         "id": "no-pinned-versioned-fetch",
-        "message": "Do not curl or wget a versioned URL. The version in the path is a pin nothing\nwatches, and the failure mode is not a stale dependency -- it is a 404 on a URL\nthat stopped existing, in the middle of a build, long after whoever typed it\nmoved on.\n",
+        "message": "Do not curl or wget a versioned URL. The version in the path is a pin nothing\nwatches, and the failure mode is not a stale dependency -- it is a 404 on a URL\nthat stopped existing, in the middle of a build, long after the pin was written.\n",
         "regexp": "(?i)(curl|wget)\\b.*https?://\\S+/v?[0-9]+\\.[0-9]+\\.[0-9]"
       }
     ],
@@ -467,7 +467,7 @@
           "word": false
         },
         "id": "workflow-declares-permissions",
-        "message": "A GitHub Actions workflow declares no top-level `permissions:` block, so its\nGITHUB_TOKEN gets whatever default the repository, organisation or enterprise\nsettings grant -- a scope decided outside this file and invisible in it. Add a\ntop-level `permissions:` block naming the minimum: `contents: read` for a\nworkflow that only checks out and tests.\n\nA `permissions:` under a job scopes that job and does not answer this.\n",
+        "message": "A GitHub Actions workflow declares no top-level `permissions:` block, so its\nGITHUB_TOKEN gets whatever default the repository, organization or enterprise\nsettings grant -- a scope decided outside this file and invisible in it. Add a\ntop-level `permissions:` block naming the minimum: `contents: read` for a\nworkflow that only checks out and tests.\n\nA `permissions:` under a job scopes that job and does not answer this.\n",
         "require_regexp": "^[\"']?permissions[\"']?:"
       }
     ],
@@ -497,7 +497,7 @@
           "word": false
         },
         "id": "no-hand-rolled-tool-install",
-        "message": "Do not download and unpack a tool by hand. A `curl | tar` installer re-decides,\nper repository, everything a version manager already knows: which asset exists\nfor this architecture, which for this OS, and what to do when the release\ncarries neither.\n\nDeclare the tool instead -- a `mise.toml` `[tools]` row, a `.tool-versions`\nline -- and let the resolver fetch it. The version then lives somewhere a\ndependency bot can see it move, which a URL built out of shell variables does\nnot.\n\nThe measured failures of the hand-written form are not stale versions. They are\na `mv` into a directory that does not exist on a fresh runner, and a vendor\nrelease with no Linux asset on the architecture nobody developed on -- each one\nfound once per repository, in CI, long after it was written.\n",
+        "message": "Do not download and unpack a tool by hand. A `curl | tar` installer re-decides,\nper repository, everything a version manager already knows: which asset exists\nfor this architecture, which for this OS, and what to do when the release\ncarries neither.\n\nDeclare the tool instead -- a `mise.toml` `[tools]` row, a `.tool-versions`\nline -- and let the resolver fetch it. The version then lives somewhere a\ndependency bot can see it move, which a URL built out of shell variables does\nnot.\n\nThe measured failures of the hand-written form are not stale versions. They are\na `mv` into a directory that does not exist on a fresh runner, and a vendor\nrelease with no Linux asset on an architecture that was never tested locally --\neach one found once per repository, in CI, long after it was written.\n",
         "regexp": "(?i)\\b(curl|wget)\\b([^\\n]|\\\\\\n)*\\|([^\\n]|\\\\\\n)*\\b(tar|unzip|bsdtar|cpio)\\b"
       },
       {
@@ -520,7 +520,7 @@
           "word": false
         },
         "id": "no-hand-rolled-tool-symlink",
-        "message": "Do not symlink a hand-installed tool onto PATH out of `$HOME/.local`. That link\nis the second half of a download-and-unpack installer, and it carries the half\nof the problem the download does not: the binary is now on PATH at a version no\nmanifest records, so every later check reports the tool as present and none of\nthem can say which one.\n\nLet the version manager own the binary, and link the version IT resolved --\n`ln -sfn \"$(mise which zig)\" /usr/local/bin/zig` -- when a link is genuinely\nneeded because the caller reads no shell profile (compose, a systemd unit, a\nnon-interactive ssh). The link then makes the tool findable without also\ndeciding which one it is.\n",
+        "message": "Do not symlink a hand-installed tool onto PATH out of `$HOME/.local`. That link\nis the second half of a download-and-unpack installer, and it carries the half\nof the problem the download does not: the binary is now on PATH at a version no\nmanifest records, so every later check reports the tool as present and none of\nthem can say which one.\n\nLet the version manager own the binary, and link the version the manager\nresolved -- `ln -sfn \"$(mise which zig)\" /usr/local/bin/zig` -- when a link is\ngenuinely needed because the caller reads no shell profile (compose, a systemd\nunit, a non-interactive ssh). The link then makes the tool findable without also\ndeciding which one it is.\n",
         "regexp": "(?i)\\bln\\s+-[a-z]*s[a-z]*\\b[^\\n]*(\\$HOME|\\$\\{HOME\\}|~)/\\.local/(bin/|[^\\n]*\\s/usr(/local)?/bin/)"
       }
     ],
@@ -845,7 +845,7 @@
           "scope": "always"
         },
         "id": "no-published-host-identity",
-        "message": "Use neutral placeholders -- example-user, example-host, example.test --\ninstead of values read off the machine you are standing on.\n"
+        "message": "Use neutral placeholders -- example-user, example-host, example.test,\n/srv/example -- instead of values taken from the local machine.\n"
       },
       {
         "builtin": "text-guards",
@@ -857,7 +857,7 @@
           "scope": "always"
         },
         "id": "no-published-markers",
-        "message": "Published text must satisfy the repository's text-capable guards. A\npull-request body reaches a public API without passing a single git hook,\nwhich is the whole reason this seam exists.\n"
+        "message": "Published text must satisfy the repository's text-capable guards. A\npull-request body reaches a public API without passing a single git hook,\nwhich is why this check runs at publish time.\n"
       },
       {
         "builtin": "no-private-repo-names",

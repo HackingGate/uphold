@@ -1,9 +1,9 @@
-# Base rule set: private-names (a private organisation or repository named in
+# Base rule set: private-names (a private organization or repository named in
 # something this repository publishes)
 #
 # The three guards that read text this repository is about to publish -- a
 # commit message, the staged diff, the tracked tree -- and refuse a name that
-# belongs to a private organisation or a private repository. Pull in with:
+# belongs to a private organization or a private repository. Pull in with:
 #
 #   [inherit]
 #   sets = ["private-names"]
@@ -17,7 +17,7 @@
 # declared in 10, `no-private-repo-names-staged` in 1, and
 # `no-private-repo-names-in-files` in 1. **Sixty-seven publish text through no
 # seam at all.** The trigger was a public repository whose pushed commit message
-# and pull-request body both named a private organisation and a private
+# and pull-request body both named a private organization and a private
 # repository, with nothing in its path to refuse either -- on the reasoning that
 # a public repository has nothing to keep in. That reasoning is backwards. A
 # public repository is not the place with nothing to protect; it is the place
@@ -61,7 +61,7 @@
 #     https://github.com/<owner>/<repo>     refused         refused
 #     <this repository's owner>/<repo>      refused         refused
 #     <other owner>/<repo>, bare            refused         NOT SEEN
-#     an organisation named on its own      refused         NOT SEEN
+#     an organization named on its own      refused         NOT SEEN
 #
 # The bottom two need a declared owner because a bare `owner/repo` is otherwise
 # indistinguishable from a relative path, and treating every path in every
@@ -130,7 +130,7 @@
 #   exists to keep off a public target. Under anybody else it is the
 #   inconclusive answer it always was -- reported, and refused only where the
 #   repository sets `refuse_unknown` -- because every `host.tld/a/b` in a
-#   document has that shape and most of them are a DOI or a licence URL.
+#   document has that shape and most of them are a DOI or a license URL.
 #
 #   What quiets a host entirely is a declaration, and which hosts carry a
 #   repository worth an answer is a fact about the repository, so the set ships

@@ -2,7 +2,7 @@
 
 Status: Accepted
 
-This record answers whether `uphold supply-chain` should be retired in favour of
+This record answers whether `uphold supply-chain` should be retired in favor of
 an existing orchestrator. It is written after the field was surveyed and the
 candidates were run, not from a list of tool names.
 [REFERENCE.md](../REFERENCE.md) documents what the command does; this says why
@@ -17,7 +17,7 @@ command exists to keep.
 
 A section is one of four states, not two. `Clean` and `Failed` are the verdicts.
 `CouldNotLook` is a scanner that did not read its input, and `Nothing` is a
-scanner correctly given no input to read -- no lockfile moved in the range, no
+scanner correctly given no input to read — no lockfile moved in the range, no
 vet store to consult. The two negative states are not the same fact and neither
 is clean.
 
@@ -43,7 +43,7 @@ repository, auto-updating from a vendor endpoint, and whether it exits non-zero
 on a linter's internal failure is undocumented.
 
 **MegaLinter erases the state rather than collapsing it.** A linter absent from
-the container flavour is marked inactive, and every reporter filters on that
+the container flavor is marked inactive, and every reporter filters on that
 flag, so the linter vanishes from the console table, the summary and the JSON,
 and the run exits `0`. Its own error table classifies infrastructure failures
 correctly as not-a-finding and then discards the classification.
@@ -72,7 +72,7 @@ Adoption costs the same work and loses the property.
 
 ## The idea is older than every implementation of it
 
-XCCDF standardised nine rule-result values, and its scoring rule excludes
+XCCDF standardized nine rule-result values, and its scoring rule excludes
 not-applicable and not-checked from the denominator while leaving error and
 unknown inside it. An unreadable check counts against the score and never for
 it. That asymmetry is what `verdict()` implements. The idea has been specified
@@ -120,5 +120,5 @@ Each scanner now hands its exit code, stdout and stderr to a reader that may
 name a could-not-look; a tool whose code already separates the two passes a
 reader that never fires. `REFERENCE.md` records the four contracts.
 
-One judgement rather than a fact, left as a judgement: of the five,
-`cargo-vet` is the one whose upstream has gone quietest.
+One judgment rather than a fact, recorded as a judgment: of the five,
+`cargo-vet` is the one whose upstream has shown the least recent activity.

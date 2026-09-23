@@ -9,29 +9,29 @@ can it be made configurable per repository? It carries the judgment;
 ## Two things are called "the shim", and separating them answers most of it
 
 **The link is machine-wide.** A file named `git` on PATH ahead of the real one
-is reached by every `git` that shell runs, in every directory, forever. That is
-a property of PATH, not of this tool.
+is reached by every `git` that shell runs, in every directory. That is a
+property of PATH, not of this tool.
 
-**What it DOES is already per repository, and already opt-out by absence.** The
+**What it does is already per repository, and already opt-out by absence.** The
 binary discovers `policy/principles.toml` from the working directory upward,
 stopping at the repository boundary. With no policy — `/tmp`, somebody else's
 checkout, a shell that never enters a participating tree — it execs the real
-command and gets out of the way.
+command and does nothing else.
 
 So "if a repository is not configured with `uphold`, pass the original command
 as-is" is what happens, and it is deliberate: refusing there protects nothing,
-breaks `git` everywhere, and gets the link removed — which loses the seam in the
-repositories that *did* declare it.
+breaks `git` everywhere, and leads operators to remove the link — which loses
+the seam in the repositories that *did* declare it.
 
 What remains is narrower than "system-wide or configurable": **the cost of the
-link is one process exec on every invocation of a shimmed command, everywhere,
-forever, to find a policy that usually is not there.**
+link is one process exec on every invocation of a shimmed command, in every
+directory, to find a policy that usually is not there.**
 
 ## How other tools handle the same problem
 
 - **uv, rustup, pyenv, volta** put shims in a directory the user adds to PATH,
   and the shim resolves a version from the tree. Same shape as this: machine-wide
-  reach, per-tree behaviour. None of them asks for a prefix.
+  reach, per-tree behavior. None of them asks for a prefix.
 - **direnv, mise** hook the SHELL rather than PATH: a per-directory change
   applied on `cd`, so nothing intercepts anything outside a participating tree.
   This is the "activate first" shape.
@@ -41,10 +41,10 @@ forever, to find a policy that usually is not there.**
 - **A prefix** (`uphold shim gh pr create …`) is what this binary already
   supports directly, and it is the shape that fails at the one job the seam has.
   The invocation nobody remembers to prefix is the invocation that publishes
-  something unchecked — which includes every agent, script and muscle-memory
+  something unchecked — which includes every agent, script and habitual
   `gh pr create` on the machine.
 
-## The decision
+## Decisions
 
 Keep the current default, and make the reach something somebody writes down.
 
@@ -82,7 +82,7 @@ The hook asks whether a policy is *discoverable*, never what it declares.
 Loading it would pay for the parse on every prompt and print its refusal on
 every prompt too.
 
-## What should NOT be built
+## What was deliberately not built
 
 **A mode where the shim is silent about doing nothing.** A shim that finds no
 policy and passes through is right; a shim that finds one and decides not to look
@@ -96,13 +96,14 @@ as "the real `git`" and exec back and forth; `shim.rs` documents the measured
 version of that, which ended when the kernel ran out of process ids. `--install`
 links, and refuses to overwrite anything it did not write.
 
-## On AI agents, since the issue asks
+## AI agents
 
-An agent runs `gh pr create` because that is what its instructions say. It will
-not prefix, and it will not read a note asking it to — which is the argument FOR
-the PATH link rather than against it: the seam has to be in the path of the
+The issue asked about AI agents specifically. An agent runs `gh pr create`
+because that is what its instructions say. It will not prefix, and it will not
+read a note asking it to — which is an argument *for* the PATH link rather than
+against it: the seam has to be in the path of the
 invocation somebody forgot about, and an agent is the most reliable producer of
 those. The evidence is this repository's own history: every pull request in the
 fleet on the day the question was asked went through `uphold shim gh pr create`,
-and one was refused for naming a private organisation in a body headed for a
+and one was refused for naming a private organization in a body headed for a
 public repository.

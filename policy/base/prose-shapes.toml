@@ -24,7 +24,7 @@
 # of a version bump is a thing no line in the inheriting tree asked for. See
 # ADR 0006.
 #
-# WHY THESE FOUR AND NOT THE OTHERS. Each of the four can be recognised without
+# WHY THESE FOUR AND NOT THE OTHERS. Each of the four can be recognized without
 # understanding the sentence. "As we will see" is that shape wherever it appears;
 # so is "-- in other words"; so is "arguably"; so is "one might argue". Nothing
 # here has to know what the paragraph is about, which is what makes a regex the
@@ -36,7 +36,7 @@
 # ISO date reads as a dated status line and is how a decision record states when
 # it was decided. A pattern cannot tell those apart, and a rule that refused
 # both would be refusing the correct use to catch the incorrect one. They stay
-# judgement, which is where a reviewer already holds them.
+# judgment, which is where a reviewer already holds them.
 #
 # WHY IT REFUSES RATHER THAN WARNS. A lint that warns about prose is advice, and
 # advice about prose is what gets skimmed: the warning is emitted, the text is

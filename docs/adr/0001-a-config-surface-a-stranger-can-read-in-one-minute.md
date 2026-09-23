@@ -5,8 +5,8 @@ Status: Accepted
 This record carries the design rationale for the consumer-writable config
 surface: what each name is, and why it earns its place. It is not the
 reference — [REFERENCE.md](../REFERENCE.md) documents the schema. Where this
-record and that document disagree, it wins; this one records the judgment
-behind it.
+record and that document disagree, the reference governs; this record carries
+the judgment behind it.
 
 ## Goal
 
@@ -41,18 +41,18 @@ and `command.*` are dotted keys inside it. Nothing about a rule lives outside
 its header's scope, so which rule owns a key is visible at the point of use
 and cannot drift during an edit.
 
-Two properties fall out for free. A duplicate rule id is a TOML parse error,
+Two properties follow directly. A duplicate rule id is a TOML parse error,
 not a runtime check — `make-illegal-states-unrepresentable` — and the only
 uniqueness check that remains is for the one collision no parser can see: two
 *inherited* files defining the same id. And kebab-case ids are legal bare
-keys, no quoting.
+keys, with no quoting.
 
 "The whole tree" is written `files.include = ["."]`, which is what an absent
 `include` means; dotted keys cannot spell an empty table, and the explicit
-spelling reads better anyway.
+spelling is clearer.
 
 Shims are `[[shim]]` tables: their fields are flat, with no sub-tables to own,
-so the ambiguity the rule sections exist to prevent has no purchase there.
+so the ambiguity the rule sections exist to prevent does not arise there.
 
 ## Scripts are the unit, spelled the way regex spells them
 
@@ -115,7 +115,7 @@ Some literals are never searched for — words that describe a machine's *kind*
 rather than its owner, which would fire on every legitimate mention. That
 suppression is policy, so it lives where policy lives: the default list is
 documented word for word in REFERENCE.md, and `ignore_literals` extends it per
-rule. A suppression the operator cannot see is mechanism eating policy.
+rule. A suppression the operator cannot see is mechanism absorbing policy.
 
 ## Inherited sets are named by what they refuse
 
@@ -127,8 +127,8 @@ deciding to inherit one, and it must predict the rule list.
 There is no take-everything shorthand: naming three sets is cheap, what a
 repository inherits is written in the repository, and each set is a separate
 decision — `unmanaged-pins` refuses a shape a repository that vendors
-deliberately has on purpose, and that argument should not stand between
-anyone and `process-residue`.
+deliberately has on purpose, and that argument should not block anyone from
+inheriting `process-residue`.
 
 The name-must-predict principle has a mechanism, not just an intention:
 `uphold rules --set <name>` prints a set's rules, so the binary answers
@@ -142,8 +142,8 @@ parameter written on a rule whose check does not read it is refused at load,
 exactly as a second check field is, and for the same reason: a field read by
 nothing looks enforced and is not.
 
-The parameter fields are optional rather than defaulted so that WRITTEN and
-ABSENT are different facts to the validator; an explicitly empty list beside
+The parameter fields are optional rather than defaulted so that *written* and
+*absent* are different facts to the validator; an explicitly empty list beside
 the wrong check is precisely the thing that looks enforced, and a defaulted
 field could not be refused.
 
@@ -161,12 +161,11 @@ The rest of the surface borrows standard vocabularies on purpose and adds
 nothing to them: `regexp` / `path_regexp` / `require_regexp` are regex, with
 the require/forbid split legible from the names; `max_lines` takes a
 `baseline`, the standard ratchet term; `files.*` selection is ripgrep's own
-scoping; `git.hooks` takes four githooks(5) names -- `pre-commit`,
-`commit-msg`, `pre-merge-commit`, `pre-push` -- and `manual`, which is not
+scoping; `git.hooks` takes four githooks(5) names — `pre-commit`,
+`commit-msg`, `pre-merge-commit`, `pre-push` — and `manual`, which is not
 git's and is where a check too slow to sit in front of a commit goes; the
-`exec` contract is one
-contract for any language — subject on stdin, kind in `UPHOLD_KIND`,
-0 pass / 1 refuse / 2 could-not-look.
+`exec` contract is one contract for any language — subject on stdin, kind in
+`UPHOLD_KIND`, 0 pass / 1 refuse / 2 could-not-look.
 
 Deliberately absent: regex-based file selection. Globs are the standard
 selection language (ripgrep, gitignore), they express every scope raised, and

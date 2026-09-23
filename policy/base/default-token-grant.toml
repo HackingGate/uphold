@@ -3,10 +3,10 @@
 #
 # A GitHub Actions workflow with no top-level `permissions:` block runs with
 # whatever default grant applies to it, and that grant is settled OUTSIDE the
-# workflow -- by the repository's setting, by the organisation's, or by the
+# workflow -- by the repository's setting, by the organization's, or by the
 # enterprise's, whichever is most restrictive. It may be read-only and it may be
 # read and write; which one it is today is not visible in the file, is not in
-# git history, and changes when somebody edits a settings page. Pull in with:
+# Git history, and changes when somebody edits a settings page. Pull in with:
 #
 #   [inherit]
 #   sets = ["default-token-grant"]
@@ -14,7 +14,7 @@
 # WHAT IT REFUSES, and why that is a decidable question at all. `least-privilege`
 # is a record in this catalog and this is the cheapest complete instance of it:
 # whether a `permissions:` key is present is a fact about the file, so it needs
-# no judgement about which scopes the workflow ought to hold. What the rule
+# no judgment about which scopes the workflow ought to hold. What the rule
 # cannot say is whether a declared block is MINIMAL -- that remainder stays with
 # the review tier, and the rule is deliberately not stretched to reach it. It
 # also cannot say what the default actually IS in this repository, which is the
@@ -33,7 +33,7 @@
 #
 # WHY THIS IS ITS OWN SET rather than a rule added to `process-residue`. The
 # seven content sets are about residue in what a repository COMMITS -- authoring
-# artefacts, captured data, credentials, stale pins. This is about how CI is
+# artifacts, captured data, credentials, stale pins. This is about how CI is
 # configured, which is a different subject with a different audience and a
 # different reason to decline: a repository with no `.github/workflows`
 # directory has nothing here to enforce, and a repository whose workflows are
@@ -70,7 +70,7 @@ stages = []
 [rule.workflow-declares-permissions]
 message = """
 A GitHub Actions workflow declares no top-level `permissions:` block, so its
-GITHUB_TOKEN gets whatever default the repository, organisation or enterprise
+GITHUB_TOKEN gets whatever default the repository, organization or enterprise
 settings grant -- a scope decided outside this file and invisible in it. Add a
 top-level `permissions:` block naming the minimum: `contents: read` for a
 workflow that only checks out and tests.

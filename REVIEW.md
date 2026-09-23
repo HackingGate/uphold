@@ -230,7 +230,7 @@ An effect that is hard to reverse and falls outside what the invoked operation d
 - The action is taken on the user's behalf by an agent or automation they cannot watch.
 
 **Ask**
-- What exactly will change, and would the user recognise it from this description?
+- What exactly will change, and would the user recognize it from this description?
 - Can the user decline this part and still get the rest of what they asked for?
 - Is the previewed plan produced by the same code that applies it?
 - What does this do when no one is there to answer -- refuse, or proceed?
@@ -240,7 +240,7 @@ An effect that is hard to reverse and falls outside what the invoked operation d
 An operation should confine its effects to what its name and context already denote to the people who invoke it, and any effect beyond that must be visible at the point of use rather than discoverable only afterwards.
 
 **Applies when**
-- The user brings an expectation from a convention, a neighbouring tool, or an earlier version of this one.
+- The user brings an expectation from a convention, a neighboring tool, or an earlier version of this one.
 - The operation touches state the user owns and the tool does not.
 - The surprising effect is paid for by the user rather than by the author.
 - Discovery happens after the fact, when the cheap moment to object has passed.

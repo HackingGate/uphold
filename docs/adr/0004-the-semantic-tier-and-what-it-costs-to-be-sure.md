@@ -5,22 +5,22 @@ Status: Accepted
 [ADR 0003](0003-the-structural-tier-and-what-a-clean-run-means.md) ends where a
 pattern over one syntax tree stops: the rule this repository enforces is "no
 command is built outside the helper", and the rule it would rather enforce is
-"every command this module runs came FROM the helper". The second is a question
+"every command this module runs came *from* the helper". The second is a question
 about values flowing between functions, and no matcher answers it.
 
-This record is what two data-flow tools said when they were asked.
+This record reports what two data-flow tools answered when asked.
 
 ## The property
 
 `probe` builds a throwaway worktree and drives a hook runner in it. Every child
 must have git's environment taken away, because a hook runner exports `GIT_DIR`
-and `GIT_INDEX_FILE` and several of them are RELATIVE to the repository the hook
+and `GIT_INDEX_FILE` and several of them are *relative* to the repository the hook
 fired in. `detached` is the one place that strips them.
 
 Stated as the tier above the structural one states it: **no execution of a
 command in this module may be reached by a command that did not come out of
 `detached`.** That is complete mediation, written as a flow property, and it is
-the shape the issue behind this work names -- a privileged operation that must
+the shape the issue behind this work names — a privileged operation that must
 pass through one mediation point.
 
 ## Semgrep: the property is expressible, the flow is not
@@ -44,16 +44,16 @@ pattern-sinks:
 
 On a fixture where the construction and the execution are two statements in one
 function, that is exactly one finding and it is the right one. Two things were
-measured getting there, and both are worth carrying:
+measured getting there, and both are recorded here:
 
 **Order matters, and the helper's own body reads as a violation without a
 carve-out.** `detached` sets `current_dir` before it calls `env_remove`, so at
 the moment of the earlier statement the value is not yet sanitized. That is
-defensible behaviour and it is not what the rule means; `pattern-not-inside` on
+defensible behavior and it is not what the rule means; `pattern-not-inside` on
 the helper is the fix, and the rule has to know the helper's name.
 
-**Nothing crosses a function boundary.** Move the construction into a wrapper --
-`fn plain(program) -> Command { Command::new(program) }` -- and call the wrapper
+**Nothing crosses a function boundary.** Move the construction into a wrapper —
+`fn plain(program) -> Command { Command::new(program) }` — and call the wrapper
 from the function that runs the command, and Semgrep reports nothing. Not on a
 fixture: on this repository's own `src/probe.rs`, with the defect planted in it
 and a wrapper one function away, `semgrep --config rule.yml src/probe.rs`
@@ -66,17 +66,17 @@ $ semgrep --config rule.yml --pro src/probe.rs
 Run `semgrep login` before running `semgrep scan --pro`.
 ```
 
-So the honest summary of the OSS tool is: it reaches one useful step past the
-structural tier, and it stops one step short of the property. The step it takes
-is real and cheap. The step it does not take is the one this rule is about, and
-it is behind an account.
+In summary, the OSS tool reaches one useful step past the structural tier and
+stops one step short of the property. The step it takes is real and cheap. The
+step it does not take is the one this rule is about, and it requires an
+account.
 
 ## CodeQL: the property, answered, at a price
 
 CodeQL resolves calls rather than matching their spelling: `Command::new` in the
 database is `<std::process::Command>::new`, from type inference, and `detached`
 is `uphold::probe::detached`. That resolution is what lets the query state the
-POSITIVE form -- the direction ADR 0003 records a matcher cannot express at all:
+*positive* form — the direction ADR 0003 records a matcher cannot express at all:
 
 ```ql
 from Execution run, DataFlow::Node sink
@@ -88,16 +88,16 @@ select run, "runs a command that did not come from `detached`"
 ```
 
 `not Flow::flowTo(sink)` is "no value out of the helper reaches this execution".
-It is a negation over a flow relation, which is a thing you can only write when
-the tool computes the relation for you.
+It is a negation over a flow relation, which can only be written when the tool
+computes the relation.
 
-Handed the same planted defect Semgrep printed `Findings: 0` on -- construction
-in a wrapper, execution one function away -- it reports the one finding and
+Handed the same planted defect Semgrep printed `Findings: 0` on — construction
+in a wrapper, execution one function away — it reports the one finding and
 nothing else. Over the compliant tree it reports nothing.
 
 ### Three measurements, none of them free
 
-**The models are yours.** The first run of that query produced three findings,
+**The models are the adopter's to write.** The first run of that query produced three findings,
 all false, all of the form `detached(..).args([..]).output()`. Value flow does
 not cross `Command::arg` and its neighbours, because nothing in the standard
 library model says those return the same command. The query needs
@@ -113,7 +113,7 @@ predicate isAdditionalFlowStep(DataFlow::Node earlier, DataFlow::Node later) {
 ```
 
 before it says anything true. That is the tier's real cost and it is not the
-toolchain: an unmodelled API produces confident wrong answers, in both
+toolchain: an unmodeled API produces confident wrong answers, in both
 directions, and the direction that produces silence is the one nobody
 investigates.
 
@@ -134,20 +134,20 @@ $ codeql query run --database=... probe-env.ql
 +-----+------+
 ```
 
-"Successfully created", zero findings, and the defect is sitting in the file.
-The state is recoverable -- the database records `parse_error` diagnostics for
-`probe.rs` -- but the recovery is worse than it sounds: the clean tree already
+"Successfully created", zero findings, and the defect is still in the file.
+The state is recoverable — the database records `parse_error` diagnostics for
+`probe.rs` — but the recovery is worse than it sounds: the clean tree already
 carries 1,689 diagnostics of the same severity, mostly `macro expansion failed`
 from `assert!` and `format!`. The signal that a file did not parse is four more
 rows against that, at severity Warning, in a channel no result of the query
 mentions. Reading it means knowing in advance which tag and which file to filter
-for -- which is to say, knowing what you were about to fail to find.
+for — that is, knowing in advance what the query would miss.
 
 ## Decisions
 
 **Neither tool is adopted here.** The property they answer is already enforced
 in this repository by a structural test, at a cost of milliseconds, and the
-extra thing CodeQL proves -- that no wrapper bypasses the helper -- is a case
+extra thing CodeQL proves — that no wrapper bypasses the helper — is a case
 `src/probe.rs` does not currently contain. A second checker over one answer is
 two answers free to disagree, and this repository has had that once already.
 
