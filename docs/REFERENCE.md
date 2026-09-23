@@ -2358,6 +2358,37 @@ through the same verdict ranking every other command here uses — where the
 shell spelled it exactly like a refusal, and a wrapper less careful would
 spell it like a pass.
 
+Each of the five also has a **version floor**. Several sections read a
+scanner's own output to learn that it did not look — guarddog's timed-out
+rules, cargo-vet's 255 with an empty stdout, cargo-deny's exit 1 over an
+unfetched database, zizmor skipping an unparseable workflow — and each reader
+was measured against one release. Before a scanner runs it is asked its
+version (`--version`; `cargo deny --version` and `cargo vet --version` for the
+two cargo subcommands), and the first `major.minor.patch` it prints is
+compared with the floor:
+
+| scanner | floor |
+|---|---|
+| osv-scanner | `2.5.1` |
+| zizmor | `1.30.0` |
+| cargo-deny | `0.20.2` |
+| cargo-vet | `0.10.2` |
+| guarddog | `3.2.0` |
+
+A release below its floor is **could not look** for that section, exit `2`,
+naming the tool, the version found and the floor. So is a version command that
+fails, and one whose answer holds no version this can read: a reader matching
+text of an unknown shape is not a pass. The floors live in `src/supply.rs`
+beside the readers that depend on them, so raising one is the same diff as
+changing the text a reader matches. They are floors, not pins — the host still
+supplies the scanners, and newer releases are accepted.
+
+**A floor raised in an uphold release can newly exit `2`** on a host whose
+scanner is older than the new floor, with no change to the tree being scanned.
+That is intended — the old release is one the new reader was not measured
+against — and the release notes name every floor that moved, so a consumer
+upgrades the scanner in the same step as uphold.
+
 Per section: `vendor/`, `upstream/`, `target/`, `node_modules/` and `.git/`
 are never descended into — somebody else's manifests are somebody else's
 backlog. cargo-deny runs once per crate or workspace root against the root

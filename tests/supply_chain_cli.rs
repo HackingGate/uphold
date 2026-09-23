@@ -30,8 +30,46 @@ fn repository() -> PathBuf {
     root
 }
 
-/// A directory of stub scanners, each a script that records and answers.
+/// What each stubbed scanner answers when asked its version: the floor
+/// release, in the shape the real tool prints it.
+///
+/// Every scanner is asked before it runs, and a stub that answered `--version`
+/// with its scan script would be a scanner whose version nobody can read,
+/// which is could-not-look. Answered first and not recorded, so the journal
+/// holds only the scans.
+fn version_answer(name: &str) -> &'static str {
+    match name {
+        "osv-scanner" => {
+            "[ \"$1\" = --version ] && { printf 'osv-scanner version: 2.5.1\\nosv-scalibr \
+             version: 0.5.2\\n'; exit 0; }\n"
+        }
+        "zizmor" => "[ \"$1\" = --version ] && { echo 'zizmor 1.30.0'; exit 0; }\n",
+        "guarddog" => "[ \"$1\" = --version ] && { echo '3.2.0'; exit 0; }\n",
+        "cargo" => {
+            "[ \"$1 $2\" = 'deny --version' ] && { echo 'cargo-deny 0.20.2'; exit 0; }\n\
+             [ \"$1 $2\" = 'vet --version' ] && { echo 'cargo-vet 0.10.2'; exit 0; }\n"
+        }
+        _ => "",
+    }
+}
+
+/// A directory of stub scanners, each a script that records and answers, and
+/// that answers its version at the floor.
 fn stubs(entries: &[(&str, &str)]) -> PathBuf {
+    let scripts: Vec<(&str, String)> = entries
+        .iter()
+        .map(|(name, script)| (*name, format!("{}{script}", version_answer(name))))
+        .collect();
+    let borrowed: Vec<(&str, &str)> = scripts
+        .iter()
+        .map(|(name, script)| (*name, script.as_str()))
+        .collect();
+    raw_stubs(&borrowed)
+}
+
+/// The same, with each script answering `--version` however it says, or not
+/// at all.
+fn raw_stubs(entries: &[(&str, &str)]) -> PathBuf {
     let directory = support::scratch("supply-chain-stubs");
     let _ = std::fs::remove_dir_all(&directory);
     std::fs::create_dir_all(&directory).unwrap();
@@ -1230,6 +1268,99 @@ fn guarddog_that_could_not_scan_a_dependency_is_could_not_look() {
     let said = text(&output);
     assert!(said.contains("could not scan left-pad"), "{said}");
     assert!(!said.contains("all checks passed"), "{said}");
+}
+
+// ── version floors ───────────────────────────────────────────────────────
+
+/// A scanner older than the release its reader was measured against is exit 2
+/// and is never run.
+///
+/// The readers match the text a scanner prints when it did not look; an older
+/// release printing something else would fall through to whichever verdict the
+/// unmatched text reaches. The reason names the tool, the version found and the
+/// floor, and the scan itself is not in the journal.
+#[test]
+fn a_scanner_below_its_floor_is_could_not_look_and_is_never_run() {
+    let root = repository();
+    std::fs::create_dir_all(root.join(".github/workflows")).unwrap();
+    std::fs::write(root.join(".github/workflows/ci.yml"), "on: push\n").unwrap();
+    let tools = raw_stubs(&[
+        (
+            "osv-scanner",
+            &format!("{}{}", version_answer("osv-scanner"), recording("exit 0")),
+        ),
+        (
+            "zizmor",
+            &format!(
+                "[ \"$1\" = --version ] && {{ echo 'zizmor 1.29.0'; exit 0; }}\n{}",
+                recording("exit 0")
+            ),
+        ),
+    ]);
+    let output = supply(&root, Some(&tools));
+    let said = text(&output);
+    assert_eq!(code(&output), 2, "{said}");
+    assert!(
+        said.contains("zizmor 1.29.0 is older than 1.30.0"),
+        "{said}"
+    );
+    assert!(said.contains("NOT CHECKED"), "{said}");
+    assert!(!said.contains("   FAILED"), "{said}");
+    // osv-scanner, at its floor, ran; zizmor, below it, did not.
+    let journal = journal(&root);
+    assert!(journal.contains("osv-scanner"), "{journal}");
+    assert!(!journal.contains("zizmor"), "{journal}");
+}
+
+/// A version answer nobody can read, or a version command that fails, is not a
+/// pass either.
+#[test]
+fn a_scanner_whose_version_cannot_be_read_is_could_not_look() {
+    let root = repository();
+    let tools = raw_stubs(&[("osv-scanner", "echo 'osv-scanner (devel)'\nexit 0")]);
+    let output = supply(&root, Some(&tools));
+    let said = text(&output);
+    assert_eq!(code(&output), 2, "{said}");
+    assert!(
+        said.contains("`osv-scanner --version` printed no version this could read"),
+        "{said}"
+    );
+    assert!(!said.contains("all checks passed"), "{said}");
+}
+
+/// cargo on PATH and no cargo-deny: `cargo deny --version` is cargo's "no such
+/// command", and that is could-not-look before any manifest is handed over.
+#[test]
+fn a_version_command_that_fails_is_could_not_look_and_no_manifest_is_handed_over() {
+    let root = repository();
+    std::fs::write(root.join("deny.toml"), "[bans]\n").unwrap();
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname = 'fixture'\n").unwrap();
+    let tools = raw_stubs(&[
+        (
+            "osv-scanner",
+            &format!("{}exit 0", version_answer("osv-scanner")),
+        ),
+        (
+            "cargo",
+            &format!(
+                "echo 'error: no such command: `deny`' >&2\n{}",
+                recording("exit 101")
+            ),
+        ),
+    ]);
+    let output = supply(&root, Some(&tools));
+    let said = text(&output);
+    assert_eq!(code(&output), 2, "{said}");
+    assert!(
+        said.contains("`cargo deny --version` did not answer (is cargo-deny installed?)"),
+        "{said}"
+    );
+    assert!(said.contains("no such command"), "{said}");
+    assert!(!said.contains("FAILED"), "{said}");
+    // Asked its version once, and handed no manifest.
+    let journal = journal(&root);
+    assert_eq!(journal.lines().count(), 1, "{journal}");
+    assert!(journal.contains("deny --version"), "{journal}");
 }
 
 // ── gitleaks ─────────────────────────────────────────────────────────────
