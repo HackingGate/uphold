@@ -30,8 +30,16 @@ use crate::error::{Fatal, Result};
 /// rather than going quietly missing from every reconcile.
 const RECORDS: &[(&str, &str)] = &[
     (
+        "acyclic-dependencies",
+        include_str!("../principles/acyclic-dependencies.toml"),
+    ),
+    (
         "backpressure",
         include_str!("../principles/backpressure.toml"),
+    ),
+    (
+        "chestertons-fence",
+        include_str!("../principles/chestertons-fence.toml"),
     ),
     (
         "complete-mediation",
@@ -52,6 +60,10 @@ const RECORDS: &[(&str, &str)] = &[
     (
         "defense-in-depth",
         include_str!("../principles/defense-in-depth.toml"),
+    ),
+    (
+        "deprecation-discipline",
+        include_str!("../principles/deprecation-discipline.toml"),
     ),
     (
         "economy-of-mechanism",
@@ -82,6 +94,7 @@ const RECORDS: &[(&str, &str)] = &[
         "high-cohesion-low-coupling",
         include_str!("../principles/high-cohesion-low-coupling.toml"),
     ),
+    ("hyrums-law", include_str!("../principles/hyrums-law.toml")),
     (
         "idempotency",
         include_str!("../principles/idempotency.toml"),
@@ -101,6 +114,10 @@ const RECORDS: &[(&str, &str)] = &[
     (
         "least-common-mechanism",
         include_str!("../principles/least-common-mechanism.toml"),
+    ),
+    (
+        "least-power",
+        include_str!("../principles/least-power.toml"),
     ),
     (
         "least-privilege",
@@ -133,6 +150,14 @@ const RECORDS: &[(&str, &str)] = &[
     (
         "reversible-decisions",
         include_str!("../principles/reversible-decisions.toml"),
+    ),
+    (
+        "robustness-principle",
+        include_str!("../principles/robustness-principle.toml"),
+    ),
+    (
+        "rule-of-three",
+        include_str!("../principles/rule-of-three.toml"),
     ),
     (
         "separation-of-concerns",

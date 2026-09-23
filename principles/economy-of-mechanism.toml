@@ -14,7 +14,7 @@ benefits = ["Review and testing can cover the whole mechanism rather than a samp
 costs = ["Convenience features are pushed to other layers, which callers then have to compose.", "Keeping a trusted core small takes continuing refusal of plausible additions.", "A small general mechanism can be slower than a larger specialized one."]
 failure_when_overapplied = ["A needed check is left out to keep the mechanism small, and the omission becomes the vulnerability.", "Logic moves out of the core into callers that each reimplement it, so verified code shrinks while trusted code grows.", "Simplicity is judged by line count, and the complexity reappears in configuration the mechanism interprets."]
 conflicts_with = ["defense-in-depth"]
-related = ["least-common-mechanism", "complete-mediation", "fail-safe-defaults", "minimize-attack-surface", "information-hiding"]
+related = ["least-common-mechanism", "complete-mediation", "fail-safe-defaults", "minimize-attack-surface", "least-power", "information-hiding"]
 review_questions = ["Which part of this change is trusted to refuse, and how large is it after the change?", "Could every path through the mechanism be enumerated in review, and was it?", "Does a new option belong inside the protected mechanism, or can it live in untrusted code that calls it?", "Is the mechanism short because it is simple, or because it hands the hard case to configuration it interprets?"]
 
 [enforcement]

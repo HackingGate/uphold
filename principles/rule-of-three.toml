@@ -1,0 +1,37 @@
+id = "rule-of-three"
+title = "Rule of Three"
+aliases = ["Three strikes and you refactor", "Wait for the third instance"]
+kind = "heuristic"
+status = "seed"
+domains = ["evolution", "architecture"]
+summary = "Tolerate the second copy and abstract at the third, when enough instances exist to show what actually varies between them."
+claim = "Defer extracting a shared abstraction until the third occurrence of similar code, because two instances rarely reveal which differences are incidental and which are the parameter."
+problem = "An abstraction extracted from two examples guesses the axis of variation. When the third case arrives and varies along a different axis, the abstraction grows flags and special cases, and it is then harder to change than the duplication it replaced."
+rationale = "Each instance is a sample of the variation the abstraction must cover. With two samples any difference could be the parameter; with three, the common part and the varying part can be separated on evidence. Duplication is cheap to remove later, while a wrong abstraction is expensive to undo because its callers have adapted to it."
+applies_when = ["The similar units are young and it is not yet clear which of their differences are essential.", "Removing the duplication later is cheap: the copies are few, local, and owned by one team.", "The shared form would generalize over cases nobody has written yet.", "The units differ in more than one place, so the axis of variation is itself in question."]
+does_not_mean = ["Keep two copies that differ only in one constant; when the parameter is already evident, one instance is enough evidence, and waiting only adds a copy to fix.", "Count to three and then abstract mechanically; the third instance is evidence to read, not a trigger to fire.", "Duplicate knowledge that must stay identical, such as a security check or a protocol constant, where a copy that drifts is a defect rather than a cost.", "Pool unrelated code that merely looks alike toward the count."]
+benefits = ["Abstractions fit observed variation rather than guessed variation.", "Early code stays direct and easy to change.", "Fewer premature frameworks with a single real client."]
+costs = ["Duplicated logic can drift before the third instance arrives.", "A fix may land in one copy and not the other.", "Someone must notice the third occurrence, and nothing forces it."]
+failure_when_overapplied = ["Copies multiply past three because each author sees only the one beside theirs, and the refactor never happens.", "The rule is cited to keep copies of a decision that must stay identical, and the copies diverge.", "Two units that differ only in a literal are kept apart on principle, adding a place for behavior to drift with no uncertainty to justify it.", "Deferral becomes permanent because by the fifth copy the extraction has become a cross-team change."]
+conflicts_with = ["parameterize-do-not-enumerate"]
+related = ["reversible-decisions", "single-authoritative-source", "high-cohesion-low-coupling"]
+review_questions = ["Is the difference between these copies a single value, or is the axis of variation still unknown?", "How many copies exist now, including those outside this change, and who would notice the next one?", "If the abstraction is extracted now, which instance's quirks would it encode as the general case?", "Do these copies carry a fact that must stay identical, so that drift would be a defect?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Clusters of near-duplicate code blocks and the number of members in each.", "Growth of a duplicate cluster over time.", "Changes that edit one member of a duplicate cluster and not its siblings."]
+checks = ["Report a duplicate cluster when it reaches a third member, as a prompt to reconsider rather than a refusal.", "Flag a change that fixes one copy in a cluster and leaves its siblings untouched.", "Track cluster sizes across runs so accumulation is visible."]
+limits = ["A clone detector sees textual similarity, not whether the copies share a reason to change.", "Three is a proxy; the evidence it stands for is whether the variation is understood, which a count cannot establish."]
+
+[[sources]]
+title = "Rule of three (computer programming)"
+url = "https://en.wikipedia.org/wiki/Rule_of_three_(computer_programming)"
+type = "documentation"
+notes = "Neutral statement of the rule and its usual justification: extraction from fewer instances tends to produce the wrong abstraction."
+
+[[sources]]
+title = "Refactoring: Improving the Design of Existing Code"
+url = "https://martinfowler.com/books/refactoring.html"
+type = "book"
+notes = "Fowler attributes the rule to Don Roberts: the first time, just do it; the second time, wince at the duplication; the third time, refactor."

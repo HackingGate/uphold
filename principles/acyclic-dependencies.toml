@@ -1,0 +1,54 @@
+id = "acyclic-dependencies"
+title = "Acyclic Dependencies Principle"
+aliases = ["ADP", "No dependency cycles", "Levelized dependencies"]
+kind = "principle"
+status = "seed"
+domains = ["architecture"]
+summary = "Keep the dependency graph between modules, packages, or components free of cycles, so each unit can be built, tested, and understood after the units beneath it."
+claim = "The dependency graph between units that are built, tested, or released separately must contain no cycles; a cycle makes its members one unit in fact while they remain several in name."
+problem = "Two packages that import each other cannot be built, tested, released, or reasoned about apart, so a change in either forces work in both, and cycles grow transitively until a large part of the system is one tangle that must move together."
+rationale = "An acyclic graph has a topological order, which gives each unit a level: it can be compiled, tested, and replaced knowing only what lies beneath it. A cycle collapses its members into one strongly connected component, so the boundary between them costs what a module boundary costs without buying the independence that justifies one."
+applies_when = ["The system is divided into units that are built, tested, versioned, or owned separately.", "The dependency graph is observable from imports, build manifests, or link metadata.", "A change adds an edge between two units that previously had none.", "Units are expected to be released or replaced independently."]
+does_not_mean = ["Forbid mutual recursion inside one unit; the principle binds edges between units, not calls within one.", "Forbid interaction in both directions at run time; callbacks and events can flow upward through an interface owned by the lower unit.", "Treat an acyclic graph as a good architecture; a graph without cycles can still be deep, wide, and tightly coupled.", "Break a cycle by merging the units into one to satisfy the checker, unless they genuinely belong together."]
+benefits = ["A build and test order exists, so units can be verified bottom up.", "The blast radius of a change is bounded by the units above it.", "Units can be released and replaced independently.", "Layering becomes a checked property instead of a diagram that drifts."]
+costs = ["Breaking a cycle usually needs an interface, an inversion, or a new unit, which adds indirection.", "Which direction an edge should point is a design judgment the graph does not supply.", "An existing tangle needs a baseline or ratchet before a checker can be enabled."]
+failure_when_overapplied = ["Every cycle is cut with an interface nobody else implements, multiplying abstractions whose only purpose is to satisfy the graph.", "Units are split so finely that the acyclic graph is harder to navigate than the tangle it replaced.", "Cycles move behind reflection, plugin lookup, or a service locator the static graph cannot see, so the checker passes and the coupling remains.", "Unrelated code is merged into one unit to absorb a cycle, trading a visible defect for a cohesion one."]
+conflicts_with = []
+related = ["high-cohesion-low-coupling", "separation-of-concerns", "information-hiding"]
+review_questions = ["Does this change add an edge between units, and does that edge close a cycle?", "Which unit should own the interface through which the lower unit reaches the higher one?", "If a cycle is broken here, is the new abstraction justified by more than the checker?", "Is there coupling the static graph cannot see, such as reflection, string-keyed lookup, or a shared registry?"]
+
+[enforcement]
+level = "lint"
+automatable = "yes"
+rung = ["semantic"]
+observable = ["Import statements and module declarations.", "Build manifests and the dependencies they declare.", "The strongly connected components of the resulting graph at the declared unit grain."]
+checks = ["Refuse a change whose dependency graph contains a cycle between declared units, naming the edges that close it.", "Where the toolchain already refuses cycles, as Go does for package imports and cargo does for crates, the consumer claims the record for that build hook rather than adding a second check.", "Where the toolchain permits cycles, the consumer wires its own architecture linter into its hook configuration and claims the record for that hook; uphold ships a pointer to it, not a wrapper.", "Hold an existing tangle to a baseline that may shrink and may not grow, so the check can be enabled on a tree that does not yet comply."]
+limits = ["The grain the rule binds at, whether file, module, package, crate, or service, is a declaration the consumer must make; a graph at the wrong grain is noise.", "Dependencies through reflection, plugins, or string-keyed registries are invisible to an import graph.", "An acyclic graph says nothing about whether its edges point the right way."]
+
+[[tools]]
+name = "ArchUnit"
+url = "https://www.archunit.org/"
+notes = "JVM library that asserts package and slice dependency rules as unit tests, including freedom from cycles."
+
+[[tools]]
+name = "Import Linter"
+url = "https://import-linter.readthedocs.io/"
+notes = "Checks declared contracts, such as layers and independence, over a Python project's import graph."
+
+[[sources]]
+title = "Acyclic dependencies principle"
+url = "https://en.wikipedia.org/wiki/Acyclic_dependencies_principle"
+type = "documentation"
+notes = "Neutral statement of the principle and the usual ways to break a cycle: dependency inversion or a new shared unit."
+
+[[sources]]
+title = "Package principles"
+url = "https://en.wikipedia.org/wiki/Package_principles"
+type = "documentation"
+notes = "Places the acyclic dependencies principle among Martin's package coupling principles, beside the stable dependencies and stable abstractions principles."
+
+[[sources]]
+title = "Design Principles and Design Patterns"
+url = "https://web.archive.org/web/20150906155800/http://www.objectmentor.com/resources/articles/Principles_and_Patterns.pdf"
+type = "essay"
+notes = "Martin (2000), archived copy. States that the dependency structure between packages must be a directed acyclic graph and shows how a cycle forces packages to be released together."
