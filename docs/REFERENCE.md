@@ -360,7 +360,7 @@ it refuses** so the name predicts the rule list:
 | set | refuses |
 |---|---|
 | `process-residue` | authoring and process residue in committed content — conflict markers, home paths, dated and status metadata, tracker and thread references in documentation, private data paths — and the residue a process leaves in the policy file itself: a rule transcribed out of a set. **Installs `pre-commit` and `manual`**, and the two report different things |
-| `code-residue` | a tracker reference in a source, configuration, build or packaging file: the tracker rule of `process-residue` over every file that is not Markdown, reST or plain text, under its own id. Its own set because a scope is not something `[inherit]` lets a repository choose, and the release that widened the rule in place was undone by hand in every tree that measured what it reported. For a tree whose comments already cite durable contracts. **Installs `pre-commit` and `manual`**, the same ceiling as the set it was split from |
+| `code-residue` | a tracker reference in a source, configuration, build or packaging file: the tracker rule of `process-residue` over every file that is not Markdown, reST, plain text or a stylesheet, under its own id. Its own set because a scope is not something `[inherit]` lets a repository choose, and the release that widened the rule in place was undone by hand in every tree that measured what it reported. For a tree whose comments already cite durable contracts. **Installs `pre-commit` and `manual`**, the same ceiling as the set it was split from |
 | `credentials` | credential material — private keys and service tokens, literal credential values, populated environment files, browser profile and session stores. A literal credential value is two rules split on the quote: in source the value half must be a quoted literal, so `password: modem_config.password.clone()` and `token = raw.trim_start_matches('v')` are expressions and not findings; in a config file — `.env`, INI, YAML, TOML, JSON, XML, properties — the text after the separator is the value whether quoted or not, and `-in-config` reads it unquoted |
 | `unmanaged-pins` | a version pinned where no manifest holds it — a shell install line, a `releases/download/vX.Y.Z` URL, a versioned `curl` or `wget` |
 | `host-identity` | the machine the author is standing on — its username, home path, hostname and default route, read at scan time and searched for in content |
@@ -571,7 +571,8 @@ The `process-residue` set rejects GitHub issue and PR URLs and numbered tracker
 references in documentation — Markdown, reST and plain text — under
 `no-task-tracker-references`. The same pattern over every other tracked file —
 source, configuration, scripts, packaging, including systemd `Documentation=`
-fields — is `no-task-tracker-references-in-code`, the one rule of the
+fields, but not CSS, Sass, Less or Stylus, where a hash and digits is a
+colour — is `no-task-tracker-references-in-code`, the one rule of the
 `code-residue` set, and the two exclude each other's files so a line is under
 exactly one of them. The scopes are two sets rather than one rule because a
 scope is not something `[inherit]` lets a repository choose: it takes sets
@@ -603,8 +604,11 @@ Date and log rules exclude `tests/fixtures`, `test/fixtures`, and `testdata`.
 Unqualified all-uppercase identifiers are not treated as repository shorthand,
 and bare numbers need prose context, an opening delimiter, or a list separator
 (a comma, semicolon, or slash) before them, so standards citations remain valid
-and a citation list that names its repository once is read to its end. Other
-legitimate literal uses need a scoped override.
+and a citation list that names its repository once is read to its end. After a
+separator, three or six digits followed by a closing paren, a semicolon, a
+comma, a percent sign or a percentage are a colour, as in
+`color-mix(in srgb, #000 20%, white)`, and are not read. Other legitimate
+literal uses need a scoped override.
 
 None of those arguments should stand between anyone and `process-residue`. The
 binary answers "what is in it" directly:

@@ -169,7 +169,7 @@
         },
         "id": "no-task-tracker-references",
         "message": "Source, configuration, and documentation must not depend on volatile\nissue or PR records. State the durable contract and rationale here, or link to\nrepository documentation. Issues may link to code; code must not depend on\nissues. Keep logs, bug reports, and benchmark results in issues, and edit\nchronology in Git history.\n",
-        "regexp": "github\\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\\b|(?:^|\\b[a-z]+[\\t ]+|(?i:\\b(?:issue|pr)[\\t ]+)|\\(|\\[|[,;/][\\t ]*)#[0-9]+\\b"
+        "regexp": "github\\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\\b|(?:^|\\b[a-z]+[\\t ]+|(?i:\\b(?:issue|pr)[\\t ]+)|\\(|\\[)#[0-9]+\\b|[,;/][\\t ]*#(?:[0-9]{1,2}|[0-9]{4,5}|[0-9]{7,})\\b|[,;/][\\t ]*#(?:[0-9]{3}|[0-9]{6})(?:[^\\w\\t ),;%]|[\\t ]*$|[\\t ]+(?:[^\\t ),;%0-9]|[0-9]+(?:[^0-9%]|$)))"
       },
       {
         "files": {
@@ -205,6 +205,11 @@
             "*.md",
             "*.rst",
             "*.txt",
+            "*.css",
+            "*.scss",
+            "*.sass",
+            "*.less",
+            "*.styl",
             "**/tests/**",
             "**/test/**",
             "**/*_test.go",
@@ -219,7 +224,7 @@
         },
         "id": "no-task-tracker-references-in-code",
         "message": "Source, configuration, and build files must not depend on volatile issue or\nPR records. State the durable contract and rationale in a comment, or link to\nrepository documentation. Issues may link to code; code must not depend on\nissues. Keep logs, bug reports, and benchmark results in issues, and edit\nchronology in Git history.\n",
-        "regexp": "github\\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\\b|(?:^|\\b[a-z]+[\\t ]+|(?i:\\b(?:issue|pr)[\\t ]+)|\\(|\\[|[,;/][\\t ]*)#[0-9]+\\b"
+        "regexp": "github\\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\\b|(?:^|\\b[a-z]+[\\t ]+|(?i:\\b(?:issue|pr)[\\t ]+)|\\(|\\[)#[0-9]+\\b|[,;/][\\t ]*#(?:[0-9]{1,2}|[0-9]{4,5}|[0-9]{7,})\\b|[,;/][\\t ]*#(?:[0-9]{3}|[0-9]{6})(?:[^\\w\\t ),;%]|[\\t ]*$|[\\t ]+(?:[^\\t ),;%0-9]|[0-9]+(?:[^0-9%]|$)))"
       }
     ],
     "set": "code-residue",

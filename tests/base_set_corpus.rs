@@ -67,6 +67,11 @@ const TRACKER_REFUSES: &[&str] = &[
     // and a sample for each is what says the move lost nothing.
     "Issue #5 has the measurement.\n",
     "PR #7 landed the rest.\n",
+    // A colour's digit count after a separator, where nothing a colour is
+    // followed by comes next. The first item is refused by the prose-word arm
+    // either way, so it is the second that holds the separator arm to it.
+    "Fixed in #100, #200.\n",
+    "Landed beside it, #200\n",
 ];
 
 /// The near misses the tracker pattern was written to let through.
@@ -78,6 +83,11 @@ const TRACKER_ALLOWS: &[&str] = &[
     "color: #fff\n",
     "border: 1px, #1px wide\n",
     "The #4 seed plays first.\n",
+    // A colour written in digits after a separator, which is the arm's one
+    // near miss: a closing paren, a semicolon, a comma or a percentage next.
+    "color-mix(in srgb, #000 20%)\n",
+    "background: linear-gradient(red, #000000);\n",
+    "border-color: #fff, #111;\n",
 ];
 
 /// What a set needs written beside `[inherit]` before it will load.
@@ -648,6 +658,31 @@ fn tracker_references_are_refused_in_configuration_and_source() {
             let (code, report) = verdict(&case, sample);
             assert_eq!(code, 0, "{path}: {report}");
         }
+    }
+}
+
+#[test]
+fn a_stylesheet_is_not_read_by_the_code_tracker_rule() {
+    // `solid #000` is the prose-word arm's shape, and no pattern that keeps
+    // `fixed #451` refused can tell the two apart, so the scope says it. The
+    // `.rs` path is the control: the same line is refused where it is read.
+    for (path, refused) in [
+        ("src/estate.rs", 1),
+        ("web/site.css", 0),
+        ("web/site.scss", 0),
+        ("web/site.sass", 0),
+        ("web/site.less", 0),
+        ("web/site.styl", 0),
+    ] {
+        let case = Case {
+            set: "code-residue",
+            rule: "no-task-tracker-references-in-code",
+            path,
+            refuses: &[],
+            allows: &[],
+        };
+        let (code, report) = verdict(&case, "a { border: 1px solid #000; }\n");
+        assert_eq!(code, refused, "{path}: {report}");
     }
 }
 
