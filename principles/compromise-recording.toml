@@ -1,0 +1,48 @@
+id = "compromise-recording"
+title = "Compromise Recording"
+aliases = ["Tamper-evident history", "Append-only state", "Record what cannot be prevented"]
+kind = "principle"
+status = "seed"
+domains = ["security", "socio-technical"]
+summary = "When a breach cannot be reliably prevented, make it reliably recorded somewhere the breaching party cannot rewrite."
+claim = "Where preventing a compromise is infeasible or costs more than the harm, the system should instead guarantee that the compromise leaves evidence, held where the party who caused it cannot alter, truncate, or route around it."
+problem = "A control that cannot be made airtight is either left out or treated as airtight, and in both cases a breach leaves no trace, so nobody learns that it happened."
+rationale = "Detection substitutes for prevention only when the record is complete and out of the actor's reach. An append-only record, or a reviewed path that every change has to take, turns an undetectable breach into a detectable one, which is often all the economics allow."
+applies_when = ["Prevention would block legitimate work or cost more than the harm it averts.", "State changes can be kept as an append-only sequence of events rather than overwritten in place, so every change stays reconstructible.", "A reviewed path exists, and a change that bypasses it would be indistinguishable afterwards from one that took it.", "The record can be held by a party or store that the recorded actor does not control."]
+does_not_mean = ["Log everything; a record earns its cost only for the compromise it can reveal.", "Replace prevention where prevention is cheap and reliable.", "Trust a log that the recorded party can edit, truncate, or skip.", "Refuse all history rewriting; rewriting private work nobody has reviewed or relied on erases no record."]
+benefits = ["A breach becomes detectable after the fact even when it could not be stopped.", "The certainty of a record deters misuse by insiders.", "Incident response starts from evidence rather than reconstruction."]
+costs = ["Append-only stores grow without bound and need retention decisions.", "Records can hold sensitive data that then needs its own protection.", "Forcing every change through one recorded path adds latency and friction."]
+failure_when_overapplied = ["Records are kept but never read, so detection exists only on paper.", "Retaining everything collides with obligations to delete personal data.", "Legitimate local work is refused because it would not appear in the shared record."]
+conflicts_with = ["data-minimization"]
+related = ["observability", "separation-of-privilege", "defense-in-depth", "complete-mediation", "reversible-decisions"]
+review_questions = ["Which compromise is this record meant to reveal, and would it reveal it?", "Can the party being recorded alter, truncate, or bypass the record?", "Is there a path by which a change reaches shared history without passing the review that is recorded?", "Who reads the record, and what prompts them to?"]
+
+[enforcement]
+level = "governance"
+automatable = "yes"
+observable = ["Shared history that can be force-pushed, rewritten, or squashed after review.", "Merges and merge-completing commits created outside the reviewed path.", "Audit logs writable or deletable by the actor they record.", "Mutable state updated in place where an event sequence would preserve each change."]
+checks = ["Refuse a merge recorded on a workstation rather than through the reviewed path, at every seam that can record one.", "Refuse force-push and history rewriting on shared branches.", "Require audit records to be written to a store the recorded actor cannot modify."]
+limits = ["A tool refuses a bypass only at the seams it runs at; a change made where no check runs leaves no refusal.", "Checks on a workstation can be skipped by the person they run for, so the durable record also has to be held elsewhere.", "Whether a record would reveal a given compromise is a judgment about the threat."]
+
+[[tools]]
+name = "Rekor"
+url = "https://github.com/sigstore/rekor"
+notes = "A public append-only transparency log for software signing events; entries cannot be altered without detection by anyone monitoring the log."
+
+[[sources]]
+title = "The Protection of Information in Computer Systems"
+url = "https://doi.org/10.1109/PROC.1975.9939"
+type = "paper"
+notes = "States compromise recording: mechanisms that reliably record that a compromise occurred can be used in place of more elaborate mechanisms that completely prevent loss."
+
+[[sources]]
+title = "Secure Audit Logs to Support Computer Forensics"
+url = "https://doi.org/10.1145/317087.317089"
+type = "paper"
+notes = "Constructs logs whose entries an attacker who compromises the logging host cannot read or undetectably alter after the fact."
+
+[[sources]]
+title = "Event Sourcing"
+url = "https://martinfowler.com/eaaDev/EventSourcing.html"
+type = "essay"
+notes = "The append-only tactic: application state is captured as a sequence of events, so every change is retained and state can be rebuilt from the log."

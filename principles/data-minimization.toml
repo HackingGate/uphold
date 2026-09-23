@@ -1,0 +1,43 @@
+id = "data-minimization"
+title = "Data Minimization"
+aliases = ["Purpose limitation", "Collect only what is needed", "Publish only what is needed"]
+kind = "principle"
+status = "seed"
+domains = ["security", "ai-harness"]
+summary = "Collect, keep, and publish only the data a stated purpose requires."
+claim = "Data should be collected, retained, and disclosed only to the extent a stated purpose requires, and used only for that purpose, because data that is not held cannot leak, be misused, or be demanded by a third party."
+problem = "Identifiers, secrets, and captured data enter artifacts because they were at hand when the artifact was written, and once committed or published they persist beyond anyone's control."
+rationale = "Exposure is bounded by what is held. Each field collected or committed is a liability with no benefit beyond its purpose, and for a pushed commit, a public repository, or a shipped fixture the retention period is effectively permanent."
+applies_when = ["Artifacts leave the party that produced them, such as commits, logs, fixtures, telemetry, or agent transcripts.", "Real identifiers such as usernames, hostnames, home paths, private repository names, or tokens are at hand when the artifact is written.", "Data collected for one purpose could be reused for another without the subject knowing, which purpose limitation refuses.", "An agent reads broad context and writes outputs that other people will see."]
+does_not_mean = ["Discard data needed for audit, recovery, or legal obligation; the purpose defines the minimum.", "Anonymize by renaming fields while keeping the identifying values.", "Treat deletion from the tip of history as removal from what was already published.", "Strip diagnostic evidence until failures cannot be explained."]
+benefits = ["Less to leak, less to protect, and less to delete on request.", "Published artifacts carry no identity of the machine or person that produced them.", "Reuse of data for an undeclared purpose shows up as a change of purpose rather than passing silently."]
+costs = ["Real captured data has to be replaced by placeholders, which can lose fidelity.", "Purposes have to be stated before collection, which slows exploratory work.", "Identifier checks produce false positives on legitimate matches."]
+failure_when_overapplied = ["Logs are stripped until incidents cannot be diagnosed.", "Fixtures are sanitized until they no longer reproduce the defect they were captured for.", "Retention rules delete the records an audit or dispute depends on."]
+conflicts_with = ["compromise-recording", "observability"]
+related = ["least-privilege", "minimize-attack-surface", "informed-consent", "least-common-mechanism"]
+review_questions = ["What is each collected or committed field for, and is that purpose stated?", "Does this artifact carry an identifier of a real person, machine, or private project?", "Once published, can this data be withdrawn, and if not, is it needed at all?", "Could this data later be used for a purpose nobody declared?"]
+
+[enforcement]
+level = "lint"
+automatable = "yes"
+rung = ["text"]
+observable = ["Private repository names in commit messages, staged diffs, and tracked files.", "The username, hostname, home path, and network identity of the running host appearing in tracked files.", "Captured fixtures carrying real identifiers rather than reserved placeholders.", "Credentials and tokens in committed content."]
+checks = ["Refuse a commit message, staged diff, or tracked file that names a repository known to be private, at every seam that publishes text.", "Read the running host's identity at scan time and refuse tracked files that contain it.", "Refuse committed content that matches credential patterns.", "Require captured fixtures to use reserved placeholder names and domains."]
+limits = ["A text rule matches identifiers it has been told about; an identifier it does not know, or one encoded differently, passes.", "Whether a field is needed for its purpose is a judgment.", "Content already pushed stays in the remote's history whatever the tip later holds."]
+
+[[tools]]
+name = "gitleaks"
+url = "https://github.com/gitleaks/gitleaks"
+notes = "Scans commits and working trees for credentials and tokens by pattern and entropy; covers the committed-secrets part of the observable set only."
+
+[[sources]]
+title = "Regulation (EU) 2016/679, Article 5: Principles relating to processing of personal data"
+url = "https://eur-lex.europa.eu/eli/reg/2016/679/art_5/oj"
+type = "standard"
+notes = "Article 5(1)(b) states purpose limitation and 5(1)(c) states data minimisation: personal data adequate, relevant, and limited to what is necessary for the purposes of processing."
+
+[[sources]]
+title = "ISO/IEC 29100:2011 Information technology, Security techniques, Privacy framework"
+url = "https://www.iso.org/standard/45123.html"
+type = "standard"
+notes = "Lists data minimization and purpose legitimacy and specification among its eleven privacy principles."
