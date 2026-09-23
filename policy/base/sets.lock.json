@@ -282,7 +282,7 @@
           "word": false
         },
         "id": "no-committed-auth-key-values",
-        "message": "Do not commit literal credential, cookie, session, token, or secret values. Use\nenvironment-variable names or explicit redacted placeholders.\n",
+        "message": "Deprecated: gitleaks owns secret shapes (the gitleaks section of `uphold\nsupply-chain`), and this rule is removed in the release after the one that\nmarked it.\n\nDo not commit literal credential, cookie, session, token, or secret values. Use\nenvironment-variable names or explicit redacted placeholders.\n",
         "regexp": "(?i)\\b(?:cookie|session|password|passwd|token|credential|secret)\\b\\s*[=:]\\s*[\"'][A-Za-z0-9_./+=:@-]{16,}"
       },
       {
@@ -315,7 +315,7 @@
           "word": false
         },
         "id": "no-committed-auth-key-values-in-config",
-        "message": "Do not commit literal credential, cookie, session, token, or secret values in\nconfiguration. Use environment-variable names or explicit redacted placeholders.\n",
+        "message": "Deprecated: gitleaks owns secret shapes (the gitleaks section of `uphold\nsupply-chain`), and this rule is removed in the release after the one that\nmarked it.\n\nDo not commit literal credential, cookie, session, token, or secret values in\nconfiguration. Use environment-variable names or explicit redacted placeholders.\n",
         "regexp": "(?i)\\b(?:cookie|session|password|passwd|token|credential|secret)\\b\\s*[=:]\\s*[\"']?[A-Za-z0-9_./+=:@-]{16,}"
       },
       {
@@ -334,7 +334,7 @@
           "word": false
         },
         "id": "no-committed-secret-material",
-        "message": "Do not commit private keys or service tokens. Keep real credentials in an\nappropriate local secret store and use placeholders in tracked files.\n",
+        "message": "Deprecated: gitleaks owns secret shapes (the gitleaks section of `uphold\nsupply-chain`), and this rule is removed in the release after the one that\nmarked it.\n\nDo not commit private keys or service tokens. Keep real credentials in an\nappropriate local secret store and use placeholders in tracked files.\n",
         "regexp": "-----BEGIN [A-Z ]*PRIVATE KEY-----|\\bssh-rsa\\s+[A-Za-z0-9+/]{20,}={0,3}\\b|\\b(?:A3T[A-Z0-9]|AKIA|ASIA)[A-Z0-9]{16}\\b|\\b(?:gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{20,})\\b|\\bxox[baprs]-[A-Za-z0-9-]{24,}\\b|\\bsk-[A-Za-z0-9]{32,}\\b"
       },
       {

@@ -124,6 +124,7 @@ usage:
                                      pushed range -- six scanners, one verdict
   uphold supply-chain --all          the same, over every manifest and commit
   uphold supply-chain --base REV     the same, over what REV..HEAD changed
+  uphold supply-chain --staged       gitleaks alone, over the staged diff
   uphold probe [--runner NAME]       can each declared hook actually refuse
                [--timeout SECONDS]   one run's patience, over the file's
   uphold rules --set NAME [--json]   what a bundled rule set refuses, rule by rule
@@ -377,15 +378,17 @@ fn run() -> Result<Exit> {
         "supply-chain" => {
             let usage = || {
                 Fatal::new(format!(
-                    "usage: uphold supply-chain [--all | --base REV]\n\n{USAGE}"
+                    "usage: uphold supply-chain [--all | --base REV | --staged]\n\n{USAGE}"
                 ))
             };
             let mut whole = false;
+            let mut staged = false;
             let mut base: Option<String> = None;
             let mut index = 0;
             while let Some(flag) = rest.get(index) {
                 match text_of(flag)? {
                     "--all" => whole = true,
+                    "--staged" => staged = true,
                     "--base" => {
                         index += 1;
                         base = Some(text_of(rest.get(index).ok_or_else(usage)?)?.to_owned());
@@ -393,6 +396,12 @@ fn run() -> Result<Exit> {
                     _ => return Err(usage()),
                 }
                 index += 1;
+            }
+            // The staged diff is a different subject, not a narrower range:
+            // combined with a range it would have to mean one of them, and a
+            // flag silently ignored is a scan of something nobody named.
+            if staged && (whole || base.is_some()) {
+                return Err(usage());
             }
             let working = std::env::current_dir()?;
             // The root, not the policy: the scanners read manifests and
@@ -406,6 +415,9 @@ fn run() -> Result<Exit> {
                 .inherited_sets
                 .iter()
                 .any(|set| set == supply::SECRETS_SET);
+            if staged {
+                return supply::run_staged(&root, secrets);
+            }
             let scope = if whole {
                 supply::Scope::Whole
             } else if let Some(base) = base {

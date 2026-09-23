@@ -2415,8 +2415,11 @@ classes that describe `deny.toml` rather than a dependency.
 The sixth section is **gitleaks**, and it is the tool that owns secret shapes:
 token formats, a per-rule entropy threshold, and path and regex allowlists,
 maintained upstream. The `credentials` set's shape and key/value regexes
-approximate the same job by hand, with no entropy test; until they are
-retired, both run.
+approximate the same job by hand, with no entropy test, and are
+**deprecated**: `no-committed-secret-material`, `no-committed-auth-key-values`
+and `no-committed-auth-key-values-in-config` still run and still load when a
+policy names them by id, their messages say gitleaks owns the job, and they are
+removed in the release after the one that marked them. Until then, both run.
 
 It reads **commits**, not files: each pushed range at `pre-push`, and every
 commit under `--all` or for a branch the remote does not have. Never the
@@ -2443,6 +2446,20 @@ so a `GITLEAKS_CONFIG` variable left in one shell cannot change the gate. A
 gitleaks answers `1` both for findings and for a scan it could not finish, so
 it is run with `--exit-code=3`: `3` is a finding (exit `1`), and any other
 non-zero code is could-not-look (exit `2`). Findings print with `--redact`.
+
+**`--staged`** runs gitleaks alone over the index (`gitleaks git --staged`),
+for the `pre-commit` id `uphold-supply-chain-staged`. The range scan sees a
+secret at `pre-push`, after it is in local history and can only be rewritten
+out; the staged scan sees it while unstaging is the fix. gitleaks reads no
+network, so the cost that keeps the other five scanners off the commit is not
+paid here, and they are not run. Once the deprecated shape rules are removed it
+is the only secret-shape check a commit meets. The same gate applies: only
+where the policy inherits `credentials`, the same pin, the same config and
+exit codes, and a missing gitleaks is exit `2`. `--staged` with `--all` or
+`--base` is a usage error rather than one flag winning. A staged finding has no
+commit, so its fingerprint is `file:rule:line`; gitleaks matches that form in
+`.gitleaksignore` for a commit scan too, so one line accepts a finding at both
+stages.
 
 ### The range
 
@@ -2585,14 +2602,15 @@ this is a section that has not been taught to read its tool yet, the way the
 guarddog section was, rather than a fact about cargo-vet that cannot be
 recovered.
 
-Two hook ids ship it in `.pre-commit-hooks.yaml`, and never at `pre-commit`:
-every scanner reaches the network, and a check that adds a network round trip
-to a commit is a check somebody switches off. `uphold-supply-chain` at
-`pre-push` scans the range; `uphold-supply-chain-all` at `manual` carries
-`--all`, since one entry cannot vary its arguments by stage. Pin the first for
-the push gate and the second for a schedule — only the full sweep can find an
-advisory published against a dependency no commit touched. Both are
-deliberately absent from `hooks/lefthook.yml`:
+Three hook ids ship it in `.pre-commit-hooks.yaml`. The five dependency
+scanners never run at `pre-commit`: each reaches the network, and a check that
+adds a network round trip to a commit is a check somebody switches off.
+`uphold-supply-chain` at `pre-push` scans the range; `uphold-supply-chain-all`
+at `manual` carries `--all`, since one entry cannot vary its arguments by
+stage. Pin the first for the push gate and the second for a schedule — only
+the full sweep can find an advisory published against a dependency no commit
+touched. `uphold-supply-chain-staged` at `pre-commit` carries `--staged`, and
+is described below. All three are deliberately absent from `hooks/lefthook.yml`:
 that file is merged into a consumer's own config wholesale, so a command there
 arrives with a `ref:` bump in every consuming repository — and on any machine
 without the scanners installed it refuses every push with exit `2`. A

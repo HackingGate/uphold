@@ -205,6 +205,30 @@
   pass_filenames: false
   always_run: true
 
+# gitleaks alone, over the staged diff, at the commit. The one scanner of the
+# six that belongs at pre-commit: it reads no network, so the round trip that
+# keeps the other five at pre-push is not paid here. What it buys is WHEN: the
+# range scan above sees a secret at pre-push, after it is in local history and
+# can only be rewritten out; this sees it while unstaging is still the fix.
+# Once the `credentials` set's three shape rules are removed (they are
+# deprecated), this is the only secret-shape check a commit meets.
+#
+# A third id rather than a stage on either above, for the reason the `--all`
+# id is its own: one entry, one argument list. Only where the policy inherits
+# `credentials`; elsewhere it says it was not asked and passes. A missing
+# gitleaks, or another version than the pin, is exit 2 as it is at the push.
+# `always_run` with no filenames because gitleaks reads the index itself, and
+# a list of paths would not say which of their hunks are staged.
+- id: uphold-supply-chain-staged
+  name: uphold supply-chain --staged
+  description: gitleaks over the staged diff, so a secret is refused before it is in local history
+  entry: uphold supply-chain
+  args: ["--staged"]
+  language: rust
+  stages: [pre-commit]
+  pass_filenames: false
+  always_run: true
+
 # How CI reaches the guards that are too slow for pre-commit. Both of the
 # tree-wide name scans and the pin check ask the forge over the network, once
 # per distinct name or pin, which is why they are not registered at commit time

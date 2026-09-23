@@ -242,6 +242,59 @@ pub(crate) fn run(root: &Path, scope: &Scope, secrets: bool) -> Result<Exit> {
     Ok(exit)
 }
 
+/// `uphold supply-chain --staged`: gitleaks alone, over the staged diff.
+///
+/// The pre-commit half of the secret scan. The range scan catches a secret at
+/// pre-push, which is after it is in local history; a commit carrying one has
+/// to be rewritten out, not just edited. gitleaks reads no network, so the
+/// reason the other five sections stay off the commit path -- a round trip on
+/// every commit -- is not a reason here, and they are not run: a commit moves
+/// no pushed range, and their sweep is the push's job.
+///
+/// Gated on [`SECRETS_SET`] for the reason the range scan is: a missing
+/// gitleaks is exit 2, and a policy that never asked for secret scanning must
+/// not have every commit refused on a machine without it.
+pub(crate) fn run_staged(root: &Path, secrets: bool) -> Result<Exit> {
+    println!("== gitleaks -- secrets in the staged diff");
+    let section = if !secrets {
+        gitleaks_not_asked(root, &Scope::Whole)?
+    } else if let Some(reason) = on_path("gitleaks").or_else(gitleaks_version_mismatch) {
+        Section::CouldNotLook(reason)
+    } else {
+        gitleaks_passes(
+            root,
+            vec![(
+                String::from("the staged diff"),
+                Some(String::from("--staged")),
+            )],
+        )?
+    };
+    let exit = match section {
+        Section::Clean => verdict(0, 0),
+        Section::Nothing(reason) => {
+            println!("   {reason}");
+            verdict(0, 0)
+        }
+        Section::Failed => {
+            println!("   FAILED");
+            verdict(1, 0)
+        }
+        Section::CouldNotLook(reason) => {
+            eprintln!("   NOT CHECKED: {reason}");
+            verdict(0, 1)
+        }
+    };
+    match exit {
+        Exit::Clean => println!("secrets: the staged diff passed"),
+        Exit::Violations => println!("secrets: FAILED -- unstage or remove what is marked above"),
+        Exit::Broken => println!(
+            "secrets: the staged diff could not be scanned, which is not a pass -- see NOT \
+             CHECKED above"
+        ),
+    }
+    Ok(exit)
+}
+
 fn on_path(tool: &str) -> Option<String> {
     if crate::probe::on_path(tool) {
         None
@@ -1493,18 +1546,28 @@ fn gitleaks(root: &Path, scope: &Scope) -> Result<Section> {
     if let Some(reason) = gitleaks_version_mismatch() {
         return Ok(Section::CouldNotLook(reason));
     }
-    let log_opts: Vec<Option<String>> = match scope {
-        Scope::Whole => vec![None],
+    let passes: Vec<(String, Option<String>)> = match scope {
+        Scope::Whole => vec![(String::from("every commit"), None)],
         Scope::Changed(_, ranges) => ranges
             .iter()
-            .map(|(from, to)| Some(format!("{from}..{to}")))
+            .map(|(from, to)| {
+                let opts = format!("{from}..{to}");
+                (opts.clone(), Some(format!("--log-opts={opts}")))
+            })
             .collect(),
     };
-    if log_opts.is_empty() {
+    if passes.is_empty() {
         return Ok(Section::Nothing(String::from(
             "no commit arrives in this range",
         )));
     }
+    gitleaks_passes(root, passes)
+}
+
+/// `gitleaks git` once per pass, each pass being what to print for it and the
+/// one argument that says what it reads: a `--log-opts` range, `--staged`, or
+/// none for every commit. The caller has already checked the version.
+fn gitleaks_passes(root: &Path, passes: Vec<(String, Option<String>)>) -> Result<Section> {
     // `--config` named explicitly, as zizmor's is: it outranks the
     // GITLEAKS_CONFIG variables gitleaks otherwise reads, so a variable left
     // in one shell cannot make that machine's gate differ from every other.
@@ -1516,7 +1579,7 @@ fn gitleaks(root: &Path, scope: &Scope) -> Result<Section> {
         (written.path.clone(), Some(written))
     };
     let mut worst = Section::Clean;
-    for opts in log_opts {
+    for (label, selector) in passes {
         let mut args: Vec<String> = vec![
             String::from("git"),
             String::from("--no-banner"),
@@ -1527,12 +1590,8 @@ fn gitleaks(root: &Path, scope: &Scope) -> Result<Section> {
             String::from("--config"),
             config.display().to_string(),
         ];
-        if let Some(opts) = &opts {
-            println!("   {opts}");
-            args.push(format!("--log-opts={opts}"));
-        } else {
-            println!("   every commit");
-        }
+        println!("   {label}");
+        args.extend(selector);
         let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
         let answer = tool_read(root, "gitleaks", &borrowed, gitleaks_could_not_look)?;
         if matches!(answer, Section::Failed) {
