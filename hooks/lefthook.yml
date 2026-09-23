@@ -54,7 +54,14 @@ pre-commit:
       run: uphold check
       glob: "{policy/upheld.toml,policy/principles.toml,.pre-commit-config.yaml,lefthook.yml}"
 
-    # ── the Go toolchain ─────────────────────────────────────────────
+    # ── the Go toolchain (deprecated) ────────────────────────────────
+    #
+    # DEPRECATED, and removed one release after the one that marked them.
+    # lefthook has no description field, so this comment is the notice; the jobs
+    # still run exactly as before. A consumer's Go gate belongs in the
+    # consumer's own lefthook.yml, as its own commands. The drift these four
+    # were published to prevent is what `uphold hooks --identity` reports across
+    # repositories, without uphold owning the declaration.
     #
     # Four jobs that run no uphold code and need no uphold binary. They are
     # published because a fleet audit read 24 sibling repositories side by side

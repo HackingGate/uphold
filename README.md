@@ -104,8 +104,16 @@ reads `lefthook.yml`, `lefthook.yaml`, `.lefthook.yml` and `.lefthook.yaml` at
 any depth; it does not read `lefthook.toml`, `lefthook.json` or the `-local`
 overlay files, so a pin written in one of those is watched by nothing.
 
-**Go repositories** — four toolchain ids ship here too. They run no uphold code
-and need no uphold binary; pin them instead of transcribing them.
+**Go repositories** — four toolchain ids still ship here, and they are
+**deprecated**: they go in the release after the one that marked them.
+Do not adopt them. A Go gate belongs in your own config, as four hooks in a
+`repo: local` block (`- repo: local` then `hooks:` holding the four). From each
+entry under the Go toolchain section of `.pre-commit-hooks.yaml`, copy `entry`,
+`language`, `stages`, `pass_filenames` and `files` verbatim, and give the hook
+its own `id` and `description`: an `uphold-` id in your config reads as one
+uphold ships. `uphold hooks --identity` compares that declaration across
+repositories and reports the copy that drifted. A repository still pinning the
+deprecated ids has these lines to replace:
 
 ```yaml
       - id: uphold-gofmt            # a tree gofmt would reformat
@@ -140,8 +148,8 @@ of the `gofmt` copies could never fail — `gofmt -l` prints the files it would
 reformat and exits `0` regardless, so twenty-two enforced and two reported
 "Passed" over unformatted code until someone read all 24 side by side.
 `uphold-gofmt` tests the *emptiness* of that output, which is where the verdict
-actually is. A pinned id can drift in one dimension, the rev, and that dimension
-has a check; a copied `entry:` line can drift in every dimension and has none.
+actually is. A copied `entry:` line can drift in every dimension, which is what
+`uphold hooks --identity` reports.
 
 ## Declare what enforces what
 
