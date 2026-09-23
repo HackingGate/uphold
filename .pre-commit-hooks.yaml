@@ -14,13 +14,13 @@
 # rather than on the hook, so the compile is paid once for the whole file
 # however many ids a repository pins.
 #
-# The four Go ids at the bottom are the exception, and they are `language:
-# system`. They run a consumer's own toolchain over a consumer's own module, so
-# there is no uphold code in them and nothing here for a runner to build:
-# `language: golang` would have pre-commit install a Go package out of THIS
-# repository, which contains none. A repository with Go in it has `go` on PATH
-# by definition, and one that does not is told so by the command rather than by
-# a build of the wrong thing.
+# The four deprecated Go ids at the bottom are the exception, and they are
+# `language: system`. They run a consumer's own toolchain over a consumer's own
+# module, so there is no uphold code in them and nothing here for a runner to
+# build: `language: golang` would have pre-commit install a Go package out of
+# THIS repository, which contains none. A repository with Go in it has `go` on
+# PATH by definition, and one that does not is told so by the command rather
+# than by a build of the wrong thing.
 
 # The declaration check. This fires when the declaration changes or when any
 # configuration it reads changes -- the files that can turn a true enforcement
@@ -216,7 +216,16 @@
   pass_filenames: false
   always_run: true
 
-# ── the Go toolchain ─────────────────────────────────────────────────
+# ── the Go toolchain (deprecated) ────────────────────────────────────
+#
+# DEPRECATED, and removed one release after the one that marked them.
+# They still run exactly as before. A consumer's Go gate belongs in the
+# consumer's own config: a `local` repo with `language: system` and the same
+# commands, including the emptiness test on `gofmt -l`. Shipping them from here
+# couples the consumer's toolchain choices -- staticcheck beside vet, `-race`, a
+# build tag -- to a `rev:` the consumer does not own. The drift they were
+# published to prevent is what `uphold hooks --identity` reports across
+# repositories (`forked`, `absent`), without uphold owning the declaration.
 #
 # Four ids that run no uphold code at all, published here for one reason: a
 # fleet audit read 24 sibling repositories side by side and found these four
@@ -229,7 +238,7 @@
 #
 # A pinned id can drift in exactly one dimension, the rev, and
 # `no-stale-hook-pins` already watches that one. A copied `entry:` line can
-# drift in every dimension and nothing watches any of them.
+# drift in every dimension; `uphold hooks --identity` is what compares them.
 #
 # The ids carry the `uphold-` prefix every id in this file carries, even though
 # they name no uphold command. hooks/lefthook.yml publishes the same four, and a
@@ -292,7 +301,7 @@
 # what failed is the next one somebody deletes.
 - id: uphold-gofmt
   name: gofmt
-  description: refuse a tree gofmt would reformat -- the check `gofmt -l` alone cannot make
+  description: "deprecated: declare this gate in your own config as a `local` repo with `language: system`; `uphold hooks --identity` catches a copy that drifted -- refuse a tree gofmt would reformat -- the check `gofmt -l` alone cannot make"
   entry: sh -c 'unformatted="$(gofmt -l .)"; [ -z "$unformatted" ] || { echo "gofmt would reformat these files; run gofmt -w ."; echo "$unformatted"; exit 1; }'
   language: system
   stages: [pre-commit, pre-merge-commit, pre-push, manual]
@@ -301,7 +310,7 @@
 
 - id: uphold-go-vet
   name: go vet
-  description: run go vet over every package in the module
+  description: "deprecated: declare this gate in your own config as a `local` repo with `language: system`; `uphold hooks --identity` catches a copy that drifted -- run go vet over every package in the module"
   entry: go vet ./...
   language: system
   stages: [pre-commit, pre-merge-commit, pre-push, manual]
@@ -329,7 +338,7 @@
 # failure standing in for one.
 - id: uphold-go-build
   name: go build
-  description: refuse a module that does not compile, without leaving a binary behind
+  description: "deprecated: declare this gate in your own config as a `local` repo with `language: system`; `uphold hooks --identity` catches a copy that drifted -- refuse a module that does not compile, without leaving a binary behind"
   entry: sh -c 'if go list -f {{.Name}} ./... 2>/dev/null | grep -qx main; then out="$(mktemp -d)"; go build -o "$out" ./...; status=$?; rm -rf "$out"; exit $status; else go build ./...; fi'
   language: system
   stages: [pre-commit, pre-merge-commit, pre-push, manual]
@@ -337,7 +346,7 @@
 
 - id: uphold-go-test
   name: go test
-  description: run the module's tests
+  description: "deprecated: declare this gate in your own config as a `local` repo with `language: system`; `uphold hooks --identity` catches a copy that drifted -- run the module's tests"
   entry: go test ./...
   language: system
   stages: [pre-commit, pre-merge-commit, pre-push, manual]
