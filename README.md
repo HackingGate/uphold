@@ -344,7 +344,11 @@ state what it claims, the problem it addresses, where it applies and where it
 does not, its costs and conflicts and failure modes, whether it is enforceable
 by review/lint/test/runtime/governance, and its sources. Every field, plus the
 `kind`, `status` and enforcement-level vocabularies:
-[`principles/SCHEMA.md`](principles/SCHEMA.md).
+[`principles/SCHEMA.md`](principles/SCHEMA.md). A record is typed by what it
+is, a `kind` from a closed list of fifteen (law, theorem, principle, heuristic,
+metric and the rest), and may also state the rungs at which a check can see it
+(`enforcement.rung`) and the tools that illustrate it (`[[tools]]`); a field
+the schema does not name fails validation.
 
 ```toml
 id = "single-authoritative-source"

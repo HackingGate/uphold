@@ -10,6 +10,10 @@ a decision or exposes a predictable failure mode. A principle without scope
 conditions is a slogan; a principle without trade-offs is marketing; a principle
 without an enforcement path cannot be treated as policy.
 
+Not every entry is a principle, either: the catalog is typed by epistemic kind,
+so a law, a theorem, a heuristic and a metric each say what they are
+([ADR 0011](adr/0011-what-an-entry-is-where-it-is-used-and-how-a-check-sees-it.md)).
+
 The collection begins with software and systems engineering because those are
 the most directly enforceable domains, but it also includes reliability,
 security, data, product decisions, organizations, and AI harnesses.

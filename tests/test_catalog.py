@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import subprocess
 import sys
@@ -12,8 +13,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from analysis import ANALYZER, matches, normalize, tokens  # noqa: E402
 from build_reference import cell  # noqa: E402
+from build_reference import render as render_reference  # noqa: E402
 from catalog import alias_index, load_catalog, name_entries, resolve  # noqa: E402
-from validate import name_collisions  # noqa: E402
+from validate import KINDS, RUNGS, name_collisions, validate_records  # noqa: E402
 
 
 class CatalogTests(unittest.TestCase):
@@ -264,6 +266,216 @@ class NamesStayUnambiguous(unittest.TestCase):
         found = name_collisions([{"id": "a", "title": "One", "aliases": ["---"]}])
         self.assertEqual(len(found), 1)
         self.assertIn("never be searched for", found[0])
+
+
+class RecordShape(unittest.TestCase):
+    """A record is refused for the field it got wrong, and for nothing else.
+
+    Each case is the real catalog with one record changed in one way, so the
+    only problem `validate_records` can report is the one planted. Against a
+    hand-built stub, a refusal could come from any of the fields the stub left
+    out, and the test would pass for the wrong reason.
+    """
+
+    SUBJECT = "fail-fast"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.catalog = load_catalog()
+
+    def problems(self, mutate, subject: str | None = None) -> list[str]:
+        records = copy.deepcopy(self.catalog)
+        target = next(
+            item for item in records if item["id"] == (subject or self.SUBJECT)
+        )
+        mutate(target)
+        return validate_records(records)
+
+    def assertRefused(self, found: list[str], *fragments: str) -> None:
+        self.assertEqual(len(found), 1, found)
+        for fragment in fragments:
+            self.assertIn(fragment, found[0])
+
+    def test_the_unchanged_catalog_has_no_problems(self):
+        # The baseline every case below is measured against.
+        self.assertEqual(self.problems(lambda record: None), [])
+
+    def test_an_unknown_top_level_field_is_refused(self):
+        # A misspelled `conflict_with` would otherwise read as a record with no
+        # conflicts at all.
+        found = self.problems(lambda record: record.update(conflict_with=["x"]))
+        self.assertRefused(found, "conflict_with", "does not name")
+
+    def test_an_unknown_enforcement_field_is_refused(self):
+        found = self.problems(
+            lambda record: record["enforcement"].update(rungs=["text"])
+        )
+        self.assertRefused(found, "[enforcement]", "rungs")
+
+    def test_a_kind_outside_the_fifteen_is_refused(self):
+        self.assertEqual(len(KINDS), 15)
+        found = self.problems(lambda record: record.update(kind="guideline"))
+        self.assertRefused(found, "kind must be one of")
+
+    def test_socio_technical_law_is_not_a_kind(self):
+        # "socio-technical" says where a law applies, which is `domains`.
+        self.assertNotIn("socio-technical-law", KINDS)
+        found = self.problems(lambda record: record.update(kind="socio-technical-law"))
+        self.assertRefused(found, "kind must be one of")
+
+    def test_every_kind_in_the_list_is_accepted(self):
+        for kind in sorted(KINDS):
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    self.problems(lambda record, kind=kind: record.update(kind=kind)),
+                    [],
+                )
+
+    def test_rung_outside_the_ladder_is_refused(self):
+        for rung in (["bytes"], [], "text", ["text", 3]):
+            with self.subTest(rung=rung):
+                found = self.problems(
+                    lambda record, rung=rung: record["enforcement"].update(rung=rung)
+                )
+                self.assertRefused(found, "enforcement.rung")
+
+    def test_rung_out_of_ladder_order_or_repeated_is_refused(self):
+        for rung, fragment in (
+            (["syntax", "text"], "ladder order"),
+            (["text", "text"], "repeats"),
+        ):
+            with self.subTest(rung=rung):
+                found = self.problems(
+                    lambda record, rung=rung: record["enforcement"].update(rung=rung)
+                )
+                self.assertRefused(found, fragment)
+
+    def test_rung_on_a_record_no_machine_can_check_is_refused(self):
+        def mutate(record):
+            record["enforcement"].update(automatable="no", rung=["text"])
+
+        self.assertRefused(self.problems(mutate), "automatable is 'no'")
+
+    def test_a_tool_without_url_or_with_an_unknown_key_is_refused(self):
+        well_formed = {"name": "Probe", "url": "https://example.org/", "notes": "n"}
+        for tool, fragment in (
+            ({"name": "Probe", "notes": "n"}, "tools[0].url"),
+            ({**well_formed, "url": "ftp://example.org/"}, "HTTP(S)"),
+            ({**well_formed, "version": "1"}, "version"),
+        ):
+            with self.subTest(tool=tool):
+                found = self.problems(
+                    lambda record, tool=tool: record.update(tools=[tool])
+                )
+                self.assertRefused(found, fragment)
+        self.assertRefused(
+            self.problems(lambda record: record.update(tools=[])), "non-empty"
+        )
+
+    def test_a_tool_named_like_a_record_is_refused(self):
+        # Another record's title, spelled the way a search would fold it: the
+        # index would answer a search for the concept with the product.
+        tool = {
+            "name": "information HIDING",
+            "url": "https://example.org/",
+            "notes": "n",
+        }
+        found = self.problems(lambda record: record.update(tools=[tool]))
+        self.assertRefused(found, "information HIDING", "not the concept")
+
+    def test_a_one_sided_conflict_is_refused(self):
+        # unix-composability does not list fail-fast, so a reader of it is never
+        # shown the trade-off; the error names both ends.
+        found = self.problems(
+            lambda record: record["conflicts_with"].append("unix-composability")
+        )
+        self.assertRefused(found, "'fail-fast'", "'unix-composability'", "two ends")
+
+    def test_an_id_both_related_and_in_conflict_is_refused(self):
+        # graceful-degradation already lists fail-fast as a conflict, so the
+        # only fault planted is the second listing.
+        found = self.problems(
+            lambda record: record["related"].append("graceful-degradation")
+        )
+        self.assertRefused(found, "'fail-fast'", "'graceful-degradation'", "both")
+
+    def test_a_one_sided_related_edge_is_allowed(self):
+        # "Read this next" from fail-fast does not oblige unix-composability.
+        found = self.problems(
+            lambda record: record["related"].append("unix-composability")
+        )
+        self.assertEqual(found, [])
+
+    def test_rung_and_tools_on_a_well_formed_record_are_accepted(self):
+        def mutate(record):
+            record["enforcement"]["rung"] = ["text", "semantic"]
+            record["tools"] = [
+                {"name": "Probe", "url": "https://example.org/", "notes": "n"}
+            ]
+
+        self.assertEqual(self.problems(mutate), [])
+
+
+def schema_table(heading: str) -> set[str]:
+    """The backticked first cells of the SCHEMA.md table whose header begins so.
+
+    Read by the header's first cell rather than by position, so a table moved
+    within the page is still found, and one renamed is a failure here rather
+    than a silently empty set.
+    """
+    lines = (ROOT / "principles" / "SCHEMA.md").read_text(encoding="utf-8").splitlines()
+    start = next(
+        index for index, line in enumerate(lines) if line.startswith(f"| {heading} |")
+    )
+    values = set()
+    for line in lines[start + 2 :]:
+        if not line.startswith("|"):
+            break
+        first = line.split("|")[1].strip()
+        values.add(first.strip("`"))
+    return values
+
+
+class TheSchemaDocumentAgrees(unittest.TestCase):
+    """SCHEMA.md and validate.py hold the same vocabularies by hand.
+
+    The validator is the authority, and the document is where a person reads
+    what each value means. Two hand-written copies drift unless something
+    compares them, which is what test_toolchain.py does for the MSRV and this
+    does for the kinds and the rungs.
+    """
+
+    def test_schema_doc_lists_exactly_the_kinds(self):
+        self.assertEqual(schema_table("kind"), KINDS)
+
+    def test_schema_doc_lists_exactly_the_rungs(self):
+        self.assertEqual(schema_table("rung"), set(RUNGS))
+
+
+class TheReferenceGroups(unittest.TestCase):
+    """QUICK_REFERENCE.md lists every record under its kind and each domain."""
+
+    def test_quick_reference_groups_every_record_by_kind_and_domain(self):
+        # Membership only: that a record's link reaches the line for each value
+        # it carries, not how the line is laid out.
+        page = render_reference()
+        by_kind = page.split("## By kind", 1)[1].split("## By domain", 1)[0]
+        by_domain = page.split("## By domain", 1)[1].split("\n## ", 1)[0]
+        for record in load_catalog():
+            path = f"principles/{record['id']}.toml"
+            for section, values in (
+                (by_kind, [record["kind"]]),
+                (by_domain, record["domains"]),
+            ):
+                for value in values:
+                    lines = [
+                        line
+                        for line in section.splitlines()
+                        if f"**{cell(value)}**" in line
+                    ]
+                    with self.subTest(record=record["id"], value=value):
+                        self.assertEqual(len(lines), 1, lines)
+                        self.assertIn(path, lines[0])
 
 
 if __name__ == "__main__":
