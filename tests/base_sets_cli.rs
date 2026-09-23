@@ -326,7 +326,7 @@ fn a_refusal_from_an_inherited_set_names_the_set_it_arrived_from() {
     // file for something that was never in it.
     let root = repository(
         "[inherit]\nsets = [\"process-residue\"]\n\n\
-         [rule.no-committed-secret-material]\nmessage = \"copied\"\nregexp = 'BEGIN PRIVATE KEY'\nfiles.include = [\".\"]\nfiles.exclude = [\"policy/**\"]\n",
+         [rule.no-env-secret-values]\nmessage = \"copied\"\nregexp = 'BEGIN PRIVATE KEY'\nfiles.include = [\".\"]\nfiles.exclude = [\"policy/**\"]\n",
     );
 
     let output = guard(&root, &["--stage", "manual"]);

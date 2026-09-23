@@ -108,15 +108,13 @@ the other scanners it costs a commit nothing but the scan. A finding there has
 no commit yet, and its fingerprint is `file:rule:line`; that form in
 `.gitleaksignore` also silences the same finding in the range scan.
 
-Three `credentials` rules are **deprecated**, because gitleaks owns their job:
-`no-committed-secret-material`, `no-committed-auth-key-values` and
-`no-committed-auth-key-values-in-config`. They still run, their messages say
-so, and a `policy/upheld.toml` naming one by id still loads; they go in the
-release after the one that marked them. Before that release, run
-`uphold supply-chain --all` once and put each accepted finding's fingerprint in
-`.gitleaksignore`, and point any claim on those ids at `uphold-supply-chain`
-or `uphold-supply-chain-staged`. `no-env-secret-values` and
-`no-browser-profile-artifacts` stay.
+gitleaks is the only secret-shape check: the range scan at `pre-push` and
+`--staged` at `pre-commit`. The `credentials` set keeps `no-env-secret-values`
+and `no-browser-profile-artifacts`, an ignored-file shape and a path shape that
+no commit scanner owns. Its three regex shape rules, deprecated in v1.20.0,
+are removed; a `policy/upheld.toml` claim still naming one is refused with a
+pointer to `uphold-supply-chain` and `uphold-supply-chain-staged`, which are
+the ids to claim instead.
 
 **lefthook** — no manifest format, so include the config this repo ships, then
 `lefthook install`. It runs commands rather than bootstrapping a language, so

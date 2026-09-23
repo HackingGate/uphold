@@ -287,12 +287,13 @@ fn a_rule_from_a_bundled_base_set_is_supplied() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
-/// Deprecated is not removed: a consumer's claim naming one of the three
-/// `credentials` rules gitleaks now owns still resolves for the release that
-/// marks them, and the rule says, in the words it refuses with, who owns the
-/// job now.
+/// Removed after a deprecation release: a consumer's claim naming one of the
+/// three `credentials` rules gitleaks took over is false now, so it is refused
+/// like any unsupplied claim (exit 1). The refusal names the id and says what
+/// to claim instead, because the claim was true against the uphold it was
+/// written for. An id that was never shipped gets no such pointer.
 #[test]
-fn a_claim_on_a_deprecated_credentials_rule_still_resolves() {
+fn a_claim_on_a_removed_credentials_rule_is_refused_and_points_to_gitleaks() {
     for id in [
         "no-committed-secret-material",
         "no-committed-auth-key-values",
@@ -311,18 +312,43 @@ fn a_claim_on_a_deprecated_credentials_rule_still_resolves() {
             &format!("[[enforce]]\nprinciple = \"defense-in-depth\"\nrule = \"{id}\"\n"),
         );
         let output = check(&root, &[]);
-        assert_eq!(code(&output), 0, "{id}: {}", stderr(&output));
+        let err = stderr(&output);
+        assert_eq!(code(&output), 1, "{id}: {err}");
+        assert!(
+            err.contains(&format!("claims \"{id}\", which no seam here supplies")),
+            "{id}: {err}"
+        );
+        assert!(err.contains("gitleaks owns secret shapes"), "{id}: {err}");
+        assert!(err.contains("\"uphold-supply-chain\""), "{id}: {err}");
     }
+
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        "[inherit]\nsets = [\"credentials\"]\n",
+    );
+    write(&root, ".pre-commit-config.yaml", PRE_COMMIT);
+    write(
+        &root,
+        "policy/upheld.toml",
+        "[[enforce]]\nprinciple = \"defense-in-depth\"\nrule = \"never-shipped\"\n",
+    );
+    let err = stderr(&check(&root, &[]));
+    assert!(
+        err.contains("\"never-shipped\", which no seam here supplies"),
+        "{err}"
+    );
+    assert!(!err.contains("gitleaks"), "{err}");
+
     let listed = Command::new(env!("CARGO_BIN_EXE_uphold"))
         .args(["rules", "--set", "credentials"])
         .output()
         .unwrap();
     let listed = stdout(&listed);
-    assert_eq!(
-        listed.matches("Deprecated: gitleaks owns").count(),
-        3,
-        "{listed}"
-    );
+    assert!(!listed.contains("no-committed-"), "{listed}");
+    assert!(listed.contains("no-env-secret-values"), "{listed}");
+    assert!(listed.contains("no-browser-profile-artifacts"), "{listed}");
 }
 
 #[test]

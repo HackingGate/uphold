@@ -361,7 +361,7 @@ it refuses** so the name predicts the rule list:
 |---|---|
 | `process-residue` | authoring and process residue in committed content — conflict markers, home paths, dated and status metadata, tracker and thread references in documentation, private data paths — and the residue a process leaves in the policy file itself: a rule transcribed out of a set. **Installs `pre-commit` and `manual`**, and the two report different things |
 | `code-residue` | a tracker reference in a source, configuration, build or packaging file: the tracker rule of `process-residue` over every file that is not Markdown, reST, plain text or a stylesheet, under its own id. Its own set because a scope is not something `[inherit]` lets a repository choose, and the release that widened the rule in place was undone by hand in every tree that measured what it reported. For a tree whose comments already cite durable contracts. **Installs `pre-commit` and `manual`**, the same ceiling as the set it was split from |
-| `credentials` | credential material — private keys and service tokens, literal credential values, populated environment files, browser profile and session stores. A literal credential value is two rules split on the quote: in source the value half must be a quoted literal, so `password: modem_config.password.clone()` and `token = raw.trim_start_matches('v')` are expressions and not findings; in a config file — `.env`, INI, YAML, TOML, JSON, XML, properties — the text after the separator is the value whether quoted or not, and `-in-config` reads it unquoted. Inheriting it also turns on the gitleaks section of [`uphold supply-chain`](#gitleaks-which-owns-secret-shapes), the tool that owns secret shapes |
+| `credentials` | credential material a commit scanner does not own — populated environment files, browser profile and session stores. Secret shapes (private keys, service tokens, literal credential values) are gitleaks' job: inheriting it also turns on the gitleaks section of [`uphold supply-chain`](#gitleaks-which-owns-secret-shapes), the tool that owns secret shapes |
 | `unmanaged-pins` | a version pinned where no manifest holds it — a shell install line, a `releases/download/vX.Y.Z` URL, a versioned `curl` or `wget` |
 | `host-identity` | the machine the author is standing on — its username, home path, hostname and default route, read at scan time and searched for in content |
 | `broken-links` | a markdown link naming a path that does not exist or leaving the repository, and a selection that yields no links at all |
@@ -2414,12 +2414,14 @@ classes that describe `deny.toml` rather than a dependency.
 
 The sixth section is **gitleaks**, and it is the tool that owns secret shapes:
 token formats, a per-rule entropy threshold, and path and regex allowlists,
-maintained upstream. The `credentials` set's shape and key/value regexes
-approximate the same job by hand, with no entropy test, and are
-**deprecated**: `no-committed-secret-material`, `no-committed-auth-key-values`
-and `no-committed-auth-key-values-in-config` still run and still load when a
-policy names them by id, their messages say gitleaks owns the job, and they are
-removed in the release after the one that marked them. Until then, both run.
+maintained upstream. It is the only secret-shape check: the `credentials`
+set's shape and key/value regexes, which approximated the same job by hand with
+no entropy test, were deprecated in v1.20.0 and removed in the release after.
+What the set keeps is what a commit scanner does not own: `no-env-secret-values`
+reads populated env files, and `no-browser-profile-artifacts` reads paths. A
+`policy/upheld.toml` claim naming one of the removed ids is refused like any
+claim nothing supplies, and the refusal says to claim `uphold-supply-chain` or
+`uphold-supply-chain-staged` instead.
 
 It reads **commits**, not files: each pushed range at `pre-push`, and every
 commit under `--all` or for a branch the remote does not have. Never the
@@ -2452,10 +2454,9 @@ for the `pre-commit` id `uphold-supply-chain-staged`. The range scan sees a
 secret at `pre-push`, after it is in local history and can only be rewritten
 out; the staged scan sees it while unstaging is the fix. gitleaks reads no
 network, so the cost that keeps the other five scanners off the commit is not
-paid here, and they are not run. Once the deprecated shape rules are removed it
-is the only secret-shape check a commit meets. The same gate applies: only
-where the policy inherits `credentials`, the same pin, the same config and
-exit codes, and a missing gitleaks is exit `2`. `--staged` with `--all` or
+paid here, and they are not run. It is the only secret-shape check a commit
+meets. The same gate applies: only where the policy inherits `credentials`, the
+same pin, the same config and exit codes, and a missing gitleaks is exit `2`. `--staged` with `--all` or
 `--base` is a usage error rather than one flag winning. A staged finding has no
 commit, so its fingerprint is `file:rule:line`; gitleaks matches that form in
 `.gitleaksignore` for a commit scan too, so one line accepts a finding at both
