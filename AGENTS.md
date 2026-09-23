@@ -11,6 +11,10 @@ opinion nobody asked for. The rules already active here are:
 - `catalog-reference-current`
 - `catalog-tests`
 - `catalog-validate`
+- `no-local-merge`
+- `no-merge-commit`
+- `no-private-repo-names`
+- `no-running-os-identity-metadata`
 - `no-stale-hook-pins`
 - `prevent-ai-author`
 - `prevent-public-push`
@@ -28,12 +32,28 @@ Authority must be verified on every access to a protected object or effect, on e
 - A protected effect is reachable through more than one interface, tier, or tool.
 - Caching, delegation, or convenience wrappers can shortcut an earlier authorization decision.
 - New surfaces are added over time to a system whose checks were written for the original surface.
+- A request's network location or origin is being read as its authorization, as inside a perimeter.
 
 **Ask**
 - What are all the paths that reach this effect, including manual, scripted, and agent-driven ones?
 - Which of those paths meets the control, and what evidence shows it?
 - When a new interface is added, does it inherit the check or does someone have to remember to add it?
 - Is the same rule body reached from every seam, or has it been reimplemented per seam?
+
+## Confused Deputy
+A program that holds authority of its own and acts on a resource a less privileged requester designated, checking only its own authority, becomes an instrument through which the requester reaches what it could not reach directly.
+
+**Applies when**
+- A program runs with privileges its callers lack, such as a setuid binary, a CI job holding a write token, or a service account.
+- An agent acts for a user and chooses targets from input that the user or a third party supplied.
+- A shim or hook intercepts a command, interprets its arguments, and performs effects with its own credentials or configuration.
+- Input that names a resource, such as a path, URL, repository, or recipient, arrives from a less trusted party.
+
+**Ask**
+- Whose authority does this code exercise when it acts on a name it was handed?
+- Which inputs designate a resource, and who supplied them?
+- Could a caller, or text a caller controls, direct this deputy at something the caller cannot reach itself?
+- When an agent or shim acts for a user, is the target checked against the user's authority or only against its own?
 
 ## Defense in Depth
 Protect critical assets and actions with multiple controls that fail differently and cover prevention, detection, containment, and recovery.
@@ -47,6 +67,20 @@ Protect critical assets and actions with multiple controls that fail differently
 - How does each layer fail differently?
 - Which layer detects failure of another?
 - Can the layers be tested independently and end to end?
+
+## Economy of Mechanism
+A mechanism whose errors stay invisible in normal use must be small and simple enough to verify completely, because its flaws surface only under the attack or accident it exists to stop.
+
+**Applies when**
+- The mechanism is a guard, parser, or policy evaluator whose wrong acceptance is not observable in ordinary use.
+- Assurance has to come from review, exhaustive testing, or proof rather than from field experience.
+- Features, flags, or configuration keys are proposed for a component that other components trust.
+
+**Ask**
+- Which part of this change is trusted to refuse, and how large is it after the change?
+- Could every path through the mechanism be enumerated in review, and was it?
+- Does a new option belong inside the protected mechanism, or can it live in untrusted code that calls it?
+- Is the mechanism short because it is simple, or because it hands the hard case to configuration it interprets?
 
 ## End-to-End Principle
 Functions requiring application-level knowledge should be implemented or verified end to end, even when lower layers provide performance or reliability assistance.
@@ -162,6 +196,21 @@ An operation should confine its effects to what its name and context already den
 - Is the extra behavior disclosed where the decision is made, or only in documentation the user reads later?
 - Whose expectation is being matched, and what is the evidence that they hold it?
 
+## Least Common Mechanism
+Every mechanism shared by more than one principal is a potential channel between them and one point whose failure or compromise reaches all of them, so shared mechanism should be no more than the function requires.
+
+**Applies when**
+- Two or more principals, tenants, or repositories run on the same process, host, cache, runner, or credential.
+- A component is updated centrally and starts behaving differently for every consumer at once.
+- Timing, cache state, or shared files could carry information across a trust boundary.
+- A function could live in a per-consumer component rather than in a shared service.
+
+**Ask**
+- Which principals share this mechanism, and does it cross a trust boundary between them?
+- What can one consumer observe or change about another through it?
+- If this shared component ships a defect, how many consumers does it reach before anyone notices?
+- Is the change sharing the owner of a fact, or sharing the machinery that acts on it?
+
 ## Make Illegal States Unrepresentable
 Where practical, encode invariants in constructors, types, schemas, or state machines so downstream code receives only valid states.
 
@@ -256,6 +305,21 @@ Organize a system so distinct concerns can be understood, changed, tested, and g
 - What distinct reasons would cause this component to change?
 - Which concern owns each invariant?
 - Does the proposed boundary reduce or merely relocate coupling?
+
+## Separation of Privilege
+Where an action is consequential enough, the mechanism should require two or more independently held conditions before it proceeds, so that the compromise or error of any one of them is not sufficient on its own.
+
+**Applies when**
+- The action is hard to reverse or lands outside the system, such as a publication, a release, a deletion, or a transfer.
+- Two authorizing facts can be held by different parties, stores, or channels that do not share a failure.
+- The configuration that permits an action could be changed by the same act the permission is meant to catch.
+- One of the authorizations can be answered by a party outside the repository or process being guarded.
+
+**Ask**
+- Which independent conditions does this action require, and who holds each?
+- Could one edit, one credential, or one person satisfy all of them?
+- When the second authority cannot be asked, does the action refuse or proceed?
+- Is there an override, and does its use leave a record of who used it?
 
 ## Single Authoritative Source
 Each authoritative fact should have one explicitly designated ownership and update authority, while replicas, caches, and derived views remain subordinate to that authority.

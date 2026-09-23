@@ -100,9 +100,10 @@ report a reviewer for missing what nobody showed them; passing it would reward
 one for repeating a static rule. Either way it measures the harness.
 
 The count **and the names** of review-carried records with no control print on
-every run, refusal or not, in the words probe prints its own denominator in. One
-control beside nineteen records is a different claim from one beside two, and
-the reader who most needs the difference is the one skimming a green run.
+every run, refusal or not, in the words probe prints its own denominator in.
+One control beside twenty-three records is a different claim from one beside
+two, and the reader who most needs the difference is the one skimming a green
+run.
 
 The honest exposure is probe's as well: a control is written by whoever wrote
 the record, so it can be written easy. The answer is the same — it lives in

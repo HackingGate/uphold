@@ -8,7 +8,9 @@
   ],
   "uncontrolled": [
     "complete-mediation",
+    "confused-deputy",
     "defense-in-depth",
+    "economy-of-mechanism",
     "end-to-end-principle",
     "enforcement-needs-a-trigger",
     "fail-fast",
@@ -17,6 +19,7 @@
     "information-hiding",
     "informed-consent",
     "least-astonishment",
+    "least-common-mechanism",
     "make-illegal-states-unrepresentable",
     "mechanism-policy-separation",
     "observability",
@@ -24,6 +27,7 @@
     "psychological-acceptability",
     "reversible-decisions",
     "separation-of-concerns",
+    "separation-of-privilege",
     "unix-composability"
   ]
 }

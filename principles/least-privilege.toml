@@ -1,6 +1,6 @@
 id = "least-privilege"
 title = "Least Privilege"
-aliases = ["Principle of least privilege", "POLP"]
+aliases = ["Principle of least privilege", "POLP", "Capability-based security"]
 kind = "principle"
 status = "seed"
 domains = ["security", "ai-harness"]
@@ -8,7 +8,7 @@ summary = "Grant only the capabilities required for the task, scope, and duratio
 claim = "Every user, process, agent, and tool should operate with the minimum permissions necessary to complete its authorized work for the minimum necessary time."
 problem = "Broad authority turns mistakes, compromised components, and prompt injection into larger and less recoverable incidents."
 rationale = "Reducing available capability reduces both accidental and adversarial blast radius."
-applies_when = ["Permissions can be scoped by resource, action, environment, or time.", "The system performs side effects or accesses protected data.", "Authorization boundaries can be checked independently of model intent."]
+applies_when = ["Permissions can be scoped by resource, action, environment, or time.", "The system performs side effects or accesses protected data.", "Authorization boundaries can be checked independently of model intent.", "Authority can be passed as capabilities that name one object and grant its use together, which makes the minimum grant the one a caller hands over."]
 does_not_mean = ["Remove every permission until normal work is impossible.", "Rely on a model instruction as an authorization control.", "Use one permanent credential because credential management is inconvenient.", "Assume read access is harmless."]
 benefits = ["Smaller attack and failure surface.", "Clearer authorization review.", "Reduced consequences of compromised components."]
 costs = ["More policy and credential complexity.", "Potential friction and approval latency.", "Risk of brittle workflows if permissions are underspecified."]
@@ -23,6 +23,11 @@ automatable = "yes"
 observable = ["Granted permissions and scopes.", "Tool manifests and credentials.", "Runtime authorization decisions."]
 checks = ["Compare requested capabilities with an allow-list.", "Reject wildcard permissions where narrower scopes exist.", "Require approval for irreversible or high-impact actions.", "Expire temporary credentials and sessions."]
 limits = ["A tool may know the permission set but not whether each permission is truly necessary.", "Business necessity remains a review judgment."]
+
+[[tools]]
+name = "seL4"
+url = "https://sel4.systems/"
+notes = "A formally verified microkernel whose access control is capability-based: a thread can use only the kernel objects it holds a capability to."
 
 [[sources]]
 title = "The Protection of Information in Computer Systems"

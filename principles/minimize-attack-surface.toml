@@ -1,0 +1,43 @@
+id = "minimize-attack-surface"
+title = "Minimize Attack Surface"
+aliases = ["Attack surface reduction", "Reduce exposed entry points"]
+kind = "principle"
+status = "seed"
+domains = ["security"]
+summary = "Expose the fewest entry points, channels, and granted capabilities the function requires, and state the rest."
+claim = "Each entry point, channel, and resource an attacker can reach or invoke is a place a flaw can be exploited, so the reachable set should be reduced to what the function requires and declared explicitly where it cannot be reduced."
+problem = "Features, ports, endpoints, and default grants accumulate because each is cheap to add, and the reachable set grows past what anyone has reviewed or can even list."
+rationale = "Exploitation requires reachability. A resource nobody can reach cannot be exploited whatever its flaws, so shrinking the reachable set lowers risk without first finding the flaws, and a surface stated in the artifact can at least be measured and compared across versions."
+applies_when = ["The system exposes endpoints, ports, commands, input formats, or tokens to parties outside its trust boundary.", "A platform grants a default capability unless the configuration narrows it.", "Optional features, debug interfaces, or sample content ship enabled.", "The effective surface is set outside the artifact under review, such as on a settings page, and is invisible in it."]
+does_not_mean = ["Rely on obscurity; an undocumented endpoint is still surface.", "Remove functions users need; the target is surface beyond the function, not the function.", "Treat a smaller surface as proof of safety; the entry points that remain still need defense.", "Count only network ports; privileges, input formats, and credentials granted to automation are surface too."]
+benefits = ["Fewer places to defend, test, and monitor.", "Flaws in unused features cannot be reached.", "An explicit surface can be compared across versions, so growth is reviewable."]
+costs = ["Disabling features and declaring grants takes configuration work per component.", "Users who need a disabled feature have to enable it deliberately.", "Measuring the surface needs an inventory that has to be kept current."]
+failure_when_overapplied = ["Diagnostic and recovery interfaces are removed, so incidents take longer to resolve.", "Functions are folded into one large endpoint, which lowers the count while widening what each entry exposes.", "A declaration is demanded everywhere, and authors paste a broad grant to satisfy the check."]
+conflicts_with = ["observability"]
+related = ["least-privilege", "fail-safe-defaults", "economy-of-mechanism", "defense-in-depth"]
+review_questions = ["What does this change add to what an outside party can reach or invoke?", "Is any capability granted by a default the artifact does not state?", "Is each new entry point needed in production, or only for development or debugging?", "Did the surface grow since the last release, and was that growth reviewed?"]
+
+[enforcement]
+level = "lint"
+automatable = "yes"
+rung = ["text"]
+observable = ["CI workflow files with no top-level permissions declaration, which therefore run on a default token grant set elsewhere.", "Listening ports, routes, and bind addresses in configuration.", "Debug, admin, or sample endpoints enabled in production configuration.", "Features enabled by default in shipped configuration."]
+checks = ["Refuse a workflow that declares no top-level permissions block, so the token grant is stated in the file rather than inherited from a setting.", "Flag bind addresses open on all interfaces where a narrower address is available.", "Flag debug or admin routes enabled in production profiles."]
+limits = ["A text rule can see whether a grant is declared; whether the declared grant is minimal is a judgment.", "Surface set outside the tree, such as a platform default or a firewall rule, is invisible to a file scan.", "Reachability built from the composition of individually harmless entry points is not visible in any one file."]
+
+[[tools]]
+name = "zizmor"
+url = "https://docs.zizmor.sh/"
+notes = "Static analysis of GitHub Actions workflows; its excessive-permissions audit reports workflow and job token grants broader than declared use requires."
+
+[[sources]]
+title = "Attack Surface Analysis Cheat Sheet"
+url = "https://cheatsheetseries.owasp.org/cheatsheets/Attack_Surface_Analysis_Cheat_Sheet.html"
+type = "practice"
+notes = "Defines the attack surface as the paths in and out of a system and the data and code protecting them, and describes identifying, mapping, and tracking changes to it."
+
+[[sources]]
+title = "An Attack Surface Metric"
+url = "https://doi.org/10.1109/TSE.2010.60"
+type = "paper"
+notes = "Formalizes the attack surface as entry and exit points, channels, and untrusted data items, weighted by damage potential against attacker effort, so two versions of a system can be compared."

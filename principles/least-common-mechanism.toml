@@ -1,0 +1,37 @@
+id = "least-common-mechanism"
+title = "Least Common Mechanism"
+aliases = ["Minimize shared mechanism", "Shared mechanism as a channel"]
+kind = "principle"
+status = "seed"
+domains = ["security", "architecture"]
+summary = "Minimize the mechanisms that more than one user, tenant, or consumer depends on and shares."
+claim = "Every mechanism shared by more than one principal is a potential channel between them and one point whose failure or compromise reaches all of them, so shared mechanism should be no more than the function requires."
+problem = "A shared cache, temporary directory, runner, credential, or centrally shipped rule lets one principal observe or influence another, and a single defect in it lands on every consumer at once."
+rationale = "A mechanism private to one principal can leak only that principal's data and fail only that principal's work. Sharing multiplies both the paths information can take between principals and the set of parties a single change reaches, so the blast radius of a shared mechanism is its whole audience."
+applies_when = ["Two or more principals, tenants, or repositories run on the same process, host, cache, runner, or credential.", "A component is updated centrally and starts behaving differently for every consumer at once.", "Timing, cache state, or shared files could carry information across a trust boundary.", "A function could live in a per-consumer component rather than in a shared service."]
+does_not_mean = ["Copy an authoritative fact into each consumer; sharing the owner of a fact differs from sharing the machinery that acts on it.", "Refuse shared libraries; code copied into every consumer is still common mechanism, and harder to patch.", "Give every tenant separate infrastructure regardless of cost or risk.", "Assume isolation because consumers use separate names on a shared substrate."]
+benefits = ["A defect or compromise in one consumer's mechanism stays with that consumer.", "Fewer covert channels cross trust boundaries.", "A change to a per-consumer mechanism has a known and bounded audience."]
+costs = ["Per-consumer mechanisms cost more resources and more deployments.", "A fix has to reach many instances instead of one.", "Isolation boundaries have to be maintained and verified in their own right."]
+failure_when_overapplied = ["Each consumer carries its own copy of a mechanism, and the copies drift apart.", "A shared fix cannot roll out because every consumer holds a private fork.", "Isolation is bought for principals that already share one trust domain."]
+conflicts_with = ["single-authoritative-source"]
+related = ["economy-of-mechanism", "least-privilege", "defense-in-depth", "high-cohesion-low-coupling", "reversible-decisions"]
+review_questions = ["Which principals share this mechanism, and does it cross a trust boundary between them?", "What can one consumer observe or change about another through it?", "If this shared component ships a defect, how many consumers does it reach before anyone notices?", "Is the change sharing the owner of a fact, or sharing the machinery that acts on it?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Caches, temporary paths, runners, and credentials used by more than one principal.", "Centrally updated components and the number of consumers that take each update.", "Global mutable state reachable from more than one tenant's request path."]
+checks = ["Flag a cache or temporary path keyed without the principal's identity.", "Report credentials or runners shared across declared trust domains.", "Require a staged rollout for a change to a component whose consumer count is above a threshold."]
+limits = ["A tool can list shared components; whether their consumers are distinct trust domains is a judgment.", "Covert channels through timing or resource contention are rarely visible in source."]
+
+[[sources]]
+title = "The Protection of Information in Computer Systems"
+url = "https://doi.org/10.1109/PROC.1975.9939"
+type = "paper"
+notes = "States least common mechanism: minimize the amount of mechanism common to more than one user and depended on by all users, since every shared mechanism is a potential information path between users."
+
+[[sources]]
+title = "A Note on the Confinement Problem"
+url = "https://doi.org/10.1145/362375.362389"
+type = "paper"
+notes = "Names covert channels: a program can leak information through shared resources such as load or storage state that were never designed to carry it."

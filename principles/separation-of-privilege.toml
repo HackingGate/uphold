@@ -1,0 +1,37 @@
+id = "separation-of-privilege"
+title = "Separation of Privilege"
+aliases = ["Two-key control", "Two-person rule", "Separation of duties", "Dual control"]
+kind = "principle"
+status = "seed"
+domains = ["security", "socio-technical"]
+summary = "A consequential action needs more than one independent authorization, so that no single key opens it."
+claim = "Where an action is consequential enough, the mechanism should require two or more independently held conditions before it proceeds, so that the compromise or error of any one of them is not sufficient on its own."
+problem = "A single check becomes the whole protection: one stolen credential, one edited configuration file, or one mistaken operator is enough, and nothing distinguishes that failure from legitimate use."
+rationale = "Two conditions that fail for unrelated reasons have to fail together for the action to proceed wrongly. The joint failure is less likely than either alone only while the conditions are held, stored, and changed independently; two checks reading one source are one key written twice."
+applies_when = ["The action is hard to reverse or lands outside the system, such as a publication, a release, a deletion, or a transfer.", "Two authorizing facts can be held by different parties, stores, or channels that do not share a failure.", "The configuration that permits an action could be changed by the same act the permission is meant to catch.", "One of the authorizations can be answered by a party outside the repository or process being guarded."]
+does_not_mean = ["Ask the same question twice; a second check derived from the first check's source adds no independence.", "Require a second human for every action; the second key can be a fact held by an independent system.", "Add an approval whose approver sees nothing the first party did not.", "Count an override that switches off both keys as a third key.", "Count two routes to yes as two keys; a check that passes when either of two authorities agrees is one key with two copies."]
+benefits = ["One compromised credential or one edited file is not enough to cause the effect.", "An error by one party is caught by a condition that party does not control.", "Each key leaves its own trace, so a wrong action shows which key was misused."]
+costs = ["Each action waits on two parties or systems and stops when either cannot answer.", "Independence has to be maintained as systems and teams are consolidated.", "Legitimate actions need both keys arranged in advance, which adds setup work."]
+failure_when_overapplied = ["Approvers approve reflexively because every trivial action needs a second key.", "A standing override is issued because the second holder is often unavailable, which reduces the control to one key.", "The two keys drift into one store or one team, and the control survives in form after its independence is gone."]
+conflicts_with = ["psychological-acceptability"]
+related = ["least-privilege", "complete-mediation", "defense-in-depth", "fail-safe-defaults", "informed-consent", "compromise-recording"]
+review_questions = ["Which independent conditions does this action require, and who holds each?", "Could one edit, one credential, or one person satisfy all of them?", "When the second authority cannot be asked, does the action refuse or proceed?", "Is there an override, and does its use leave a record of who used it?"]
+
+[enforcement]
+level = "governance"
+automatable = "partially"
+observable = ["The set of conditions a consequential action checks before it proceeds.", "Where each condition's answer is stored and who can change it.", "Whether the action proceeds when one condition cannot be evaluated.", "Override invocations and who made them."]
+checks = ["Refuse the action unless a locally declared allow-list and an independently held external authority both permit it.", "Treat an authority that could not be asked as a refusal rather than a pass.", "Refuse configuration in which every condition is derived from the same editable source.", "Require each override to name who invoked it and to apply to one action."]
+limits = ["A tool can see that two conditions are checked; whether their holders are truly independent is an organizational fact.", "Which actions are consequential enough to need two keys is a judgment about consequences."]
+
+[[sources]]
+title = "The Protection of Information in Computer Systems"
+url = "https://doi.org/10.1109/PROC.1975.9939"
+type = "paper"
+notes = "States separation of privilege: a protection mechanism that requires two keys is more robust and flexible than one that allows access on a single key."
+
+[[sources]]
+title = "NIST SP 800-53 Revision 5: Security and Privacy Controls for Information Systems and Organizations"
+url = "https://doi.org/10.6028/NIST.SP.800-53r5"
+type = "standard"
+notes = "Control AC-5, Separation of Duties, is the organizational form: duties are divided so that no single individual can complete a sensitive function alone."

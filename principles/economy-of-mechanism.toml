@@ -1,0 +1,37 @@
+id = "economy-of-mechanism"
+title = "Economy of Mechanism"
+aliases = ["KISS", "Keep it simple", "Keep security simple", "Small enough to verify"]
+kind = "principle"
+status = "seed"
+domains = ["security", "architecture"]
+summary = "Keep a protection mechanism small and simple enough that every path through it can be inspected and tested."
+claim = "A mechanism whose errors stay invisible in normal use must be small and simple enough to verify completely, because its flaws surface only under the attack or accident it exists to stop."
+problem = "Protection logic gathers options, modes, and special cases until nobody can enumerate what it permits, and its flaws stay hidden because legitimate use never exercises them."
+rationale = "Ordinary use and ordinary testing exercise the paths legitimate callers take; a protection flaw lives on the paths they do not. Only exhaustive inspection, testing, or proof reaches those paths, and the cost of each grows with the mechanism, so size decides whether assurance is available at all."
+applies_when = ["The mechanism is a guard, parser, or policy evaluator whose wrong acceptance is not observable in ordinary use.", "Assurance has to come from review, exhaustive testing, or proof rather than from field experience.", "Features, flags, or configuration keys are proposed for a component that other components trust."]
+does_not_mean = ["KISS as general code simplicity; the slogan is broader than this record, which binds the mechanism a protective decision depends on.", "Make the code easy to read at a glance; readable code can still form a mechanism too large to verify, and a small verifiable kernel can be dense.", "Minimize total system size; the constraint binds the trusted part, and moving work out of it into untrusted callers is the intended outcome.", "Refuse every feature; a feature placed outside the protected mechanism costs its assurance nothing.", "Prefer a naive mechanism that is small because it omits a case it has to handle."]
+benefits = ["Review and testing can cover the whole mechanism rather than a sample of it.", "The permitted set can be stated and compared with the implementation.", "Fewer interacting options leave fewer combinations for an attacker to search."]
+costs = ["Convenience features are pushed to other layers, which callers then have to compose.", "Keeping a trusted core small takes continuing refusal of plausible additions.", "A small general mechanism can be slower than a larger specialized one."]
+failure_when_overapplied = ["A needed check is left out to keep the mechanism small, and the omission becomes the vulnerability.", "Logic moves out of the core into callers that each reimplement it, so verified code shrinks while trusted code grows.", "Simplicity is judged by line count, and the complexity reappears in configuration the mechanism interprets."]
+conflicts_with = ["defense-in-depth"]
+related = ["least-common-mechanism", "complete-mediation", "fail-safe-defaults", "minimize-attack-surface", "information-hiding"]
+review_questions = ["Which part of this change is trusted to refuse, and how large is it after the change?", "Could every path through the mechanism be enumerated in review, and was it?", "Does a new option belong inside the protected mechanism, or can it live in untrusted code that calls it?", "Is the mechanism short because it is simple, or because it hands the hard case to configuration it interprets?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Size, branch count, and cyclomatic complexity of modules designated as guards or policy evaluators.", "The number of options, modes, or configuration keys a guard interprets, tracked across releases.", "Code reachable from a guard entry point, including dependencies."]
+checks = ["Report guard modules whose complexity grew since the previous release.", "Require a stated reason for each new configuration key a trusted component reads.", "Flag a trusted component that imports a large general-purpose dependency for a narrow use."]
+limits = ["A metric can measure size; whether the mechanism is small enough to verify is a judgment about which verification is available.", "Which components are trusted has to be declared; a tool cannot infer the trusted base from the code alone."]
+
+[[sources]]
+title = "The Protection of Information in Computer Systems"
+url = "https://doi.org/10.1109/PROC.1975.9939"
+type = "paper"
+notes = "States economy of mechanism: keep the design as simple and small as possible, because design and implementation errors that permit unwanted access are not noticed in normal use and need line-by-line inspection to find."
+
+[[sources]]
+title = "The Emperor's Old Clothes"
+url = "https://doi.org/10.1145/358549.358561"
+type = "paper"
+notes = "Turing Award lecture contrasting a design so simple that it obviously has no deficiencies with one so complicated that it has no obvious deficiencies; the distinction between verifiable and merely unrefuted."

@@ -1,0 +1,31 @@
+id = "confused-deputy"
+title = "Confused Deputy"
+aliases = ["Confused deputy problem", "Confused deputy attack"]
+kind = "anti-pattern"
+status = "seed"
+domains = ["security", "ai-harness"]
+summary = "A privileged program acts on a resource its requester named, under its own authority, and so lends the requester reach nobody granted it."
+claim = "A program that holds authority of its own and acts on a resource a less privileged requester designated, checking only its own authority, becomes an instrument through which the requester reaches what it could not reach directly."
+problem = "A privileged service, tool, or agent accepts a name, path, or target from a caller and acts on it with its own rights, so the caller borrows authority nobody granted it."
+rationale = "An ordinary authority check answers whether the acting program may do something; a deputy acting for others needs the different answer of whether this requester may. Where designation and authority travel separately, as with names resolved under the program's ambient authority, the program cannot tell the two apart. The direct remedy is to check each designation against the requester's authority; the structural one is capability-based design, which joins the two, so that naming an object and holding the right to use it are one token."
+applies_when = ["A program runs with privileges its callers lack, such as a setuid binary, a CI job holding a write token, or a service account.", "An agent acts for a user and chooses targets from input that the user or a third party supplied.", "A shim or hook intercepts a command, interprets its arguments, and performs effects with its own credentials or configuration.", "Input that names a resource, such as a path, URL, repository, or recipient, arrives from a less trusted party."]
+does_not_mean = ["Forbid privileged services; the requirement is on how they resolve what a request designates.", "Treat authenticating the requester as sufficient; knowing who asked does not decide what they may name.", "Count an instruction to a model as a check; an agent told to act only for the user still acts with its own tool grants.", "Require a full capability redesign where checking each designation against the requester is enough."]
+benefits = ["Callers cannot reach through a deputy what they could not reach directly.", "Injected or forged targets fail at the deputy instead of succeeding with its authority.", "Authority used for each request is attributable to the requester who held it."]
+costs = ["The requester's identity and authority have to travel with every call the deputy makes.", "A check per designation adds latency and complexity to the deputy.", "Retrofitting capability passing onto an ambient-authority system is invasive."]
+failure_when_overapplied = ["Every internal helper re-derives the requester's authority, and the copies disagree.", "A deputy is stripped of the authority its own function needs, so the work moves to a less controlled path.", "Deliberate delegation, where a user knowingly lends authority, is refused with no way to express it."]
+conflicts_with = []
+related = ["least-privilege", "complete-mediation", "informed-consent", "least-astonishment", "defense-in-depth"]
+review_questions = ["Whose authority does this code exercise when it acts on a name it was handed?", "Which inputs designate a resource, and who supplied them?", "Could a caller, or text a caller controls, direct this deputy at something the caller cannot reach itself?", "When an agent or shim acts for a user, is the target checked against the user's authority or only against its own?"]
+
+[enforcement]
+level = "runtime"
+automatable = "partially"
+observable = ["Privileged entry points that accept resource names, paths, or URLs from callers.", "Credentials held by an agent, hook, or service that differ from the invoking user's.", "Authorization calls evaluated against the service identity rather than the requester's."]
+checks = ["Require each privileged operation on a caller-supplied designation to pass an authorization call parameterized by the requester.", "Flag file operations on caller-supplied paths performed under elevated privilege without a prior check.", "Refuse an agent tool call whose target was named neither by the user nor by a declared policy."]
+limits = ["A tool can find where a designation enters a privileged operation; whether the check consults the right principal needs data-flow and domain knowledge.", "Designations that pass through text a model reads cannot be traced reliably to their origin."]
+
+[[sources]]
+title = "The Confused Deputy (or why capabilities might have been invented)"
+url = "https://doi.org/10.1145/54289.871709"
+type = "paper"
+notes = "Names the problem: a compiler with write authority to a billing file was directed by a user to write its output there, using authority the compiler held for a different purpose."

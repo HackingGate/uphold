@@ -106,6 +106,57 @@ rule = "workflow-declares-permissions"
 # the setting -- the setting is one place and the workflows are many, and the
 # one that gets edited is the workflow.
 
+[[enforce]]
+principle = "minimize-attack-surface"
+rule = "workflow-declares-permissions"
+# The token a workflow runs with is surface, and a default grant is surface
+# nobody reviewed because it is in no file. The rule makes the grant a line in
+# the workflow, where it can be read and compared across versions. What would
+# make this claim false is the rule passing a workflow whose only
+# `permissions:` is under a job: that one leaves the workflow's own grant at the
+# default, and the pattern is anchored to column zero so it does not pass it.
+
+[[enforce]]
+principle = "compromise-recording"
+rule = "no-local-merge"
+# A merge made through a pull request leaves a diff somebody reviewed and a
+# record of who approved it; one made on a workstation leaves a commit that
+# looks the same and neither record. The forge's history is the record, and it
+# is complete only while every merge reaches it through review. What would make
+# this claim false is a local merge the guard exits 0 over at the moment git
+# records it, which is the last moment the two are distinguishable.
+
+[[enforce]]
+principle = "compromise-recording"
+rule = "no-merge-commit"
+# The same act by the other road: a commit finishing a merge, or a squash merge
+# resolved by hand, never passes `pre-merge-commit`. Two stages because there
+# are two ways in; a claim on one of them would leave the other outside the
+# record.
+
+[[enforce]]
+principle = "data-minimization"
+rule = "no-private-repo-names"
+# A commit message is published with the push and cannot be withdrawn once it
+# is on a public remote. The guard refuses a message naming a repository that
+# the forge or the private-owner list says is private, so what the history holds
+# is no more than the change needs. What would make this claim false is a
+# message naming a known private repository and the guard exiting 0; the rule
+# stands down where `visibility` is `private`, and this repository declares
+# `public`. A name the forge answers 404 for is printed rather than refused,
+# and that is the limit the record states: a text rule matches the identifiers
+# it has been told about.
+
+[[enforce]]
+principle = "data-minimization"
+rule = "no-running-os-identity-metadata"
+# The username, home path, hostname and default route of the machine running
+# the scan are read at scan time and searched for in the tracked files, so an
+# identity nobody listed is still found. What would make this claim false is a
+# tracked file carrying the running host's identity and the scan exiting 0; an
+# identifier of some other machine is not what this rule reads, and the claim
+# does not cover it.
+
 # What routes to a rule, and what routes to a reviewer.
 #
 # `enforcement.automatable = "yes"` says a machine CAN decide the principle. It
@@ -147,7 +198,7 @@ idempotency = "Nothing here has a retryable side-effecting endpoint. `uphold` co
 # whoever wrote the record is the only reader who knows what violating it looks
 # like, and a fixture in a file is reviewable.
 #
-# One control, deliberately, and the run says so on every invocation: eighteen
+# One control, deliberately, and the run says so on every invocation: twenty-two
 # review-carried records have none. That line is the honest reading of what has
 # been demonstrated here, and it is what the next control should be chosen
 # against.

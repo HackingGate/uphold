@@ -44,6 +44,32 @@
       "path": "principles/enforcement-needs-a-trigger.toml"
     },
     {
+      "name": "Append-only state",
+      "key": "append only state",
+      "tokens": [
+        "append",
+        "only",
+        "state"
+      ],
+      "field": "alias",
+      "id": "compromise-recording",
+      "title": "Compromise Recording",
+      "path": "principles/compromise-recording.toml"
+    },
+    {
+      "name": "Attack surface reduction",
+      "key": "attack surface reduction",
+      "tokens": [
+        "attack",
+        "surface",
+        "reduction"
+      ],
+      "field": "alias",
+      "id": "minimize-attack-surface",
+      "title": "Minimize Attack Surface",
+      "path": "principles/minimize-attack-surface.toml"
+    },
+    {
       "name": "Backpressure",
       "key": "backpressure",
       "tokens": [
@@ -68,6 +94,19 @@
       "id": "parameterize-do-not-enumerate",
       "title": "Parameterize, Do Not Enumerate",
       "path": "principles/parameterize-do-not-enumerate.toml"
+    },
+    {
+      "name": "Capability-based security",
+      "key": "capability based security",
+      "tokens": [
+        "capability",
+        "based",
+        "security"
+      ],
+      "field": "alias",
+      "id": "least-privilege",
+      "title": "Least Privilege",
+      "path": "principles/least-privilege.toml"
     },
     {
       "name": "Check every access",
@@ -96,6 +135,21 @@
       "path": "principles/high-cohesion-low-coupling.toml"
     },
     {
+      "name": "Collect only what is needed",
+      "key": "collect only what is needed",
+      "tokens": [
+        "collect",
+        "only",
+        "what",
+        "is",
+        "needed"
+      ],
+      "field": "alias",
+      "id": "data-minimization",
+      "title": "Data Minimization",
+      "path": "principles/data-minimization.toml"
+    },
+    {
       "name": "Combinatorial explosion",
       "key": "combinatorial explosion",
       "tokens": [
@@ -120,6 +174,18 @@
       "path": "principles/complete-mediation.toml"
     },
     {
+      "name": "Compromise Recording",
+      "key": "compromise recording",
+      "tokens": [
+        "compromise",
+        "recording"
+      ],
+      "field": "title",
+      "id": "compromise-recording",
+      "title": "Compromise Recording",
+      "path": "principles/compromise-recording.toml"
+    },
+    {
       "name": "Confirm destructive actions",
       "key": "confirm destructive actions",
       "tokens": [
@@ -131,6 +197,56 @@
       "id": "informed-consent",
       "title": "Informed Consent for Consequential Actions",
       "path": "principles/informed-consent.toml"
+    },
+    {
+      "name": "Confused Deputy",
+      "key": "confused deputy",
+      "tokens": [
+        "confused",
+        "deputy"
+      ],
+      "field": "title",
+      "id": "confused-deputy",
+      "title": "Confused Deputy",
+      "path": "principles/confused-deputy.toml"
+    },
+    {
+      "name": "Confused deputy attack",
+      "key": "confused deputy attack",
+      "tokens": [
+        "confused",
+        "deputy",
+        "attack"
+      ],
+      "field": "alias",
+      "id": "confused-deputy",
+      "title": "Confused Deputy",
+      "path": "principles/confused-deputy.toml"
+    },
+    {
+      "name": "Confused deputy problem",
+      "key": "confused deputy problem",
+      "tokens": [
+        "confused",
+        "deputy",
+        "problem"
+      ],
+      "field": "alias",
+      "id": "confused-deputy",
+      "title": "Confused Deputy",
+      "path": "principles/confused-deputy.toml"
+    },
+    {
+      "name": "Data Minimization",
+      "key": "data minimization",
+      "tokens": [
+        "data",
+        "minimization"
+      ],
+      "field": "title",
+      "id": "data-minimization",
+      "title": "Data Minimization",
+      "path": "principles/data-minimization.toml"
     },
     {
       "name": "Default deny",
@@ -215,6 +331,31 @@
       "id": "least-astonishment",
       "title": "Least Astonishment",
       "path": "principles/least-astonishment.toml"
+    },
+    {
+      "name": "Dual control",
+      "key": "dual control",
+      "tokens": [
+        "dual",
+        "control"
+      ],
+      "field": "alias",
+      "id": "separation-of-privilege",
+      "title": "Separation of Privilege",
+      "path": "principles/separation-of-privilege.toml"
+    },
+    {
+      "name": "Economy of Mechanism",
+      "key": "economy of mechanism",
+      "tokens": [
+        "economy",
+        "of",
+        "mechanism"
+      ],
+      "field": "title",
+      "id": "economy-of-mechanism",
+      "title": "Economy of Mechanism",
+      "path": "principles/economy-of-mechanism.toml"
     },
     {
       "name": "Encapsulation by design decision",
@@ -481,6 +622,43 @@
       "path": "principles/informed-consent.toml"
     },
     {
+      "name": "Keep it simple",
+      "key": "keep it simple",
+      "tokens": [
+        "keep",
+        "it",
+        "simple"
+      ],
+      "field": "alias",
+      "id": "economy-of-mechanism",
+      "title": "Economy of Mechanism",
+      "path": "principles/economy-of-mechanism.toml"
+    },
+    {
+      "name": "Keep security simple",
+      "key": "keep security simple",
+      "tokens": [
+        "keep",
+        "security",
+        "simple"
+      ],
+      "field": "alias",
+      "id": "economy-of-mechanism",
+      "title": "Economy of Mechanism",
+      "path": "principles/economy-of-mechanism.toml"
+    },
+    {
+      "name": "KISS",
+      "key": "kiss",
+      "tokens": [
+        "kiss"
+      ],
+      "field": "alias",
+      "id": "economy-of-mechanism",
+      "title": "Economy of Mechanism",
+      "path": "principles/economy-of-mechanism.toml"
+    },
+    {
       "name": "Layered defenses",
       "key": "layered defenses",
       "tokens": [
@@ -503,6 +681,19 @@
       "id": "least-astonishment",
       "title": "Least Astonishment",
       "path": "principles/least-astonishment.toml"
+    },
+    {
+      "name": "Least Common Mechanism",
+      "key": "least common mechanism",
+      "tokens": [
+        "least",
+        "common",
+        "mechanism"
+      ],
+      "field": "title",
+      "id": "least-common-mechanism",
+      "title": "Least Common Mechanism",
+      "path": "principles/least-common-mechanism.toml"
     },
     {
       "name": "Least Privilege",
@@ -568,6 +759,32 @@
       "id": "parameterize-do-not-enumerate",
       "title": "Parameterize, Do Not Enumerate",
       "path": "principles/parameterize-do-not-enumerate.toml"
+    },
+    {
+      "name": "Minimize Attack Surface",
+      "key": "minimize attack surface",
+      "tokens": [
+        "minimize",
+        "attack",
+        "surface"
+      ],
+      "field": "title",
+      "id": "minimize-attack-surface",
+      "title": "Minimize Attack Surface",
+      "path": "principles/minimize-attack-surface.toml"
+    },
+    {
+      "name": "Minimize shared mechanism",
+      "key": "minimize shared mechanism",
+      "tokens": [
+        "minimize",
+        "shared",
+        "mechanism"
+      ],
+      "field": "alias",
+      "id": "least-common-mechanism",
+      "title": "Least Common Mechanism",
+      "path": "principles/least-common-mechanism.toml"
     },
     {
       "name": "No bypass path",
@@ -846,6 +1063,62 @@
       "path": "principles/psychological-acceptability.toml"
     },
     {
+      "name": "Publish only what is needed",
+      "key": "publish only what is needed",
+      "tokens": [
+        "publish",
+        "only",
+        "what",
+        "is",
+        "needed"
+      ],
+      "field": "alias",
+      "id": "data-minimization",
+      "title": "Data Minimization",
+      "path": "principles/data-minimization.toml"
+    },
+    {
+      "name": "Purpose limitation",
+      "key": "purpose limitation",
+      "tokens": [
+        "purpose",
+        "limitation"
+      ],
+      "field": "alias",
+      "id": "data-minimization",
+      "title": "Data Minimization",
+      "path": "principles/data-minimization.toml"
+    },
+    {
+      "name": "Record what cannot be prevented",
+      "key": "record what cannot be prevented",
+      "tokens": [
+        "record",
+        "what",
+        "cannot",
+        "be",
+        "prevented"
+      ],
+      "field": "alias",
+      "id": "compromise-recording",
+      "title": "Compromise Recording",
+      "path": "principles/compromise-recording.toml"
+    },
+    {
+      "name": "Reduce exposed entry points",
+      "key": "reduce exposed entry points",
+      "tokens": [
+        "reduce",
+        "exposed",
+        "entry",
+        "points"
+      ],
+      "field": "alias",
+      "id": "minimize-attack-surface",
+      "title": "Minimize Attack Surface",
+      "path": "principles/minimize-attack-surface.toml"
+    },
+    {
       "name": "Report could-not-check",
       "key": "report could not check",
       "tokens": [
@@ -914,6 +1187,47 @@
       "path": "principles/separation-of-concerns.toml"
     },
     {
+      "name": "Separation of duties",
+      "key": "separation of duties",
+      "tokens": [
+        "separation",
+        "of",
+        "duties"
+      ],
+      "field": "alias",
+      "id": "separation-of-privilege",
+      "title": "Separation of Privilege",
+      "path": "principles/separation-of-privilege.toml"
+    },
+    {
+      "name": "Separation of Privilege",
+      "key": "separation of privilege",
+      "tokens": [
+        "separation",
+        "of",
+        "privilege"
+      ],
+      "field": "title",
+      "id": "separation-of-privilege",
+      "title": "Separation of Privilege",
+      "path": "principles/separation-of-privilege.toml"
+    },
+    {
+      "name": "Shared mechanism as a channel",
+      "key": "shared mechanism as a channel",
+      "tokens": [
+        "shared",
+        "mechanism",
+        "as",
+        "a",
+        "channel"
+      ],
+      "field": "alias",
+      "id": "least-common-mechanism",
+      "title": "Least Common Mechanism",
+      "path": "principles/least-common-mechanism.toml"
+    },
+    {
       "name": "Show, then ask",
       "key": "show then ask",
       "tokens": [
@@ -954,6 +1268,20 @@
       "path": "principles/single-authoritative-source.toml"
     },
     {
+      "name": "Small enough to verify",
+      "key": "small enough to verify",
+      "tokens": [
+        "small",
+        "enough",
+        "to",
+        "verify"
+      ],
+      "field": "alias",
+      "id": "economy-of-mechanism",
+      "title": "Economy of Mechanism",
+      "path": "principles/economy-of-mechanism.toml"
+    },
+    {
       "name": "SOC",
       "key": "soc",
       "tokens": [
@@ -987,6 +1315,45 @@
       "id": "single-authoritative-source",
       "title": "Single Authoritative Source",
       "path": "principles/single-authoritative-source.toml"
+    },
+    {
+      "name": "Tamper-evident history",
+      "key": "tamper evident history",
+      "tokens": [
+        "tamper",
+        "evident",
+        "history"
+      ],
+      "field": "alias",
+      "id": "compromise-recording",
+      "title": "Compromise Recording",
+      "path": "principles/compromise-recording.toml"
+    },
+    {
+      "name": "Two-key control",
+      "key": "two key control",
+      "tokens": [
+        "two",
+        "key",
+        "control"
+      ],
+      "field": "alias",
+      "id": "separation-of-privilege",
+      "title": "Separation of Privilege",
+      "path": "principles/separation-of-privilege.toml"
+    },
+    {
+      "name": "Two-person rule",
+      "key": "two person rule",
+      "tokens": [
+        "two",
+        "person",
+        "rule"
+      ],
+      "field": "alias",
+      "id": "separation-of-privilege",
+      "title": "Separation of Privilege",
+      "path": "principles/separation-of-privilege.toml"
     },
     {
       "name": "Two-way door decisions",
@@ -1050,6 +1417,18 @@
       "id": "psychological-acceptability",
       "title": "Psychological Acceptability",
       "path": "principles/psychological-acceptability.toml"
+    },
+    {
+      "name": "Zero trust",
+      "key": "zero trust",
+      "tokens": [
+        "zero",
+        "trust"
+      ],
+      "field": "alias",
+      "id": "complete-mediation",
+      "title": "Complete Mediation",
+      "path": "principles/complete-mediation.toml"
     }
   ]
 }

@@ -38,8 +38,24 @@ const RECORDS: &[(&str, &str)] = &[
         include_str!("../principles/complete-mediation.toml"),
     ),
     (
+        "compromise-recording",
+        include_str!("../principles/compromise-recording.toml"),
+    ),
+    (
+        "confused-deputy",
+        include_str!("../principles/confused-deputy.toml"),
+    ),
+    (
+        "data-minimization",
+        include_str!("../principles/data-minimization.toml"),
+    ),
+    (
         "defense-in-depth",
         include_str!("../principles/defense-in-depth.toml"),
+    ),
+    (
+        "economy-of-mechanism",
+        include_str!("../principles/economy-of-mechanism.toml"),
     ),
     (
         "end-to-end-principle",
@@ -83,6 +99,10 @@ const RECORDS: &[(&str, &str)] = &[
         include_str!("../principles/least-astonishment.toml"),
     ),
     (
+        "least-common-mechanism",
+        include_str!("../principles/least-common-mechanism.toml"),
+    ),
+    (
         "least-privilege",
         include_str!("../principles/least-privilege.toml"),
     ),
@@ -93,6 +113,10 @@ const RECORDS: &[(&str, &str)] = &[
     (
         "mechanism-policy-separation",
         include_str!("../principles/mechanism-policy-separation.toml"),
+    ),
+    (
+        "minimize-attack-surface",
+        include_str!("../principles/minimize-attack-surface.toml"),
     ),
     (
         "observability",
@@ -113,6 +137,10 @@ const RECORDS: &[(&str, &str)] = &[
     (
         "separation-of-concerns",
         include_str!("../principles/separation-of-concerns.toml"),
+    ),
+    (
+        "separation-of-privilege",
+        include_str!("../principles/separation-of-privilege.toml"),
     ),
     (
         "single-authoritative-source",
