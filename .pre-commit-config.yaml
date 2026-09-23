@@ -185,6 +185,24 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      # The scanners, at the stage the README tells consumers to use for
+      # `uphold-supply-chain`, and from the working tree for the reason the
+      # guards run from it. It reads the pushed range from what pre-commit and
+      # prek export, as the push guard above does. A branch the remote does not
+      # have yet has nothing to diff against, so its first push scans every
+      # manifest and workflow. That is why this could not be added until
+      # zizmor.yml answered the findings in the dist-generated release.yml.
+      #
+      # Only at pre-push, not at manual. CI runs the manual stage and installs
+      # none of the scanners, so `supply-chain --all` there would be exit 2 on
+      # every run. It belongs in a job that installs them.
+      - id: uphold-supply-chain
+        name: uphold supply-chain
+        entry: cargo run --quiet -- supply-chain
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
       # The pin check used to be a second hook, `hook-pins-resolve`, running a
       # Python script that asked whether every `rev:` still named a ref that
       # exists while the `no-stale-hook-pins` guard asked whether the pin had

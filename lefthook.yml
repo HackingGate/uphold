@@ -143,3 +143,13 @@ pre-push:
     guards:
       use_stdin: true
       run: cargo run --quiet -- guard --stage pre-push --remote {1} --remote-url {2}
+    # The scanners over the pushed range, the command hooks/lefthook.yml tells a
+    # lefthook consumer to write in their own file. `use_stdin: true` for the
+    # reason the guards need it: the range is git's ref lines, and without them
+    # the command refuses. The whole-tree `--all` form is not in `uphold-manual`,
+    # to match .pre-commit-config.yaml, which leaves it off the manual stage
+    # because CI runs that stage without the scanners. That file also explains
+    # why the first push of a branch scans every workflow.
+    supply-chain:
+      use_stdin: true
+      run: cargo run --quiet -- supply-chain

@@ -1,0 +1,83 @@
+# This repository's zizmor policy, which `uphold supply-chain` hands zizmor in
+# place of the bundled policy/zizmor.default.yml. The default stands down
+# completely when this file exists, because zizmor reads one config and does not
+# merge two. So the first block restates the default's one departure word for
+# word, and the reasoning for it stays in policy/zizmor.default.yml. If the
+# default changes, this block has to change with it.
+#
+# The rest is findings in .github/workflows/release.yml: the three errors
+# (excessive-permissions, template-injection, unpinned-images) and seven
+# lower-severity template-injection findings that zizmor also exits non-zero
+# for. dist generates that file and rewrites it on every `dist generate`, so an
+# edit there does not last. dist 0.33 has no setting that removes any of them:
+# the workflow-level permission, the expressions and the container line are
+# all fixed in its template (src/backend/ci/github.rs and
+# templates/ci/github/release.yml.j2 in cargo-dist). test.yml is written by
+# hand, so its findings are fixed in the file and nothing here covers it.
+#
+# EACH ENTRY IS PINNED TO ITS LINE AND COLUMN, not to the whole file. A
+# regenerate with the same dist and the same dist-workspace.toml puts each
+# finding back where it was; this was checked by regenerating and diffing the
+# file, and only Dependabot's `uses:` pins changed. When a dist upgrade or a
+# config change moves a line, the entry stops matching and the finding comes
+# back at the next push that touches the workflow. That is intended: a new
+# template is a new file to review, and a file-wide ignore would let a new
+# finding of the same kind through without anyone looking at it.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "*": ref-pin
+
+  # `permissions: contents: write` at the top of the workflow. dist always
+  # writes it; `github-custom-job-permissions` only applies to jobs a user adds,
+  # not to dist's own. `host` and `announce` need the write, since they create
+  # the GitHub Release and upload its files. `plan` and `build-global-artifacts`
+  # get the write too without needing it, and that is the real cost of this
+  # entry. What limits it: the only trigger is a pushed version tag
+  # (`pr-run-mode = "skip"` removes the pull_request trigger), so the only
+  # person who can start the workflow can already push to the repository.
+  # `build-local-artifacts`, the job that compiles third-party code, has its
+  # own block with `contents: read`.
+  excessive-permissions:
+    ignore:
+      - release.yml:18:3
+
+  # Expressions expanded inside `run:` blocks. dist's template writes all of
+  # them inline and has no setting that moves them into `env:`. Each value
+  # comes from one of two sources, and a requester outside the repository
+  # controls neither.
+  #
+  # The tag name: `github.ref_name` directly (79:91, the one error), and the
+  # plan job's `tag` and `tag-flag` outputs built from it (148:26, 205:26,
+  # 255:25, 286:34). The only event is a tag push matching the version
+  # pattern, and only someone who can push to the repository can create a tag.
+  # Putting shell syntax in a tag name gives that person nothing they could not
+  # already do by pushing a workflow.
+  #
+  # dist's plan: `matrix.install_dist.run` (134:18),
+  # `matrix.packages_install` (144:15) and `matrix.dist_args` (148:98) are
+  # fields of the matrix `dist host --steps=create` computes from
+  # dist-workspace.toml at the tagged commit. Changing them means committing to
+  # that file.
+  template-injection:
+    ignore:
+      - release.yml:79:91
+      - release.yml:134:18
+      - release.yml:144:15
+      - release.yml:148:26
+      - release.yml:148:98
+      - release.yml:205:26
+      - release.yml:255:25
+      - release.yml:286:34
+
+  # `container: ${{ matrix.container && matrix.container.image || null }}`.
+  # zizmor cannot see the matrix, which dist builds at run time from
+  # dist-workspace.toml. No `[dist.github-custom-runners.*]` entry there sets a
+  # `container`, so the expression is null and the job runs on the host with no
+  # image. The pin belongs in dist-workspace.toml: an entry that adds a
+  # container has to name the image by digest there, because this ignore
+  # would hide one that does not.
+  unpinned-images:
+    ignore:
+      - release.yml:110:66

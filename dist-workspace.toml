@@ -57,6 +57,11 @@ merge-tasks = true
 # for any Linux target from a Linux host), installing cargo-zigbuild in the
 # job through pip. The x86_64 musl target is the same OS and architecture as
 # the host, so dist calls plain `cargo build` for it, as it already did.
+#
+# None of these entries sets a `container`. zizmor.yml ignores the
+# `unpinned-images` finding on release.yml's `container:` line because of that.
+# An entry that adds a container has to name the image by digest
+# (`image@sha256:...`) here, since that ignore would hide an unpinned one.
 [dist.github-custom-runners.aarch64-unknown-linux-gnu]
 runner = "ubuntu-latest"
 host = "x86_64-unknown-linux-gnu"
