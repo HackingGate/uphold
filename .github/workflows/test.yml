@@ -209,6 +209,13 @@ jobs:
           save-if: 'false'
 
       # ── pre-commit (Python) ──────────────────────────────────────
+      # `prek-pins-current` is a `language: system` hook whose entry is
+      # `prek update --check`, so this runner needs a prek on PATH as well; the
+      # prek leg gets one from its action.
+      - if: matrix.tool == 'pre-commit'
+        run: |
+          uv tool install prek
+          uv tool dir --bin >> "$GITHUB_PATH"
       - if: matrix.tool == 'pre-commit'
         uses: pre-commit/action@v3.0.1
         with:
