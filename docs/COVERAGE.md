@@ -43,6 +43,16 @@ The syntax row has no hook in this repository to check against. It is where the
 consumer's `ast-grep scan` belongs by cost: it reads one tree per file and needs
 no build.
 
+## Records by rung
+
+The same ladder, read from the catalog side: which records say a gate at each
+rung can see them, and which state no rung and are held by a reviewer alone.
+That list is generated from each record's `enforcement.rung` into
+[`QUICK_REFERENCE.md`](../QUICK_REFERENCE.md#by-rung), under the same staleness
+gate as the rest of that page, so it is not repeated here. What this repository
+actually claims against those records is `uphold check --coverage`, whose last
+line counts the claimable records a rule here claims.
+
 ## What a gate at each rung reads
 
 These are what a consumer imports into its own hook config and claims a record

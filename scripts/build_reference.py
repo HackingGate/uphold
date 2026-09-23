@@ -9,6 +9,7 @@ import sys
 
 from analysis import ANALYZER
 from catalog import ROOT, alias_index, load_catalog, name_entries
+from validate import RUNGS
 
 OUTPUT = ROOT / "QUICK_REFERENCE.md"
 INDEX_OUTPUT = ROOT / "name-index.json"
@@ -22,21 +23,40 @@ def link(record: dict) -> str:
     return f"[{cell(record['title'])}](principles/{record['id']}.toml)"
 
 
-def grouped(records: list[dict], values) -> list[str]:
+def grouped(records: list[dict], values, order=None) -> list[str]:
     """One line per value, listing every record that carries it.
 
     Values sort by their folded spelling, with the raw spelling as the tie-break,
-    and records keep the order they arrive in, so a regenerated file is a diff
-    only when the catalog changed.
+    unless `order` gives them a position of their own; records keep the order
+    they arrive in, so a regenerated file is a diff only when the catalog
+    changed.
     """
     groups: dict[str, list[dict]] = {}
     for record in records:
         for value in values(record):
             groups.setdefault(value, []).append(record)
+    if order is None:
+
+        def key(value):
+            return (value.casefold(), value)
+
+    else:
+
+        def key(value):
+            return order.index(value)
+
     return [
         f"- **{cell(value)}**: " + ", ".join(link(record) for record in groups[value])
-        for value in sorted(groups, key=lambda value: (value.casefold(), value))
+        for value in sorted(groups, key=key)
     ]
+
+
+NO_RUNG = "none stated"
+
+
+def rungs_of(record: dict) -> list[str]:
+    """The rungs a record says a check can see it at, or the one word for none."""
+    return record["enforcement"].get("rung") or [NO_RUNG]
 
 
 def render() -> str:
@@ -70,6 +90,13 @@ def render() -> str:
     lines.extend(grouped(records, lambda record: [record["kind"]]))
     lines.extend(["", "## By domain", ""])
     lines.extend(grouped(records, lambda record: record["domains"]))
+
+    # The third question a record answers (ADR 0011): at which rung a gate can
+    # see it. In ladder order, and with the records that state no rung listed
+    # last under one word, so the line a reader wants -- what a reviewer alone
+    # can hold -- is a line and not a subtraction.
+    lines.extend(["", "## By rung", ""])
+    lines.extend(grouped(records, rungs_of, order=(*RUNGS, NO_RUNG)))
 
     # This is a rendering of `catalog.alias_index()`, not a second construction
     # of it: the mapping is a value the catalog holds, and this loop spends it on
