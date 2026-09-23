@@ -104,7 +104,10 @@ $ ast-grep scan -r rule.yml swallowed.rs ; echo $?
 Exit 0, no output, and the `Command::new("git")` the rule exists to catch is
 sitting in the file. The state is recoverable -- a second rule matching
 `kind: ERROR` reports the region the grammar could not read -- but it is a
-second rule, it is per adopter, and nothing anywhere requires it. A tool whose
+second rule, it is per adopter, and nothing anywhere requires it. It also sees
+only ERROR nodes: recovery that inserts a MISSING node and nothing else passes
+it, which [ADR 0009](0009-a-consumers-structural-rules-are-ast-greps.md)
+measured. A tool whose
 default answer to "I could not look" is the same as its answer to "nothing to
 report" is the `UNKNOWN -> PASS` shape this repository keeps finding one seam at
 a time, and it is the single most useful thing this evaluation produced.

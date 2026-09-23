@@ -72,7 +72,9 @@ convincing than a regex that printed nothing.
 So: **a provider that cannot distinguish "found nothing" from "could not look"
 must be paired with something that can, and the pairing is part of the claim
 rather than part of the adopter's memory.** For `ast-grep` that is a companion
-rule matching `kind: ERROR`. For CodeQL it is a diagnostics query with a filter
+rule matching `kind: ERROR`, which catches ERROR recovery and not recovery that
+only inserts a MISSING node; [ADR 0009](0009-a-consumers-structural-rules-are-ast-greps.md)
+names what covers the rest. For CodeQL it is a diagnostics query with a filter
 that knows which tag and which file to look for. For a hook it is a probe. A
 provider that answers the question itself -- as this binary's own scan does,
 exiting 2 over a path it could not open -- needs no pairing, and that is the
