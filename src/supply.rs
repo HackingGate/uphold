@@ -56,6 +56,14 @@
 //! that a question went unasked, which is this command's third verdict and the
 //! reason it exists.
 //!
+//! THOSE READERS HAVE A FLOOR. Each was written by running one release of its
+//! scanner, and a release old enough to print something else turns the
+//! could-not-look it matches into whichever verdict the unmatched text falls
+//! through to. So each scanner is asked its version before it runs, and one
+//! older than its `Floor` -- or one whose version cannot be read -- is
+//! could-not-look, the same shape as not on PATH. A floor, not a pin: the host
+//! still supplies the scanner, and gitleaks alone is pinned, for its own reason.
+//!
 //! WHAT NOTHING HERE READS IS SAID OUT LOUD TOO. zizmor parses GitHub Actions
 //! and nothing else, so a pipeline defined for any other vendor is read by no
 //! scanner here -- an asymmetry of tooling, not preference: Actions is the CI
@@ -240,6 +248,128 @@ fn on_path(tool: &str) -> Option<String> {
     } else {
         Some(format!("{tool} is not on PATH, so this was not checked"))
     }
+}
+
+/// A `major.minor.patch` release number, ordered the way releases are.
+///
+/// Hand-parsed rather than a semver crate: the only question asked of it is
+/// "at least this", and a pre-release or build suffix is dropped rather than
+/// ranked, so `1.30.0-rc1` counts as `1.30.0`. No scanner here ships one on
+/// the channels a host installs from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Version(u64, u64, u64);
+
+impl std::fmt::Display for Version {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}.{}.{}", self.0, self.1, self.2)
+    }
+}
+
+/// The first `major.minor.patch` in what a tool printed for `--version`.
+///
+/// The FIRST, because osv-scanner prints its own version and then the
+/// osv-scalibr library's on the next line, and the second is not the tool's.
+/// A word is one number only if all three parts are digits: `cargo-deny`, the
+/// word before the version, is not one, and neither is a two-part `3.2`.
+fn parse_version(said: &str) -> Option<Version> {
+    said.split_whitespace().find_map(|word| {
+        let word = word.strip_prefix('v').unwrap_or(word);
+        let release = word.split(['-', '+']).next()?;
+        let mut parts = release.split('.');
+        let mut number = || -> Option<u64> {
+            let part = parts.next()?;
+            if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            part.parse().ok()
+        };
+        let version = Version(number()?, number()?, number()?);
+        parts.next().is_none().then_some(version)
+    })
+}
+
+/// The oldest release of one scanner whose output this binary's reader of it
+/// was measured against.
+///
+/// A floor, not a pin. The readers below match a scanner's exit codes and the
+/// text it prints when it did not look; a release old enough to print
+/// something else turns that could-not-look into whichever verdict the
+/// unmatched text falls through to. A newer one may reword too, but that is a
+/// release nobody here has measured yet, not one known to predate the reader.
+/// Each floor sits beside the reader that depends on it, so raising one is the
+/// same diff as changing the text the reader matches.
+struct Floor {
+    /// The name the refusal uses.
+    tool: &'static str,
+    /// The program that prints its version...
+    program: &'static str,
+    /// ...and what it is handed to print it.
+    args: &'static [&'static str],
+    /// The oldest release accepted.
+    oldest: Version,
+}
+
+impl Floor {
+    /// The version command as the reader would type it.
+    fn asked(&self) -> String {
+        std::iter::once(self.program)
+            .chain(self.args.iter().copied())
+            .collect::<Vec<&str>>()
+            .join(" ")
+    }
+}
+
+/// Why this scanner is not one to run, or `None` when it is.
+///
+/// Missing from PATH, a version it would not print, one this could not read,
+/// and one older than the floor are each could-not-look: in every case the
+/// reader downstream would be matching text nobody knows the shape of.
+fn ready(floor: &Floor) -> Option<String> {
+    if let Some(reason) = on_path(floor.program) {
+        return Some(reason);
+    }
+    let asked = floor.asked();
+    let tool = floor.tool;
+    let output = match Command::new(floor.program).args(floor.args).output() {
+        Ok(output) => output,
+        Err(error) => {
+            return Some(format!(
+                "could not run `{asked}` to learn which {tool} this is: {error}, so this \
+                 was not checked"
+            ));
+        }
+    };
+    let said = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() {
+        return Some(format!(
+            "`{asked}` did not answer (is {tool} installed?), so which {tool} this is is \
+             unknown and this was not checked: {}",
+            first_said(&String::from_utf8_lossy(&output.stderr))
+        ));
+    }
+    against_floor(floor, &said)
+}
+
+/// What a scanner's `--version` answer says about running it: `None` when the
+/// version is at or above the floor, the reason otherwise.
+fn against_floor(floor: &Floor, said: &str) -> Option<String> {
+    let asked = floor.asked();
+    let tool = floor.tool;
+    let oldest = floor.oldest;
+    let Some(found) = parse_version(said) else {
+        return Some(format!(
+            "`{asked}` printed no version this could read ({:?}), so this was not checked; \
+             this uphold reads {tool} {oldest} or later",
+            first_said(said)
+        ));
+    };
+    if found < oldest {
+        return Some(format!(
+            "{tool} {found} is older than {oldest}, the oldest this uphold reads, so this \
+             was not checked; upgrade {tool} to {oldest} or later"
+        ));
+    }
+    None
 }
 
 /// Run one tool, show what it said when it refused, and read its answer.
@@ -640,6 +770,9 @@ fn osv(root: &Path, scope: &Scope) -> Result<Section> {
         if locks.is_empty() {
             return Ok(Section::Nothing(String::from("no lockfile in this range")));
         }
+        if let Some(reason) = ready(&OSV_FLOOR) {
+            return Ok(Section::CouldNotLook(reason));
+        }
         // By path, and no exclude globs: the globs exist to keep a tree walk out
         // of somebody else's vendored manifests, and there is no walk here --
         // every path was named by the diff.
@@ -655,6 +788,9 @@ fn osv(root: &Path, scope: &Scope) -> Result<Section> {
         println!("   {} lockfile(s) in this range", locks.len());
         let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
         return tool_read(root, "osv-scanner", &borrowed, osv_could_not_look);
+    }
+    if let Some(reason) = ready(&OSV_FLOOR) {
+        return Ok(Section::CouldNotLook(reason));
     }
     tool_read(
         root,
@@ -706,7 +842,7 @@ fn zizmor(root: &Path, scope: &Scope) -> Result<Section> {
             Scope::Changed(..) => "no workflow changed in this range",
         })));
     }
-    if let Some(reason) = on_path("zizmor") {
+    if let Some(reason) = ready(&ZIZMOR_FLOOR) {
         return Ok(Section::CouldNotLook(reason));
     }
     println!("   {} {unit}", workflows.len());
@@ -765,7 +901,7 @@ fn deny(root: &Path, scope: &Scope) -> Result<Section> {
             "no deny.toml at the root (write one to opt in)",
         )));
     }
-    if let Some(reason) = on_path("cargo") {
+    if let Some(reason) = ready(&DENY_FLOOR) {
         return Ok(Section::CouldNotLook(reason));
     }
     let manifests = match scope {
@@ -871,6 +1007,26 @@ fn deny(root: &Path, scope: &Scope) -> Result<Section> {
     Ok(Section::Clean)
 }
 
+/// cargo-vet's floor: the stdout-versus-stderr split below was measured by
+/// running cargo-vet 0.10.2 against a store it could not open and a tree with
+/// an unvetted dependency.
+const VET_FLOOR: Floor = Floor {
+    tool: "cargo-vet",
+    program: "cargo",
+    args: &["vet", "--version"],
+    oldest: Version(0, 10, 2),
+};
+
+/// cargo-deny's floor: the exit-bitmask and empty-stdout reading in `deny` was
+/// measured against cargo-deny 0.20.2, and the four config-only
+/// headline classes it drops were read off that release's output.
+const DENY_FLOOR: Floor = Floor {
+    tool: "cargo-deny",
+    program: "cargo",
+    args: &["deny", "--version"],
+    oldest: Version(0, 20, 2),
+};
+
 /// cargo-vet's could-not-look, which shares exit 255 with its finding.
 ///
 /// cargo-vet answers 255 for two facts. Dependencies carrying no audit are a
@@ -909,6 +1065,15 @@ fn first_said(text: &str) -> &str {
         .unwrap_or("it printed nothing at all")
 }
 
+/// osv-scanner's floor: exits 127 and 128 below were measured against
+/// osv-scanner 2.5.1, the release the flags `osv` passes were run on.
+const OSV_FLOOR: Floor = Floor {
+    tool: "osv-scanner",
+    program: "osv-scanner",
+    args: &["--version"],
+    oldest: Version(2, 5, 1),
+};
+
 /// osv-scanner's could-not-look, which its own exit code names.
 ///
 /// `0` is clean and `1` is a vulnerability; every higher code is the scanner
@@ -927,6 +1092,15 @@ fn osv_could_not_look(code: i32, _stdout: &str, stderr: &str) -> Option<String> 
         first_said(stderr)
     ))
 }
+
+/// zizmor's floor: the `failed to parse input:` line and the 11-14 severity
+/// codes below were measured against zizmor 1.30.0.
+const ZIZMOR_FLOOR: Floor = Floor {
+    tool: "zizmor",
+    program: "zizmor",
+    args: &["--version"],
+    oldest: Version(1, 30, 0),
+};
 
 /// zizmor's could-not-look, which hides in two places and one of them is zero.
 ///
@@ -979,6 +1153,9 @@ fn vet(root: &Path, scope: &Scope) -> Result<Section> {
             "no Cargo.lock moved in this range",
         )));
     }
+    if let Some(reason) = ready(&VET_FLOOR) {
+        return Ok(Section::CouldNotLook(reason));
+    }
     tool_read(root, "cargo", &["vet", "--locked"], vet_could_not_look)
 }
 
@@ -996,6 +1173,16 @@ const GUARDDOG_RULES: [&str; 10] = [
     "-r",
     "metadata_mismatch",
 ];
+
+/// guarddog's floor: the "rules failed to run while scanning" text, the JSON
+/// report's `errors` / `results` / `risks` keys and exit 0 on a finding were
+/// all measured against guarddog 3.2.0.
+const GUARDDOG_FLOOR: Floor = Floor {
+    tool: "guarddog",
+    program: "guarddog",
+    args: &["--version"],
+    oldest: Version(3, 2, 0),
+};
 
 /// guarddog's own report that a rule did not run.
 ///
@@ -1160,7 +1347,7 @@ fn guarddog(root: &Path, scope: &Scope) -> Result<Section> {
             Scope::Changed(..) => "no Python or npm manifest moved in this range",
         })));
     }
-    if let Some(reason) = on_path("guarddog") {
+    if let Some(reason) = ready(&GUARDDOG_FLOOR) {
         return Ok(Section::CouldNotLook(reason));
     }
     let mut refused = false;
@@ -1439,9 +1626,126 @@ mod tempfile_guard {
 #[cfg(test)]
 mod tests {
     use super::{
-        GITLEAKS_DEFAULT, GITLEAKS_FOUND, GITLEAKS_VERSION, PRUNE, Scope, find_named,
-        find_workflow_dirs, gitleaks_could_not_look, interesting, unscanned_ci,
+        DENY_FLOOR, Floor, GITLEAKS_DEFAULT, GITLEAKS_FOUND, GITLEAKS_VERSION, GUARDDOG_FLOOR,
+        OSV_FLOOR, PRUNE, Scope, VET_FLOOR, Version, ZIZMOR_FLOOR, against_floor, find_named,
+        find_workflow_dirs, gitleaks_could_not_look, interesting, parse_version, unscanned_ci,
     };
+
+    /// Every floor, for the tests that hold them all to one rule.
+    const FLOORS: [&Floor; 5] = [
+        &OSV_FLOOR,
+        &ZIZMOR_FLOOR,
+        &DENY_FLOOR,
+        &VET_FLOOR,
+        &GUARDDOG_FLOOR,
+    ];
+
+    /// What each scanner printed for its version command on the host the
+    /// readers were measured on, byte for byte, paired with the floor it
+    /// answers. osv-scanner's is the multi-line one: its own version first,
+    /// then the osv-scalibr library's, which is not the tool's.
+    const REAL_ANSWERS: [(&Floor, &str, Version); 5] = [
+        (
+            &OSV_FLOOR,
+            "osv-scanner version: 2.5.1\nosv-scalibr version: 0.5.2\ncommit: n/a\nbuilt at: n/a\n",
+            Version(2, 5, 1),
+        ),
+        (&ZIZMOR_FLOOR, "zizmor 1.30.0\n", Version(1, 30, 0)),
+        (&DENY_FLOOR, "cargo-deny 0.20.2\n", Version(0, 20, 2)),
+        (&VET_FLOOR, "cargo-vet 0.10.2\n", Version(0, 10, 2)),
+        (&GUARDDOG_FLOOR, "3.2.0\n", Version(3, 2, 0)),
+    ];
+
+    #[test]
+    fn each_scanners_real_version_answer_parses_to_its_own_release() {
+        for (floor, said, want) in REAL_ANSWERS {
+            assert_eq!(parse_version(said), Some(want), "{}: {said:?}", floor.tool);
+            // And the release the readers were measured on is not refused.
+            assert_eq!(against_floor(floor, said), None, "{}", floor.tool);
+        }
+    }
+
+    /// The floors ARE the versions in the fixtures above: a floor raised
+    /// without re-measuring the reader, or a reader re-measured without
+    /// raising its floor, fails here rather than on somebody's push.
+    #[test]
+    fn each_floor_is_the_release_its_reader_was_measured_against() {
+        for (floor, _, measured) in REAL_ANSWERS {
+            assert_eq!(floor.oldest, measured, "{}", floor.tool);
+        }
+    }
+
+    #[test]
+    fn versions_compare_as_numbers_not_as_text() {
+        assert!(parse_version("zizmor 1.100.0") > parse_version("zizmor 1.30.0"));
+        assert_eq!(parse_version("v2.5.1"), Some(Version(2, 5, 1)));
+        assert_eq!(parse_version("zizmor 1.30.0-rc1"), Some(Version(1, 30, 0)));
+        assert_eq!(
+            parse_version("guarddog 3.2.0+local"),
+            Some(Version(3, 2, 0))
+        );
+        // Newer on every axis passes.
+        for said in ["zizmor 1.30.1", "zizmor 1.31.0", "zizmor 2.0.0"] {
+            assert_eq!(against_floor(&ZIZMOR_FLOOR, said), None, "{said}");
+        }
+    }
+
+    /// Older than the floor is could-not-look, and the reason names the tool,
+    /// the version found and the floor -- the three facts a reader needs to
+    /// know what to install.
+    #[test]
+    fn a_release_below_the_floor_is_refused_naming_the_tool_what_was_found_and_the_floor() {
+        for (floor, said) in [
+            (&ZIZMOR_FLOOR, "zizmor 1.29.9"),
+            (
+                &OSV_FLOOR,
+                "osv-scanner version: 1.9.2\nosv-scalibr version: 9.9.9",
+            ),
+            (&DENY_FLOOR, "cargo-deny 0.19.0"),
+            (&VET_FLOOR, "cargo-vet 0.10.1"),
+            (&GUARDDOG_FLOOR, "2.9.0"),
+        ] {
+            let reason = against_floor(floor, said).unwrap_or_default();
+            let found = parse_version(said).unwrap().to_string();
+            assert!(reason.contains(floor.tool), "{reason}");
+            assert!(reason.contains(&found), "{reason}");
+            assert!(reason.contains(&floor.oldest.to_string()), "{reason}");
+            assert!(reason.contains("was not checked"), "{reason}");
+        }
+    }
+
+    /// A version nobody can read is not a pass: the reader downstream would be
+    /// matching text of a shape nobody knows.
+    #[test]
+    fn a_version_answer_this_cannot_read_is_refused_rather_than_trusted() {
+        for said in [
+            "",
+            "guarddog",
+            "3.2",
+            "zizmor 1.x.0",
+            "zizmor 1.30.0.1",
+            "cargo-deny dev",
+        ] {
+            for floor in FLOORS {
+                let reason = against_floor(floor, said).unwrap_or_default();
+                assert!(reason.contains("printed no version"), "{said:?}: {reason}");
+                assert!(reason.contains(&floor.oldest.to_string()), "{reason}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_documentation_names_every_scanner_floor() {
+        for floor in FLOORS {
+            let row = format!("| {} | `{}` |", floor.tool, floor.oldest);
+            assert!(
+                include_str!("../docs/REFERENCE.md").contains(&row),
+                "docs/REFERENCE.md does not carry `{row}`, so a consumer reading it installs \
+                 a {} this binary may refuse",
+                floor.tool
+            );
+        }
+    }
 
     #[test]
     fn the_documentation_names_the_pinned_gitleaks() {

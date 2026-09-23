@@ -78,7 +78,11 @@ One id per stage because the stage is an argument. Pinning all five costs
 nothing: which guards fire is decided by `policy/principles.toml`. The
 scanners are two more ids, unpinned above because they need a host toolchain:
 `uphold-supply-chain` at `pre-push`, which scans what the push changed, and
-`uphold-supply-chain-all` at `manual`, which scans everything.
+`uphold-supply-chain-all` at `manual`, which scans everything. Each scanner
+must be at least the release its output reader was measured against (the
+floors are listed in [docs/REFERENCE.md](docs/REFERENCE.md#uphold-supply-chain--six-scanners-one-verdict));
+an older one is exit 2 for its section, so an uphold upgrade that raises a
+floor can newly refuse a push on a host with an old scanner.
 
 A policy inheriting `credentials` also gets **gitleaks** in both, over the
 pushed commits and over every commit. gitleaks owns secret shapes: its rule
