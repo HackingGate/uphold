@@ -839,11 +839,11 @@ fn written(runner: &str, directory: &str, stage: &str) -> String {
 /// where a line is wrapped is not a difference in what runs.
 ///
 /// A quoted assignment read once, on the next line and nowhere after, is folded
-/// into that line, because ten trees spelled the delegate's hook directory
-/// inline on the exec line where this binary binds `hook_dir` first. The one
-/// thing the fold hides is `set -e` stopping on a failed assignment, and the
-/// assignment it exists for is `cd` into the directory git just ran the file
-/// from. A variable read twice is left alone: substituting it would run its
+/// into that line, because hand-written copies spelled the delegate's hook
+/// directory inline on the exec line where this binary binds `hook_dir` first.
+/// The one thing the fold hides is `set -e` stopping on a failed assignment,
+/// and the assignment it exists for is `cd` into the directory git just ran the
+/// file from. A variable read twice is left alone: substituting it would run its
 /// `$(...)` twice, and `ref_lines="$(cat)"` would read stdin twice.
 pub(crate) fn effective_lines(text: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
