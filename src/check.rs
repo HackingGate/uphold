@@ -36,6 +36,20 @@ use crate::error::{Exit, Fatal, Result, verdict};
 
 const DECLARATION: &str = "policy/upheld.toml";
 
+/// Rule ids a bundled set shipped and then removed, each with where its job
+/// went. A claim naming one is still refused -- nothing here supplies it, so
+/// the claim is false -- but the refusal says what to claim instead, because
+/// the consumer who wrote it did so against an uphold that did supply it.
+const REMOVED: &[(&str, &str)] = &[
+    ("no-committed-secret-material", GITLEAKS_OWNS),
+    ("no-committed-auth-key-values", GITLEAKS_OWNS),
+    ("no-committed-auth-key-values-in-config", GITLEAKS_OWNS),
+];
+
+const GITLEAKS_OWNS: &str = "it was removed from the `credentials` set after its deprecation \
+     in v1.20.0, and gitleaks owns secret shapes now: claim \"uphold-supply-chain\" or \
+     \"uphold-supply-chain-staged\" and install that hook instead";
+
 /// `owner/name` -- the form a consumer's runner configuration writes down.
 ///
 /// From `package.repository` at COMPILE time. The Python read the manifest off
@@ -632,9 +646,13 @@ pub(crate) fn run(root: &Path, policy: &Policy, coverage: bool) -> Result<Exit> 
             )));
         }
 
-        failures.push(format!(
-            "{at}: {principle:?} claims {rule:?}, which no seam here supplies"
-        ));
+        let mut failure =
+            format!("{at}: {principle:?} claims {rule:?}, which no seam here supplies");
+        if let Some((_, went)) = REMOVED.iter().find(|(id, _)| *id == rule) {
+            failure.push_str("; ");
+            failure.push_str(went);
+        }
+        failures.push(failure);
     }
 
     if !failures.is_empty() {

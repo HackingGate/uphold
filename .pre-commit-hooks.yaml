@@ -210,8 +210,8 @@
 # keeps the other five at pre-push is not paid here. What it buys is WHEN: the
 # range scan above sees a secret at pre-push, after it is in local history and
 # can only be rewritten out; this sees it while unstaging is still the fix.
-# Once the `credentials` set's three shape rules are removed (they are
-# deprecated), this is the only secret-shape check a commit meets.
+# With the `credentials` set's three shape rules removed, this is the only
+# secret-shape check a commit meets.
 #
 # A third id rather than a stage on either above, for the reason the `--all`
 # id is its own: one entry, one argument list. Only where the policy inherits

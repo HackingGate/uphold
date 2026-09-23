@@ -217,68 +217,6 @@ const CORPUS: &[Case] = &[
     },
     Case {
         set: "credentials",
-        rule: "no-committed-secret-material",
-        path: "sample.conf",
-        refuses: &[
-            "-----BEGIN OPENSSH PRIVATE KEY-----\n",
-            "ghp_000000000000000000000000000000000000\n",
-            "AKIAIOSFODNN7EXAMPLE\n",
-        ],
-        allows: &["key_path = /etc/ssl/private/service.pem\n"],
-    },
-    Case {
-        set: "credentials",
-        rule: "no-committed-auth-key-values",
-        path: "sample.rs",
-        refuses: &[
-            "token = \"abcdefghijklmnopqrstuvwx\"\n",
-            "password: \"hunter2hunter2hunter2\"\n",
-            "token = 'abcdef0123456789abcd'\n",
-        ],
-        allows: &[
-            "token = ${SERVICE_TOKEN}\n",
-            // What the mandatory quote bought. Each of these was a finding on
-            // a file holding no credential: a field access, a method chain, a
-            // call, and a path resolved at runtime are all sixteen characters
-            // of the value class, and none of them is quoted.
-            "password: modem_config.password.clone()\n",
-            "let token = raw.trim_start_matches('v')\n",
-            "token = debs_mod.resolve_token()\n",
-            "token = probe_output.strip()\n",
-            "secret: config::secrets::load()\n",
-            "token = read_token(&path)?\n",
-        ],
-    },
-    Case {
-        set: "credentials",
-        rule: "no-committed-auth-key-values-in-config",
-        path: ".env",
-        refuses: &["TOKEN=abcdef0123456789abcd\n"],
-        // Nothing here: a placeholder in a `.env` is `no-env-secret-values`'s
-        // finding, and a sample it lets through says nothing about this rule.
-        allows: &[],
-    },
-    Case {
-        set: "credentials",
-        rule: "no-committed-auth-key-values-in-config",
-        path: "sample.ini",
-        refuses: &[
-            "token = abcdef0123456789abcd\n",
-            "token = \"abcdefghijklmnopqrstuvwx\"\n",
-        ],
-        allows: &["token = ${SERVICE_TOKEN}\n"],
-    },
-    // The same unquoted line, in a source file: outside the config globs the
-    // only rule left is the quoted one, and it does not read an unquoted value.
-    Case {
-        set: "credentials",
-        rule: "no-committed-auth-key-values-in-config",
-        path: "sample.rs",
-        refuses: &[],
-        allows: &["TOKEN=abcdef0123456789abcd\n"],
-    },
-    Case {
-        set: "credentials",
         rule: "no-env-secret-values",
         path: ".env",
         refuses: &["API_KEY=abcdef123456\n", "SERVICE_PASSWORD=hunter2\n"],
@@ -757,46 +695,6 @@ fn a_docs_line_naming_a_record_is_reported_once_and_under_the_tracker_id() {
             findings_under(&report, "no-process-history-references"),
             0,
             "{sample:?}: {report}"
-        );
-    }
-}
-
-#[test]
-fn a_quoted_credential_in_a_config_file_is_one_finding_and_not_two() {
-    // The source rule's exclude and the config rule's glob have to name the
-    // same shapes, and nothing in the loader checks that they do. This is what
-    // does: one quoted value, once per shape, refused by the config rule and
-    // by nothing else. The label is matched with its line end because the
-    // source rule's id is a prefix of the config rule's.
-    for path in [
-        "settings.env",
-        ".env.local",
-        "sample.ini",
-        "sample.cfg",
-        "sample.conf",
-        "sample.properties",
-        "sample.yml",
-        "sample.yaml",
-        "sample.toml",
-        "sample.json",
-        "sample.xml",
-    ] {
-        let case = Case {
-            set: "credentials",
-            rule: "no-committed-auth-key-values-in-config",
-            path,
-            refuses: &[],
-            allows: &[],
-        };
-        let (code, report) = verdict(&case, "token = \"abcdefghijklmnopqrstuvwx\"\n");
-        assert_eq!(code, 1, "{path}: {report}");
-        assert!(
-            report.contains("policy check failed: no-committed-auth-key-values-in-config\n"),
-            "{path}: not refused by the config rule.\n{report}"
-        );
-        assert!(
-            !report.contains("policy check failed: no-committed-auth-key-values\n"),
-            "{path}: refused by the source rule too, so the partition is not exact.\n{report}"
         );
     }
 }
