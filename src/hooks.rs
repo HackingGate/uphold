@@ -493,7 +493,8 @@ pub(crate) enum Mode {
     Write,
     /// Write the four files, taking over a file without the marker when its
     /// effective lines are the ones this command writes, and refusing it with
-    /// the difference when they are not.
+    /// the difference when they are not. Every file is judged first, and one
+    /// refused file means none is written.
     Adopt,
     /// Say what is in the directory and whether git runs it. Writes nothing.
     Check,
@@ -629,47 +630,72 @@ pub(crate) fn install(
         )));
     }
 
+    // Every file is judged before any is written. Stopping at the first that
+    // differs left the ones before it rewritten with the marker and the rest as
+    // they were: a directory neither `--install` nor `--check` describes,
+    // reached by a command that exited 2.
     let hooks_dir = root.join(directory);
-    std::fs::create_dir_all(&hooks_dir).map_err(|error| Fatal::at(&hooks_dir, error))?;
     let mut adopted: Vec<&str> = Vec::new();
+    let mut refused: Vec<(String, String)> = Vec::new();
     for stage in STAGES {
         let path = hooks_dir.join(stage);
-        let body = written(runner, directory, stage);
-        if path.exists() {
-            let current = crate::error::read_to_string(&path)?;
-            if !current.contains(MARKER) {
-                if mode != Mode::Adopt {
-                    return Err(Fatal::at(
-                        &path,
-                        "this file was not written by `uphold hooks --install`, and replacing \
-                         a hook somebody wrote is not this command's call. Move it aside, or \
-                         fold what it does into the runner's own config -- or, if it is a \
-                         hand-written copy of what this command writes, `--adopt` takes it \
-                         over",
-                    ));
-                }
-                let theirs = effective_lines(&current);
-                let ours = effective_lines(&body);
-                if theirs != ours {
-                    return Err(Fatal::at(
-                        &path,
-                        format!(
-                            "this file was not written by `uphold hooks --install`, and what \
-                             it does is not what this command writes, so it is not a copy to \
-                             adopt. The lines that differ, comments and blank lines aside:\n\n{}",
-                            unified_diff(
-                                &format!("{directory}/{stage}"),
-                                &theirs,
-                                "what `uphold hooks --install` writes",
-                                &ours
-                            )
-                        ),
-                    ));
-                }
-                adopted.push(stage);
-            }
+        if !path.exists() {
+            continue;
         }
-        std::fs::write(&path, body).map_err(|error| Fatal::at(&path, error))?;
+        let current = crate::error::read_to_string(&path)?;
+        if current.contains(MARKER) {
+            continue;
+        }
+        if mode != Mode::Adopt {
+            return Err(Fatal::at(
+                &path,
+                "this file was not written by `uphold hooks --install`, and replacing \
+                 a hook somebody wrote is not this command's call. Move it aside, or \
+                 fold what it does into the runner's own config -- or, if it is a \
+                 hand-written copy of what this command writes, `--adopt` takes it \
+                 over",
+            ));
+        }
+        let theirs = effective_lines(&current);
+        let ours = effective_lines(&written(runner, directory, stage));
+        if theirs == ours {
+            adopted.push(stage);
+        } else {
+            let name = format!("{directory}/{stage}");
+            let diff = unified_diff(
+                &name,
+                &theirs,
+                "what `uphold hooks --install` writes",
+                &ours,
+            );
+            refused.push((name, diff));
+        }
+    }
+    if !refused.is_empty() {
+        let (names, diffs): (Vec<String>, Vec<String>) = refused.into_iter().unzip();
+        let spared = if adopted.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " The lines of {} are this command's own, and it is left unmarked with the \
+                 rest until every file can be adopted.",
+                adopted.join(", ")
+            )
+        };
+        return Err(Fatal::new(format!(
+            "not written by `uphold hooks --install`, and not what this command writes, so \
+             not a copy to adopt: {}. Nothing was written.{spared} The lines that differ, \
+             comments and blank lines aside:\n\n{}",
+            names.join(", "),
+            diffs.join("\n\n")
+        )));
+    }
+
+    std::fs::create_dir_all(&hooks_dir).map_err(|error| Fatal::at(&hooks_dir, error))?;
+    for stage in STAGES {
+        let path = hooks_dir.join(stage);
+        std::fs::write(&path, written(runner, directory, stage))
+            .map_err(|error| Fatal::at(&path, error))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -811,6 +837,14 @@ fn written(runner: &str, directory: &str, stage: &str) -> String {
 /// Continuations are joined because three of the fleet's hand-written copies
 /// wrapped one long command at a different word than this binary does, and
 /// where a line is wrapped is not a difference in what runs.
+///
+/// A quoted assignment read once, on the next line and nowhere after, is folded
+/// into that line, because ten trees spelled the delegate's hook directory
+/// inline on the exec line where this binary binds `hook_dir` first. The one
+/// thing the fold hides is `set -e` stopping on a failed assignment, and the
+/// assignment it exists for is `cd` into the directory git just ran the file
+/// from. A variable read twice is left alone: substituting it would run its
+/// `$(...)` twice, and `ref_lines="$(cat)"` would read stdin twice.
 pub(crate) fn effective_lines(text: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let mut pending = String::new();
@@ -833,7 +867,53 @@ pub(crate) fn effective_lines(text: &str) -> Vec<String> {
     if !pending.is_empty() {
         lines.push(pending.split_whitespace().collect::<Vec<&str>>().join(" "));
     }
+    fold_single_use_assignments(lines)
+}
+
+fn fold_single_use_assignments(mut lines: Vec<String>) -> Vec<String> {
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let substituted = lines.get(index).and_then(|line| {
+            let (name, value) = assignment(line)?;
+            let (next, later) = lines.get(index + 1..)?.split_first()?;
+            let quoted = format!("\"${name}\"");
+            let only_there = reads(next, name) == 1
+                && next.contains(&quoted)
+                && later.iter().all(|after| reads(after, name) == 0);
+            only_there.then(|| next.replacen(&quoted, value, 1))
+        });
+        if let Some(next) = substituted {
+            lines.remove(index);
+            if let Some(slot) = lines.get_mut(index) {
+                *slot = next;
+            }
+        } else {
+            index += 1;
+        }
+    }
     lines
+}
+
+/// `name="value"` on a line of its own: the name, and the value with its quotes.
+fn assignment(line: &str) -> Option<(&str, &str)> {
+    let (name, value) = line.split_once('=')?;
+    let is_name = name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let quoted = value.len() >= 2 && value.starts_with('"') && value.ends_with('"');
+    (is_name && quoted).then_some((name, value))
+}
+
+/// How many times `line` reads `name`, as `$name` or `${name`.
+fn reads(line: &str, name: &str) -> usize {
+    line.match_indices('$')
+        .filter(|(at, _)| {
+            let after = line.get(at + 1..).unwrap_or_default();
+            let after = after.strip_prefix('{').unwrap_or(after);
+            after.strip_prefix(name).is_some_and(|tail| {
+                !tail.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+            })
+        })
+        .count()
 }
 
 /// A fingerprint of a hook's effective lines, for a report to name the text
@@ -1105,6 +1185,45 @@ mod tests {
         assert_ne!(
             ours,
             effective_lines(&pre_push_hook("pre-commit", ".githooks"))
+        );
+    }
+
+    #[test]
+    fn a_hook_dir_spelled_inline_is_the_same_delegate_as_one_bound_first() {
+        for runner in ["prek", "pre-commit"] {
+            let ours = delegate_hook(runner, "commit-msg");
+            let inline = ours.replace(
+                "hook_dir=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nexec",
+                "exec",
+            );
+            let inline = inline.replace("\"$hook_dir\"", "\"$(cd \"$(dirname \"$0\")\" && pwd)\"");
+            assert_ne!(ours, inline);
+            assert_eq!(effective_lines(&ours), effective_lines(&inline), "{runner}");
+        }
+    }
+
+    #[test]
+    fn an_assignment_read_again_later_is_not_folded() {
+        // The pre-push file binds four names and reads `ref_lines` twice; a
+        // fold there would read stdin twice.
+        let lines = effective_lines(&pre_push_hook("prek", ".githooks"));
+        for bound in ["hook_dir=", "remote_name=", "remote_url=", "ref_lines="] {
+            assert!(
+                lines.iter().any(|line| line.starts_with(bound)),
+                "{bound} {lines:?}"
+            );
+        }
+        assert_eq!(
+            effective_lines("x=\"$(cat)\"\necho \"$x\"\necho \"$x\"\n"),
+            ["x=\"$(cat)\"", "echo \"$x\"", "echo \"$x\""]
+        );
+        assert_eq!(
+            effective_lines("x=\"$(cat)\"\necho \"$xy\"\n"),
+            ["x=\"$(cat)\"", "echo \"$xy\""]
+        );
+        assert_eq!(
+            effective_lines("x=\"$(cat)\"\necho \"$x\"\n"),
+            ["echo \"$(cat)\""]
         );
     }
 

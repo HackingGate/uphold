@@ -351,6 +351,100 @@ fn a_hand_written_copy_that_does_something_else_is_refused_with_the_difference()
     assert_eq!(kept, drifted);
 }
 
+/// A hand-written delegate for `stage` that spells the hook directory inline
+/// on the exec line, where this binary binds `hook_dir` on the line before.
+fn inline_delegate(stage: &str) -> String {
+    format!(
+        "#!/bin/sh\n# hand-written\nset -e\n\
+         exec prek hook-impl --hook-dir \"$(cd \"$(dirname \"$0\")\" && pwd)\" \
+         --script-version 4 --hook-type={stage} -- \"$@\"\n"
+    )
+}
+
+#[test]
+fn a_directory_of_hand_written_copies_with_the_hook_dir_inline_is_adopted() {
+    let root = repository();
+    let stub = stub_runner("prek");
+    std::fs::create_dir_all(root.join(".githooks")).unwrap();
+    for stage in ["pre-commit", "commit-msg", "pre-merge-commit"] {
+        std::fs::write(root.join(".githooks").join(stage), inline_delegate(stage)).unwrap();
+    }
+    std::fs::write(root.join(".githooks/pre-push"), HAND_WRITTEN).unwrap();
+
+    let output = install(&root, &["--adopt"], &stub);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains("adopted pre-commit, commit-msg, pre-merge-commit, pre-push"),
+        "{}",
+        text(&output)
+    );
+    for stage in ["pre-commit", "commit-msg", "pre-merge-commit", "pre-push"] {
+        let now = std::fs::read_to_string(root.join(".githooks").join(stage)).unwrap();
+        assert!(now.contains(MARKER), "{stage}: {now}");
+    }
+    assert_eq!(hooks_path(&root), ".githooks");
+}
+
+#[test]
+fn one_copy_that_does_something_else_is_named_and_nothing_is_written() {
+    // pre-commit matches and commit-msg calls pre-commit where this directory
+    // runs prek. Adopting pre-commit on the way to refusing commit-msg is the
+    // half-marked directory this command must not leave.
+    let root = repository();
+    let stub = stub_runner("prek");
+    std::fs::create_dir_all(root.join(".githooks")).unwrap();
+    let matching = inline_delegate("pre-commit");
+    let differing = inline_delegate("commit-msg").replace("exec prek", "exec pre-commit");
+    std::fs::write(root.join(".githooks/pre-commit"), &matching).unwrap();
+    std::fs::write(root.join(".githooks/commit-msg"), &differing).unwrap();
+
+    let output = install(&root, &["--adopt"], &stub);
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    let said = text(&output);
+    assert!(
+        said.contains("not a copy to adopt: .githooks/commit-msg."),
+        "{said}"
+    );
+    assert!(said.contains("--- .githooks/commit-msg"), "{said}");
+    assert!(!said.contains("--- .githooks/pre-commit"), "{said}");
+    assert!(said.contains("Nothing was written"), "{said}");
+    assert!(said.contains("The lines of pre-commit are"), "{said}");
+    assert_eq!(
+        std::fs::read_to_string(root.join(".githooks/pre-commit")).unwrap(),
+        matching
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join(".githooks/commit-msg")).unwrap(),
+        differing
+    );
+    assert!(!root.join(".githooks/pre-merge-commit").exists());
+    assert!(!root.join(".githooks/pre-push").exists());
+    assert_eq!(hooks_path(&root), "");
+}
+
+#[test]
+fn every_copy_that_does_something_else_is_named() {
+    let root = repository();
+    let stub = stub_runner("prek");
+    std::fs::create_dir_all(root.join(".githooks")).unwrap();
+    for stage in ["pre-commit", "pre-merge-commit"] {
+        std::fs::write(
+            root.join(".githooks").join(stage),
+            inline_delegate(stage).replace("set -e\n", ""),
+        )
+        .unwrap();
+    }
+
+    let output = install(&root, &["--adopt"], &stub);
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    let said = text(&output);
+    assert!(
+        said.contains("not a copy to adopt: .githooks/pre-commit, .githooks/pre-merge-commit."),
+        "{said}"
+    );
+    assert!(said.contains("+set -e"), "{said}");
+}
+
 #[test]
 fn without_adopt_a_hand_written_copy_is_still_refused_and_told_about_adopt() {
     let root = repository();
