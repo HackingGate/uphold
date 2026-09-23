@@ -184,6 +184,13 @@ const GIT_ENVIRONMENT: [&str; 8] = [
 pub fn git_command(root: &Path) -> Command {
     let mut command = Command::new(real_git());
     command.current_dir(root);
+    without_git_environment(&mut command);
+    command
+}
+
+/// The same stripping for a command that is not git but runs it, such as this
+/// binary under test when the code path asks git about the fixture.
+pub fn without_git_environment(command: &mut Command) -> &mut Command {
     for name in GIT_ENVIRONMENT {
         command.env_remove(name);
     }

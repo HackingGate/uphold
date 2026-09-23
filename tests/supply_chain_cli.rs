@@ -94,6 +94,9 @@ fn invoke(root: &Path, path: &std::ffi::OsStr, args: &[&str], push: &[(&str, &st
         .env("STUB_LOG", root.join("stub.log"))
         .current_dir(root)
         .stdin(Stdio::null());
+    // The binary asks git about the fixture's ranges, and a hook's GIT_DIR
+    // would answer about the repository running the suite instead.
+    support::without_git_environment(&mut command);
     for name in [
         "PRE_COMMIT_FROM_REF",
         "PRE_COMMIT_TO_REF",
@@ -1227,4 +1230,180 @@ fn guarddog_that_could_not_scan_a_dependency_is_could_not_look() {
     let said = text(&output);
     assert!(said.contains("could not scan left-pad"), "{said}");
     assert!(!said.contains("all checks passed"), "{said}");
+}
+
+// ── gitleaks ─────────────────────────────────────────────────────────────
+
+/// The gitleaks release the binary pins. Stated here as well as in
+/// `src/supply.rs` on purpose: a bump that forgets this file fails the tests
+/// below, which is the moment someone should read what the bump changes.
+const GITLEAKS_PINNED: &str = "8.30.1";
+
+/// A policy that inherits the set which asks for gitleaks.
+const WITH_CREDENTIALS: &str = "[inherit]\nsets = [\"credentials\"]\n";
+
+/// A stub gitleaks answering `version` with `version`, recording every other
+/// run, copying the file its `--config` names beside the log, and then
+/// answering `then`. Builtins only: some tests give it no `/usr/bin`.
+fn gitleaks_stub(version: &str, then: &str) -> String {
+    format!(
+        "if [ \"$1\" = version ]; then echo '{version}'; exit 0; fi\n\
+         echo \"gitleaks $*\" >> \"$STUB_LOG\"\n\
+         while [ $# -gt 0 ]; do\n\
+           if [ \"$1\" = --config ]; then\n\
+             while IFS= read -r line; do echo \"$line\"; done < \"$2\" > \"$STUB_LOG.config\"\n\
+           fi\n\
+           shift\n\
+         done\n\
+         {then}"
+    )
+}
+
+fn inheriting_credentials() -> PathBuf {
+    let root = repository();
+    std::fs::write(root.join("policy/principles.toml"), WITH_CREDENTIALS).unwrap();
+    root
+}
+
+/// The two scanners that answer over an empty tree, clean, beside gitleaks.
+fn quiet_neighbours(gitleaks: &str) -> PathBuf {
+    stubs(&[
+        ("osv-scanner", "exit 0"),
+        ("guarddog", "exit 0"),
+        ("gitleaks", gitleaks),
+    ])
+}
+
+#[test]
+fn a_policy_inheriting_credentials_with_no_gitleaks_installed_is_exit_2() {
+    let root = inheriting_credentials();
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", "exit 0")]);
+    let output = supply_without_the_system_path(&root, &tools);
+    let said = text(&output);
+    assert_eq!(code(&output), 2, "{said}");
+    assert!(said.contains("gitleaks is not on PATH"), "{said}");
+    assert!(!said.contains("all checks passed"), "{said}");
+}
+
+#[test]
+fn a_gitleaks_at_another_version_is_exit_2_and_scans_nothing() {
+    for version in ["8.29.0", "v8.30.2", "version is set by build process"] {
+        let root = inheriting_credentials();
+        let tools = quiet_neighbours(&gitleaks_stub(version, "exit 0"));
+        let output = supply_without_the_system_path(&root, &tools);
+        let said = text(&output);
+        assert_eq!(code(&output), 2, "{version}: {said}");
+        assert!(
+            said.contains(&format!("pinned to {GITLEAKS_PINNED}")),
+            "{said}"
+        );
+        assert!(journal(&root).is_empty(), "{}", journal(&root));
+    }
+}
+
+#[test]
+fn all_scans_every_commit_with_the_bundled_config_and_a_finding_code_of_its_own() {
+    let root = inheriting_credentials();
+    let tools = quiet_neighbours(&gitleaks_stub(&format!("v{GITLEAKS_PINNED}"), "exit 0"));
+    let output = supply_without_the_system_path(&root, &tools);
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(said.contains("every commit"), "{said}");
+    let ran = journal(&root);
+    assert!(ran.starts_with("gitleaks git "), "{ran}");
+    assert!(ran.contains("--exit-code=3"), "{ran}");
+    assert!(ran.contains("--redact"), "{ran}");
+    assert!(!ran.contains("--log-opts"), "{ran}");
+    let config = std::fs::read_to_string(root.join("stub.log.config")).unwrap();
+    assert!(config.contains("useDefault = true"), "{config}");
+    assert!(config.contains("_test"), "{config}");
+}
+
+#[test]
+fn the_repositorys_own_gitleaks_toml_is_handed_over_in_place_of_the_default() {
+    let root = inheriting_credentials();
+    std::fs::write(
+        root.join(".gitleaks.toml"),
+        "# the repository's own\n[extend]\nuseDefault = true\n",
+    )
+    .unwrap();
+    let tools = quiet_neighbours(&gitleaks_stub(GITLEAKS_PINNED, "exit 0"));
+    let output = supply_without_the_system_path(&root, &tools);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let config = std::fs::read_to_string(root.join("stub.log.config")).unwrap();
+    assert!(config.contains("the repository's own"), "{config}");
+}
+
+#[test]
+fn a_gitleaks_finding_is_exit_1_and_its_words_are_shown() {
+    let root = inheriting_credentials();
+    let tools = quiet_neighbours(&gitleaks_stub(
+        GITLEAKS_PINNED,
+        "echo 'RuleID: github-pat'\nexit 3",
+    ));
+    let output = supply_without_the_system_path(&root, &tools);
+    let said = text(&output);
+    assert_eq!(code(&output), 1, "{said}");
+    assert!(said.contains("RuleID: github-pat"), "{said}");
+    assert!(said.contains(".gitleaksignore"), "{said}");
+}
+
+/// gitleaks answers 1 for a partial scan as well as for findings, which is
+/// why the findings are moved to another code: 1 is left meaning "did not
+/// finish".
+#[test]
+fn gitleaks_own_exit_1_is_a_scan_that_did_not_finish() {
+    let root = inheriting_credentials();
+    let tools = quiet_neighbours(&gitleaks_stub(
+        GITLEAKS_PINNED,
+        "echo 'partial scan completed' >&2\nexit 1",
+    ));
+    let output = supply_without_the_system_path(&root, &tools);
+    let said = text(&output);
+    assert_eq!(code(&output), 2, "{said}");
+    assert!(said.contains("NOT CHECKED: gitleaks exited 1"), "{said}");
+}
+
+#[test]
+fn a_policy_that_does_not_inherit_credentials_never_asks_gitleaks() {
+    let root = repository();
+    let tools = quiet_neighbours(&gitleaks_stub(GITLEAKS_PINNED, "exit 3"));
+    let output = supply_without_the_system_path(&root, &tools);
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(
+        said.contains("does not inherit the `credentials` set"),
+        "{said}"
+    );
+    assert!(journal(&root).is_empty(), "{}", journal(&root));
+}
+
+/// A push that changes no manifest still carries commits, and gitleaks reads
+/// commits: it runs alone, over exactly the pushed range.
+#[test]
+fn a_range_touching_no_manifest_still_runs_gitleaks_over_that_range() {
+    let root = tracked();
+    std::fs::write(root.join("policy/principles.toml"), WITH_CREDENTIALS).unwrap();
+    let before = commit(&root, "inherit credentials");
+    write(&root, "src/main.rs", "fn main() {}\n");
+    let after = commit(&root, "source only");
+    let tools = stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        ("guarddog", &recording(GUARDDOG_CLEAN)),
+        ("gitleaks", &gitleaks_stub(GITLEAKS_PINNED, "exit 0")),
+    ]);
+    let output = pushed(&root, &tools, &before, &after);
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(
+        said.contains("only gitleaks has anything to read"),
+        "{said}"
+    );
+    let ran = journal(&root);
+    assert!(
+        ran.contains(&format!("--log-opts={before}..{after}")),
+        "{ran}"
+    );
+    assert!(!ran.contains("osv-scanner"), "{ran}");
+    assert!(!ran.contains("guarddog"), "{ran}");
 }

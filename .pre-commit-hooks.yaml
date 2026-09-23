@@ -158,9 +158,11 @@
   pass_filenames: false
   always_run: true
 
-# Five external scanners, one verdict. The scanners are NOT built by this
-# hook -- osv-scanner, zizmor, cargo-deny, cargo-vet and guarddog come from
-# the host's own toolchain, and one that is missing is exit 2, never a pass.
+# Six external scanners, one verdict. The scanners are NOT built by this
+# hook -- osv-scanner, zizmor, cargo-deny, cargo-vet, guarddog and gitleaks
+# come from the host's own toolchain, and one that is missing is exit 2, never
+# a pass. gitleaks runs only where the policy inherits the `credentials` set,
+# and only at the version this uphold pins.
 # At pre-push, not pre-commit: every one of them reaches the network, and a
 # check that adds a network round trip to a commit is a check somebody
 # switches off. Seven repositories carried this orchestration as a ~100-line
@@ -169,12 +171,13 @@
 # Scoped to the pushed range, which is why this entry no longer carries the
 # manual stage. The command reads the range from the same variables the push
 # guard above reads, and a push that changes no lockfile, manifest or workflow
-# now runs no scanner at all rather than the whole tree's worth. `always_run`
+# runs gitleaks alone over its commits, or no scanner at all where the policy
+# does not ask for gitleaks, rather than the whole tree's worth. `always_run`
 # with no filenames for the same reason the push guard has it: the runner
 # passes the files in the push, and the range is not one of them.
 - id: uphold-supply-chain
   name: uphold supply-chain
-  description: origin, advisories, typosquats and workflow security over the pushed range -- five scanners, one verdict
+  description: origin, advisories, typosquats, workflow security and committed secrets over the pushed range -- six scanners, one verdict
   entry: uphold supply-chain
   language: rust
   stages: [pre-push]
@@ -194,7 +197,7 @@
 # is the pair this was split into.
 - id: uphold-supply-chain-all
   name: uphold supply-chain --all
-  description: the same five scanners over every manifest in the tree, for CI and scheduled runs
+  description: the same six scanners over every manifest in the tree and every commit, for CI and scheduled runs
   entry: uphold supply-chain
   args: ["--all"]
   language: rust

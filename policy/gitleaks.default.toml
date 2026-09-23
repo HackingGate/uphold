@@ -1,0 +1,21 @@
+# The gitleaks configuration `uphold secrets` runs where a repository has no
+# .gitleaks.toml of its own. A repository that wants a different answer writes
+# its own at the root, and this default stands down WHOLLY: the allowlist below
+# is not merged into it, so a repository config that wants the test trees
+# excluded says so itself.
+#
+# NO RULE IS DECLARED HERE. The rule list is the one the pinned gitleaks ships,
+# entropy thresholds and per-rule allowlists included. A copy of it here would
+# be the hand-maintained shape list the `credentials` set carried, and would
+# fall behind upstream the same way.
+[extend]
+useDefault = true
+
+# The test-tree exclusion the `credentials` set applied to its own shape
+# rules, stated once. Test fixtures carry an example credential on purpose,
+# and a Go test sits beside its subject as `<name>_test.go` rather than under
+# a `tests/` directory, so both layouts are named. The cost is the one the set
+# already accepted: a real credential pasted into a test passes.
+[[allowlists]]
+description = "test trees, whose fixtures carry example credentials on purpose"
+paths = ['''(?:^|/)tests?/''', '''_test\.go$''']
