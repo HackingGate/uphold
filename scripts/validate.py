@@ -32,6 +32,33 @@ KINDS = {
     "metric",
     "decision-procedure",
 }
+# Where an entry is used, from a closed list of technical roles, each with the
+# one line principles/SCHEMA.md shows beside it; a test holds the two equal.
+# `uphold_check.py` reads this dict to refuse a `[review].include_domains` value
+# no record can carry, so a filter that would silently match nothing is an
+# error instead.
+DOMAINS: dict[str, str] = {
+    "architecture": "structure and modularity of a system",
+    "interfaces": "APIs, protocols and contracts between parts",
+    "distributed-systems": "many nodes, partial failure and coordination",
+    "reliability": "keeping a service correct and available in operation",
+    "security": "confidentiality, integrity, authorization and privacy",
+    "data": "state, storage, consistency and derived artifacts",
+    "program-representation": "syntax trees, IRs and graphs a tool reads",
+    "compiler-semantics": "what a language definition and its compiler establish",
+    "static-analysis": "facts derived about a program without running it",
+    "formal-verification": "proof that a program meets a specification",
+    "symbolic-reasoning": "execution over symbolic rather than concrete values",
+    "model-checking": "exhaustive exploration of a state space",
+    "constraint-solving": "SAT, SMT and related decision procedures",
+    "testing": "executable checks and fuzzing",
+    "runtime-analysis": "instrumentation and monitoring of a running program",
+    "concurrency": "interleaving, ordering and shared state",
+    "performance": "latency, throughput and scalability",
+    "socio-technical": "people, teams, incentives and organizations",
+    "evolution": "change, versioning, migration and deprecation",
+    "ai-harness": "agents, shims and hooks that act for a person",
+}
 STATUSES = {"seed", "reviewed", "deprecated"}
 LEVELS = {"informational", "review", "lint", "test", "runtime", "governance"}
 AUTOMATABLE = {"no", "partially", "yes"}
@@ -174,6 +201,30 @@ def check_rung(errors: list[str], path: str, enforcement: dict) -> None:
         )
 
 
+def check_domains(errors: list[str], path: str, domains: object) -> None:
+    """`domains` is a non-empty list of distinct tags from `DOMAINS`.
+
+    A type error is already reported by the required-list check, so this one
+    speaks only about the values.
+    """
+    if not is_string_list(domains):
+        return
+    if not domains:
+        error(errors, path, "domains must name at least one domain")
+        return
+    repeated = sorted({value for value in domains if domains.count(value) > 1})
+    if repeated:
+        error(errors, path, f"domains repeats {repeated}")
+    for value in domains:
+        if value not in DOMAINS:
+            error(
+                errors,
+                path,
+                f"domains names {value!r}, which is not a domain; "
+                f"the list is {sorted(DOMAINS)} (principles/SCHEMA.md)",
+            )
+
+
 def check_tools(errors: list[str], path: str, tools: object, names: set[str]) -> None:
     """`[[tools]]` is optional; each is an example, and never the concept.
 
@@ -298,6 +349,8 @@ def validate_records(records: list[dict]) -> list[str]:
                 error(errors, path, "id must be kebab-case")
             if "_path" in record and record["_path"].stem != record_id:
                 error(errors, path, "filename must match id")
+
+        check_domains(errors, path, record.get("domains"))
 
         if record.get("kind") not in KINDS:
             error(errors, path, f"kind must be one of {sorted(KINDS)}")

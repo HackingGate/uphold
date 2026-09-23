@@ -2884,7 +2884,9 @@ is a different field from the [rule one](#max_lines-and-max_bytes-and-the-baseli
 of the same name. It is load-bearing rather than a nicety: see
 [DESIGN.md](DESIGN.md#why-the-review-tier-is-not-what-that-record-refuses).
 Over budget fails the build and says to shorten records or narrow
-`include_domains`.
+`include_domains`. Its values come from the closed list in
+[`principles/SCHEMA.md`](../principles/SCHEMA.md#domains), and a value outside
+it is exit `2`: a filter no record can match would compile an empty document.
 
 When a repository has no subject for a principle, say so with a reason:
 

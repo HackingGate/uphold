@@ -355,7 +355,7 @@ id = "single-authoritative-source"
 title = "Single Authoritative Source"
 kind = "principle"
 status = "seed"
-domains = ["data", "architecture", "governance"]
+domains = ["data", "architecture", "socio-technical"]
 
 summary = "One authority owns each fact; copies may exist."
 claim = """
