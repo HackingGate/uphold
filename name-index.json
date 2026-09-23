@@ -93,6 +93,20 @@
       "path": "principles/compromise-recording.toml"
     },
     {
+      "name": "At-least-once delivery",
+      "key": "at least once delivery",
+      "tokens": [
+        "at",
+        "least",
+        "once",
+        "delivery"
+      ],
+      "field": "alias",
+      "id": "idempotency",
+      "title": "Idempotency",
+      "path": "principles/idempotency.toml"
+    },
+    {
       "name": "Attack surface reduction",
       "key": "attack surface reduction",
       "tokens": [
@@ -149,6 +163,18 @@
       "path": "principles/robustness-principle.toml"
     },
     {
+      "name": "Blast radius",
+      "key": "blast radius",
+      "tokens": [
+        "blast",
+        "radius"
+      ],
+      "field": "alias",
+      "id": "defense-in-depth",
+      "title": "Defense in Depth",
+      "path": "principles/defense-in-depth.toml"
+    },
+    {
       "name": "Calculator with one_plus_one()",
       "key": "calculator with one plus one",
       "tokens": [
@@ -162,6 +188,31 @@
       "id": "parameterize-do-not-enumerate",
       "title": "Parameterize, Do Not Enumerate",
       "path": "principles/parameterize-do-not-enumerate.toml"
+    },
+    {
+      "name": "Campbell's law",
+      "key": "campbell s law",
+      "tokens": [
+        "campbell",
+        "s",
+        "law"
+      ],
+      "field": "alias",
+      "id": "goodharts-law",
+      "title": "Goodhart's Law",
+      "path": "principles/goodharts-law.toml"
+    },
+    {
+      "name": "Canonical representation",
+      "key": "canonical representation",
+      "tokens": [
+        "canonical",
+        "representation"
+      ],
+      "field": "alias",
+      "id": "single-authoritative-source",
+      "title": "Single Authoritative Source",
+      "path": "principles/single-authoritative-source.toml"
     },
     {
       "name": "Capability-based security",
@@ -354,6 +405,19 @@
       "path": "principles/confused-deputy.toml"
     },
     {
+      "name": "Conway's Law",
+      "key": "conway s law",
+      "tokens": [
+        "conway",
+        "s",
+        "law"
+      ],
+      "field": "title",
+      "id": "conways-law",
+      "title": "Conway's Law",
+      "path": "principles/conways-law.toml"
+    },
+    {
       "name": "Data Minimization",
       "key": "data minimization",
       "tokens": [
@@ -415,6 +479,42 @@
       "path": "principles/deprecation-discipline.toml"
     },
     {
+      "name": "Design for failure",
+      "key": "design for failure",
+      "tokens": [
+        "design",
+        "for",
+        "failure"
+      ],
+      "field": "alias",
+      "id": "graceful-degradation",
+      "title": "Graceful Degradation",
+      "path": "principles/graceful-degradation.toml"
+    },
+    {
+      "name": "Determinism",
+      "key": "determinism",
+      "tokens": [
+        "determinism"
+      ],
+      "field": "alias",
+      "id": "reproducible-derived-state",
+      "title": "Reproducible Derived State",
+      "path": "principles/reproducible-derived-state.toml"
+    },
+    {
+      "name": "Deterministic generation",
+      "key": "deterministic generation",
+      "tokens": [
+        "deterministic",
+        "generation"
+      ],
+      "field": "alias",
+      "id": "reproducible-derived-state",
+      "title": "Reproducible Derived State",
+      "path": "principles/reproducible-derived-state.toml"
+    },
+    {
       "name": "Distinguish not-violated from not-inspected",
       "key": "distinguish not violated from not inspected",
       "tokens": [
@@ -462,6 +562,31 @@
       "path": "principles/least-astonishment.toml"
     },
     {
+      "name": "Don't repeat yourself",
+      "key": "don t repeat yourself",
+      "tokens": [
+        "don",
+        "t",
+        "repeat",
+        "yourself"
+      ],
+      "field": "alias",
+      "id": "single-authoritative-source",
+      "title": "Single Authoritative Source",
+      "path": "principles/single-authoritative-source.toml"
+    },
+    {
+      "name": "DRY",
+      "key": "dry",
+      "tokens": [
+        "dry"
+      ],
+      "field": "alias",
+      "id": "single-authoritative-source",
+      "title": "Single Authoritative Source",
+      "path": "principles/single-authoritative-source.toml"
+    },
+    {
       "name": "Dual control",
       "key": "dual control",
       "tokens": [
@@ -485,6 +610,18 @@
       "id": "economy-of-mechanism",
       "title": "Economy of Mechanism",
       "path": "principles/economy-of-mechanism.toml"
+    },
+    {
+      "name": "Effectively-once",
+      "key": "effectively once",
+      "tokens": [
+        "effectively",
+        "once"
+      ],
+      "field": "alias",
+      "id": "idempotency",
+      "title": "Idempotency",
+      "path": "principles/idempotency.toml"
     },
     {
       "name": "Encapsulate what varies",
@@ -675,6 +812,18 @@
       "path": "principles/fail-safe-defaults.toml"
     },
     {
+      "name": "Fault containment",
+      "key": "fault containment",
+      "tokens": [
+        "fault",
+        "containment"
+      ],
+      "field": "alias",
+      "id": "defense-in-depth",
+      "title": "Defense in Depth",
+      "path": "principles/defense-in-depth.toml"
+    },
+    {
       "name": "Flow control under load",
       "key": "flow control under load",
       "tokens": [
@@ -687,6 +836,19 @@
       "id": "backpressure",
       "title": "Backpressure",
       "path": "principles/backpressure.toml"
+    },
+    {
+      "name": "Goodhart's Law",
+      "key": "goodhart s law",
+      "tokens": [
+        "goodhart",
+        "s",
+        "law"
+      ],
+      "field": "title",
+      "id": "goodharts-law",
+      "title": "Goodhart's Law",
+      "path": "principles/goodharts-law.toml"
     },
     {
       "name": "Graceful Degradation",
@@ -1039,6 +1201,18 @@
       "path": "principles/least-common-mechanism.toml"
     },
     {
+      "name": "Mirroring hypothesis",
+      "key": "mirroring hypothesis",
+      "tokens": [
+        "mirroring",
+        "hypothesis"
+      ],
+      "field": "alias",
+      "id": "conways-law",
+      "title": "Conway's Law",
+      "path": "principles/conways-law.toml"
+    },
+    {
       "name": "Name what you remove",
       "key": "name what you remove",
       "tokens": [
@@ -1209,6 +1383,19 @@
       "id": "reversible-decisions",
       "title": "Optimize for Reversible Decisions",
       "path": "principles/reversible-decisions.toml"
+    },
+    {
+      "name": "Organization-structure homomorphism",
+      "key": "organization structure homomorphism",
+      "tokens": [
+        "organization",
+        "structure",
+        "homomorphism"
+      ],
+      "field": "alias",
+      "id": "conways-law",
+      "title": "Conway's Law",
+      "path": "principles/conways-law.toml"
     },
     {
       "name": "Orthogonality",
@@ -1519,6 +1706,31 @@
       "path": "principles/explicit-unknown.toml"
     },
     {
+      "name": "Reproducible builds",
+      "key": "reproducible builds",
+      "tokens": [
+        "reproducible",
+        "builds"
+      ],
+      "field": "alias",
+      "id": "reproducible-derived-state",
+      "title": "Reproducible Derived State",
+      "path": "principles/reproducible-derived-state.toml"
+    },
+    {
+      "name": "Reproducible Derived State",
+      "key": "reproducible derived state",
+      "tokens": [
+        "reproducible",
+        "derived",
+        "state"
+      ],
+      "field": "title",
+      "id": "reproducible-derived-state",
+      "title": "Reproducible Derived State",
+      "path": "principles/reproducible-derived-state.toml"
+    },
+    {
       "name": "Robustness Principle",
       "key": "robustness principle",
       "tokens": [
@@ -1698,6 +1910,19 @@
         "source",
         "of",
         "truth"
+      ],
+      "field": "alias",
+      "id": "single-authoritative-source",
+      "title": "Single Authoritative Source",
+      "path": "principles/single-authoritative-source.toml"
+    },
+    {
+      "name": "Single-writer principle",
+      "key": "single writer principle",
+      "tokens": [
+        "single",
+        "writer",
+        "principle"
       ],
       "field": "alias",
       "id": "single-authoritative-source",
@@ -1921,6 +2146,22 @@
       "id": "rule-of-three",
       "title": "Rule of Three",
       "path": "principles/rule-of-three.toml"
+    },
+    {
+      "name": "When a measure becomes a target",
+      "key": "when a measure becomes a target",
+      "tokens": [
+        "when",
+        "a",
+        "measure",
+        "becomes",
+        "a",
+        "target"
+      ],
+      "field": "alias",
+      "id": "goodharts-law",
+      "title": "Goodhart's Law",
+      "path": "principles/goodharts-law.toml"
     },
     {
       "name": "Zero trust",

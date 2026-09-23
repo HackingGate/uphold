@@ -54,6 +54,10 @@ const RECORDS: &[(&str, &str)] = &[
         include_str!("../principles/confused-deputy.toml"),
     ),
     (
+        "conways-law",
+        include_str!("../principles/conways-law.toml"),
+    ),
+    (
         "data-minimization",
         include_str!("../principles/data-minimization.toml"),
     ),
@@ -85,6 +89,10 @@ const RECORDS: &[(&str, &str)] = &[
     (
         "fail-safe-defaults",
         include_str!("../principles/fail-safe-defaults.toml"),
+    ),
+    (
+        "goodharts-law",
+        include_str!("../principles/goodharts-law.toml"),
     ),
     (
         "graceful-degradation",
@@ -146,6 +154,10 @@ const RECORDS: &[(&str, &str)] = &[
     (
         "psychological-acceptability",
         include_str!("../principles/psychological-acceptability.toml"),
+    ),
+    (
+        "reproducible-derived-state",
+        include_str!("../principles/reproducible-derived-state.toml"),
     ),
     (
         "reversible-decisions",

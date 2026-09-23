@@ -101,7 +101,7 @@ one for repeating a static rule. Either way it measures the harness.
 
 The count **and the names** of review-carried records with no control print on
 every run, refusal or not, in the words probe prints its own denominator in.
-One control beside twenty-seven records is a different claim from one beside
+One control beside twenty-nine records is a different claim from one beside
 two, and the reader who most needs the difference is the one skimming a green
 run.
 

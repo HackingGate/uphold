@@ -1,6 +1,6 @@
 id = "single-authoritative-source"
 title = "Single Authoritative Source"
-aliases = ["Single Source of Truth", "SSOT", "System of Record"]
+aliases = ["Single Source of Truth", "SSOT", "System of Record", "DRY", "Don't repeat yourself", "Single-writer principle", "Canonical representation"]
 kind = "principle"
 status = "seed"
 domains = ["data", "architecture", "socio-technical"]
@@ -8,14 +8,14 @@ summary = "Give each authoritative fact one owner and update authority; copies a
 claim = "Each authoritative fact should have one explicitly designated ownership and update authority, while replicas, caches, and derived views remain subordinate to that authority."
 problem = "Independent writable copies create semantic drift, ambiguous ownership, conflicting updates, and reconciliation work."
 rationale = "When update authority is explicit, disagreements can be resolved against a known source and changes can be traced to an accountable boundary."
-applies_when = ["The same fact is represented in multiple services, stores, reports, or workflows.", "Conflicting updates would be materially expensive or unsafe.", "A responsible owner can be assigned at an appropriate domain boundary."]
+applies_when = ["The same fact is represented in multiple services, stores, reports, or workflows.", "Conflicting updates would be materially expensive or unsafe.", "A responsible owner can be assigned at an appropriate domain boundary.", "One fact arrives in several spellings, such as case, encoding, or path form, and is normalized to one canonical form at the boundary so that two copies can be compared for equality."]
 does_not_mean = ["Use one physical database for the entire system.", "Forbid replication, caching, indexes, or read models.", "Centralize unrelated domains under one team or schema.", "Treat every derived value as independently authoritative."]
 benefits = ["Clear ownership and update paths.", "Simpler reconciliation and lineage.", "Reduced semantic drift across consumers."]
 costs = ["The authority can become a latency or availability dependency.", "Cross-domain facts may resist clean ownership.", "Synchronization and versioning remain necessary."]
 failure_when_overapplied = ["An enterprise-wide shared database couples unrelated domains.", "A central team becomes a throughput bottleneck.", "Local operation is blocked even when temporary divergence would be acceptable."]
 conflicts_with = ["graceful-degradation", "reversible-decisions", "least-common-mechanism"]
 related = ["information-hiding", "end-to-end-principle", "observability", "parameterize-do-not-enumerate"]
-review_questions = ["Which component owns the canonical meaning and writes?", "Can every copy explain its source and refresh policy?", "What happens when the authority is unavailable?"]
+review_questions = ["Which component owns the canonical meaning and writes?", "Can every copy explain its source and refresh policy?", "What happens when the authority is unavailable?", "Is there exactly one writer for this fact, and what stops a second component from writing it?"]
 
 [enforcement]
 level = "governance"

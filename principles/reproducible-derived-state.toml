@@ -1,0 +1,53 @@
+id = "reproducible-derived-state"
+title = "Reproducible Derived State"
+aliases = ["Reproducible builds", "Determinism", "Deterministic generation"]
+kind = "principle"
+status = "seed"
+domains = ["data", "reliability", "evolution"]
+summary = "Anything generated -- a build, a lockfile, a rendered document, an index -- can be regenerated from declared inputs and compared, so a copy that drifted from its source is caught rather than trusted."
+claim = "A derived artifact should be a pure function of its named inputs, so that two derivations from the same inputs are byte-identical and any difference between a stored artifact and a fresh derivation is detectable as drift."
+problem = "Generated files, build outputs, and indexes are edited by hand, built from inputs nobody recorded, or stamped with the time and host of their build, so nobody can say whether an artifact still corresponds to its source, and a stale or tampered one looks the same as a current one."
+rationale = "When derivation is deterministic, verification reduces to equality: regenerate and compare. That makes a derived artifact subordinate to its source by construction, lets independent parties confirm that an artifact came from the claimed source, and turns drift from a latent inconsistency into a failing check."
+applies_when = ["An artifact is generated from other files and is stored, shipped, or read instead of being regenerated.", "Consumers or reviewers read the derived artifact rather than its source.", "The derivation can be rerun in the checking environment at acceptable cost.", "Someone must be able to confirm that an artifact came from the inputs it claims."]
+does_not_mean = ["Commit every generated file; often the better choice is not to store the derivation at all.", "Forbid nondeterministic computation; it means any nondeterminism enters as a named, fixed input, such as a seed or a source date.", "That a reproducible artifact is correct; byte identity shows the derivation is stable, not that the generator is right.", "Hand-edit the generated file until the comparison passes; the fix belongs in the source or the generator."]
+benefits = ["Drift between source and artifact is caught mechanically.", "Independent rebuilds can confirm provenance and expose a compromised build.", "Caching is safe because equal inputs give equal outputs.", "Review can concentrate on the source, knowing the artifact follows from it."]
+costs = ["Timestamps, paths, locale, ordering, and tool versions must all be pinned or stripped.", "Toolchains must themselves be deterministic, or be confined until they are.", "Regenerating in the check adds time to every run."]
+failure_when_overapplied = ["Useful provenance, such as build time and host, is stripped from artifacts with nothing recording it elsewhere.", "Determinism is demanded of outputs that are inherently environmental, such as benchmark results, and the check is switched off when it cannot pass.", "Every intermediate file is committed and checked, so a one-line source change produces a large diff of derived noise.", "The generator's own version is left out of the named inputs, so the check fails on every tool upgrade and is disabled."]
+conflicts_with = ["observability"]
+related = ["single-authoritative-source", "idempotency", "explicit-unknown"]
+review_questions = ["What are this artifact's named inputs, and does its generator read anything else, such as the clock, the host, the locale, or the environment?", "Does the check regenerate and compare, or only confirm the file exists?", "When the stored artifact and a fresh derivation differ, which one does the process treat as right?", "Is the generator's own version among the pinned inputs?"]
+
+[enforcement]
+level = "lint"
+automatable = "yes"
+rung = ["text"]
+observable = ["The stored artifact and the bytes produced by regenerating it from the same inputs.", "Inputs the generator reads, including environment variables, the clock, and directory ordering.", "Hashes of independent builds of the same source."]
+checks = ["Regenerate each stored derived file in a hook and refuse the change when the bytes differ, whether the file is a generated reference, an index, or a compiled document.", "Build twice under varied time, path, and locale and refuse when the outputs differ.", "Report could-not-check rather than pass when the generator cannot run."]
+limits = ["Byte equality shows the derivation is stable, not that it is correct.", "A tool cannot know which undeclared inputs a generator reads unless the derivation runs in a sandbox.", "Some artifacts legitimately embed facts about their environment, and where provenance ends and noise begins is a design decision."]
+
+[[tools]]
+name = "Nix"
+url = "https://nixos.org/"
+notes = "Builds each derivation in a sandbox from declared inputs, so undeclared inputs are unavailable rather than merely discouraged."
+
+[[tools]]
+name = "Bazel"
+url = "https://bazel.build/"
+notes = "Keys each build action by its declared inputs and runs it hermetically, so equal inputs are served from cache and drift shows as a rebuild."
+
+[[tools]]
+name = "diffoscope"
+url = "https://diffoscope.org/"
+notes = "Explains where two supposedly identical artifacts differ, recursing into archives and binaries, which is the diagnostic step after a byte comparison fails."
+
+[[sources]]
+title = "Reproducible Builds: Definitions"
+url = "https://reproducible-builds.org/docs/definition/"
+type = "standard"
+notes = "A build is reproducible when, given the same source, build environment, and build instructions, any party can recreate bit-by-bit identical copies of the specified artifacts."
+
+[[sources]]
+title = "SOURCE_DATE_EPOCH specification"
+url = "https://reproducible-builds.org/specs/source-date-epoch/"
+type = "standard"
+notes = "Shows the standard resolution of the tension with provenance: a timestamp is not stripped but made a named input, set from the source rather than the clock."
