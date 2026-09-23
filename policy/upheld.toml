@@ -66,9 +66,10 @@ rule = "no-stale-hook-pins"
 [[enforce]]
 principle = "single-authoritative-source"
 rule = "no-stale-hook-pins"
-# The upstream tag owns the version; a `rev:` here is a copy of it. The hook
-# refuses a copy that has drifted behind its owner, which is the only failure a
-# copy has once it exists.
+# The upstream tag owns the version; a lefthook `ref:` here is a copy of it. The
+# hook refuses a copy that has drifted behind its owner, which is the only
+# failure a copy has once it exists. A pre-commit `rev:` is the same copy, and
+# `prek-pins-current` in .pre-commit-config.yaml is what refuses its drift.
 
 [[enforce]]
 principle = "complete-mediation"

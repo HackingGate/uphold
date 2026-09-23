@@ -409,11 +409,15 @@ fn a_pin_that_names_no_tag_and_a_pin_left_behind_are_both_reported() {
     support::git(&upstream, &["tag", "v1.0.0"]);
     support::git(&upstream, &["tag", "v2.0.0"]);
 
+    // Behind is asked of a lefthook ref; a pre-commit `rev:` has
+    // `prek update --check` for that.
     let url = upstream.to_string_lossy().into_owned();
     write(
         &root,
-        ".pre-commit-config.yaml",
-        &format!("repos:\n  - repo: {url}\n    rev: v1.0.0\n    hooks:\n      - id: x\n"),
+        "lefthook.yml",
+        &format!(
+            "remotes:\n  - git_url: {url}\n    ref: v1.0.0\n    configs:\n      - lefthook.yml\n"
+        ),
     );
     let output = guard(&root, &["--stage", "manual"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));

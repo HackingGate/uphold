@@ -111,10 +111,29 @@ remotes:
 That `ref:` is the one version a lefthook consumer pins, and **Dependabot does
 not watch it**: there is no ecosystem that reads a lefthook config, so no
 updater will raise a pull request when a newer tag lands. What watches it is
-`no-stale-hook-pins`, which reads lefthook `remotes:` as pins alongside
-pre-commit `repo:`/`rev:` pairs and refuses one that has fallen behind its
-upstream or names no `ref:` at all — so the pin is watched by a guard rather
-than by an updater, and you are told it is stale rather than handed the bump. It
+`no-stale-hook-pins`, which reads lefthook `remotes:` as pins and refuses one
+that has fallen behind its upstream or names no `ref:` at all — so the pin is
+watched by a guard rather than by an updater, and you are told it is stale
+rather than handed the bump. For pre-commit `rev:` pins the guard asks only
+whether the tag exists; whether it is the newest is `prek update --check`'s
+question, and this is the entry to copy into your `.pre-commit-config.yaml`:
+
+```yaml
+  - repo: local
+    hooks:
+      - id: prek-pins-current
+        name: pre-commit pins are the newest tag
+        entry: prek update --check
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+```
+
+prek exits 1 both for a pin that would move and for a remote it could not
+reach; its output says which (`would update rev` or `update failed`). It orders
+tags by date, not version, and reports a bare sha as movable
+([ADR 0010](docs/adr/0010-who-asks-whether-a-hook-pin-is-current.md)). It
 reads `lefthook.yml`, `lefthook.yaml`, `.lefthook.yml` and `.lefthook.yaml` at
 any depth; it does not read `lefthook.toml`, `lefthook.json` or the `-local`
 overlay files, so a pin written in one of those is watched by nothing.
