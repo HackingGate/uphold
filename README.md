@@ -13,6 +13,7 @@ claim in that file is an `[[enforce]]` block naming one.
 
 - [`docs/REFERENCE.md`](docs/REFERENCE.md) — every config field, seam by seam
 - [`docs/DESIGN.md`](docs/DESIGN.md) — why it is shaped this way
+- [`docs/COVERAGE.md`](docs/COVERAGE.md) — which rung of checking exists for which language
 - [`QUICK_REFERENCE.md`](QUICK_REFERENCE.md) — the catalog, one page
 
 ## Install
