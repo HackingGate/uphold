@@ -181,8 +181,9 @@ repos:
       # fallen behind. Two checkers over one answer are two verdicts free to
       # disagree, and they did: the guard counted a pin it could not reach as
       # passed while the script called the same pin unresolvable. The guard asks
-      # both questions now, over one `git ls-remote`, and a pin it could not
+      # whether each ref exists, over one `git ls-remote`, and a pin it could not
       # check is exit 2 -- so the script is gone and the guard stages carry it.
+      # Whether a `rev:` in this file is the newest tag is the next hook's.
       #
       # It stays off pre-commit for the reason the script did: one network round
       # trip per pinned repository in front of every commit is a check that gets
@@ -194,6 +195,17 @@ repos:
       - id: guards-manual
         name: "guards (stage: manual)"
         entry: cargo run --quiet -- guard --stage manual
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+      # The guard asks that of lefthook refs only; for this file prek answers it
+      # (ADR 0009). This is the entry a consumer copies. prek exits 1 for an unreachable remote as
+      # it does for a stale pin, so a failure here is either until its output
+      # says which: `would update rev` or `update failed`.
+      - id: prek-pins-current
+        name: pre-commit pins are the newest tag
+        entry: prek update --check
         language: system
         pass_filenames: false
         always_run: true

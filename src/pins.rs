@@ -8,8 +8,10 @@
 //!
 //! Two predicates, and neither implies the other:
 //!
-//! * **Behind.** The pin names a tag, and the upstream has a newer one. This is
-//!   `no-stale-hook-pins`.
+//! * **Behind.** The pin names a tag, and the upstream has a newer one. Asked
+//!   here of a lefthook `remotes:` ref, which no other tool reads. A pre-commit
+//!   `rev:` is asked by `prek update --check`, which the consumer runs as a
+//!   hook of their own; ADR 0009 records the probes behind that split.
 //! * **Forward.** The pin names a tag that was never cut. That fails at
 //!   hook-init, as a clone error, before any hook runs -- which is why nothing
 //!   can report it after the fact.
@@ -114,6 +116,10 @@ struct LefthookRemote {
 pub(crate) struct Pin {
     pub repo: String,
     pub rev: String,
+    /// Which manager's file holds it, because the two are not asked the same
+    /// questions: whether a pre-commit `rev:` is the newest tag is
+    /// `prek update --check`'s to answer, not this guard's.
+    pub manager: Manager,
     /// Repository-relative, because a report that says a pin is behind without
     /// saying which file holds it sends the reader looking through a tree that
     /// may hold several.
@@ -278,6 +284,7 @@ fn pre_commit_pins(path: &Path, source: &str, text: &str) -> Result<Vec<Pin>> {
         pins.push(Pin {
             repo: entry.repo,
             rev,
+            manager: Manager::PreCommit,
             source: source.to_owned(),
         });
     }
@@ -309,6 +316,7 @@ fn lefthook_pins(path: &Path, source: &str, text: &str) -> Result<Vec<Pin>> {
         pins.push(Pin {
             repo: remote.git_url,
             rev: reference,
+            manager: Manager::Lefthook,
             source: source.to_owned(),
         });
     }
@@ -591,6 +599,10 @@ fn canonical(value: &serde_json::Value) -> String {
 /// Numeric runs compare as numbers so `v10` sorts above `v9`, which a string
 /// comparison gets backwards -- and getting it backwards means reporting a
 /// current pin as stale, which is how a check earns a blanket opt-out.
+///
+/// It orders lefthook `remotes:` refs only. Nothing else reads a lefthook ref;
+/// a pre-commit `rev:` has `prek update --check`, which orders by tag date
+/// rather than by version (ADR 0009).
 fn version_key(tag: &str) -> (Vec<(u64, String)>, u64, String, u64) {
     let trimmed = tag.trim_start_matches('v');
     let (trimmed, revision) = post_release(trimmed);
@@ -766,6 +778,7 @@ pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
     let mut behind: Vec<String> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
     let mut unchecked: Vec<String> = Vec::new();
+    let mut ordered_elsewhere = 0_usize;
     let mut cache: BTreeMap<String, Option<Refs>> = BTreeMap::new();
 
     for pin in &pins {
@@ -809,6 +822,14 @@ pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
             ));
             continue;
         }
+        // Behind is asked of lefthook refs alone. For a pre-commit `rev:` the
+        // consumer runs `prek update --check` as the `prek-pins-current` hook;
+        // ADR 0009 has the probes, and what that command gets wrong (a rev
+        // naming no tag reads as "update to <an older tag>") is the arm above.
+        if pin.manager == Manager::PreCommit {
+            ordered_elsewhere += 1;
+            continue;
+        }
         if let Some(newest) = tags.last()
             && newest != &pin.rev
         {
@@ -817,6 +838,16 @@ pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
                 pin.repo, pin.rev, newest, pin.source
             ));
         }
+    }
+    // Said on every run, so a pass here is not read as "the pre-commit pins
+    // are current" by someone who never added the hook that asks.
+    if ordered_elsewhere > 0 {
+        println!(
+            "{}: {ordered_elsewhere} pre-commit `rev:` pin(s) were checked for naming a tag, \
+             not for being the newest one. That is `prek update --check`'s question: the \
+             `prek-pins-current` hook.",
+            request.rule.id
+        );
     }
 
     // The delegate `uphold hooks --install` writes is a pin with no `rev:`,
@@ -869,7 +900,7 @@ pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
             report.push_str("\n\n");
         }
         report.push_str(&behind.join("\n"));
-        report.push_str("\n\nThe upstream tag owns the version; a `rev:` here is a copy of it.");
+        report.push_str("\n\nThe upstream tag owns the version; a `ref:` here is a copy of it.");
     }
     if !report.is_empty() {
         // IN the refusal, not on a stream beside it. `Refusal` says it carries
@@ -968,6 +999,7 @@ mod tests {
             vec![Pin {
                 repo: "https://example.test/a".to_owned(),
                 rev: "v1.0.0".to_owned(),
+                manager: Manager::PreCommit,
                 source: PRE_COMMIT_CONFIG.to_owned(),
             }]
         );
@@ -1170,6 +1202,7 @@ mod tests {
             vec![Pin {
                 repo: "https://example.test/hooks".to_owned(),
                 rev: "v1.2.3".to_owned(),
+                manager: Manager::Lefthook,
                 source: "lefthook.yml".to_owned(),
             }]
         );

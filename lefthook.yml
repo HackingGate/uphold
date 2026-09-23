@@ -94,6 +94,10 @@ uphold-manual:
     # is the whole of where it runs.
     guards:
       run: cargo run --quiet -- guard --stage manual
+    # The `rev:` half of pin freshness, which the guard above leaves to prek:
+    # the same entry as `prek-pins-current` in .pre-commit-config.yaml.
+    prek-pins-current:
+      run: prek update --check
 
 commit-msg:
   commands:

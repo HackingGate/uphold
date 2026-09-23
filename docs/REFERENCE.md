@@ -1289,7 +1289,7 @@ stamped on it, the range about to be pushed.
 | `prevent-unowned-target` | a **command** told to publish to a repository this workspace does not own. The same decision as the row above, reached from the shim seam instead of a hook — so it registers with `command.before` and never `git.hooks`, and a destination it could not resolve is exit `2`. Carried by `published-text` as `unowned-forge-target`, with `owner_required` and `command.scope = "always"` in the bundled declaration |
 | `no-local-merge` | a merge that would make a merge commit |
 | `no-merge-commit` | a commit finishing a merge or a squash merge |
-| `no-stale-hook-pins` | a pin left behind its upstream, or naming no ref — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree; a pin it **could not check** is exit `2` |
+| `no-stale-hook-pins` | a pin naming no ref, or a branch — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree — and a lefthook ref left behind its upstream. Whether a pre-commit `rev:` is the newest tag is `prek update --check`'s, run as the consumer's own `prek-pins-current` hook; a pin it **could not check** is exit `2` |
 | `no-hand-copied-base-rule` | a rule this policy writes out by hand under an id a bundled set already ships, from a set it does not inherit. Reads the **policy**, not the tree. At `pre-commit` only what the change adds; at `manual` the whole sweep |
 | `no-stale-visibility` | a declared `private` the forge no longer serves. Reads the **declaration** and the forge, not the tree; a forge that did not answer is exit `2` and never "confirmed private", and it says which silence it met — a 404 reads differently from a rate limit |
 | `removed-function-named` | a commit that removes a function -- a Rust `fn`, a Python `def`, a Go `func` or method -- whose message does not name it. Reads no artifact itself: it judges **evidence** from the compiled-in providers (the parser over `HEAD` and the index, a pattern over the staged diff, the message), and the refusal names the file, the function and which provider saw it go. A staged file the parser could not read is exit `2` unless the diff pattern found a removal in it, and two parsers disagreeing about one function is a refusal naming both. See [ADR 0008](adr/0008-evidence-and-what-a-policy-may-consume.md) |
@@ -1600,7 +1600,13 @@ config in the tree — `lefthook.yml`, `lefthook.yaml`, `.lefthook.yml`,
 `.lefthook.yaml`, at any depth, gitignored files and submodules excluded — and
 reads lefthook `remotes:` entries as pins alongside pre-commit `repo:`/`rev:`
 pairs. A `remotes:` entry with no `ref:` is refused as unpinned, because it
-follows the upstream's default branch. `lefthook.toml`, `lefthook.json` and the
+follows the upstream's default branch. A lefthook ref is also asked whether it
+is the newest tag; a pre-commit `rev:` is not, because `prek update --check`
+answers that and the README carries the `prek-pins-current` hook that runs it.
+The run prints how many pre-commit pins it checked for existence only, so its
+pass is not read as theirs being current. [ADR
+0009](adr/0009-who-asks-whether-a-hook-pin-is-current.md) has the probes,
+including what prek gets wrong. `lefthook.toml`, `lefthook.json` and the
 `-local` overlay files are **not** read, so a pin written in one of those is
 watched by nothing here.
 

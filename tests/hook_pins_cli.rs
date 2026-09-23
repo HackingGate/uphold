@@ -186,7 +186,7 @@ fn a_finding_beside_an_unreachable_remote_carries_the_pin_it_could_not_check() {
         &root,
         ".pre-commit-config.yaml",
         &format!(
-            "repos:\n  - repo: {url}\n    rev: v1.0.0\n    hooks:\n      - id: x\n  \
+            "repos:\n  - repo: {url}\n    rev: v3.0.0\n    hooks:\n      - id: x\n  \
              - repo: {}\n    rev: v1.0.0\n    hooks:\n      - id: y\n",
             nowhere.display()
         ),
@@ -197,7 +197,7 @@ fn a_finding_beside_an_unreachable_remote_carries_the_pin_it_could_not_check() {
     // A violation outranks an unread surface, which is the rule `audit::verdict`
     // states and the reason this is 1 rather than 2: something WAS found.
     assert_eq!(output.status.code().unwrap(), 1, "{report}");
-    assert!(report.contains("v2.0.0 is newer"), "{report}");
+    assert!(report.contains("names no tag"), "{report}");
     assert!(
         report.contains("established nothing about them"),
         "the pin nobody could reach has to travel with the finding:\n{report}"
@@ -248,7 +248,7 @@ fn a_config_below_the_root_is_checked_too() {
     write(
         &root,
         "sub/.pre-commit-config.yaml",
-        &format!("repos:\n  - repo: {url}\n    rev: v1.0.0\n    hooks:\n      - id: y\n"),
+        &format!("repos:\n  - repo: {url}\n    rev: v3.0.0\n    hooks:\n      - id: y\n"),
     );
 
     let output = guard(&root);
@@ -256,9 +256,9 @@ fn a_config_below_the_root_is_checked_too() {
     assert_eq!(
         output.status.code().unwrap(),
         1,
-        "the root config is current and the nested one is not:\n{report}"
+        "the root config names a tag and the nested one does not:\n{report}"
     );
-    assert!(report.contains("v2.0.0 is newer"), "{report}");
+    assert!(report.contains("names no tag"), "{report}");
     assert!(
         report.contains("sub/.pre-commit-config.yaml"),
         "the report has to name the file holding the stale pin:\n{report}"
@@ -280,6 +280,25 @@ fn a_config_with_no_repos_key_is_unreadable_rather_than_empty() {
     let report = text(&output);
     assert_eq!(output.status.code().unwrap(), 2, "{report}");
     assert!(report.contains("`repos:`"), "{report}");
+}
+
+/// Whether a pre-commit `rev:` is the newest tag is `prek update --check`'s
+/// question, so a pin behind its upstream passes here -- and the run says so,
+/// or the pass reads as "these pins are current" to a repository that never
+/// added the hook that asks.
+#[test]
+fn a_pre_commit_pin_behind_its_upstream_passes_and_names_the_hook_that_asks() {
+    let root = repository();
+    let url = upstream(&root, &["v1.0.0", "v2.0.0"]);
+    write(
+        &root,
+        ".pre-commit-config.yaml",
+        &format!("repos:\n  - repo: {url}\n    rev: v1.0.0\n    hooks:\n      - id: x\n"),
+    );
+    let output = guard(&root);
+    let report = text(&output);
+    assert_eq!(output.status.code().unwrap(), 0, "{report}");
+    assert!(report.contains("prek-pins-current"), "{report}");
 }
 
 /// The behaviour every change above had to leave alone.
