@@ -591,8 +591,9 @@ fn canonical(value: &serde_json::Value) -> String {
 /// Numeric runs compare as numbers so `v10` sorts above `v9`, which a string
 /// comparison gets backwards -- and getting it backwards means reporting a
 /// current pin as stale, which is how a check earns a blanket opt-out.
-fn version_key(tag: &str) -> (Vec<(u64, String)>, u64, String) {
+fn version_key(tag: &str) -> (Vec<(u64, String)>, u64, String, u64) {
     let trimmed = tag.trim_start_matches('v');
+    let (trimmed, revision) = post_release(trimmed);
     // Semver's rule, and the reason it is here: a prerelease PRECEDES the
     // release it leads to. Scanned as one string, `v1.0.0-rc1` produced a longer
     // key with an equal prefix and sorted ABOVE `v1.0.0`, so a repository
@@ -607,7 +608,11 @@ fn version_key(tag: &str) -> (Vec<(u64, String)>, u64, String) {
         Some((release, prerelease)) => (release, Some(prerelease.to_owned())),
         None => (trimmed, None),
     };
-    let rank = u64::from(prerelease.is_none());
+    let rank = match (&prerelease, revision) {
+        (Some(_), _) => 0,
+        (None, None) => 1,
+        (None, Some(_)) => 2,
+    };
     let mut key = Vec::new();
     let mut digits = String::new();
     let mut text = String::new();
@@ -633,7 +638,35 @@ fn version_key(tag: &str) -> (Vec<(u64, String)>, u64, String) {
     }
     // `rank` before the prerelease text so every prerelease of one version
     // sorts under its release, and `rc2` still sorts above `rc1`.
-    (key, rank, prerelease.unwrap_or_default())
+    (
+        key,
+        rank,
+        prerelease.unwrap_or_default(),
+        revision.unwrap_or_default(),
+    )
+}
+
+/// Split off a trailing revision counter: `-1`, `-r1`, `.post1` or `_1`.
+///
+/// Debian, Alpine, Python and repackaging upstreams use these to mean a later
+/// build of the same version, so `v0.11.0.1-1` follows `v0.11.0.1`. Read as a
+/// semver prerelease it sorted under the tag it replaced, and the newest pin
+/// was reported as stale. A suffix with letters in it, `-rc1`, is not a
+/// counter and stays a prerelease.
+fn post_release(version: &str) -> (&str, Option<u64>) {
+    ["-", "-r", ".post", "_"]
+        .iter()
+        .find_map(|marker| {
+            let (release, counter) = version.rsplit_once(marker)?;
+            if release.is_empty() || counter.is_empty() {
+                return None;
+            }
+            if !counter.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            Some((release, counter.parse().ok()))
+        })
+        .unwrap_or((version, None))
 }
 
 /// What the remote has: tags newest last, and branch names.
@@ -1175,6 +1208,37 @@ mod tests {
             tags.first().map(String::as_str),
             Some("v1.0.0-rc1"),
             "{tags:?}"
+        );
+    }
+
+    /// A bare revision counter FOLLOWS the version it revises.
+    ///
+    /// `v0.11.0.1-1` was read as a prerelease of `v0.11.0.1` and sorted under
+    /// it, so a pin on the newest tag the remote had was reported as stale.
+    #[test]
+    fn a_revision_counter_outranks_its_release() {
+        for revised in [
+            "v0.11.0.1-1",
+            "v0.11.0.1.post1",
+            "v0.11.0.1-r1",
+            "v0.11.0.1_1",
+        ] {
+            let mut tags = vec![String::from(revised), String::from("v0.11.0.1")];
+            tags.sort_by_key(|tag| version_key(tag));
+            assert_eq!(tags.last().map(String::as_str), Some(revised), "{tags:?}");
+        }
+
+        let mut tags = vec![
+            String::from("v1.0.1"),
+            String::from("v1.0.0-10"),
+            String::from("v1.0.0-9"),
+            String::from("v1.0.0"),
+            String::from("v1.0.0-rc1"),
+        ];
+        tags.sort_by_key(|tag| version_key(tag));
+        assert_eq!(
+            tags,
+            ["v1.0.0-rc1", "v1.0.0", "v1.0.0-9", "v1.0.0-10", "v1.0.1"],
         );
     }
 
