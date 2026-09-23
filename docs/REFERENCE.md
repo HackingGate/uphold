@@ -2648,12 +2648,18 @@ displace them.
 the comments. A file in the directory without this command's marker is
 compared with the text the command would write, by *effective lines*: the
 shebang and every line that is not a comment, a line ending in `\` joined to
-the next, runs of whitespace collapsed. Equal lines mean the file already does
-what this command's file does, so it is rewritten with the marker and reported
-as `adopted`; from then on it is an ordinary install. Lines that differ mean
-somebody decided something, and the run refuses (exit `2`) with a unified diff
-of the two — the file is not touched. That is how the trees that carried the
-delegate by hand move onto the command without moving their file aside first.
+the next, runs of whitespace collapsed, and a quoted assignment that is read
+once, on the next line and nowhere after, folded into that line — so
+`--hook-dir "$(cd "$(dirname "$0")" && pwd)"` inline is the same line as
+`hook_dir=` bound first and passed as `"$hook_dir"`. Equal lines mean the file
+already does what this command's file does, so it is rewritten with the marker
+and reported as `adopted`; from then on it is an ordinary install. Lines that
+differ mean somebody decided something, and the run refuses (exit `2`) naming
+every file that differs, each with a unified diff of the two. Every file is
+judged before any is written, so a refusal writes nothing: not the files that
+matched, not the absent ones, not `core.hooksPath`. That is how the trees that
+carried the delegate by hand move onto the command without moving their files
+aside first.
 
 **`--check`** writes nothing and says, for each of the four files, whether it
 is absent, written by this command and matching this binary, written by this
