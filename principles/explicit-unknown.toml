@@ -13,7 +13,7 @@ does_not_mean = ["Fail the build for every unavailable optional check.", "Emit a
 benefits = ["Lost coverage becomes visible rather than silently green.", "Environment defects are separable from real violations.", "Aggregate status means what a reader thinks it means."]
 costs = ["Three or more outcome states to model, transport, and render, not two.", "Callers must decide a policy for unknown, which is a real decision.", "More output, some of which is not immediately actionable."]
 failure_when_overapplied = ["Everything uncertain is reported as unknown until the report is noise.", "Unknown is treated as pass by every consumer, restoring the original problem one layer up.", "Teams add retries and suppressions to make unknowns disappear rather than to make checks run."]
-conflicts_with = ["psychological-acceptability", "graceful-degradation"]
+conflicts_with = ["psychological-acceptability", "graceful-degradation", "robustness-principle"]
 related = ["fail-fast", "observability", "complete-mediation", "fail-safe-defaults", "single-authoritative-source", "informed-consent", "least-astonishment"]
 review_questions = ["What does this check return when its tool, credential, or input is missing?", "Can a reader of the summary tell the difference between clean and not inspected?", "Which paths were skipped in this run, and is that list reported?", "Who decides whether unknown blocks, and is that decision written down or implicit in an exit code?"]
 

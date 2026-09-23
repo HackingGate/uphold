@@ -144,11 +144,30 @@ Components should contain behavior that belongs to one coherent responsibility a
 - Responsibilities and change patterns can be identified.
 - Dependencies can be narrowed without duplicating authority.
 - The boundary corresponds to a meaningful lifecycle or ownership unit.
+- Packages are released and reused as units, so what changes together and what is reused together decide where a boundary goes.
 
 **Ask**
 - Which responsibility unifies this component?
 - Which dependencies are essential rather than convenient?
 - Do recent changes repeatedly cross this boundary?
+- Does a caller reach through one object to a second one's internals, or depend on an interface wider than the part it uses?
+- Do the things that change together live together, and do the things reused together ship together?
+- Does a stable package depend on a volatile one, and are the packages most depended on also the most abstract?
+
+## Hyrum's Law
+With a sufficient number of users of an interface, every observable behavior of it will be depended on by somebody, regardless of what the contract promises.
+
+**Applies when**
+- An interface has many consumers the maintainer does not know individually, or has been stable long enough for implicit reliance to accumulate.
+- Behavior beyond the documented contract is observable: ordering, timing, error text, output formatting, defaults, identifiers.
+- Identifiers, names, and generated documents are read by consumers' configuration and tooling, which makes them a contract whether or not they are declared one.
+- A change is being judged safe on the ground that it alters only undocumented behavior.
+
+**Ask**
+- What does this change alter that a consumer can observe, including behavior the contract does not mention?
+- Who consumes this interface, and which of them does the maintainer not know about?
+- Has this unpromised behavior been stable long enough that reliance has probably formed, and should it be varied deliberately instead?
+- If a consumer breaks, is there a deprecation path, or only a changelog entry?
 
 ## Information Hiding
 Module boundaries should conceal design decisions likely to change, exposing only the stable information required by clients.
@@ -157,6 +176,8 @@ Module boundaries should conceal design decisions likely to change, exposing onl
 - A representation, algorithm, policy, or external dependency is likely to change.
 - Clients can operate through a smaller stable contract.
 - The hidden decision has a coherent owner.
+- Clients can be written against a declared interface rather than a concrete implementation, so the implementation can be replaced behind it.
+- Layers can be stacked so that each uses only the operations of the one beneath and never its representation.
 
 **Ask**
 - Which design decision is this boundary hiding?
@@ -211,6 +232,21 @@ Every mechanism shared by more than one principal is a potential channel between
 - If this shared component ships a defect, how many consumers does it reach before anyone notices?
 - Is the change sharing the owner of a fact, or sharing the machinery that acts on it?
 
+## Rule of Least Power
+Choose the least expressive language or interface that suffices for the purpose, because each increment of expressive power removes an increment of what others can analyze, transform, or reuse without running it.
+
+**Applies when**
+- A format, configuration surface, or rule language is being chosen or extended.
+- Consumers other than the author will read, validate, diff, or transform what is written in it.
+- A field is about to accept an expression, a template, a script, or a regular expression where a closed value would do.
+- The need is understood well enough to state what the weaker form cannot express.
+
+**Ask**
+- What is the weakest form that expresses every real case here, and what does this form add beyond it?
+- Which consumers read this artifact, and which of them can still analyze it without executing it?
+- Where a field accepts an expression or a script, what closed value would have served, and why was it not enough?
+- If an escape hatch is needed, is it one named place, or does power leak into every field?
+
 ## Make Illegal States Unrepresentable
 Where practical, encode invariants in constructors, types, schemas, or state machines so downstream code receives only valid states.
 
@@ -218,6 +254,7 @@ Where practical, encode invariants in constructors, types, schemas, or state mac
 - The invariant is stable and can be expressed in the representation.
 - Construction passes through a controlled boundary.
 - Invalid states do not need to be preserved for diagnosis or migration.
+- Input crosses a boundary where it can be parsed once into a type that carries the check, rather than validated and passed on as the raw value.
 
 **Ask**
 - Which invalid combinations recur in checks or incidents?
@@ -287,11 +324,42 @@ For uncertain, noncritical choices, favor designs and commitments whose conseque
 - The decision is uncertain and can be staged.
 - Rollback or migration can be designed explicitly.
 - Delay has its own opportunity cost.
+- A schema or interface change can be made as expand and contract: add the new form, move readers and writers across, then remove the old, so each step can be undone on its own.
 
 **Ask**
 - What exactly would rollback restore?
 - Which consequences are irreversible outside the system boundary?
 - What evidence will trigger consolidation or reversal?
+
+## Robustness Principle
+An implementation should be conservative in what it emits and liberal in what it accepts, interpreting nonconforming input whose meaning can be recovered rather than rejecting it.
+
+**Applies when**
+- Many independent implementations must interoperate and none controls the others' release cycles.
+- The specification is young or ambiguous, and deviations are more likely misreadings than intent.
+- The meaning of a deviating input can be recovered without guessing, and accepting it makes no security decision.
+- A feedback channel exists through which a tolerated deviation is reported back to its sender.
+
+**Ask**
+- Which deviations does this parser accept, and is that list written where a peer implementer could read it?
+- Is each accepted deviation's meaning recoverable without guessing, and does any downstream component interpret it differently?
+- When input is repaired, does the sender learn of it through an error, a log, or a metric?
+- What would it cost to stop accepting this deviation in a year, and who would be broken then?
+
+## Rule of Three
+Defer extracting a shared abstraction until the third occurrence of similar code, because two instances rarely reveal which differences are incidental and which are the parameter.
+
+**Applies when**
+- The similar units are young and it is not yet clear which of their differences are essential.
+- Removing the duplication later is cheap: the copies are few, local, and owned by one team.
+- The shared form would generalize over cases nobody has written yet.
+- The units differ in more than one place, so the axis of variation is itself in question.
+
+**Ask**
+- Is the difference between these copies a single value, or is the axis of variation still unknown?
+- How many copies exist now, including those outside this change, and who would notice the next one?
+- If the abstraction is extracted now, which instance's quirks would it encode as the general case?
+- Do these copies carry a fact that must stay identical, so that drift would be a defect?
 
 ## Separation of Concerns
 Organize a system so distinct concerns can be understood, changed, tested, and governed independently where their real dependencies permit it.
@@ -300,6 +368,7 @@ Organize a system so distinct concerns can be understood, changed, tested, and g
 - Concerns have different change drivers, owners, policies, or test strategies.
 - A boundary can be introduced without duplicating core truth.
 - Interactions can be made explicit through contracts.
+- Two concerns can be made orthogonal, so that a change to one leaves the other unchanged.
 
 **Ask**
 - What distinct reasons would cause this component to change?

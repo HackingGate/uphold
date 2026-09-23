@@ -1,0 +1,37 @@
+id = "hyrums-law"
+title = "Hyrum's Law"
+aliases = ["Law of implicit interfaces", "Every observable behavior is a dependency"]
+kind = "law"
+status = "seed"
+domains = ["interfaces", "evolution", "socio-technical"]
+summary = "Past some number of users, the documented contract stops being the effective one: whatever an interface observably does, someone relies on."
+claim = "With a sufficient number of users of an interface, every observable behavior of it will be depended on by somebody, regardless of what the contract promises."
+problem = "Maintainers change behavior the contract never promised -- iteration order, error text, timing, a default, the formatting of a field -- and break consumers who relied on it, because the documented contract was never the one in force."
+rationale = "Consumers program against what they observe, not what they read, and the chance that some consumer depends on a given observable property rises with the number of consumers and with how long the property has been stable. The effective interface is the union of what has been observed, so its size is set by what is observable, not by what is documented."
+applies_when = ["An interface has many consumers the maintainer does not know individually, or has been stable long enough for implicit reliance to accumulate.", "Behavior beyond the documented contract is observable: ordering, timing, error text, output formatting, defaults, identifiers.", "Identifiers, names, and generated documents are read by consumers' configuration and tooling, which makes them a contract whether or not they are declared one.", "A change is being judged safe on the ground that it alters only undocumented behavior."]
+does_not_mean = ["That every observable behavior must be preserved forever; the law predicts breakage, it does not forbid change.", "That writing a contract is pointless; the contract allocates responsibility and sets the terms of a deprecation, even though it does not bound reliance.", "That hiding more removes the effect; information hiding narrows what is observable but cannot remove timing, ordering, or resource use.", "That consumers relying on undocumented behavior can be ignored as at fault; at scale their breakage is the maintainer's cost."]
+benefits = ["Change risk is estimated against actual reliance rather than the written contract.", "Deliberately varying unpromised behavior, such as iteration order, keeps reliance from forming.", "Deprecation plans budget for consumers the contract does not list."]
+costs = ["Treating all observable behavior as contract freezes the implementation.", "Randomizing unpromised behavior costs reproducibility and ease of debugging.", "Measuring actual reliance needs visibility into consumers the maintainer may not have."]
+failure_when_overapplied = ["Maintainers refuse every change, citing unknown consumers, and the interface ossifies.", "The law is cited to excuse breaking changes as inevitable instead of to plan them.", "Nondeterminism is injected into outputs that ought to be reproducible, trading one problem for another.", "Every internal helper is treated as public although only consumers with access to it can depend on it."]
+conflicts_with = []
+related = ["robustness-principle", "deprecation-discipline", "least-astonishment", "information-hiding"]
+review_questions = ["What does this change alter that a consumer can observe, including behavior the contract does not mention?", "Who consumes this interface, and which of them does the maintainer not know about?", "Has this unpromised behavior been stable long enough that reliance has probably formed, and should it be varied deliberately instead?", "If a consumer breaks, is there a deprecation path, or only a changelog entry?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Consumer-visible outputs of an interface: order, formatting, error text, defaults, identifiers.", "Differences in a public surface or a generated artifact between two versions.", "Consumer usage where it is visible, such as in a monorepo or a search of dependents."]
+checks = ["Diff every consumer-visible artifact between releases, including identifiers and generated documents, and require a change note for each difference.", "Run known dependents' tests against a candidate release before publishing it.", "Vary unpromised orderings in test builds so reliance on them fails early."]
+limits = ["No tool can enumerate consumers it cannot see.", "Which observed behavior is relied upon becomes known only when it breaks.", "A diff shows that behavior changed; whether the change breaks anyone depends on consumers the diff does not contain."]
+
+[[sources]]
+title = "Hyrum's Law"
+url = "https://www.hyrumslaw.com/"
+type = "essay"
+notes = "Hyrum Wright's own statement of the observation, drawn from large-scale changes to shared libraries."
+
+[[sources]]
+title = "Software Engineering at Google, Chapter 1: What Is Software Engineering?"
+url = "https://abseil.io/resources/swe-book/html/ch01.html"
+type = "book"
+notes = "Places the law under time and change: the longer a system lives and the more users it has, the more of its incidental behavior becomes load-bearing."

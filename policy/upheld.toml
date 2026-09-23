@@ -157,13 +157,38 @@ rule = "no-running-os-identity-metadata"
 # identifier of some other machine is not what this rule reads, and the claim
 # does not cover it.
 
+[[enforce]]
+principle = "chestertons-fence"
+rule = "removed-function-named"
+# A function in no file after a commit is a fence taken down, and the message
+# is the one place a reader who meets the old failure again can find why. The
+# guard refuses the commit until the message names what went, which makes the
+# removal a decision somebody wrote down rather than an accident of a cleanup.
+# What would make this claim false is the guard exiting 0 over a removal the
+# message does not name. It does not judge whether the stated reason is true,
+# and a condition deleted inside a function that stays has no name to require;
+# the record's limits say both.
+
+[[enforce]]
+principle = "deprecation-discipline"
+rule = "no-stale-hook-pins"
+# A hook pin behind its owner's newest tag is compatibility debt nobody has
+# paid, and it grows into a jump across several releases. The guard refuses
+# the pin, naming it and the tag it is behind, so the gap is closed while it is
+# one release wide rather than found at the next forced upgrade. What would make this claim false is the guard
+# exiting 0 over a lefthook `ref:` that is behind its newest tag, or over one it
+# could not check. It reads hook pins only; a dependency lock is not what this
+# rule measures.
+
 # What routes to a rule, and what routes to a reviewer.
 #
 # `enforcement.automatable = "yes"` says a machine CAN decide the principle. It
 # is a property of the principle, not of this repository -- so an unclaimed one
-# is an error, and the two below are the case that error cannot express on its
-# own: this repository is a catalog and a CLI, and neither a queue nor a
-# retryable side-effecting endpoint exists in it to carry the rule.
+# is an error, and the entries below are the case that error cannot express on
+# its own. Two have no subject here: this repository is a catalog and a CLI, and
+# neither a queue nor a retryable side-effecting endpoint exists in it to carry
+# the rule. The third has a subject and no gate: the module graph exists, and
+# nothing here that runs can see a cycle in it.
 #
 # Recorded here with a reason rather than by amending the records. Changing
 # `backpressure` to `partially` would make the catalog describe THIS repository
@@ -189,6 +214,7 @@ emit_controls = ["review-controls.json"]
 [review.no_subject_here]
 backpressure = "Nothing here has a queue, an admission decision, or a producer to slow down. The record's checks are about a running service; this repository is a catalog and a command-line tool."
 idempotency = "Nothing here has a retryable side-effecting endpoint. `uphold` commands read and report; the one that writes, --review --emit, is idempotent by construction because it writes a pure function of the catalog."
+acyclic-dependencies = "No gate here decides a module graph. uphold is one crate, cargo refuses a cycle only between crates, so its modules may import each other freely, and no import-graph check runs over scripts/. A consumer claims the record for the gate that sees its units: an architecture linter in its hook configuration, or the build itself where the compiler refuses import cycles, as Go's does between packages."
 
 # A record with no findings against it is either guarding a clean tree or saying
 # nothing a reviewer can act on, and no count of citations tells those apart. A
@@ -198,7 +224,7 @@ idempotency = "Nothing here has a retryable side-effecting endpoint. `uphold` co
 # whoever wrote the record is the only reader who knows what violating it looks
 # like, and a fixture in a file is reviewable.
 #
-# One control, deliberately, and the run says so on every invocation: twenty-two
+# One control, deliberately, and the run says so on every invocation: twenty-six
 # review-carried records have none. That line is the honest reading of what has
 # been demonstrated here, and it is what the next control should be chosen
 # against.

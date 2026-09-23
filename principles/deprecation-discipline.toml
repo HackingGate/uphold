@@ -1,0 +1,49 @@
+id = "deprecation-discipline"
+title = "Deprecation Discipline"
+aliases = ["Compatibility budget", "Semantic versioning"]
+kind = "practice"
+status = "seed"
+domains = ["evolution", "interfaces"]
+summary = "Change a published interface through announced, versioned, time-boxed steps, and finish them; a deprecated path that is never removed is compatibility debt that keeps accruing."
+claim = "Every incompatible change to a published interface should be signaled by its version, announced with a migration path and a removal point, and completed by removal, so that the cost of compatibility is budgeted and paid rather than accumulated."
+problem = "Interfaces change either abruptly, breaking consumers who had no warning, or never, because old paths are marked deprecated and then kept indefinitely. Both come from treating compatibility as free and deprecation as an announcement rather than a process with an end."
+rationale = "A version number that encodes compatibility lets a consumer decide mechanically which updates are safe, and a deprecation with a date and a migration turns an open-ended obligation into a bounded one. Measuring how far each consumer's pin is behind the newest release makes unpaid compatibility debt visible before it becomes a forced jump across several versions."
+applies_when = ["An interface, package, rule, or format is consumed by code its maintainer does not control or release with.", "An incompatible change is planned, or an old path is being kept alive beside a new one.", "Consumers pin versions of their dependencies and must decide when to move.", "A pin, lock, or reference can fall behind the newest release of what it names."]
+does_not_mean = ["That a version number proves compatibility; a semantic version is the publisher's promise, and consumers depend on more than the promise covers.", "Deprecate without shipping the replacement; a deprecation with no migration path is a breaking change announced early.", "Move to the newest release of everything at once; the discipline is to know the gap and close it on a schedule.", "Keep compatibility shims indefinitely to avoid disappointing anyone; the unfinished deprecation is the failure this record names."]
+benefits = ["Consumers can tell safe updates from breaking ones without reading every diff.", "Old paths are removed, so the cost of maintaining them stays bounded.", "Staleness is measured, so large version jumps are avoided."]
+costs = ["Two paths are maintained through the deprecation window.", "Migration has to be communicated and tracked across consumers.", "Version numbers invite false confidence where the contract is underspecified."]
+failure_when_overapplied = ["Every change is released as a major version out of caution, so the version stops distinguishing breaking changes from safe ones.", "Deprecation windows are so long that the old path gains users faster than migration removes them.", "Automated update pressure churns pins daily and consumers learn to merge updates unread.", "Removal dates are enforced against consumers who were given no migration path, turning the process into a scheduled outage."]
+conflicts_with = ["robustness-principle"]
+related = ["hyrums-law", "reversible-decisions", "single-authoritative-source", "chestertons-fence"]
+review_questions = ["Is this change compatible under the interface's versioning promise, and does the version bump say so?", "If something is deprecated here, where is its replacement, and when is the old path removed?", "How far is each pin in this tree behind the newest release of what it names, and who closes that gap?", "Which consumers still use the old path, and how would the maintainer know?"]
+
+[enforcement]
+level = "lint"
+automatable = "yes"
+rung = ["text"]
+observable = ["Version pins and references in dependency and hook manifests, and the newest release tag of what each one names.", "Deprecation markers and the removal version or date they state.", "The version bump of a release against the kinds of change it contains."]
+checks = ["Refuse a pin that is behind the newest release tag of what it names, reporting both, for hook and dependency references alike.", "Refuse a deprecation marker that states no removal version or date, and one whose date has passed while the path remains.", "Derive the version bump from the changes a release contains rather than from a hand-chosen number."]
+limits = ["Whether a change is breaking depends on what consumers rely on, which a tool sees only partially.", "A pin behind the newest tag may be deliberate; a check can require the decision to be written down, not judge it.", "A remote that cannot be reached does not make a pin current; the check must report could-not-check, not pass."]
+
+[[tools]]
+name = "semantic-release"
+url = "https://semantic-release.gitbook.io/semantic-release/"
+notes = "Derives the next version number and release notes from structured commit messages, so the bump follows the changes rather than a person's choice."
+
+[[sources]]
+title = "Software Engineering at Google, Chapter 15: Deprecation"
+url = "https://abseil.io/resources/swe-book/html/ch15.html"
+type = "book"
+notes = "Treats deprecation as a managed process with owners, migration tooling, and deadlines, and distinguishes advisory from compulsory deprecation."
+
+[[sources]]
+title = "Semantic Versioning 2.0.0"
+url = "https://semver.org/"
+type = "standard"
+notes = "Encodes compatibility in the version number: a major increment for incompatible changes, minor for compatible additions, patch for compatible fixes, and a deprecation announced in a minor release before removal in a major one."
+
+[[sources]]
+title = "Software Engineering at Google, Chapter 21: Dependency Management"
+url = "https://abseil.io/resources/swe-book/html/ch21.html"
+type = "book"
+notes = "Argues that a semantic version is a lossy estimate of compatibility, which is why the record keeps version signalling and completed removal together."

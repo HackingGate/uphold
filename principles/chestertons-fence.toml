@@ -1,0 +1,32 @@
+id = "chestertons-fence"
+title = "Chesterton's Fence"
+aliases = ["Know why before you remove", "Name what you remove"]
+kind = "heuristic"
+status = "seed"
+domains = ["evolution", "socio-technical"]
+summary = "Before removing a check, rule, or function whose purpose is unclear, find out why it is there, so the removal is a decision and not an accident."
+claim = "Do not remove a control, rule, or function until its purpose is known and named, and let the removal state why that purpose no longer holds or where it is now served."
+problem = "Code and controls outlive the memory of why they exist. A guard that looks pointless is deleted in a cleanup, and the failure it prevented returns months later with no record connecting the two."
+rationale = "An existing mechanism is evidence that someone once met a problem, and understanding it usually costs far less than rediscovering the problem in production. Naming the purpose at removal time also leaves a record in history, so whoever meets the returning failure can find the decision that let it back."
+applies_when = ["A change removes a check, a validation, a configuration entry, a rule, or a function.", "The purpose of what is being removed is not evident from its code, name, tests, or history.", "The failure it might prevent would be rare, delayed, or expensive.", "Version history is the only record that survives the removal."]
+does_not_mean = ["Keep everything whose purpose nobody can recover; after a bounded search, a staged removal with an observed rollback path is a legitimate way to find out.", "Require archaeology for code a compiler or coverage report already proves unreachable.", "Treat age as proof of value; a fence can outlive its field.", "Put the whole burden on the remover; whoever added a control without stating its purpose created the ambiguity."]
+benefits = ["Latent protections are not removed by accident.", "Removals leave evidence of intent in history.", "Unwritten knowledge is surfaced and written down at the moment it is needed."]
+costs = ["Cleanup slows while purposes are researched.", "Some purposes are unrecoverable, and the search has no natural end.", "Cruft accumulates when every removal must be justified at length."]
+failure_when_overapplied = ["Nothing is ever removed, and the system accumulates controls nobody understands and everyone is afraid to touch.", "The stated reason becomes a formula such as 'no longer needed' that satisfies the check while carrying no evidence.", "Removal waits on an author who has left, when a staged removal with monitoring would answer the question sooner.", "Only removals carry the burden, while additions without a stated purpose keep building new fences."]
+conflicts_with = []
+related = ["reversible-decisions", "observability", "hyrums-law", "deprecation-discipline"]
+review_questions = ["What did the removed thing prevent or provide, and where is that written?", "If its purpose could not be found, what was searched, and what would show that the removal was wrong?", "Is the purpose now served elsewhere, and does that place carry a test?", "Could a reader who meets the old failure again find this removal from the history alone?"]
+
+[enforcement]
+level = "governance"
+automatable = "yes"
+rung = ["syntax"]
+observable = ["Functions, rules, hooks, and configuration entries present in the tree before a change and absent after it, as a parser sees them.", "The commit message or change description that accompanies the removal.", "Whether each removed identifier appears in that message."]
+checks = ["Refuse a commit that removes a function unless its message names the function, found by parsing the tree before and after the change.", "Apply the same refusal to removed rules, hooks, and policy entries, where a removal switches a control off.", "Report could-not-check rather than pass when a changed file cannot be parsed and no removal in it can be ruled out."]
+limits = ["A tool can see that a removal is named; it cannot see whether the stated purpose is true or whether the search for it was honest.", "Removed behavior that is not a named unit, such as a deleted condition inside a function, has no identifier to require.", "A rename looks like a removal plus an addition unless the parser pairs them."]
+
+[[sources]]
+title = "G. K. Chesterton: Chesterton's fence"
+url = "https://en.wikipedia.org/wiki/G._K._Chesterton#Chesterton's_Fence"
+type = "essay"
+notes = "Neutral reference quoting the passage from 'The Drift from Domesticity' in The Thing (1929): a reformer who sees no use for a fence is told to go away and come back when he does."
