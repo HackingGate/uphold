@@ -106,12 +106,14 @@ overlay files, so a pin written in one of those is watched by nothing.
 
 **Go repositories** — four toolchain ids still ship here, and they are
 **deprecated**: they go in the release after the one that marked them.
-Do not adopt them. A Go gate belongs in your own config: copy the four entries
-under the Go toolchain section of `.pre-commit-hooks.yaml` verbatim, every
-field, into a `repo: local` block (`- repo: local` then `hooks:` holding the
-four). `uphold hooks --identity` compares that declaration across repositories
-and reports the copy that drifted. A repository still pinning the deprecated
-ids has these lines to replace:
+Do not adopt them. A Go gate belongs in your own config, as four hooks in a
+`repo: local` block (`- repo: local` then `hooks:` holding the four). From each
+entry under the Go toolchain section of `.pre-commit-hooks.yaml`, copy `entry`,
+`language`, `stages`, `pass_filenames` and `files` verbatim, and give the hook
+its own `id` and `description`: an `uphold-` id in your config reads as one
+uphold ships. `uphold hooks --identity` compares that declaration across
+repositories and reports the copy that drifted. A repository still pinning the
+deprecated ids has these lines to replace:
 
 ```yaml
       - id: uphold-gofmt            # a tree gofmt would reformat
