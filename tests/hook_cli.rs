@@ -484,3 +484,38 @@ fn a_call_with_no_strings_is_allowed_without_looking_further() {
     assert_eq!(code(&output), 0);
     assert_eq!(stdout(&output), "");
 }
+
+/// A policy that does not load is exit 2 on a string-free call too (#236).
+///
+/// The subject's strings are what the rules judge, and the policy is what says
+/// which rules there are. A call carrying only numbers and flags used to return
+/// before the policy was read, so a broken configuration passed every such call
+/// at exit 0 and announced itself only on the calls that published text.
+#[test]
+fn a_call_with_no_strings_under_a_broken_policy_is_could_not_look() {
+    let root = workspace(
+        "hook-no-strings-broken-policy",
+        Some("[rule.no-example-needle\nmessage = \"unterminated table header\"\n"),
+    );
+    let output = hook(
+        &root,
+        "claude-code",
+        r#"{"tool_name":"mcp__forge__count","tool_input":{"limit":10,"all":true}}"#,
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "");
+}
+
+/// No policy found is not a policy that failed to load: it loads as empty, and
+/// a string-free call made there is still clean.
+#[test]
+fn a_call_with_no_strings_and_no_policy_is_allowed() {
+    let root = workspace("hook-no-strings-no-policy", None);
+    let output = hook(
+        &root,
+        "claude-code",
+        r#"{"tool_name":"mcp__forge__count","tool_input":{"limit":10,"all":true}}"#,
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "");
+}
