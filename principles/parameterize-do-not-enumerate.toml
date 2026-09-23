@@ -3,7 +3,7 @@ title = "Parameterize, Do Not Enumerate"
 aliases = ["Combinatorial explosion", "One entity per value", "Calculator with one_plus_one()", "Parameterize Function", "Method-per-argument"]
 kind = "principle"
 status = "seed"
-domains = ["design", "architecture", "interfaces", "APIs", "tools", "AI-harness"]
+domains = ["architecture", "interfaces", "ai-harness"]
 summary = "When entities differ only in a value they carry, take the value as an argument; a name per value grows multiplicatively and each copy is a place the behaviour can drift."
 claim = "If two units of code differ only in a constant, they are one unit with an unextracted parameter. Naming the constant in the identifier moves it out of the type system and into the namespace, where the count grows as the product of the value sets rather than their sum, nothing forces the copies to stay consistent, and the next value needs an author instead of a caller."
 problem = "A general capability already exists underneath, and a caller needs one specific value of it, so a helper is written that hardcodes that value and takes its name from it. The archetype is a calculator exposing `one_plus_one()`, `one_plus_two()`, `two_plus_one()`: the operation was understood, the operands were not made arguments, and the surface is now the size of the operand set squared. The same shape at n=1 is a script named for the single key it sends, sitting directly on an interface that already accepts any key -- an explosion that has only emitted its first term, and is harder to see precisely because one file looks cheap."

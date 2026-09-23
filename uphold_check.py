@@ -57,6 +57,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
 
 import review as review_mod
 from catalog import load_catalog, resolve
+from validate import DOMAINS
 
 HERE = Path(__file__).resolve().parent
 DECLARATION_RELPATH = Path("policy") / "upheld.toml"
@@ -576,6 +577,16 @@ def review_settings(declaration: dict) -> dict:
         isinstance(value, str) for value in domains
     ):
         raise CouldNotLook("`review.include_domains` must be an array of domain names")
+    # A filter naming a domain no record can carry matches nothing, and a
+    # review document compiled from nothing would read as a repository with no
+    # constraints. The list is closed (principles/SCHEMA.md), so a name outside
+    # it is a typo or a stale value, and this tool cannot tell which.
+    unknown = [value for value in domains if value not in DOMAINS]
+    if unknown:
+        raise CouldNotLook(
+            f"`review.include_domains` names {unknown}, outside the closed list; "
+            f"the domains are {', '.join(sorted(DOMAINS))} (principles/SCHEMA.md)"
+        )
 
     emit = settings.get("emit", ["REVIEW.md"])
     if not isinstance(emit, list) or not all(

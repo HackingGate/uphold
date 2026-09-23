@@ -23,9 +23,12 @@ ships from here.
   where a law applies, which is `domains`. A kind outside the list fails
   validation. [`principles/SCHEMA.md`](../../principles/SCHEMA.md) gives each
   kind's meaning, and a test holds its table equal to the validator's set.
-* **`domains` says where the entry is used.** It stays an open list of strings
-  in this change. Closing it to a vocabulary is a following change, made once
-  the records in it show which values are one domain spelled twice.
+* **`domains` says where the entry is used, from a closed list of twenty
+  technical areas** in [`principles/SCHEMA.md`](../../principles/SCHEMA.md#domains),
+  held equal to `DOMAINS` in `scripts/validate.py` by a test. A record's list is
+  non-empty with no repeats, and a value outside the list fails validation. A
+  `[review].include_domains` filter naming any other value exits 2, since a
+  filter no record can match would compile an empty review document.
 * **`enforcement.rung` says how a check sees the entry:** at which rungs of
   the ladder in [`docs/COVERAGE.md`](../COVERAGE.md#rungs) (`text`, `syntax`,
   `semantic`, `proof`) what `observable` lists can be read. It is optional,
@@ -94,8 +97,8 @@ consumer's gate, coupled to an uphold release.
 
 ## Consequences
 
-* A record with a kind outside the fifteen, a field the schema does not name,
-  or a one-sided conflict cannot be committed.
+* A record with a kind outside the fifteen, a domain outside the twenty, a
+  field the schema does not name, or a one-sided conflict cannot be committed.
 * `QUICK_REFERENCE.md` groups every record by kind and by domain, and shows a
   record's rungs beside its enforcement level when it states them.
 * `uphold_check.py --explain` prints a record's rungs and tools when it has

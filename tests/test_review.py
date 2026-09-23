@@ -21,6 +21,8 @@ SCRIPT = ROOT / "uphold_check.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import review as review_mod  # noqa: E402
+from catalog import load_catalog  # noqa: E402
+from validate import DOMAINS  # noqa: E402
 
 sys.path.insert(0, str(ROOT))
 
@@ -50,7 +52,7 @@ def record(record_id: str, automatable: str, **extra: object) -> dict:
         "claim": f"the {record_id} claim",
         "applies_when": ["when it applies"],
         "review_questions": ["what to ask"],
-        "domains": ["software"],
+        "domains": ["architecture"],
         "enforcement": {"automatable": automatable},
     }
     base.update(extra)
@@ -118,7 +120,7 @@ class Routing(unittest.TestCase):
     def test_include_domains_narrows_what_compiles_in(self):
         records = {
             "a": record("a", "partially", domains=["security"]),
-            "b": record("b", "partially", domains=["product"]),
+            "b": record("b", "partially", domains=["socio-technical"]),
         }
         for_review, _, _ = review_mod.route(records, set(), {}, ["security"])
         self.assertEqual([r["id"] for r in for_review], ["a"])
@@ -259,7 +261,7 @@ class Controls(unittest.TestCase):
     def test_a_control_over_a_record_this_repository_filters_out_is_refused(self):
         # Narrowing `include_domains` takes the entry away; the control has no
         # document to be driven against, and saying so is the whole point.
-        records = {"a": record("a", "partially", domains=["product"])}
+        records = {"a": record("a", "partially", domains=["socio-technical"])}
         for_review, _, _ = review_mod.route(records, set(), {}, ["security"])
         errors, _ = review_mod.audit_controls(self.control(), for_review, records)
         self.assertEqual(len(errors), 1)
@@ -379,6 +381,20 @@ class Settings(unittest.TestCase):
         self.tmp = self._directory.name
         self.addCleanup(self._directory.cleanup)
 
+    def routes_nothing(self) -> str:
+        """A domain in the vocabulary that no record carries.
+
+        Filtering on it routes nothing, so nothing is refused before the write
+        is reached, and the emit tests below test the write. Computed here
+        rather than written down, because the next record to carry it would
+        otherwise turn these tests into tests of the routing.
+        """
+        carried = {value for record in load_catalog() for value in record["domains"]}
+        spare = sorted(set(DOMAINS) - carried)
+        if not spare:
+            self.skipTest("every domain is carried by a record; none routes nothing")
+        return spare[0]
+
     def test_a_max_lines_that_is_not_a_number_is_two_not_a_traceback(self):
         result = self.review(
             """
@@ -409,6 +425,22 @@ class Settings(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("review.include_domains", result.stderr)
 
+    def test_include_domains_naming_an_unknown_domain_is_two(self):
+        # A filter no record can match compiles an empty document, which reads
+        # as a repository with nothing to review. The value is refused and
+        # named, with the list it was not in.
+        result = self.review(
+            """
+            [review]
+            include_domains = ["security", "product"]
+            """
+        )
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("review.include_domains", result.stderr)
+        self.assertIn("'product'", result.stderr)
+        self.assertNotIn("'security'", result.stderr)
+        self.assertIn("socio-technical", result.stderr)
+
     def test_an_emit_entry_that_is_not_a_file_name_is_two(self):
         result = self.review(
             """
@@ -427,12 +459,10 @@ class Settings(unittest.TestCase):
         for. A hook runs this unattended; the one place it may write is the
         repository it describes.
         """
-        # `include_domains` names a domain no record carries, so nothing routes
-        # and nothing is refused before the write is reached.
         result = self.review(
-            """
+            f"""
             [review]
-            include_domains = ["no-such-domain"]
+            include_domains = ["{self.routes_nothing()}"]
             emit = ["../ESCAPED.md"]
             """,
             "--emit",
@@ -446,7 +476,7 @@ class Settings(unittest.TestCase):
         result = self.review(
             f"""
             [review]
-            include_domains = ["no-such-domain"]
+            include_domains = ["{self.routes_nothing()}"]
             emit = ["{target}"]
             """,
             "--emit",
@@ -457,9 +487,9 @@ class Settings(unittest.TestCase):
     def test_an_emit_name_under_a_directory_that_is_not_there_is_two_not_one(self):
         """A missing parent is could-not-do-it, not a false claim."""
         result = self.review(
-            """
+            f"""
             [review]
-            include_domains = ["no-such-domain"]
+            include_domains = ["{self.routes_nothing()}"]
             emit = ["generated/REVIEW.md"]
             """,
             "--emit",
@@ -470,9 +500,9 @@ class Settings(unittest.TestCase):
     def test_an_emit_name_inside_the_repository_is_written(self):
         """The refusals above are a narrower door, not a closed one."""
         result = self.review(
-            """
+            f"""
             [review]
-            include_domains = ["no-such-domain"]
+            include_domains = ["{self.routes_nothing()}"]
             emit = ["REVIEW.md"]
             """,
             "--emit",

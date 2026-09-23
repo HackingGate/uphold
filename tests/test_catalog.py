@@ -15,7 +15,13 @@ from analysis import ANALYZER, matches, normalize, tokens  # noqa: E402
 from build_reference import cell  # noqa: E402
 from build_reference import render as render_reference  # noqa: E402
 from catalog import alias_index, load_catalog, name_entries, resolve  # noqa: E402
-from validate import KINDS, RUNGS, name_collisions, validate_records  # noqa: E402
+from validate import (  # noqa: E402
+    DOMAINS,
+    KINDS,
+    RUNGS,
+    name_collisions,
+    validate_records,
+)
 
 
 class CatalogTests(unittest.TestCase):
@@ -331,6 +337,27 @@ class RecordShape(unittest.TestCase):
                     [],
                 )
 
+    def test_an_unknown_domain_is_refused(self):
+        # A tag outside the list is refused by name, rather than read as a
+        # domain of its own that no review filter would think to name.
+        found = self.problems(lambda record: record["domains"].append("operations"))
+        self.assertRefused(found, "fail-fast", "'operations'", "not a domain")
+
+    def test_an_empty_or_repeated_domains_list_is_refused(self):
+        found = self.problems(lambda record: record.update(domains=[]))
+        self.assertRefused(found, "domains", "at least one")
+        found = self.problems(
+            lambda record: record.update(domains=["reliability", "reliability"])
+        )
+        self.assertRefused(found, "domains repeats", "'reliability'")
+
+    def test_every_domain_has_a_meaning(self):
+        for domain, meaning in DOMAINS.items():
+            with self.subTest(domain=domain):
+                self.assertIsInstance(meaning, str)
+                self.assertTrue(meaning.strip())
+                self.assertNotIn("\n", meaning)
+
     def test_rung_outside_the_ladder_is_refused(self):
         for rung in (["bytes"], [], "text", ["text", 3]):
             with self.subTest(rung=rung):
@@ -416,8 +443,8 @@ class RecordShape(unittest.TestCase):
         self.assertEqual(self.problems(mutate), [])
 
 
-def schema_table(heading: str) -> set[str]:
-    """The backticked first cells of the SCHEMA.md table whose header begins so.
+def schema_rows(heading: str) -> dict[str, str]:
+    """The SCHEMA.md table whose header begins so, first cell to second.
 
     Read by the header's first cell rather than by position, so a table moved
     within the page is still found, and one renamed is a failure here rather
@@ -427,13 +454,18 @@ def schema_table(heading: str) -> set[str]:
     start = next(
         index for index, line in enumerate(lines) if line.startswith(f"| {heading} |")
     )
-    values = set()
+    rows = {}
     for line in lines[start + 2 :]:
         if not line.startswith("|"):
             break
-        first = line.split("|")[1].strip()
-        values.add(first.strip("`"))
-    return values
+        cells = line.split("|")
+        rows[cells[1].strip().strip("`")] = cells[2].strip()
+    return rows
+
+
+def schema_table(heading: str) -> set[str]:
+    """The backticked first cells of the SCHEMA.md table whose header begins so."""
+    return set(schema_rows(heading))
 
 
 class TheSchemaDocumentAgrees(unittest.TestCase):
@@ -442,7 +474,7 @@ class TheSchemaDocumentAgrees(unittest.TestCase):
     The validator is the authority, and the document is where a person reads
     what each value means. Two hand-written copies drift unless something
     compares them, which is what test_toolchain.py does for the MSRV and this
-    does for the kinds and the rungs.
+    does for the kinds, the rungs and the domains.
     """
 
     def test_schema_doc_lists_exactly_the_kinds(self):
@@ -450,6 +482,11 @@ class TheSchemaDocumentAgrees(unittest.TestCase):
 
     def test_schema_doc_lists_exactly_the_rungs(self):
         self.assertEqual(schema_table("rung"), set(RUNGS))
+
+    def test_schema_doc_lists_exactly_the_domains(self):
+        # The meaning too: a tag worded one way in the validator and another in
+        # the document is two tags to whoever reads both.
+        self.assertEqual(schema_rows("domain"), DOMAINS)
 
 
 class TheReferenceGroups(unittest.TestCase):

@@ -12,7 +12,7 @@ File name and `id` must match.
 | `aliases` | string array | common alternative names |
 | `kind` | enum | epistemic category — see below |
 | `status` | enum | `seed`, `reviewed`, or `deprecated` |
-| `domains` | string array | areas in which the entry is useful |
+| `domains` | enum array | where the entry is used — see below |
 | `summary` | string | quick-reference sentence |
 | `claim` | string | strongest concise formulation |
 | `problem` | string | recurring failure or decision addressed |
@@ -57,6 +57,38 @@ it fails validation.
 | `representation` | a structured form encoding program or system information |
 | `metric` | a quantified measure |
 | `decision-procedure` | an algorithmic procedure deciding a formal problem |
+
+## Domains
+
+`domains` says where an entry is used, as the technical areas it bears on. The
+list is closed: each value is one of these, the list is non-empty, and no value
+repeats. `uphold_check.py --review` refuses a `[review].include_domains` value
+outside it with exit 2, since a filter no record can match would compile an
+empty review document. `DOMAINS` in `scripts/validate.py` holds the same table,
+and a test holds the two equal.
+
+| domain | meaning |
+|---|---|
+| `architecture` | structure and modularity of a system |
+| `interfaces` | APIs, protocols and contracts between parts |
+| `distributed-systems` | many nodes, partial failure and coordination |
+| `reliability` | keeping a service correct and available in operation |
+| `security` | confidentiality, integrity, authorization and privacy |
+| `data` | state, storage, consistency and derived artifacts |
+| `program-representation` | syntax trees, IRs and graphs a tool reads |
+| `compiler-semantics` | what a language definition and its compiler establish |
+| `static-analysis` | facts derived about a program without running it |
+| `formal-verification` | proof that a program meets a specification |
+| `symbolic-reasoning` | execution over symbolic rather than concrete values |
+| `model-checking` | exhaustive exploration of a state space |
+| `constraint-solving` | SAT, SMT and related decision procedures |
+| `testing` | executable checks and fuzzing |
+| `runtime-analysis` | instrumentation and monitoring of a running program |
+| `concurrency` | interleaving, ordering and shared state |
+| `performance` | latency, throughput and scalability |
+| `socio-technical` | people, teams, incentives and organizations |
+| `evolution` | change, versioning, migration and deprecation |
+| `ai-harness` | agents, shims and hooks that act for a person |
 
 ## Relationships
 
