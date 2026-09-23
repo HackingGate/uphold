@@ -1,0 +1,11 @@
+# The record the README's fleet sentence is anchored to, so that sentence is
+# compared against a value somebody edits rather than trusted as prose.
+#
+# A repository counts when it is a checkout of its own and carries
+# policy/principles.toml at its root. The test fixture trees inside a checkout
+# carry that file too and are not repositories, which is why the test is the
+# checkout and not the file. Recount by walking the owner's workspace for that
+# file and keeping the directories that are git checkouts, then change both
+# values in one commit: a count with a stale date reads as current.
+repositories = 88
+counted = "2026-09-23"

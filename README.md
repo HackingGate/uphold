@@ -1,5 +1,46 @@
 # uphold
 
+uphold refuses, before it happens, what a coding agent or a person should not do
+to a repository:
+
+- a force-push over a remote branch — **shim**, with the `git push` rule below
+- a committed credential — **scan**, with the `credentials` set below
+- a commit the policy refuses, such as one carrying an AI author marker — **guard**
+- an MCP tool call publishing text the policy refuses — **hook**
+
+<!-- fact-anchor: source=docs/fleet.toml key=repositories states=88 -->
+<!-- fact-anchor: source=docs/fleet.toml key=counted states=2026-09-23 -->
+When last counted, on 2026-09-23, 88 repositories carried an uphold policy, all
+of them maintained by one person and the coding agents working in them.
+
+```sh
+cargo install --git https://github.com/HackingGate/uphold --tag v1.19.0
+```
+
+Or pin the pre-commit or lefthook manifest under [Install](#install).
+
+`policy/principles.toml`, inheriting one bundled set and declaring one rule:
+
+```toml
+shim = [{ command = "git", match = ["push:*"], argv_subject = true }]
+
+[inherit]
+sets = ["credentials"]
+
+[rule.no-force-push]
+message = "Push without rewriting the remote branch."
+regexp = '(?:^|\s)(?:--force\S*|-\w*f\w*|\+\S+)(?:\s|$)'
+subjects = ["argv"]
+command.before = ["git push"]
+```
+
+- [`docs/REFERENCE.md`](docs/REFERENCE.md) — every config field, seam by seam
+- [`docs/DESIGN.md`](docs/DESIGN.md) — why it is shaped this way
+- [`docs/COVERAGE.md`](docs/COVERAGE.md) — which rung of checking exists for which language
+- [`QUICK_REFERENCE.md`](QUICK_REFERENCE.md) — the catalog, one page
+
+## A catalog, and the claims held against it
+
 A filtered catalog of engineering principles, and a binary that holds a
 repository to the ones it claims to enforce.
 
@@ -10,11 +51,6 @@ That file is [`policy/upheld.toml`](policy/upheld.toml). The binary that
 reads it — plus the content rules, the Git guards, and the command shims — is
 `uphold`. You uphold a *principle*; what does it is a *rule*, which is why every
 claim in that file is an `[[enforce]]` block naming one.
-
-- [`docs/REFERENCE.md`](docs/REFERENCE.md) — every config field, seam by seam
-- [`docs/DESIGN.md`](docs/DESIGN.md) — why it is shaped this way
-- [`docs/COVERAGE.md`](docs/COVERAGE.md) — which rung of checking exists for which language
-- [`QUICK_REFERENCE.md`](QUICK_REFERENCE.md) — the catalog, one page
 
 ## Install
 
@@ -46,7 +82,7 @@ scanners are two more ids, unpinned above because they need a host toolchain:
 
 **lefthook** — no manifest format, so include the config this repo ships, then
 `lefthook install`. It runs commands rather than bootstrapping a language, so
-the binary must be on PATH.
+the binary must be on PATH, from the `cargo install` line at the top.
 
 ```yaml
 # lefthook.yml
@@ -55,10 +91,6 @@ remotes:
     ref: v1.19.0
     configs:
       - hooks/lefthook.yml
-```
-
-```sh
-cargo install --git https://github.com/HackingGate/uphold --tag v1.19.0
 ```
 
 That `ref:` is the one version a lefthook consumer pins, and **Dependabot does
