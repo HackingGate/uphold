@@ -22,24 +22,49 @@ File name and `id` must match.
 | `benefits` | string array | expected gains |
 | `costs` | string array | trade-offs and new risks |
 | `failure_when_overapplied` | string array | predictable misuse |
-| `conflicts_with` | string array | opposing objectives or principles, by id where possible |
-| `related` | string array | related record ids |
+| `conflicts_with` | string array | record ids in tension with this one; symmetric |
+| `related` | string array | record ids worth reading next; one-directional |
 | `review_questions` | string array | questions for design or code review |
+
+## Optional fields
+
+`enforcement.rung` and `[[tools]]` may be omitted; each is described below. No
+other field is accepted: a top-level, `[enforcement]`, `[[sources]]` or
+`[[tools]]` key this document does not name fails validation, so a misspelled
+field is refused rather than read as an absent one.
 
 ## Kind
 
-Entries are classified by epistemic kind rather than all being called principles.
+Entries are classified by epistemic kind rather than all being called
+principles. `kind` says what the entry is; `domains` says where it is used, and
+`enforcement.rung` says how a check sees it. The list is closed: a kind outside
+it fails validation.
 
 | kind | meaning |
 |---|---|
-| `law` | a structural, mathematical, or physical constraint under stated assumptions |
-| `principle` | defeasible normative guidance |
-| `heuristic` | compressed judgment useful in recurring situations |
-| `philosophy` | a coherent design stance, often containing several principles |
-| `tactic` | a concrete mechanism used to change a quality attribute |
-| `pattern` | a reusable arrangement for a recurring problem |
-| `socio-technical-law` | a recurring organizational or incentive effect |
-| `anti-pattern` | a recurring structure associated with predictable harm |
+| `law` | a descriptive relationship that holds under stated assumptions |
+| `theorem` | a formally established result or impossibility |
+| `principle` | normative design guidance |
+| `heuristic` | a defeasible rule of thumb |
+| `philosophy` | a coherent design stance |
+| `pattern` | a recurring solution structure |
+| `anti-pattern` | a recurring structure with predictable failure modes |
+| `tactic` | a concrete mechanism that changes a quality attribute |
+| `practice` | a repeatable engineering activity |
+| `method` | a systematic procedure for analysis, construction or verification |
+| `model` | an abstraction used to reason about a system |
+| `property` | a characteristic that can be stated or checked |
+| `representation` | a structured form encoding program or system information |
+| `metric` | a quantified measure |
+| `decision-procedure` | an algorithmic procedure deciding a formal problem |
+
+## Relationships
+
+`conflicts_with` is symmetric: a tension between two records has two ends, so
+if A lists B, B lists A, and validation refuses a conflict written on one side
+only. `related` is one-directional: A pointing a reader at B does not oblige B
+to point back. One id may not appear in both lists of the same record; a pair
+in tension is kept in `conflicts_with`.
 
 ## Status
 
@@ -56,6 +81,7 @@ automatable = "partially"
 observable = ["...things a tool can inspect..."]
 checks = ["...candidate checks..."]
 limits = ["...what cannot safely be inferred..."]
+rung = ["text", "syntax"]  # optional
 ```
 
 `level` says where a rule *could* live, not that the record's prose may be
@@ -74,6 +100,22 @@ Allowed `automatable` values: `no`, `partially`, `yes`. An entry may be only
 partially automatable; the record must then say what the machine can observe and
 what remains a judgment.
 
+`rung` is optional and says at which rungs of the observation ladder a check
+can see what `observable` lists. The rungs are defined in
+[`docs/COVERAGE.md`](../docs/COVERAGE.md#rungs):
+
+| rung | what a check reads |
+|---|---|
+| `text` | the bytes, by regex |
+| `syntax` | the parse tree |
+| `semantic` | what a compiler or linter resolves |
+| `proof` | what a verifier establishes over a stated core |
+
+When present, `rung` is a non-empty list, in ladder order, with no repeats. A
+record whose `automatable` is `no` carries no `rung`: nothing a machine can
+decide has no rung to be seen at. Like the rest of the table, `rung` is design
+input for whoever builds the check; no engine reads it.
+
 ## Sources
 
 At least one source is required. A source is a pointer, not an endorsement that
@@ -89,6 +131,31 @@ notes = "Foundational articulation of information hiding."
 
 Allowed source types are currently free-form but should normally be one of:
 `standard`, `paper`, `book`, `essay`, `documentation`, or `practice`.
+
+## Tools
+
+Optional. A tool is an example of something that observes or operationalizes
+the concept; the concept is the record, and the tool is illustrative. Omit the
+table when no mature tool operationalizes the concept.
+
+```toml
+[[tools]]
+name = "ast-grep"
+url = "https://ast-grep.github.io/"
+notes = "Structural search over the parse tree; one way to observe the syntax rung."
+```
+
+`name`, `url` and `notes` are each required and are the only keys; `url` is
+HTTP(S). A tool's name may not be a record's title or alias under the name
+index's lookup key, so a search for the concept never answers with the product.
+
+## Scope: a gate uphold does not ship
+
+A record that needs a gate uphold does not ship is observed by a
+consumer-owned external gate: the compiler, linter or verifier the consumer
+imports into its own hook config and claims in its `policy/upheld.toml`. uphold
+ships the pointer, in `[[tools]]` and in
+[`docs/COVERAGE.md`](../docs/COVERAGE.md), not a wrapper around the tool.
 
 ## Compatibility rules
 

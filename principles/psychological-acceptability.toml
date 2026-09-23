@@ -13,8 +13,8 @@ does_not_mean = ["Weaken a control because someone complained once.", "Accept ev
 benefits = ["Coverage that persists instead of eroding.", "Fewer standing exemptions and blanket overrides.", "Failure output that leads to a fix rather than to a disabled check."]
 costs = ["Escape hatches, baselines, and staged adoption are extra machinery to build and maintain.", "Some genuine violations pass while adoption is staged.", "Acceptability is measured over time, so the evidence arrives late."]
 failure_when_overapplied = ["Every friction is treated as a defect until the control no longer refuses anything.", "Exemption paths become the normal path.", "The rule is softened rather than scoped, so it now agrees with its opposite."]
-conflicts_with = ["defense-in-depth", "fail-safe-defaults", "complete-mediation", "informed-consent"]
-related = ["least-privilege", "graceful-degradation", "explicit-unknown", "reversible-decisions", "informed-consent", "least-astonishment"]
+conflicts_with = ["defense-in-depth", "fail-safe-defaults", "complete-mediation", "informed-consent", "explicit-unknown"]
+related = ["least-privilege", "graceful-degradation", "reversible-decisions", "least-astonishment"]
 review_questions = ["How often will this fire on legitimate work, and what does the person do next?", "Is the cheapest response to a failure a fix, or turning the check off?", "Is there a scoped way in for a tree that does not yet comply, such as a baseline or a ratchet?", "Six months from now, what evidence would show this is still enabled everywhere it was installed?"]
 
 [enforcement]

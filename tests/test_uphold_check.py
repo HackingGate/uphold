@@ -433,3 +433,44 @@ class AnUnreadableDeclaration(unittest.TestCase):
         result = run(self.tmp, "--oscal")
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertEqual(result.stdout.strip(), "")
+
+
+def explained(**enforcement: object) -> dict:
+    return {
+        "id": "a",
+        "title": "A",
+        "kind": "principle",
+        "status": "seed",
+        "claim": "the claim",
+        "problem": "the problem",
+        "applies_when": ["when it applies"],
+        "does_not_mean": ["what it is not"],
+        "costs": ["a cost"],
+        "review_questions": ["what to ask"],
+        "enforcement": {"level": "lint", "automatable": "partially", **enforcement},
+    }
+
+
+class TheExplanation(unittest.TestCase):
+    """`--explain` is read by whoever builds a check, so it carries design input.
+
+    A record's rungs say at what depth a check has to read, and its tools are
+    examples of something that already reads there. Both are shown when the
+    record states them, and neither is invented when it does not.
+    """
+
+    def test_explain_prints_rung_and_tools_when_present(self):
+        record = explained(rung=["text", "syntax"])
+        record["tools"] = [
+            {"name": "ast-grep", "url": "https://ast-grep.github.io/", "notes": "n"}
+        ]
+        text = uphold_check.format_explain(record)
+        self.assertIn("automatable=partially / rung=text, syntax", text)
+        # Headed as examples, so the product is not read as the concept.
+        self.assertIn("tools (illustrative, not the concept):", text)
+        self.assertIn("ast-grep  https://ast-grep.github.io/", text)
+
+    def test_explain_prints_neither_when_absent(self):
+        text = uphold_check.format_explain(explained())
+        self.assertNotIn("rung", text)
+        self.assertNotIn("tools", text)

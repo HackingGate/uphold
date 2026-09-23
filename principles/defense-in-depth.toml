@@ -13,7 +13,7 @@ does_not_mean = ["Add many copies of the same control.", "Treat overlapping tool
 benefits = ["Reduced single-control dependency.", "Earlier detection and smaller blast radius.", "More resilient recovery paths."]
 costs = ["Operational and cognitive complexity.", "Potential inconsistent policy across layers.", "Higher latency and maintenance cost."]
 failure_when_overapplied = ["Several controls share one identity provider or parser and fail together.", "Users bypass an unusable stack of approvals.", "No owner can explain which layer is authoritative."]
-conflicts_with = ["unix-composability", "psychological-acceptability"]
+conflicts_with = ["unix-composability", "psychological-acceptability", "enforcement-needs-a-trigger"]
 related = ["least-privilege", "observability", "graceful-degradation", "complete-mediation"]
 review_questions = ["How does each layer fail differently?", "Which layer detects failure of another?", "Can the layers be tested independently and end to end?"]
 

@@ -13,7 +13,7 @@ does_not_mean = ["Use one physical database for the entire system.", "Forbid rep
 benefits = ["Clear ownership and update paths.", "Simpler reconciliation and lineage.", "Reduced semantic drift across consumers."]
 costs = ["The authority can become a latency or availability dependency.", "Cross-domain facts may resist clean ownership.", "Synchronization and versioning remain necessary."]
 failure_when_overapplied = ["An enterprise-wide shared database couples unrelated domains.", "A central team becomes a throughput bottleneck.", "Local operation is blocked even when temporary divergence would be acceptable."]
-conflicts_with = ["graceful-degradation"]
+conflicts_with = ["graceful-degradation", "reversible-decisions"]
 related = ["information-hiding", "end-to-end-principle", "observability", "parameterize-do-not-enumerate"]
 review_questions = ["Which component owns the canonical meaning and writes?", "Can every copy explain its source and refresh policy?", "What happens when the authority is unavailable?"]
 

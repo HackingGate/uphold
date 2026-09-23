@@ -331,10 +331,13 @@ def engine_suppliers(root: Path, *, strict: bool = True) -> dict[str, list[str]]
 
 def format_explain(record: dict) -> str:
     enforcement = record.get("enforcement", {})
+    rung = enforcement.get("rung")
+    observed = f" / rung={', '.join(rung)}" if rung else ""
     lines = [
         f"{record['title']} ({record['id']})",
         f"kind: {record['kind']}   status: {record['status']}   "
-        f"enforcement: {enforcement.get('level')} / automatable={enforcement.get('automatable')}",
+        f"enforcement: {enforcement.get('level')} / automatable={enforcement.get('automatable')}"
+        f"{observed}",
         "",
         f"claim: {record['claim']}",
         f"problem: {record['problem']}",
@@ -357,6 +360,11 @@ def format_explain(record: dict) -> str:
     if enforcement.get("limits"):
         lines += ["", "what no tool can decide:"]
         lines += [f"  - {item}" for item in enforcement["limits"]]
+    if record.get("tools"):
+        # Headed as examples on purpose: a reader building a rule from this
+        # output should not take the product for the concept it observes.
+        lines += ["", "tools (illustrative, not the concept):"]
+        lines += [f"  - {tool['name']}  {tool['url']}" for tool in record["tools"]]
     lines += ["", "review questions:"]
     lines += [f"  - {item}" for item in record["review_questions"]]
     return "\n".join(lines) + "\n"

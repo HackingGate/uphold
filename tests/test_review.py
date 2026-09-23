@@ -154,17 +154,41 @@ class Composition(unittest.TestCase):
     def test_no_field_beyond_those_three_crosses_over(self):
         # Zero new schema, and zero old schema smuggled across: a reviewer that
         # is handed costs, conflicts and sources is handed the catalog.
+        # The typing fields are the catalog's index, not review input: what an
+        # entry is, where it is used, the rung a check reads it at, and the
+        # tools that illustrate it are for whoever builds a check, not for the
+        # reviewer asked the record's questions.
         entry = record(
             "a",
             "partially",
             costs=["a cost nobody asked for"],
             conflicts_with=["something-else"],
             rationale="the rationale",
+            kind="decision-procedure",
+            domains=["a-domain-of-its-own"],
+            enforcement={"automatable": "partially", "rung": ["syntax-rung-marker"]},
+            tools=[
+                {
+                    "name": "an-illustrative-tool",
+                    "url": "https://tool.example/",
+                    "notes": "a note about the tool",
+                }
+            ],
         )
         document = review_mod.render([entry], [])
         self.assertNotIn("a cost nobody asked for", document)
         self.assertNotIn("something-else", document)
         self.assertNotIn("the rationale", document)
+        for value in (
+            "decision-procedure",
+            "a-domain-of-its-own",
+            "syntax-rung-marker",
+            "an-illustrative-tool",
+            "https://tool.example/",
+            "a note about the tool",
+        ):
+            with self.subTest(value=value):
+                self.assertNotIn(value, document)
 
 
 class Controls(unittest.TestCase):

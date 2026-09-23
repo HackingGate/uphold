@@ -13,8 +13,8 @@ does_not_mean = ["Hide failures or return stale data as current.", "Continue uns
 benefits = ["Higher practical availability.", "Smaller incident impact.", "Controlled use of stale or partial data where acceptable."]
 costs = ["More states and test cases.", "Potentially inconsistent user experience.", "Reconciliation complexity after recovery."]
 failure_when_overapplied = ["The system silently serves misleading data.", "Every feature gains a poorly tested fallback.", "Operators cannot tell degraded mode from normal operation."]
-conflicts_with = ["fail-fast", "single-authoritative-source", "least-privilege", "fail-safe-defaults", "explicit-unknown", "least-astonishment"]
-related = ["observability", "backpressure", "defense-in-depth"]
+conflicts_with = ["fail-fast", "single-authoritative-source", "least-privilege", "fail-safe-defaults", "explicit-unknown", "least-astonishment", "backpressure", "complete-mediation"]
+related = ["observability", "defense-in-depth"]
 review_questions = ["Which capabilities remain safe and truthful without this dependency?", "How is degraded mode visible to users and operators?", "What state must be reconciled after recovery?"]
 
 [enforcement]

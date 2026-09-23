@@ -18,6 +18,27 @@ def cell(value: str) -> str:
     return " ".join(value.split()).replace("|", "\\|")
 
 
+def link(record: dict) -> str:
+    return f"[{cell(record['title'])}](principles/{record['id']}.toml)"
+
+
+def grouped(records: list[dict], values) -> list[str]:
+    """One line per value, listing every record that carries it.
+
+    Values sort by their folded spelling, with the raw spelling as the tie-break,
+    and records keep the order they arrive in, so a regenerated file is a diff
+    only when the catalog changed.
+    """
+    groups: dict[str, list[dict]] = {}
+    for record in records:
+        for value in values(record):
+            groups.setdefault(value, []).append(record)
+    return [
+        f"- **{cell(value)}**: " + ", ".join(link(record) for record in groups[value])
+        for value in sorted(groups, key=lambda value: (value.casefold(), value))
+    ]
+
+
 def render() -> str:
     records = sorted(load_catalog(), key=lambda item: item["title"].casefold())
     lines = [
@@ -30,16 +51,25 @@ def render() -> str:
     ]
     for record in records:
         enforcement = record["enforcement"]
-        title = cell(record["title"])
         aliases = "; ".join(cell(alias) for alias in record["aliases"]) or "—"
         summary = cell(record["summary"])
         domains = ", ".join(cell(domain) for domain in record["domains"])
         level = enforcement["level"]
         automation = enforcement["automatable"]
-        path = f"principles/{record['id']}.toml"
+        rung = enforcement.get("rung")
+        observed = f"; rung: {', '.join(rung)}" if rung else ""
         lines.append(
-            f"| [{title}]({path}) | {aliases} | {record['kind']} | {domains} | {summary} | {level}; {automation} |"
+            f"| {link(record)} | {aliases} | {record['kind']} | {domains} | {summary} | {level}; {automation}{observed} |"
         )
+
+    # Two groupings of the same records, for a reader who arrives with "which
+    # records are heuristics" or "what applies to data" rather than a name.
+    # `kind` and `domains` answer different questions (ADR 0011), so each gets
+    # its own list rather than one being folded into the other.
+    lines.extend(["", "## By kind", ""])
+    lines.extend(grouped(records, lambda record: [record["kind"]]))
+    lines.extend(["", "## By domain", ""])
+    lines.extend(grouped(records, lambda record: record["domains"]))
 
     # This is a rendering of `catalog.alias_index()`, not a second construction
     # of it: the mapping is a value the catalog holds, and this loop spends it on

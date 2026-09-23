@@ -27,8 +27,9 @@ rule = "catalog-reference-current"
 [[enforce]]
 principle = "make-illegal-states-unrepresentable"
 rule = "catalog-validate"
-# A record with an unknown kind, status, enforcement level, or a relationship to
-# an id that does not exist cannot be committed.
+# A record with an unknown kind, status, enforcement level or rung, a field the
+# schema does not name, a relationship to an id that does not exist, or a
+# conflict only one of its two records lists cannot be committed.
 
 [[enforce]]
 principle = "single-authoritative-source"
