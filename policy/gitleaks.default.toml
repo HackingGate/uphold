@@ -1,5 +1,5 @@
-# The gitleaks configuration `uphold secrets` runs where a repository has no
-# .gitleaks.toml of its own. A repository that wants a different answer writes
+# The gitleaks configuration the gitleaks section of `uphold supply-chain` runs
+# where a repository has no .gitleaks.toml of its own. A repository that wants a different answer writes
 # its own at the root, and this default stands down WHOLLY: the allowlist below
 # is not merged into it, so a repository config that wants the test trees
 # excluded says so itself.
