@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use crate::config::{self, Check, CheckKind, Literals, Policy, Rule};
 use crate::engine::{self, Query};
-use crate::error::{Exit, Fatal, Result};
+use crate::error::{Exit, Fatal, Result, verdict};
 use crate::report::Failure;
 use crate::sources;
 
@@ -239,6 +239,26 @@ pub(crate) enum Verdict {
     Guard(crate::guard::Refusal),
 }
 
+/// The verdict of one seam, given how each kind of rule it consults answered.
+///
+/// Every input arrives through `answer`, so nothing here reads a file, runs a
+/// command or looks at a policy. That is what lets `#[cfg(kani)] mod proofs`
+/// state the fail-closed property over every combination of answers rather
+/// than over the rules a test can write. [`judged`] is the caller that knows
+/// what each kind reads.
+pub(crate) fn over_kinds<V>(
+    seam: Seam,
+    mut answer: impl FnMut(Judged) -> Result<Vec<V>>,
+) -> Result<Vec<V>> {
+    let mut verdicts: Vec<V> = Vec::new();
+    for kind in EVERY_JUDGED {
+        if seam.consults(*kind) {
+            verdicts.extend(answer(*kind)?);
+        }
+    }
+    Ok(verdicts)
+}
+
 /// Everything a piece of published text is judged by, at one seam.
 ///
 /// The single assembly. `label` is what the subject is called in a report --
@@ -251,48 +271,36 @@ pub(crate) fn judged(
     label: &str,
     text: &str,
 ) -> Result<Vec<Verdict>> {
-    let mut verdicts: Vec<Verdict> = Vec::new();
-    for kind in EVERY_JUDGED {
-        if !seam.consults(*kind) {
-            continue;
-        }
-        match *kind {
-            Judged::Literals => {
-                verdicts.extend(
-                    failures_in(root, policy, text)?
-                        .into_iter()
-                        .map(Verdict::Rule),
-                );
-            }
+    over_kinds(seam, |kind| {
+        Ok(match kind {
+            Judged::Literals => failures_in(root, policy, text)?
+                .into_iter()
+                .map(Verdict::Rule)
+                .collect(),
+            // Every inner rule is in scope here: the three seams that reach
+            // this line -- `scan --text`, `guard --text`, the harness hook --
+            // are handed text and no destination, so there is nothing to ask a
+            // `public-target` scope about. The shim, which does have one,
+            // passes its own memo.
             Judged::Guards => {
-                verdicts.extend(
-                    // Every inner rule is in scope here: the three seams that
-                    // reach this line -- `scan --text`, `guard --text`, the
-                    // harness hook -- are handed text and no destination, so
-                    // there is nothing to ask a `public-target` scope about.
-                    // The shim, which does have one, passes its own memo.
-                    crate::guard::over_text(root, policy, label, text, &mut |_| Ok(true))?
-                        .into_iter()
-                        .map(Verdict::Guard),
-                );
+                crate::guard::over_text(root, policy, label, text, &mut |_| Ok(true))?
+                    .into_iter()
+                    .map(Verdict::Guard)
+                    .collect()
             }
-            Judged::Prose => {
-                verdicts.extend(
-                    crate::prose::over_text(policy, text)?
-                        .into_iter()
-                        .map(Verdict::Rule),
-                );
-            }
+            Judged::Prose => crate::prose::over_text(policy, text)?
+                .into_iter()
+                .map(Verdict::Rule)
+                .collect(),
             // The shim's two, and the shim does not arrive here: it holds a
             // subject and a per-rule scope this function is not given, so it
             // dispatches rule by rule through `Judged::of` instead. Reached
             // only if `Seam::Command` is ever handed to this function, and
             // running a path-scoped rule over pathless text is the one thing
             // this file exists to refuse.
-            Judged::Patterns | Judged::Consultation => {}
-        }
-    }
-    Ok(verdicts)
+            Judged::Patterns | Judged::Consultation => Vec::new(),
+        })
+    })
 }
 
 pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<Exit> {
@@ -313,11 +321,11 @@ pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<
             }
         }
     }
-    if verdicts.is_empty() {
+    let exit = verdict(verdicts.len(), 0);
+    if exit == Exit::Clean {
         println!("policy checks passed (text)");
-        return Ok(Exit::Clean);
     }
-    Ok(Exit::Violations)
+    Ok(exit)
 }
 
 /// The policy a text check runs under, and the root it was loaded from.
@@ -403,6 +411,170 @@ pub(crate) fn failures_in(
     }
 
     Ok(failures)
+}
+
+/// The fail-closed property of the published-text seams, over every answer.
+///
+/// `cargo kani`, and see CONTRIBUTING for what it costs. What a kind of rule
+/// answers is left to the model checker: could not look, found nothing, or
+/// found one thing. The rule bodies themselves -- a regex, a literal search, a
+/// command source, a guard reading the repository -- are the part no harness
+/// here reaches. What is proven is that no combination of their answers
+/// reaches clean except the one where every kind the seam asks looked and
+/// found nothing.
+///
+/// One finding is the bound. `over_kinds` never looks inside what a kind
+/// found: it passes the list on or stops at an error, so an empty list and a
+/// non-empty one reach every branch it has, and five kinds at one each still
+/// make a concatenation longer than any single list.
+#[cfg(kani)]
+mod proofs {
+    use super::{EVERY_JUDGED, Judged, Seam, load_for, over_kinds};
+    use crate::config::Policy;
+    use crate::error::{Exit, Fatal, Result, verdict};
+    use std::path::{Path, PathBuf};
+
+    fn any_seam() -> Seam {
+        match kani::any::<u8>() % 4 {
+            0 => Seam::Scan,
+            1 => Seam::Guard,
+            2 => Seam::Hook,
+            _ => Seam::Command,
+        }
+    }
+
+    #[derive(Clone, Copy, kani::Arbitrary)]
+    struct Answer {
+        could_not_look: bool,
+        found_one: bool,
+    }
+
+    /// What one kind answered, as a list of `finding`. The harnesses that only
+    /// ask whether a list is empty pass `()`, whose list never allocates:
+    /// `over_kinds` cannot look inside a finding, so its type changes the cost
+    /// of the proof and nothing about what it proves.
+    fn answer<V: Clone>(answers: &[Answer; 5], kind: Judged, finding: V) -> Result<Vec<V>> {
+        let given = answers[kind as usize];
+        if given.could_not_look {
+            Err(Fatal::new(String::new()))
+        } else {
+            Ok(vec![finding; usize::from(given.found_one)])
+        }
+    }
+
+    fn looked_and_found_nothing(answers: &[Answer; 5], seam: Seam) -> bool {
+        EVERY_JUDGED.iter().all(|kind| {
+            let given = answers[*kind as usize];
+            !seam.consults(*kind) || (!given.could_not_look && !given.found_one)
+        })
+    }
+
+    /// `clean <-> every consulted kind looked and found nothing`, through the
+    /// same `verdict` and `Exit::of` the callers settle on. Clean is a claim
+    /// that every consulted kind was evaluated, not the absence of a finding.
+    #[kani::proof]
+    #[kani::unwind(7)]
+    fn clean_means_every_consulted_kind_looked_and_found_nothing() {
+        let seam = any_seam();
+        let answers: [Answer; 5] = kani::any();
+        let run = over_kinds(seam, |kind| answer(&answers, kind, ()))
+            .map(|verdicts| verdict(verdicts.len(), 0));
+        let clean = Exit::of(&run) as i32 == Exit::Clean as i32;
+        assert!(clean == looked_and_found_nothing(&answers, seam));
+    }
+
+    /// `a consulted kind could not look -> exit 2`, whatever the others found.
+    /// A finding does not outrank it here, unlike in `verdict`: the seam
+    /// stops at the first kind that could not look, so what it would have
+    /// reported is not known.
+    #[kani::proof]
+    #[kani::unwind(7)]
+    fn a_consulted_kind_that_could_not_look_is_broken() {
+        let seam = any_seam();
+        let answers: [Answer; 5] = kani::any();
+        let broken_kind = EVERY_JUDGED
+            .iter()
+            .any(|kind| seam.consults(*kind) && answers[*kind as usize].could_not_look);
+        let run = over_kinds(seam, |kind| answer(&answers, kind, ()))
+            .map(|verdicts| verdict(verdicts.len(), 0));
+        assert!(broken_kind == (Exit::of(&run) as i32 == Exit::Broken as i32));
+    }
+
+    /// Every consulted kind is asked exactly once when none could not look,
+    /// no kind the seam does not consult is ever asked, and nothing a kind
+    /// found is dropped or duplicated on the way to the verdict.
+    #[kani::proof]
+    #[kani::unwind(7)]
+    fn every_consulted_kind_is_asked_once_and_every_finding_is_kept() {
+        let seam = any_seam();
+        let answers: [Answer; 5] = kani::any();
+        let mut asked = [0_u8; 5];
+        let run = over_kinds(seam, |kind| {
+            asked[kind as usize] += 1;
+            answer(&answers, kind, kind as u8)
+        });
+        for kind in EVERY_JUDGED {
+            let slot = *kind as usize;
+            if !seam.consults(*kind) {
+                assert!(asked[slot] == 0);
+            } else if let Ok(verdicts) = &run {
+                assert!(asked[slot] == 1);
+                let kept = verdicts
+                    .iter()
+                    .filter(|found| **found == *kind as u8)
+                    .count();
+                assert!(kept == usize::from(answers[slot].found_one));
+            }
+        }
+    }
+
+    /// The verdict is a function of the seam and the answers, and an answer
+    /// from a kind the seam does not consult cannot move it.
+    #[kani::proof]
+    #[kani::unwind(7)]
+    fn the_verdict_is_a_function_of_the_consulted_answers() {
+        let seam = any_seam();
+        let answers: [Answer; 5] = kani::any();
+        let mut elsewhere: [Answer; 5] = kani::any();
+        for kind in EVERY_JUDGED {
+            if seam.consults(*kind) {
+                elsewhere[*kind as usize] = answers[*kind as usize];
+            }
+        }
+        let first = over_kinds(seam, |kind| answer(&answers, kind, kind as u8));
+        let second = over_kinds(seam, |kind| answer(&elsewhere, kind, kind as u8));
+        match (first, second) {
+            (Ok(first), Ok(second)) => assert!(first == second),
+            (Err(_), Err(_)) => {}
+            _ => panic!("one input, two verdicts"),
+        }
+    }
+
+    #[expect(
+        dead_code,
+        reason = "reached through `kani::stub`, which rustc does not count as a use"
+    )]
+    fn a_policy_that_does_not_load(_root: &Path, _policy_path: &Path) -> Result<Policy> {
+        Err(Fatal::new(String::new()))
+    }
+
+    /// A policy that exists and does not load is exit 2. `config::load` is replaced by one that always fails, since
+    /// parsing TOML is not what is being proven; `load_for` and the exit it
+    /// settles into are the real ones.
+    #[kani::proof]
+    #[kani::stub(crate::config::load, a_policy_that_does_not_load)]
+    #[kani::unwind(3)]
+    fn a_declared_policy_that_does_not_load_is_broken() {
+        let found = (PathBuf::from("r"), PathBuf::from("p"));
+        // Forgotten rather than dropped: the drop glue of a whole `Policy` is
+        // most of what the checker would otherwise unwind, on an arm the stub
+        // never takes.
+        let run = load_for(Some(&found)).map(|(_, policy)| {
+            core::mem::forget(policy);
+            Exit::Clean
+        });
+        assert!(Exit::of(&run) as i32 == Exit::Broken as i32);
+    }
 }
 
 #[cfg(test)]

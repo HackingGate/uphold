@@ -79,6 +79,17 @@ impl Exit {
     pub(crate) const fn code(self) -> i32 {
         self as i32
     }
+
+    /// What a whole run exits with. Every `?` in this binary ends here, so a
+    /// policy that did not load, a source that named nothing and a rule that
+    /// could not look all arrive as the error arm -- and the error arm has one
+    /// answer.
+    pub(crate) const fn of(run: &Result<Self>) -> Self {
+        match run {
+            Ok(exit) => *exit,
+            Err(_) => Self::Broken,
+        }
+    }
 }
 
 /// The exit code a run owes its reader, from what it found and what it could
@@ -155,5 +166,20 @@ mod proofs {
     fn the_only_codes_are_the_three_that_are_documented() {
         let code = verdict(kani::any(), kani::any()).code();
         assert!(code == 0 || code == 1 || code == 2);
+    }
+
+    /// `error -> exit 2`, and a run that finished keeps the code it chose.
+    #[kani::proof]
+    fn a_run_that_stopped_on_an_error_exits_broken() {
+        let run = if kani::any() {
+            Err(super::Fatal::new("could not look"))
+        } else {
+            Ok(verdict(kani::any(), kani::any()))
+        };
+        let exit = Exit::of(&run) as i32;
+        match run {
+            Err(_) => assert!(exit == Exit::Broken as i32),
+            Ok(chosen) => assert!(exit == chosen as i32),
+        }
     }
 }

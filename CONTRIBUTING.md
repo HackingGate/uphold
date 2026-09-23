@@ -183,29 +183,46 @@ anything. Some survivors are equivalent mutants and some are unreachable, and
 both are worth a sentence in the commit rather than a test written to silence
 them.
 
-### Proving the exit-state ranking
+### Proving the fail-closed property
 
 ```sh
 cargo install --locked kani-verifier && cargo kani setup
-cargo kani                                 # four harnesses, about a second each
+cargo kani -j --output-format=terse        # ten harnesses, about two minutes
+lefthook run proofs                        # the same, as the manual group
 ```
 
-`error::verdict` is the one function in this crate where an unknown becomes a
-number a caller acts on, and `#[cfg(kani)] mod proofs` states what it must do
-over every pair of counts rather than over the four pairs a unit test can name:
-a run that could not look never exits 0, a violation outranks an unread surface,
-and clean means read everything and found nothing.
+Two places in this crate turn an unknown into a number a caller acts on, and
+each carries a `#[cfg(kani)] mod proofs` that states what it must do over every
+input rather than over the handful a unit test can name.
 
-The reason it is worth a model checker for this one function and for nothing
-else here is measured. Change `could_not_look > 0` to `could_not_look > 1` and
-every one of the 197 in-crate unit tests still passes -- including the four that
-test `verdict` directly, since they name 3 and 0 and never 1. Kani refuses in
-15 milliseconds, with the counterexample. The rest of this crate reads files,
-runs git and formats reports, none of which CBMC can say anything useful about.
+`error::verdict` and `Exit::of`, over every pair of counts and every run: a run
+that could not look never exits 0, a violation outranks an unread surface,
+clean means read everything and found nothing, and a run that stopped on an
+error exits 2. Change `could_not_look > 0` to `could_not_look > 1` and every
+in-crate unit test still passes -- including the four that test `verdict`
+directly, since they name 3 and 0 and never 1. Kani refuses in 15 milliseconds,
+with the counterexample.
 
-Not wired into a hook, and for the same reason as `cargo deny`: the toolchain is
-half a gigabyte fetched by `cargo kani setup`, which is not something a commit
-should wait for. The proofs are cheap once it is installed.
+`text::over_kinds`, the step every published-text seam but the shim takes from
+what each kind of rule answered to the verdict, over every seam and every
+combination of answers: clean exactly when every consulted kind looked and
+found nothing, exit 2 whenever one could not look, each consulted kind asked
+once and no other kind asked at all, and the same answers giving the same
+verdict. `text::load_for` is proven to hand a policy that did not load on as an
+error, with `config::load` replaced by a loader that always fails. Swallowing a
+kind's error in `over_kinds`, or skipping one consulted kind, fails three of the
+five.
+
+What the harnesses do not reach is stated in them: the rule bodies (a regex, a
+literal search, a command source, a guard reading the repository), the shim's
+per-rule dispatch, and everything that reads a file or runs a process. Those
+stay under the tests they have.
+
+Manual, not pre-push. Two of the harnesses take one to two minutes of solver
+time each, and the toolchain is half a gigabyte fetched by `cargo kani setup`,
+which is past what a push should wait for and not something every contributor
+has. CI runs them as a job of their own; locally they are `lefthook run
+proofs`, or the `kani` hook at the manual stage of pre-commit and prek.
 
 The MSRV is written twice, in `Cargo.toml` as `rust-version` and in
 `toolchain.toml` as the rustc `want`, because cargo and the preflight cannot read

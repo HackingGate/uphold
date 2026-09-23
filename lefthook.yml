@@ -60,10 +60,10 @@ pre-commit:
 
 # Not git hooks. lefthook has no equivalent of pre-commit's manual stage, so the
 # checks that are too slow or too host-dependent to sit in front of a commit are
-# named groups instead: `lefthook run preflight`, `lefthook run coverage` and
-# `lefthook run uphold-manual`. Same entry points as the manual hooks in
-# .pre-commit-config.yaml, so the three runners are still answering one question
-# each.
+# named groups instead: `lefthook run preflight`, `lefthook run coverage`,
+# `lefthook run proofs` and `lefthook run uphold-manual`. Same entry points as
+# the manual hooks in .pre-commit-config.yaml, so the three runners are still
+# answering one question each.
 preflight:
   commands:
     deps-check:
@@ -73,6 +73,14 @@ coverage:
   commands:
     coverage:
       run: scripts/coverage.sh
+
+# The Kani harnesses. Not pre-push, for the reasons CONTRIBUTING gives under
+# "Proving the fail-closed property": minutes of solver time, and a toolchain
+# `cargo kani setup` has to fetch first.
+proofs:
+  commands:
+    kani:
+      run: cargo kani -j --output-format=terse
 
 # The guards that ask a network the same question once per distinct name or pin:
 # too slow for a commit, and too important to leave to whoever pushes next. This

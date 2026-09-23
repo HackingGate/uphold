@@ -94,6 +94,13 @@ codegen-units = 1
 panic = "abort"
 debug = 1
 
+# Read by `cargo kani` and by nothing else. One harness replaces
+# `config::load` with a loader that always fails, and replacing a function is
+# still an unstable Kani feature; declared here so the bare `cargo kani` that
+# CONTRIBUTING, the manual hook and CI run is the same command.
+[package.metadata.kani.unstable]
+stubbing = true
+
 # The profile `dist` builds the release artifacts with. It adds nothing to
 # `release`: the shipped binary is the one `cargo build --release` produces.
 [profile.dist]

@@ -108,6 +108,16 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [manual]
+      # Manual for the reason coverage is: minutes of solver time over the
+      # harnesses, after a toolchain `cargo kani setup` fetches. CONTRIBUTING
+      # has the measurement, and CI runs it as a job of its own.
+      - id: kani
+        name: kani proofs of the fail-closed property
+        entry: cargo kani -j --output-format=terse
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
       - id: catalog-validate
         name: validate principle records
         entry: uv run --no-project scripts/validate.py

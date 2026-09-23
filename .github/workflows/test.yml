@@ -147,16 +147,34 @@ jobs:
           files: lcov.info
           fail_ci_if_error: true
 
+  # The model checker over the fail-closed property. A job of its own because
+  # nothing else here needs its half-gigabyte toolchain, and on
+  # ubuntu-latest rather than ubuntu-slim because `-j` runs the harnesses side
+  # by side and the two longest are each one to two minutes of solver time.
+  # The version is pinned: a Kani release that moves the stubbing flag would
+  # otherwise fail this job on a change that touched no harness.
+  proofs:
+    name: kani proofs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: model-checking/kani-github-action@v1.1
+        with:
+          kani-version: '0.67.0'
+          args: -j --output-format=terse
+
   hooks:
     name: ${{ matrix.tool }}
     runs-on: ubuntu-slim
     # Coverage has its own job, with the toolchain it needs and a cache that
     # survives; running it once per runner here would build the tree
-    # instrumented three more times to answer the same question. What this job
-    # asks is whether each runner can DRIVE the configuration, and the hooks
-    # left in it answer that.
+    # instrumented three more times to answer the same question. The Kani
+    # proofs are skipped for the same reason, and have a job of their own below.
+    # What this job asks is whether each runner can DRIVE the configuration,
+    # and the hooks left in it answer that.
     env:
-      SKIP: coverage
+      SKIP: coverage,kani
       # The private-name guards ask the forge whether a name is a private
       # repository, and they ask through `gh`. With no token `gh` answers
       # nothing -- and until an unaskable forge became its own state, that was

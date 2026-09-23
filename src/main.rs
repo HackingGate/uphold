@@ -718,11 +718,11 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
             eprintln!("guard refused: {}", guard::refused_by(&policy, refusal));
             eprintln!("{}", refusal.report.trim_end());
         }
-        if refusals.is_empty() {
+        let exit = verdict(refusals.len(), 0);
+        if exit == Exit::Clean {
             println!("text checks passed");
-            return Ok(Exit::Clean);
         }
-        return Ok(Exit::Violations);
+        return Ok(exit);
     }
 
     // No default. A guard reads a different artifact at every stage, so guessing
@@ -1237,13 +1237,11 @@ fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result
 }
 
 fn main() {
-    let exit = match run() {
-        Ok(exit) => exit,
-        Err(error) => {
-            eprintln!("policy check error: {error}");
-            Exit::Broken
-        }
-    };
+    let run = run();
+    if let Err(error) = &run {
+        eprintln!("policy check error: {error}");
+    }
+    let exit = Exit::of(&run);
     // A verdict nobody received is not a verdict. Where a write failed for a
     // reason that is not a reader closing a pipe -- a full disk under a
     // redirected report, a file this process may no longer write -- the findings
