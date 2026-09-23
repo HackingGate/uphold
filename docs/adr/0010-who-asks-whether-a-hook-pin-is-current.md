@@ -1,4 +1,4 @@
-# ADR 0009: who asks whether a hook pin is current
+# ADR 0010: who asks whether a hook pin is current
 
 Status: Accepted
 

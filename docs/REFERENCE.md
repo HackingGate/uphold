@@ -1605,7 +1605,7 @@ is the newest tag; a pre-commit `rev:` is not, because `prek update --check`
 answers that and the README carries the `prek-pins-current` hook that runs it.
 The run prints how many pre-commit pins it checked for existence only, so its
 pass is not read as theirs being current. [ADR
-0009](adr/0009-who-asks-whether-a-hook-pin-is-current.md) has the probes,
+0010](adr/0010-who-asks-whether-a-hook-pin-is-current.md) has the probes,
 including what prek gets wrong. `lefthook.toml`, `lefthook.json` and the
 `-local` overlay files are **not** read, so a pin written in one of those is
 watched by nothing here.

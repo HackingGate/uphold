@@ -364,7 +364,7 @@ is enforced at another seam.
 pin has fallen behind the newest upstream tag, and whether the ref it names
 exists at all. The first half is asked of lefthook refs only; for a pre-commit
 `rev:` it belongs to `prek update --check`, run by the consumer
-([ADR 0009](adr/0009-who-asks-whether-a-hook-pin-is-current.md)). They were two checkers for a while -- a `check_hook_pins.py`
+([ADR 0010](adr/0010-who-asks-whether-a-hook-pin-is-current.md)). They were two checkers for a while -- a `check_hook_pins.py`
 script beside the guard -- and that arrangement is the drift this section warns
 about: the two read the same `rev:` lines, reached the same remote, and were
 free to return different verdicts. They did. The guard counted a pin whose

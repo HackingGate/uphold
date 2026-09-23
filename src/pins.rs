@@ -11,7 +11,7 @@
 //! * **Behind.** The pin names a tag, and the upstream has a newer one. Asked
 //!   here of a lefthook `remotes:` ref, which no other tool reads. A pre-commit
 //!   `rev:` is asked by `prek update --check`, which the consumer runs as a
-//!   hook of their own; ADR 0009 records the probes behind that split.
+//!   hook of their own; ADR 0010 records the probes behind that split.
 //! * **Forward.** The pin names a tag that was never cut. That fails at
 //!   hook-init, as a clone error, before any hook runs -- which is why nothing
 //!   can report it after the fact.
@@ -602,7 +602,7 @@ fn canonical(value: &serde_json::Value) -> String {
 ///
 /// It orders lefthook `remotes:` refs only. Nothing else reads a lefthook ref;
 /// a pre-commit `rev:` has `prek update --check`, which orders by tag date
-/// rather than by version (ADR 0009).
+/// rather than by version (ADR 0010).
 fn version_key(tag: &str) -> (Vec<(u64, String)>, u64, String, u64) {
     let trimmed = tag.trim_start_matches('v');
     let (trimmed, revision) = post_release(trimmed);
@@ -824,7 +824,7 @@ pub(crate) fn stale(request: &Request<'_>) -> Result<Option<Refusal>> {
         }
         // Behind is asked of lefthook refs alone. For a pre-commit `rev:` the
         // consumer runs `prek update --check` as the `prek-pins-current` hook;
-        // ADR 0009 has the probes, and what that command gets wrong (a rev
+        // ADR 0010 has the probes, and what that command gets wrong (a rev
         // naming no tag reads as "update to <an older tag>") is the arm above.
         if pin.manager == Manager::PreCommit {
             ordered_elsewhere += 1;

@@ -200,7 +200,7 @@ repos:
         always_run: true
         stages: [manual]
       # The guard asks that of lefthook refs only; for this file prek answers it
-      # (ADR 0009). This is the entry a consumer copies. prek exits 1 for an unreachable remote as
+      # (ADR 0010). This is the entry a consumer copies. prek exits 1 for an unreachable remote as
       # it does for a stale pin, so a failure here is either until its output
       # says which: `would update rev` or `update failed`.
       - id: prek-pins-current

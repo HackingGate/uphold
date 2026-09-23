@@ -118,7 +118,7 @@ question, and this is the entry to copy into your `.pre-commit-config.yaml`:
 prek exits 1 both for a pin that would move and for a remote it could not
 reach; its output says which (`would update rev` or `update failed`). It orders
 tags by date, not version, and reports a bare sha as movable
-([ADR 0009](docs/adr/0009-who-asks-whether-a-hook-pin-is-current.md)). It
+([ADR 0010](docs/adr/0010-who-asks-whether-a-hook-pin-is-current.md)). It
 reads `lefthook.yml`, `lefthook.yaml`, `.lefthook.yml` and `.lefthook.yaml` at
 any depth; it does not read `lefthook.toml`, `lefthook.json` or the `-local`
 overlay files, so a pin written in one of those is watched by nothing.

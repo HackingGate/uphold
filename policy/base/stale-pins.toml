@@ -20,7 +20,7 @@
 # lefthook `remotes:`, that names nothing at all or names a branch; and a
 # lefthook `ref:` that names a tag its upstream has moved past. Whether a
 # pre-commit `rev:` is the newest tag is not asked here: `prek update --check`
-# asks it, as the consumer's own `prek-pins-current` hook (ADR 0009, and the
+# asks it, as the consumer's own `prek-pins-current` hook (ADR 0010, and the
 # README has the entry). Read at any depth in the work tree, because a pin in
 # `sub/.pre-commit-config.yaml` is a pin a run touches. A tree holding no hook
 # configuration of either manager is exit 2 and not a clean pass: zero pins
