@@ -216,9 +216,12 @@ repos:
       # a slow test run skips the guards standing beside it. Pre-push is where
       # the same suite still refuses before anything leaves the machine, which
       # is the moment refusing is worth what it costs.
+      # Without the variables git exports to a hook, for the reason lefthook.yml
+      # gives beside the same command: a test that spawns `uphold` inherits them
+      # and reads the repository this hook fired in instead of its fixture.
       - id: engine-tests
         name: scan engine tests
-        entry: cargo test --quiet
+        entry: env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_PREFIX -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_CONFIG_PARAMETERS cargo test --quiet
         language: system
         pass_filenames: false
         always_run: true
