@@ -48,7 +48,11 @@ fn scan_text(root: &Path, stdin: &[u8], home: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.as_mut().unwrap().write_all(stdin).unwrap();
+    if let Err(error) = child.stdin.as_mut().unwrap().write_all(stdin) {
+        // The binary may answer and exit before it reads its input; that is its
+        // verdict, not a failure to deliver the event.
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
+    }
     child.wait_with_output().unwrap()
 }
 
@@ -272,7 +276,11 @@ fn guard_text(root: &Path, stdin: &[u8], home: &str, allow: Option<&str>) -> Out
         None => command.env_remove("UPHOLD_ALLOW"),
     };
     let mut child = command.spawn().unwrap();
-    child.stdin.as_mut().unwrap().write_all(stdin).unwrap();
+    if let Err(error) = child.stdin.as_mut().unwrap().write_all(stdin) {
+        // The binary may answer and exit before it reads its input; that is its
+        // verdict, not a failure to deliver the event.
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
+    }
     child.wait_with_output().unwrap()
 }
 
