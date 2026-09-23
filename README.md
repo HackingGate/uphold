@@ -223,6 +223,15 @@ disagree with the engine about anything.
 Exit codes, everywhere: `0` clean, `1` a claim is false / a violation, `2` could
 not look — see [`explicit-unknown`](principles/explicit-unknown.toml).
 
+At `scan --text`, `guard --text` and `hook`, the step from what each kind of rule
+answered about a piece of text to the exit code is model-checked with Kani, over
+every seam and every combination of answers: `0` only when every kind the seam
+consults looked and found nothing, `2` whenever one could not look. That proof
+starts where the rules have answered. The rule bodies, the shim's
+per-rule dispatch and everything that reads a file or runs a process are tested,
+not proven; [CONTRIBUTING](CONTRIBUTING.md#proving-the-fail-closed-property) has
+the harnesses and what they cost.
+
 ## Commands
 
 ```sh
