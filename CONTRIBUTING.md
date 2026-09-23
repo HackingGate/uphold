@@ -16,10 +16,15 @@ A proposed entry should answer four questions:
 3. Prefer the narrowest defensible claim.
 4. Add at least one serious source.
 5. Link related and conflicting entries by ID.
-6. Rebuild the generated index and run everything CI runs:
+6. Add the record's `include_str!` pair to `RECORDS` in `src/catalog.rs`, in
+   id order. The binary carries the catalog compiled in, and `cargo test`
+   refuses a tree where the list and `ls principles/` disagree.
+7. Rebuild the generated index and the compiled review documents, then run
+   everything CI runs:
 
 ```sh
 uv run --no-project scripts/build_reference.py
+uv run --no-project uphold_check.py --review --emit
 prek run --all-files --hook-stage manual    # or: pre-commit run ...
 ```
 
