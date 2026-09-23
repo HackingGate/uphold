@@ -119,10 +119,10 @@ usage:
   uphold hooks --identity DIR...     do these repositories declare the same hooks
   uphold hooks --install             write the hooks git runs, as tracked files
                [--adopt | --check]   take over a hand-written copy; or only report
-  uphold supply-chain                origin, advisories, typosquats and workflow
-                                     security over the pushed range -- five
-                                     scanners, one verdict
-  uphold supply-chain --all          the same, over every manifest in the tree
+  uphold supply-chain                origin, advisories, typosquats, workflow
+                                     security and committed secrets over the
+                                     pushed range -- six scanners, one verdict
+  uphold supply-chain --all          the same, over every manifest and commit
   uphold supply-chain --base REV     the same, over what REV..HEAD changed
   uphold probe [--runner NAME]       can each declared hook actually refuse
                [--timeout SECONDS]   one run's patience, over the file's
@@ -398,7 +398,14 @@ fn run() -> Result<Exit> {
             // The root, not the policy: the scanners read manifests and
             // workflows, and a superproject that only tracks submodules is
             // still where its own workflows live.
-            let (root, _) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
+            let (root, policy) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
+            // Loaded for one fact, whether it inherits the set that asks for
+            // gitleaks. A policy that will not load is exit 2 here as it is
+            // everywhere else: which sections apply cannot be known without it.
+            let secrets = config::load(&root, &policy)?
+                .inherited_sets
+                .iter()
+                .any(|set| set == supply::SECRETS_SET);
             let scope = if whole {
                 supply::Scope::Whole
             } else if let Some(base) = base {
@@ -418,7 +425,7 @@ fn run() -> Result<Exit> {
                 }
                 supply::scope_for_push(&root, &push.refs)?
             };
-            supply::run(&root, &scope)
+            supply::run(&root, &scope, secrets)
         }
         "probe" => {
             let usage = || {

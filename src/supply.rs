@@ -1,12 +1,18 @@
-//! `uphold supply-chain` -- origin, advisories, typosquats and workflow
-//! security, in one run.
+//! `uphold supply-chain` -- origin, advisories, typosquats, workflow security
+//! and committed secrets, in one run.
 //!
-//! Five external scanners, orchestrated: osv-scanner (known vulnerabilities
-//! and reported-malicious packages), zizmor (workflow security), cargo-deny
-//! (origin, advisories, bans, licenses), cargo-vet (has anyone looked at this
-//! dependency) and guarddog (publisher identity and typosquats -- the half OSV
-//! cannot reach, scoring an UNKNOWN package on how closely its name shadows a
-//! popular one).
+//! Five external scanners over dependencies and workflows, orchestrated:
+//! osv-scanner (known vulnerabilities and reported-malicious packages), zizmor
+//! (workflow security), cargo-deny (origin, advisories, bans, licenses),
+//! cargo-vet (has anyone looked at this dependency) and guarddog (publisher
+//! identity and typosquats -- the half OSV cannot reach, scoring an UNKNOWN
+//! package on how closely its name shadows a popular one).
+//!
+//! A sixth, gitleaks, reads commits rather than manifests, and owns secret
+//! shapes: the token formats, entropy thresholds and allowlists the
+//! `credentials` set's regexes approximated by hand. It runs only where the
+//! policy inherits that set, and it is the one scanner here pinned to a
+//! version, for the reason given at `GITLEAKS_VERSION`.
 //!
 //! It exists because seven repositories in one workspace carried this
 //! orchestration as a ~100-line shell task, near-identical, and the copies had
@@ -145,15 +151,26 @@ pub(crate) enum Scope {
     /// Every manifest in the tree -- `--all`, and what this command did before
     /// there was a range.
     Whole,
-    /// What one range changed, filtered to the names above.
-    Changed(Vec<PathBuf>),
+    /// What the ranges changed, filtered to the names above, and the ranges
+    /// themselves as `(from, to)` commit pairs. gitleaks reads commits rather
+    /// than files, so it is handed the second; every other section reads the
+    /// first.
+    Changed(Vec<PathBuf>, Vec<(String, String)>),
 }
 
-/// `uphold supply-chain`
-pub(crate) fn run(root: &Path, scope: &Scope) -> Result<Exit> {
-    if let Scope::Changed(paths) = scope
-        && paths.is_empty()
-    {
+/// The bundled set whose inheritance turns the gitleaks section on.
+///
+/// Gated on the set rather than run everywhere because a missing scanner is
+/// exit 2: a repository that never asked for credential scanning would
+/// otherwise have every push refused on a machine without gitleaks, on the
+/// strength of an uphold bump.
+pub(crate) const SECRETS_SET: &str = "credentials";
+
+/// `uphold supply-chain`. `secrets` is whether the policy inherits
+/// [`SECRETS_SET`].
+pub(crate) fn run(root: &Path, scope: &Scope, secrets: bool) -> Result<Exit> {
+    let manifests_moved = !matches!(scope, Scope::Changed(paths, _) if paths.is_empty());
+    if !manifests_moved && !secrets {
         println!(
             "supply chain: nothing in this range that a scanner reads -- no lockfile, \
                  manifest or workflow changed"
@@ -162,16 +179,33 @@ pub(crate) fn run(root: &Path, scope: &Scope) -> Result<Exit> {
     }
     let mut failed = 0_usize;
     let mut unread = 0_usize;
-    let sections: [SectionRun; 5] = [
-        (
-            "OSV -- known vulnerabilities and reported-malicious packages",
-            osv,
-        ),
-        ("zizmor -- workflow security", zizmor),
-        ("cargo-deny -- origin, advisories, bans, licenses", deny),
-        ("cargo-vet -- has anyone looked at this dependency", vet),
-        ("guarddog -- publisher identity and typosquats", guarddog),
-    ];
+    let mut sections: Vec<SectionRun> = Vec::new();
+    if manifests_moved {
+        let dependencies: [SectionRun; 5] = [
+            (
+                "OSV -- known vulnerabilities and reported-malicious packages",
+                osv,
+            ),
+            ("zizmor -- workflow security", zizmor),
+            ("cargo-deny -- origin, advisories, bans, licenses", deny),
+            ("cargo-vet -- has anyone looked at this dependency", vet),
+            ("guarddog -- publisher identity and typosquats", guarddog),
+        ];
+        sections.extend(dependencies);
+    } else {
+        println!(
+            "supply chain: no lockfile, manifest or workflow changed in this range, so only \
+             gitleaks has anything to read"
+        );
+    }
+    sections.push((
+        "gitleaks -- committed secrets",
+        if secrets {
+            gitleaks
+        } else {
+            gitleaks_not_asked
+        },
+    ));
     for (title, section) in sections {
         println!("\n== {title}");
         match section(root, scope)? {
@@ -345,7 +379,7 @@ fn is_unscanned_ci(path: &Path) -> bool {
 /// The walk poisons on an unreadable directory like every other enumeration
 /// here: a declaration naming two of three files understates the gap.
 fn unscanned_ci(root: &Path, scope: &Scope) -> Result<Vec<PathBuf>> {
-    if let Scope::Changed(paths) = scope {
+    if let Scope::Changed(paths, _) = scope {
         return Ok(paths
             .iter()
             .filter(|path| is_unscanned_ci(path))
@@ -407,6 +441,7 @@ fn declare_unscanned_ci(root: &Path, scope: &Scope) -> Result<()> {
 /// introduces everything.
 pub(crate) fn scope_for_ranges(root: &Path, ranges: &[(String, String)]) -> Result<Scope> {
     let mut changed = BTreeSet::new();
+    let mut read = Vec::new();
     for (from, to) in ranges {
         // A deleted ref pushes no content. Nothing arrives, so nothing is
         // scanned; the range would not even parse.
@@ -416,13 +451,16 @@ pub(crate) fn scope_for_ranges(root: &Path, ranges: &[(String, String)]) -> Resu
         if is_zero(from) {
             println!(
                 "   a branch the remote does not have: no ancestor to diff against, so every \
-                 manifest is in scope"
+                 manifest and every commit is in scope"
             );
             return Ok(Scope::Whole);
         }
+        // Collected only once the diff below has parsed it: a revision git
+        // cannot resolve fails there, before any scanner is handed it.
         collect_range(root, Path::new(""), from, to, &mut changed)?;
+        read.push((from.clone(), to.clone()));
     }
-    Ok(Scope::Changed(changed.into_iter().collect()))
+    Ok(Scope::Changed(changed.into_iter().collect(), read))
 }
 
 /// The same, from git's pre-push ref lines.
@@ -597,7 +635,7 @@ fn directories_of(paths: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn osv(root: &Path, scope: &Scope) -> Result<Section> {
-    if let Scope::Changed(paths) = scope {
+    if let Scope::Changed(paths, _) = scope {
         let locks = selected(root, paths, &LOCK_NAMES);
         if locks.is_empty() {
             return Ok(Section::Nothing(String::from("no lockfile in this range")));
@@ -653,7 +691,7 @@ fn zizmor(root: &Path, scope: &Scope) -> Result<Section> {
         // The changed files themselves, not their directory: zizmor reports per
         // workflow, and handing it the directory would print the whole
         // directory's backlog for one edited file.
-        Scope::Changed(paths) => (
+        Scope::Changed(paths, _) => (
             paths
                 .iter()
                 .filter(|path| is_workflow(path))
@@ -665,7 +703,7 @@ fn zizmor(root: &Path, scope: &Scope) -> Result<Section> {
     if workflows.is_empty() {
         return Ok(Section::Nothing(String::from(match scope {
             Scope::Whole => "no workflows here",
-            Scope::Changed(_) => "no workflow changed in this range",
+            Scope::Changed(..) => "no workflow changed in this range",
         })));
     }
     if let Some(reason) = on_path("zizmor") {
@@ -735,7 +773,7 @@ fn deny(root: &Path, scope: &Scope) -> Result<Section> {
         // A lock maps to the manifest beside it: cargo-deny is pointed at a
         // manifest, and a `Cargo.lock` that moved is exactly the dependency
         // change this section exists to read.
-        Scope::Changed(paths) => {
+        Scope::Changed(paths, _) => {
             let mut found: Vec<PathBuf> =
                 directories_of(&selected(root, paths, &["Cargo.toml", "Cargo.lock"]))
                     .into_iter()
@@ -827,7 +865,7 @@ fn deny(root: &Path, scope: &Scope) -> Result<Section> {
     if checked == 0 {
         return Ok(Section::Nothing(String::from(match scope {
             Scope::Whole => "a deny.toml and no crate to hold to it",
-            Scope::Changed(_) => "no crate manifest or lock moved in this range",
+            Scope::Changed(..) => "no crate manifest or lock moved in this range",
         })));
     }
     Ok(Section::Clean)
@@ -934,7 +972,7 @@ fn vet(root: &Path, scope: &Scope) -> Result<Section> {
     // -- and the answer can only change when the resolved set does. That is a
     // `Cargo.lock` moving; a manifest edit that did not relock changed nothing
     // vet reads.
-    if let Scope::Changed(paths) = scope
+    if let Scope::Changed(paths, _) = scope
         && selected(root, paths, &["Cargo.lock"]).is_empty()
     {
         return Ok(Section::Nothing(String::from(
@@ -1108,7 +1146,7 @@ fn guarddog(root: &Path, scope: &Scope) -> Result<Section> {
         // A directory, not a file: guarddog is run with the working directory
         // set to the manifest's own, and `pyproject.toml` moving is a dependency
         // change whether or not the lock moved with it.
-        Scope::Changed(paths) => (
+        Scope::Changed(paths, _) => (
             directories_of(&selected(root, paths, &["uv.lock", "pyproject.toml"]))
                 .into_iter()
                 .map(|directory| directory.join("uv.lock"))
@@ -1119,7 +1157,7 @@ fn guarddog(root: &Path, scope: &Scope) -> Result<Section> {
     if python.is_empty() && npm.is_empty() {
         return Ok(Section::Nothing(String::from(match scope {
             Scope::Whole => "no Python or npm manifests here",
-            Scope::Changed(_) => "no Python or npm manifest moved in this range",
+            Scope::Changed(..) => "no Python or npm manifest moved in this range",
         })));
     }
     if let Some(reason) = on_path("guarddog") {
@@ -1223,6 +1261,151 @@ fn guarddog(root: &Path, scope: &Scope) -> Result<Section> {
 /// Hand-rolled rather than a crate, because this is the only place the binary
 /// needs one and the contract is four lines: named, filled, handed to one
 /// command, gone.
+/// The gitleaks release this binary is tested against.
+///
+/// Pinned here, unlike the other five scanners, because gitleaks' verdict is
+/// the rule list compiled into it: two machines on two versions are two gates
+/// over the same commit. The other five answer from databases that move under
+/// any version, so a pin would buy them nothing. The README's install line
+/// and docs/REFERENCE.md name this version too, and a unit test below holds
+/// the three together.
+const GITLEAKS_VERSION: &str = "8.30.1";
+
+/// The gitleaks configuration run where the repository has none of its own.
+const GITLEAKS_DEFAULT: &str = include_str!("../policy/gitleaks.default.toml");
+
+/// The exit code gitleaks is told to answer when it found something.
+///
+/// gitleaks answers `1` for "leaks found" and also for a partial scan whose
+/// git subprocess failed half way, so its default leaves a refusal and a scan
+/// that did not finish spelled alike. `--exit-code` moves the finding to a
+/// code of its own; `2` is a Go runtime panic and `126` an unknown flag, so
+/// neither is used.
+const GITLEAKS_FOUND: i32 = 3;
+
+/// Stands in for the gitleaks section in a policy that does not inherit
+/// [`SECRETS_SET`]. Said out loud, for the reason every section says why it
+/// read nothing.
+fn gitleaks_not_asked(_root: &Path, _scope: &Scope) -> Result<Section> {
+    Ok(Section::Nothing(format!(
+        "the policy does not inherit the `{SECRETS_SET}` set, which is what asks for this"
+    )))
+}
+
+/// gitleaks over the commits in scope: each pushed range, or every commit
+/// under `--all` and for a branch the remote does not have.
+///
+/// Commits and not the working tree, because the working tree holds ignored
+/// files -- a populated `.env` among them -- that no commit carries, and a
+/// push refused for a file that never leaves the machine is the false positive
+/// this scanner was adopted to stop producing.
+fn gitleaks(root: &Path, scope: &Scope) -> Result<Section> {
+    if let Some(reason) = on_path("gitleaks") {
+        return Ok(Section::CouldNotLook(reason));
+    }
+    if let Some(reason) = gitleaks_version_mismatch() {
+        return Ok(Section::CouldNotLook(reason));
+    }
+    let log_opts: Vec<Option<String>> = match scope {
+        Scope::Whole => vec![None],
+        Scope::Changed(_, ranges) => ranges
+            .iter()
+            .map(|(from, to)| Some(format!("{from}..{to}")))
+            .collect(),
+    };
+    if log_opts.is_empty() {
+        return Ok(Section::Nothing(String::from(
+            "no commit arrives in this range",
+        )));
+    }
+    // `--config` named explicitly, as zizmor's is: it outranks the
+    // GITLEAKS_CONFIG variables gitleaks otherwise reads, so a variable left
+    // in one shell cannot make that machine's gate differ from every other.
+    let own = root.join(".gitleaks.toml");
+    let (config, _kept): (PathBuf, Option<tempfile_guard::TempFile>) = if own.is_file() {
+        (own, None)
+    } else {
+        let written = tempfile_guard::TempFile::containing(GITLEAKS_DEFAULT)?;
+        (written.path.clone(), Some(written))
+    };
+    let mut worst = Section::Clean;
+    for opts in log_opts {
+        let mut args: Vec<String> = vec![
+            String::from("git"),
+            String::from("--no-banner"),
+            String::from("--no-color"),
+            String::from("--redact"),
+            String::from("--verbose"),
+            format!("--exit-code={GITLEAKS_FOUND}"),
+            String::from("--config"),
+            config.display().to_string(),
+        ];
+        if let Some(opts) = &opts {
+            println!("   {opts}");
+            args.push(format!("--log-opts={opts}"));
+        } else {
+            println!("   every commit");
+        }
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        let answer = tool_read(root, "gitleaks", &borrowed, gitleaks_could_not_look)?;
+        if matches!(answer, Section::Failed) {
+            println!(
+                "   remove the secret from the commit, or put an accepted finding's \
+                 fingerprint in .gitleaksignore"
+            );
+        }
+        // The same ranking `verdict` applies across sections: a finding is
+        // what the reader acts on first, and every answer was printed.
+        worst = match (worst, answer) {
+            (Section::Failed, _) | (_, Section::Failed) => Section::Failed,
+            (reason @ Section::CouldNotLook(_), _) | (_, reason @ Section::CouldNotLook(_)) => {
+                reason
+            }
+            _ => Section::Clean,
+        };
+    }
+    Ok(worst)
+}
+
+/// Why the gitleaks on PATH is not the pinned one, or `None` when it is.
+fn gitleaks_version_mismatch() -> Option<String> {
+    let install = format!(
+        "install {GITLEAKS_VERSION} (mise: \"aqua:gitleaks/gitleaks\" = \"{GITLEAKS_VERSION}\")"
+    );
+    let output = match Command::new("gitleaks").arg("version").output() {
+        Ok(output) => output,
+        Err(error) => return Some(format!("could not run gitleaks version: {error}")),
+    };
+    let said = String::from_utf8_lossy(&output.stdout);
+    let said = said.trim();
+    if !output.status.success() {
+        return Some(format!(
+            "`gitleaks version` did not answer, so which rule list would run is unknown; \
+             {install}"
+        ));
+    }
+    if said.strip_prefix('v').unwrap_or(said) == GITLEAKS_VERSION {
+        return None;
+    }
+    Some(format!(
+        "gitleaks on PATH says {said:?} and this uphold is pinned to {GITLEAKS_VERSION}; \
+         another version is another rule list, so this was not checked. {install}"
+    ))
+}
+
+/// gitleaks' could-not-look, which its own exit code names once the finding
+/// has been moved off `1`: anything but `0` and [`GITLEAKS_FOUND`] is a scan
+/// that did not finish, the partial scan included.
+fn gitleaks_could_not_look(code: i32, _stdout: &str, stderr: &str) -> Option<String> {
+    if matches!(code, 0 | GITLEAKS_FOUND) {
+        return None;
+    }
+    Some(format!(
+        "gitleaks exited {code} without a verdict, so the range was not fully read: {}",
+        first_said(stderr)
+    ))
+}
+
 mod tempfile_guard {
     use std::path::PathBuf;
 
@@ -1255,7 +1438,39 @@ mod tempfile_guard {
 
 #[cfg(test)]
 mod tests {
-    use super::{PRUNE, Scope, find_named, find_workflow_dirs, interesting, unscanned_ci};
+    use super::{
+        GITLEAKS_DEFAULT, GITLEAKS_FOUND, GITLEAKS_VERSION, PRUNE, Scope, find_named,
+        find_workflow_dirs, gitleaks_could_not_look, interesting, unscanned_ci,
+    };
+
+    #[test]
+    fn the_documentation_names_the_pinned_gitleaks() {
+        let line = format!("\"aqua:gitleaks/gitleaks\" = \"{GITLEAKS_VERSION}\"");
+        assert!(
+            include_str!("../README.md").contains(&line),
+            "README.md does not carry `{line}`, so a consumer following it installs a \
+             gitleaks this binary refuses"
+        );
+        let named = format!("`{GITLEAKS_VERSION}`");
+        assert!(
+            include_str!("../docs/REFERENCE.md").contains(&named),
+            "docs/REFERENCE.md does not name {named} as the pinned gitleaks"
+        );
+    }
+
+    #[test]
+    fn the_default_gitleaks_config_extends_upstream_and_declares_no_rule() {
+        assert!(GITLEAKS_DEFAULT.contains("useDefault = true"));
+        assert!(!GITLEAKS_DEFAULT.contains("[[rules]]"));
+    }
+
+    #[test]
+    fn gitleaks_exit_1_is_a_scan_that_did_not_finish() {
+        assert!(gitleaks_could_not_look(0, "", "").is_none());
+        assert!(gitleaks_could_not_look(GITLEAKS_FOUND, "", "").is_none());
+        assert!(gitleaks_could_not_look(1, "", "partial scan completed").is_some());
+        assert!(gitleaks_could_not_look(126, "", "unknown flag").is_some());
+    }
 
     /// Paths under the fixture, as strings, so a failure names what was found.
     fn relative(root: &std::path::Path, found: &[std::path::PathBuf]) -> Vec<String> {

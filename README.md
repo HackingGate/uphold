@@ -80,6 +80,21 @@ scanners are two more ids, unpinned above because they need a host toolchain:
 `uphold-supply-chain` at `pre-push`, which scans what the push changed, and
 `uphold-supply-chain-all` at `manual`, which scans everything.
 
+A policy inheriting `credentials` also gets **gitleaks** in both, over the
+pushed commits and over every commit. gitleaks owns secret shapes: its rule
+list, entropy thresholds and allowlists replace what the set's regexes did by
+hand. It must be on PATH at the one version this uphold pins, because its rule
+list is compiled into it; a missing gitleaks or another version is exit 2 and
+refuses the push. With mise:
+
+```toml
+[tools]
+"aqua:gitleaks/gitleaks" = "8.30.1"
+```
+
+A `.gitleaks.toml` at the root is handed to gitleaks in place of the bundled
+default, and a `.gitleaksignore` holds the fingerprints of accepted findings.
+
 **lefthook** — no manifest format, so include the config this repo ships, then
 `lefthook install`. It runs commands rather than bootstrapping a language, so
 the binary must be on PATH, from the `cargo install` line at the top.
@@ -203,8 +218,8 @@ uphold shim --install           # link this binary under each command's name
 uphold shim --status            # what is linked, and whether PATH reaches it
 uphold hook claude-code         # judge a pending agent tool call, read on stdin
 uphold audit --for-publication  # before flipping private -> public
-uphold supply-chain             # five scanners over the pushed range; a missing one is exit 2
-uphold supply-chain --all       # the same over every manifest in the tree
+uphold supply-chain             # six scanners over the pushed range; a missing one is exit 2
+uphold supply-chain --all       # the same over every manifest and every commit
 
 uphold hooks --identity ../a ../b   # do these repositories declare the same hooks
 uphold hooks --install              # write the hooks git runs, as tracked files

@@ -361,7 +361,7 @@ it refuses** so the name predicts the rule list:
 |---|---|
 | `process-residue` | authoring and process residue in committed content — conflict markers, home paths, dated and status metadata, tracker and thread references in documentation, private data paths — and the residue a process leaves in the policy file itself: a rule transcribed out of a set. **Installs `pre-commit` and `manual`**, and the two report different things |
 | `code-residue` | a tracker reference in a source, configuration, build or packaging file: the tracker rule of `process-residue` over every file that is not Markdown, reST, plain text or a stylesheet, under its own id. Its own set because a scope is not something `[inherit]` lets a repository choose, and the release that widened the rule in place was undone by hand in every tree that measured what it reported. For a tree whose comments already cite durable contracts. **Installs `pre-commit` and `manual`**, the same ceiling as the set it was split from |
-| `credentials` | credential material — private keys and service tokens, literal credential values, populated environment files, browser profile and session stores. A literal credential value is two rules split on the quote: in source the value half must be a quoted literal, so `password: modem_config.password.clone()` and `token = raw.trim_start_matches('v')` are expressions and not findings; in a config file — `.env`, INI, YAML, TOML, JSON, XML, properties — the text after the separator is the value whether quoted or not, and `-in-config` reads it unquoted |
+| `credentials` | credential material — private keys and service tokens, literal credential values, populated environment files, browser profile and session stores. A literal credential value is two rules split on the quote: in source the value half must be a quoted literal, so `password: modem_config.password.clone()` and `token = raw.trim_start_matches('v')` are expressions and not findings; in a config file — `.env`, INI, YAML, TOML, JSON, XML, properties — the text after the separator is the value whether quoted or not, and `-in-config` reads it unquoted. Inheriting it also turns on the gitleaks section of [`uphold supply-chain`](#gitleaks-which-owns-secret-shapes), the tool that owns secret shapes |
 | `unmanaged-pins` | a version pinned where no manifest holds it — a shell install line, a `releases/download/vX.Y.Z` URL, a versioned `curl` or `wget` |
 | `host-identity` | the machine the author is standing on — its username, home path, hostname and default route, read at scan time and searched for in content |
 | `broken-links` | a markdown link naming a path that does not exist or leaving the repository, and a selection that yields no links at all |
@@ -2324,7 +2324,7 @@ nothing else does. It is not a pass — the shim says on stderr that the command
 ran unchecked, every time, so a bypass that becomes habit is visible in a shell
 history and in a CI log. An empty `UPHOLD_ALLOW=` switches nothing off.
 
-## `uphold supply-chain` — five scanners, one verdict
+## `uphold supply-chain` — six scanners, one verdict
 
 ```sh
 uphold supply-chain             # what the pushed range changed
@@ -2370,6 +2370,40 @@ Each scanner's own exit code decides; findings are shown, never re-judged.
 The one filter applied is cargo-deny's headline lines, dropping the four
 classes that describe `deny.toml` rather than a dependency.
 
+### gitleaks, which owns secret shapes
+
+The sixth section is **gitleaks**, and it is the tool that owns secret shapes:
+token formats, a per-rule entropy threshold, and path and regex allowlists,
+maintained upstream. The `credentials` set's shape and key/value regexes
+approximate the same job by hand, with no entropy test; until they are
+retired, both run.
+
+It reads **commits**, not files: each pushed range at `pre-push`, and every
+commit under `--all` or for a branch the remote does not have. Never the
+working tree, which holds ignored files — a populated `.env` — that no commit
+carries.
+
+It runs only where the policy **inherits `credentials`**; elsewhere the section
+says it was not asked. A missing scanner is exit `2` here as everywhere in this
+command, and a set nobody inherited must not refuse pushes on a machine
+without gitleaks on the strength of an uphold bump.
+
+It is the one scanner **pinned to a version**, `8.30.1`, because its verdict is
+the rule list compiled into it: two versions are two gates over one commit. A
+gitleaks reporting any other version — a `go install` build reports none — is
+exit `2`, naming the version wanted.
+
+A `.gitleaks.toml` at the root is handed over with `--config`; without one,
+a bundled default ([`policy/gitleaks.default.toml`](../policy/gitleaks.default.toml))
+extends gitleaks' own rules and allowlists test trees (`tests/`, `test/`,
+`*_test.go`), the exclusion the set applied. `--config` is always explicit,
+so a `GITLEAKS_CONFIG` variable left in one shell cannot change the gate. A
+`.gitleaksignore` at the root holds the fingerprints of accepted findings.
+
+gitleaks answers `1` both for findings and for a scan it could not finish, so
+it is run with `--exit-code=3`: `3` is a finding (exit `1`), and any other
+non-zero code is could-not-look (exit `2`). Findings print with `--redact`.
+
 ### The range
 
 The command scans **what a range changed**, not the tree. At `pre-push` the
@@ -2386,12 +2420,15 @@ The changed set is filtered to `Cargo.toml`, `Cargo.lock`, `uv.lock`,
 and the unscanned CI configuration below — that last group is in the set
 *because* nothing reads it, so a push carrying only a `.circleci/config.yml`
 is told the file went unscanned instead of being told there was nothing here.
-A range holding none of them runs no scanner, prints one line and exits `0`. Per scanner: osv-scanner is handed the changed
+A range holding none of them runs none of the first five scanners and says so
+in one line; where gitleaks is not asked for either, that is the whole run and
+it exits `0`. Per scanner: osv-scanner is handed the changed
 lockfiles by path; zizmor the changed workflow files; cargo-deny each crate
 root whose `Cargo.toml` or `Cargo.lock` moved; cargo-vet only where a
 `Cargo.lock` moved and a store exists; guarddog pypi each directory whose
 `uv.lock` or `pyproject.toml` moved and guarddog npm each changed
-`package.json`.
+`package.json`; gitleaks each pushed range as `--log-opts=FROM..TO`, whatever
+files it touched.
 
 A **submodule pointer** that moved is expanded inside the submodule and its
 paths prefixed — a member's new lockfile is in the push as surely as one at
