@@ -54,72 +54,6 @@ pre-commit:
       run: uphold check
       glob: "{policy/upheld.toml,policy/principles.toml,.pre-commit-config.yaml,lefthook.yml}"
 
-    # ── the Go toolchain (deprecated) ────────────────────────────────
-    #
-    # DEPRECATED, and removed one release after the one that marked them.
-    # lefthook has no description field, so this comment is the notice; the jobs
-    # still run exactly as before. A consumer's Go gate belongs in the
-    # consumer's own lefthook.yml, as its own commands. The drift these four
-    # were published to prevent is what `uphold hooks --identity` reports across
-    # repositories, without uphold owning the declaration.
-    #
-    # Four jobs that run no uphold code and need no uphold binary. They are
-    # published because a fleet audit read 24 sibling repositories side by side
-    # and found these four hand-copied as local declarations -- and found that
-    # two of the 24 gofmt copies could never exit nonzero, because `gofmt -l`
-    # prints the files it would reformat and exits 0 either way. The reasoning
-    # is in .pre-commit-hooks.yaml, which publishes the same four ids under the
-    # same names; this file is the lefthook half of that one list.
-    #
-    # What keeps them silent in a repository without Go in it is `go.mod`, and
-    # three of the four are conditioned on nothing else. It was a `glob:` on Go
-    # paths, the same list .pre-commit-hooks.yaml spelled as a `files:` regex,
-    # and that is a condition on the CHANGED SET where the command reads the
-    # whole module: a commit touching only a testdata fixture or a `//go:embed`
-    # asset changes what the module compiles and tests against and ran none of
-    # them. The reasoning is in .pre-commit-hooks.yaml, where the regex came off
-    # the same three ids.
-    #
-    # It comes off differently here, and the difference is the distribution
-    # rather than the check. That file is a MANIFEST: a consumer names the id,
-    # so an id with no condition fires only in a repository that asked for it.
-    # This file is merged into the consumer's own wholesale, so an unconditional
-    # Go job would arrive in every consuming repository on a `ref:` bump, Go or
-    # not, and fail there for want of a module -- the failure the glob was
-    # written against, and the one `uphold-supply-chain` is kept out of this
-    # file for. `test -f go.mod` is that same condition asked of the repository
-    # instead of the commit, which is the level it was always about.
-    #
-    # `uphold-gofmt` keeps its glob on top of the condition, because formatting
-    # is the one question here whose answer a file that is not Go cannot change.
-    #
-    # Jobs rather than commands for the reason uphold-check is one: `glob` is a
-    # job key. The three that no longer carry one stay jobs so that the four are
-    # read as one list.
-    - name: uphold-gofmt
-      # `gofmt -l` is a REPORT and not a gate, so the EMPTINESS of its output is
-      # the verdict and emptiness is what is tested here. The list is printed
-      # before the refusal, because a gate that fails without naming what failed
-      # is the next one somebody deletes.
-      run: test -f go.mod || exit 0; unformatted="$(gofmt -l .)"; [ -z "$unformatted" ] || { echo "gofmt would reformat these files; run gofmt -w ."; echo "$unformatted"; exit 1; }
-      glob: "{*.go,*go.mod,*go.sum}"
-    - name: uphold-go-vet
-      run: test -f go.mod || exit 0; go vet ./...
-    - name: uphold-go-build
-      # Two shapes of module, one command, and `-o` is right for exactly one of
-      # them. Where `./...` resolves to several packages go discards what it
-      # built; where it resolves to a SINGLE main package go writes the
-      # executable into the working directory -- so a bare `go build ./...`
-      # leaves an untracked binary in the tree the job just checked, in exactly
-      # the repositories small enough to have one package. And `-o` is a refusal
-      # where there is no main package at all: `go: no main packages to build`,
-      # exit 1, on every library-only module. So the packages are asked about
-      # first and the shape chooses the command. The status is carried across
-      # the cleanup because `rm` succeeding must not become the answer.
-      run: test -f go.mod || exit 0; if go list -f {{.Name}} ./... 2>/dev/null | grep -qx main; then out="$(mktemp -d)"; go build -o "$out" ./...; status=$?; rm -rf "$out"; exit $status; else go build ./...; fi
-    - name: uphold-go-test
-      run: test -f go.mod || exit 0; go test ./...
-
 commit-msg:
   commands:
     uphold-scan-text:
@@ -144,14 +78,12 @@ pre-push:
       use_stdin: true
       run: uphold guard --stage pre-push --remote {1} --remote-url {2}
 
-# `uphold-supply-chain` is deliberately NOT in this file, and the Go jobs'
-# paragraph at the bottom is the reason at a different severity. A remote
-# config is merged into the consumer's own wholesale -- there is no pinning an
-# id out of it -- so a command here starts running in every consuming
-# repository on the strength of a `ref:` bump. For the Go jobs that meant a
-# job failing for want of a module; for a command whose scanners come from the
-# host toolchain it meant every push refused with exit 2 on any machine
-# without osv-scanner installed, measured by this repository's own consumer
+# `uphold-supply-chain` is deliberately NOT in this file. A remote config is
+# merged into the consumer's own wholesale -- there is no pinning an id out of
+# it -- so a command here starts running in every consuming repository on the
+# strength of a `ref:` bump. For a command whose scanners come from the host
+# toolchain that meant every push refused with exit 2 on any machine without
+# osv-scanner installed, measured by this repository's own consumer
 # matrix on the day it was added. A lefthook consumer opts in by writing the
 # command in its own file, where the decision is visible:
 #
@@ -193,14 +125,3 @@ uphold-manual:
       run: uphold scan
     uphold-guard:
       run: uphold guard --stage manual
-
-# The four Go jobs are NOT repeated here, and .pre-commit-hooks.yaml declares
-# them `stages: [pre-commit]` for the same reason rather than the
-# `[pre-commit, manual]` every other id there carries. Measured against lefthook
-# v2.1.9: `glob` is applied to the files a GIT HOOK is running over, and a named
-# group like this one has no such set -- every job in it runs, glob or no glob.
-# So a Go job here fires in a repository with no Go in it and fails for want of
-# a module, which is the one thing these four are published not to do. Making
-# the two files disagree about which stages the ids reach, to keep a manual
-# sweep this runner cannot condition, would be the forked declaration the ids
-# exist to end.

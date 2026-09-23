@@ -161,52 +161,26 @@ reads `lefthook.yml`, `lefthook.yaml`, `.lefthook.yml` and `.lefthook.yaml` at
 any depth; it does not read `lefthook.toml`, `lefthook.json` or the `-local`
 overlay files, so a pin written in one of those is watched by nothing.
 
-**Go repositories** — four toolchain ids still ship here, and they are
-**deprecated**: they go in the release after the one that marked them.
-Do not adopt them. A Go gate belongs in your own config, as four hooks in a
-`repo: local` block (`- repo: local` then `hooks:` holding the four). From each
-entry under the Go toolchain section of `.pre-commit-hooks.yaml`, copy `entry`,
-`language`, `stages`, `pass_filenames` and `files` verbatim, and give the hook
-its own `id` and `description`: an `uphold-` id in your config reads as one
-uphold ships. `uphold hooks --identity` compares that declaration across
-repositories and reports the copy that drifted. A repository still pinning the
-deprecated ids has these lines to replace:
+**Go repositories** — uphold ships no Go toolchain hooks. A Go gate belongs in
+your own config, as hooks in a `repo: local` block with `language: system`, so
+they use the `go` already on PATH and your choice of vet, linters, `-race` or
+build tags is yours to edit rather than a `rev:` to bump. One thing to copy with
+care: `gofmt -l` prints the files it would reformat and exits `0` regardless, so
+a gate on it has to test the *emptiness* of that output:
 
 ```yaml
-      - id: uphold-gofmt            # a tree gofmt would reformat
-      - id: uphold-go-vet
-      - id: uphold-go-build
-      - id: uphold-go-test
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        entry: sh -c 'out="$(gofmt -l .)"; [ -z "$out" ] || { echo "$out"; exit 1; }'
+        language: system
+        pass_filenames: false
+        files: '(\.go|go\.mod|go\.sum)$'
 ```
 
-`language: system`, so they use the `go` a Go repository already has on PATH and
-add no toolchain and no build. A lefthook consumer gets the same four ids from
-`hooks/lefthook.yml` with nothing extra to write.
-
-Three of the four carry no `files:` filter, and that is deliberate: `go vet`,
-`go build` and `go test` read the whole module, so a commit staging only a
-testdata fixture or a `//go:embed` asset changes what the module is tested
-against and must run them. A filter on Go paths skipped exactly that commit and
-left the finding to CI, which is a green the later red contradicts.
-`uphold-gofmt` keeps the filter, because formatting is the one question here
-whose answer a file that is not Go can never change. They run at every stage a
-runner has a file set at — `pre-commit`, `pre-merge-commit`, `pre-push` and
-`manual` — since git runs `pre-merge-commit` and not `pre-commit` for a merge,
-and a merge is as able to break a build as a commit is.
-
-The lefthook half conditions its three on `go.mod` existing instead. A
-`.pre-commit-config.yaml` consumer *names* the id, so an unconditional id fires
-only where it was asked for; a lefthook remote config is merged wholesale, so
-the condition has to be a fact about the repository rather than about the id
-list.
-
-They exist because 24 sibling repositories declared these four by hand, and two
-of the `gofmt` copies could never fail — `gofmt -l` prints the files it would
-reformat and exits `0` regardless, so twenty-two enforced and two reported
-"Passed" over unformatted code until someone read all 24 side by side.
-`uphold-gofmt` tests the *emptiness* of that output, which is where the verdict
-actually is. A copied `entry:` line can drift in every dimension, which is what
-`uphold hooks --identity` reports.
+`uphold hooks --identity` compares a declaration like this one across
+repositories and reports the copy that drifted.
 
 ## Declare what enforces what
 
