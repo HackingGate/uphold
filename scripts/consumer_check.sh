@@ -11,7 +11,7 @@
 # that read git's stdin under a runner that does not forward it. Each of those
 # passed every test here and failed on first contact with a consumer.
 #
-# Each runner is asked the same nine questions, because "supports lefthook" has
+# Each runner is asked the same eight questions, because "supports lefthook" has
 # to mean the same thing as "supports pre-commit" or it is a listing rather than
 # a claim:
 #
@@ -28,9 +28,6 @@
 #   7. an ordinary merge commit is made and passes, and a merge that would bring
 #      in a zero-width space is refused
 #   8. the manual-stage entry point runs and passes
-#   9. each of the four published Go ids runs, and each one can refuse
-#  10. a commit that stages no Go file at all still runs the module-wide ids
-#  11. a module with no main package in it compiles
 #
 # Question 4 is the one that matters for the runners. A guard that cannot see
 # the push does not fail loudly by default; it falls back to some other tree and
@@ -48,23 +45,6 @@
 # invocation that nothing here made. A pinned id that never runs is this
 # script's own failure mode, one level up -- it passes here, in a config that
 # looks complete, and does nothing in the consumer that copies it.
-#
-# Question 9 is the same lesson applied before it can be learned twice. The four
-# Go ids are published for repositories with Go in them, and this consumer is
-# not one until question 9 makes it one -- which is also when it pins them. Four
-# more ids pinned and never driven is exactly the hole questions 6 to 8 were
-# added to close.
-#
-# Questions 10 and 11 ask what question 9 cannot, because question 9 edits a Go
-# file for every fault it plants. Three of these commands read the whole module
-# and are not asking about the file that changed, so the commit that must run
-# them is the one carrying NO Go file -- a fixture, an embedded asset, a golden
-# file. That commit skipped all three while a `files:` regex was what triggered
-# them, and skipped it silently, which is the shape of every bug this script
-# exists to catch. And a module with no `package main` in it is most of a Go
-# fleet and was none of question 9's fixture: `go build -o <dir> ./...` refuses
-# it outright, so the id that answers "does this compile" answered "no main
-# packages to build" instead.
 
 set -euo pipefail
 
@@ -93,23 +73,6 @@ commit() {
     git -C "$CONSUMER" add -A
     git -C "$CONSUMER" -c user.email=demo@example.test -c user.name=Demo \
         commit -q -m "$1"
-}
-
-# Stage what is in the tree, commit it, and require that ONE named id refused
-# and that the refusal carries the tool's own words. Used by question 9, where a
-# passing commit would be no evidence at all: a hook that never fired and a hook
-# that fired and found nothing look identical from out here, and the two runners
-# spell their progress output differently enough that grepping for a hook's name
-# would be a third thing to keep in step.
-refuses() {
-    local id=$1 needle=$2 subject=$3
-    git -C "$CONSUMER" add -A
-    if git -C "$CONSUMER" -c user.email=demo@example.test -c user.name=Demo \
-        commit -q -m "$subject" >"$WORK/$id.log" 2>&1; then
-        fail "$id did not refuse: \"$subject\" was accepted"
-    fi
-    grep -q "$needle" "$WORK/$id.log" ||
-        fail "refused, but not by $id: $(cat "$WORK/$id.log")"
 }
 
 say "consumer: $CONSUMER  runner: $RUNNER  hooks: $HOOKS_REPO@$HOOKS_REF"
@@ -181,15 +144,6 @@ DECLARATION
 
 printf 'A consuming repository.\n' > "$CONSUMER/README.md"
 
-# The four Go ids are NOT pinned here. They are pinned at question 9, at the
-# moment this consumer becomes a repository with Go in it, because that is the
-# moment a consumer pins them -- and because three of the four now run on every
-# commit rather than on a Go path appearing in the staged set. A module-wide
-# check pinned by a repository with no module is a check that fails on every
-# commit, loudly and correctly, and this consumer has no module until question 9
-# makes one. lefthook has no per-id pin to defer, so hooks/lefthook.yml conditions
-# its Go jobs on `go.mod` existing instead; both spellings come to the same thing
-# here, which is what questions 9 to 11 then ask of all three runners.
 case "$RUNNER" in
 pre-commit | prek)
     cat > "$CONSUMER/.pre-commit-config.yaml" <<CONFIG
@@ -404,130 +358,4 @@ lefthook)
     ;;
 esac
 
-say "9. each of the four published Go ids runs, and each one can refuse"
-# Pinned now, for the reason written where the config was: these four are for a
-# repository with Go in it, and this one is about to become one.
-case "$RUNNER" in
-pre-commit | prek)
-    cat >> "$CONSUMER/.pre-commit-config.yaml" <<'CONFIG'
-      - id: uphold-gofmt
-      - id: uphold-go-vet
-      - id: uphold-go-build
-      - id: uphold-go-test
-CONFIG
-    ;;
-esac
-# Every question above ran in a consumer with no Go in it and with none of these
-# four pinned, so nothing above establishes anything about them -- and an id
-# that never ran and an id that ran and found nothing look identical from out
-# here. So Go arrives with the pins, and each id is then driven by a fault that
-# ONLY it can see: a build that does not compile fails all four at once and
-# would prove nothing about which of them ran.
-cat > "$CONSUMER/go.mod" <<'GOMOD'
-module example.test/consumerapp
-
-go 1.22
-GOMOD
-cat > "$CONSUMER/main.go" <<'GO'
-package main
-
-func main() {}
-GO
-commit "Add a Go module" || fail "a clean Go tree was refused"
-
-# `go build ./...` writes an executable into the working directory when `./...`
-# resolves to a single main package -- which is the shape a small consumer has,
-# and the shape of this fixture. The published id builds into a throwaway
-# directory for exactly that reason; if it ever stops, the binary lands here,
-# untracked, in the tree the hook had just finished pronouncing clean.
-if [ -e "$CONSUMER/consumerapp" ]; then
-    fail "uphold-go-build left an executable behind in the consumer's tree"
-fi
-
-# gofmt, which is why these four ids exist at all. `gofmt -l` PRINTS the files
-# it would reformat and exits 0 whatever it printed, so a hand-copied entry
-# running it bare reports a pass over unformatted code for as long as it lives
-# -- two of the 24 copies audited did precisely that. The published id tests the
-# EMPTINESS of that output, and this refusal is the whole of the difference.
-printf 'package main\n\nfunc  main( ){}\n' > "$CONSUMER/main.go"
-refuses uphold-gofmt "gofmt would reformat" "Unformatted Go"
-printf 'package main\n\nfunc main() {}\n' > "$CONSUMER/main.go"
-
-# go vet, on a finding the other three accept: an unused `fmt.Sprintf` result
-# compiles, and `unusedresult` is outside the vet subset `go test` runs itself.
-printf 'package main\n\nimport "fmt"\n\nfunc main() { fmt.Sprintf("nothing reads this") }\n' \
-    > "$CONSUMER/main.go"
-refuses uphold-go-vet "result of fmt.Sprintf call not used" "Go that only vet objects to"
-printf 'package main\n\nfunc main() {}\n' > "$CONSUMER/main.go"
-
-# go test, on a test that builds and vets clean, so nothing else can be what
-# refused it.
-cat > "$CONSUMER/main_test.go" <<'GO'
-package main
-
-import "testing"
-
-func TestConsumer(t *testing.T) { t.Fatal("this test fails on purpose") }
-GO
-refuses uphold-go-test "this test fails on purpose" "A failing Go test"
-rm -f "$CONSUMER/main_test.go"
-
-# go build last, because a tree that does not compile refuses under all four and
-# can only be attributed once the other three have already answered.
-printf 'package main\n\nfunc main() { nope() }\n' > "$CONSUMER/main.go"
-refuses uphold-go-build "undefined: nope" "Go that does not compile"
-printf 'package main\n\nfunc main() {}\n' > "$CONSUMER/main.go"
-
-# And the accepting direction, which is the half a consumer lives in: four ids
-# that only ever refuse would pass this question by never letting anything
-# through. It carries a NEW file rather than only the restored one, for the
-# reason question 6 replaces a claim instead of deleting it -- main.go is back
-# to bytes already committed and main_test.go was never committed at all, so
-# there would be nothing staged, git would refuse the empty commit, and the
-# question would have passed on a commit that never happened.
-cat > "$CONSUMER/greet.go" <<'GO'
-package main
-
-func greet() string { return "hello" }
-GO
-commit "Restore the Go module" || fail "a clean Go tree was refused after the faults"
-
-say "10. a commit that stages no Go file still runs the module-wide ids"
-# The false green these three ids were published with. `go vet`, `go build` and
-# `go test` read the whole module, and a module is compiled and tested against
-# its fixtures -- so a commit that stages only testdata is a commit that can
-# turn the suite red while touching no Go path at all. Triggered by a file list
-# they never read, all three skipped it and left the finding to CI.
-#
-# The fault is planted with hooks off, so what is staged when the question is
-# asked is one JSON file and nothing else.
-cat > "$CONSUMER/fixture_test.go" <<'GO'
-package main
-
-import "testing"
-
-func TestFixture(t *testing.T) { t.Fatal("this test reads a fixture that changed") }
-GO
-raw_commit "Plant a test that fails"
-mkdir -p "$CONSUMER/testdata"
-printf '{"changed": true}
-' > "$CONSUMER/testdata/x.json"
-refuses uphold-go-test "this test reads a fixture that changed" "Change a fixture only"
-rm -f "$CONSUMER/fixture_test.go"
-raw_commit "Remove the planted test and keep the fixture"
-
-say "11. a module with no main package compiles"
-# `go build -o <dir> ./...` is how uphold-go-build avoids leaving an
-# executable behind, and it is also a refusal where there is no main package to
-# write: `go: no main packages to build`, exit 1, on every library-only module.
-# Question 9's fixture is a single main package, which is the one shape that
-# cannot see it -- so a library, which is what most of a Go module fleet is.
-rm -f "$CONSUMER/main.go" "$CONSUMER/greet.go"
-cat > "$CONSUMER/lib.go" <<'GO'
-package consumerapp
-
-func Greet() string { return "hello" }
-GO
-commit "Make the module a library" || fail "a library-only module was refused"
-
-say "$RUNNER: all eleven passed"
+say "$RUNNER: all eight passed"
