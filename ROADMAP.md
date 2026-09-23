@@ -2,10 +2,16 @@
 
 ## Catalog
 
-- Expand foundational architecture, reliability, security, data, product, and
-  AI-harness entries.
-- Add explicit contradiction pairs and decision matrices.
-- Promote seed entries to reviewed status after source and field review.
+- Promote seed entries to reviewed status after source and field review; every
+  record is `seed`.
+- State `enforcement.rung` on the records that predate the field and are
+  machine-observable, so the by-rung index in `QUICK_REFERENCE.md` describes
+  the whole catalog rather than the records added with it.
+- Add review controls: one record carries a control, and the run names every
+  review-carried record that has none.
+- Fill the kinds no record uses yet only when a candidate is a claim a rule can
+  hold; a method, representation or metric belongs in the coverage page's
+  rung glossary unless a consumer can claim it.
 - Add examples from public HackingGate repositories without exposing private
   organization names or implementation details.
 

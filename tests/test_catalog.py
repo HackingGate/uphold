@@ -490,19 +490,23 @@ class TheSchemaDocumentAgrees(unittest.TestCase):
 
 
 class TheReferenceGroups(unittest.TestCase):
-    """QUICK_REFERENCE.md lists every record under its kind and each domain."""
+    """QUICK_REFERENCE.md lists every record under its kind, domains and rungs."""
 
-    def test_quick_reference_groups_every_record_by_kind_and_domain(self):
+    def test_quick_reference_groups_every_record_by_kind_domain_and_rung(self):
         # Membership only: that a record's link reaches the line for each value
-        # it carries, not how the line is laid out.
+        # it carries, not how the line is laid out. A record stating no rung
+        # reaches the one line for that, so the review-only set is readable
+        # rather than left as what the other lines omit.
         page = render_reference()
         by_kind = page.split("## By kind", 1)[1].split("## By domain", 1)[0]
-        by_domain = page.split("## By domain", 1)[1].split("\n## ", 1)[0]
+        by_domain = page.split("## By domain", 1)[1].split("## By rung", 1)[0]
+        by_rung = page.split("## By rung", 1)[1].split("\n## ", 1)[0]
         for record in load_catalog():
             path = f"principles/{record['id']}.toml"
             for section, values in (
                 (by_kind, [record["kind"]]),
                 (by_domain, record["domains"]),
+                (by_rung, record["enforcement"].get("rung") or ["none stated"]),
             ):
                 for value in values:
                     lines = [
