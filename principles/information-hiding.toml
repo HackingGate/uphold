@@ -1,6 +1,6 @@
 id = "information-hiding"
 title = "Information Hiding"
-aliases = ["Encapsulation by design decision"]
+aliases = ["Encapsulation by design decision", "Abstraction barrier", "Encapsulate what varies", "Program to an interface"]
 kind = "principle"
 status = "seed"
 domains = ["architecture", "interfaces"]
@@ -8,7 +8,7 @@ summary = "Hide volatile design decisions behind interfaces chosen to contain ch
 claim = "Module boundaries should conceal design decisions likely to change, exposing only the stable information required by clients."
 problem = "When clients depend on internal representation or policy, one local change propagates through the system."
 rationale = "A boundary around a volatile decision limits the number of components that must understand or change with it."
-applies_when = ["A representation, algorithm, policy, or external dependency is likely to change.", "Clients can operate through a smaller stable contract.", "The hidden decision has a coherent owner."]
+applies_when = ["A representation, algorithm, policy, or external dependency is likely to change.", "Clients can operate through a smaller stable contract.", "The hidden decision has a coherent owner.", "Clients can be written against a declared interface rather than a concrete implementation, so the implementation can be replaced behind it.", "Layers can be stacked so that each uses only the operations of the one beneath and never its representation."]
 does_not_mean = ["Hide all behavior from observability or review.", "Use getters and setters around every field.", "Prevent clients from expressing legitimate requirements.", "Treat secrecy as a substitute for a stable contract."]
 benefits = ["Reduced ripple effects.", "Replaceable implementations.", "Smaller client knowledge surface."]
 costs = ["Interface design effort.", "Potential mismatch between abstraction and client needs.", "Debugging may require privileged introspection."]

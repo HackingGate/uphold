@@ -1,0 +1,37 @@
+id = "robustness-principle"
+title = "Robustness Principle"
+aliases = ["Postel's law", "Be liberal in what you accept", "Be conservative in what you send"]
+kind = "principle"
+status = "seed"
+domains = ["interfaces", "distributed-systems"]
+summary = "Send only what the specification allows and tolerate peers' deviations where their meaning is clear -- an interoperability rule whose long-run price is that the tolerated deviations become the protocol."
+claim = "An implementation should be conservative in what it emits and liberal in what it accepts, interpreting nonconforming input whose meaning can be recovered rather than rejecting it."
+problem = "Among independently written implementations, strict rejection of every deviation makes interoperation fail on the first ambiguity in a specification or the first bug in a peer, before either can be corrected."
+rationale = "Tolerance absorbs specification ambiguity and peer defects at the point where they meet, so a deployed network keeps working while implementations converge. Conservatism on output keeps each implementation's own contribution to the ambiguity small."
+applies_when = ["Many independent implementations must interoperate and none controls the others' release cycles.", "The specification is young or ambiguous, and deviations are more likely misreadings than intent.", "The meaning of a deviating input can be recovered without guessing, and accepting it makes no security decision.", "A feedback channel exists through which a tolerated deviation is reported back to its sender."]
+does_not_mean = ["Accept input whose meaning must be guessed; tolerance at a trust boundary is a parser differential waiting to be exploited.", "Tolerate silently; repairing input without reporting it removes the only pressure that would correct the sender.", "Apply to internal interfaces whose two sides ship together, where a strict contract costs nothing.", "Relax output; the conservative half binds even where the liberal half has been withdrawn."]
+benefits = ["Interoperation survives specification ambiguity and peer defects.", "Deployment is not blocked on every peer being correct at once.", "A protocol can be adopted incrementally across a heterogeneous ecosystem."]
+costs = ["Every accepted deviation is behavior peers can come to rely on.", "Parsers grow permissive branches that are rarely tested and often security relevant.", "Two implementations that tolerate differently disagree about what one message means."]
+failure_when_overapplied = ["Tolerated deviations become the de facto protocol: new implementations must reproduce the dominant one's leniency, and the specification no longer describes what is deployed, which RFC 9413 calls protocol decay.", "Two lenient parsers interpret one malformed input differently, and the difference is a request-smuggling or authentication bypass.", "Senders never learn of their defects because every receiver repairs them, so the defects are never fixed.", "The specification cannot be tightened later, because tightening breaks peers that only ever worked through tolerance."]
+conflicts_with = ["fail-fast", "explicit-unknown", "deprecation-discipline"]
+related = ["hyrums-law", "graceful-degradation", "least-astonishment"]
+review_questions = ["Which deviations does this parser accept, and is that list written where a peer implementer could read it?", "Is each accepted deviation's meaning recoverable without guessing, and does any downstream component interpret it differently?", "When input is repaired, does the sender learn of it through an error, a log, or a metric?", "What would it cost to stop accepting this deviation in a year, and who would be broken then?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Parser branches that accept input outside the grammar the specification defines.", "Warnings, counters, or logs emitted when nonconforming input is repaired.", "Differences between two parsers' interpretations of the same malformed corpus."]
+checks = ["Require each tolerated deviation to be enumerated in one place and counted when it is accepted.", "Fuzz two parsers of the same format against each other and flag inputs they interpret differently.", "Flag a lenient parse path at a trust boundary whose result feeds an authorization or routing decision."]
+limits = ["Whether a deviation's meaning is unambiguous is a judgment about the protocol's semantics.", "The ecosystem cost of a tolerance appears years later and outside any one repository."]
+
+[[sources]]
+title = "RFC 1122: Requirements for Internet Hosts -- Communication Layers"
+url = "https://www.rfc-editor.org/rfc/rfc1122"
+type = "standard"
+notes = "Section 1.2.2, Robustness Principle, restates Postel's rule from the IP and TCP specifications and adds that software should expect every conceivable error from peers."
+
+[[sources]]
+title = "RFC 9413: Maintaining Robust Protocols"
+url = "https://www.rfc-editor.org/rfc/rfc9413"
+type = "standard"
+notes = "Informational RFC and the counter-argument. Section 4.1, Protocol Decay, describes how tolerated flaws become entrenched as de facto standards; section 5 recommends active protocol maintenance and deliberate intolerance instead."

@@ -1,0 +1,37 @@
+id = "least-power"
+title = "Rule of Least Power"
+aliases = ["Principle of least power", "Least expressive language that suffices"]
+kind = "principle"
+status = "seed"
+domains = ["interfaces", "architecture"]
+summary = "Pick the weakest language, format, or interface that can express the need; what a weaker form cannot say, a reader or a tool can show it does not say."
+claim = "Choose the least expressive language or interface that suffices for the purpose, because each increment of expressive power removes an increment of what others can analyze, transform, or reuse without running it."
+problem = "A configuration file becomes a program, a schema field starts accepting an expression, or a hook takes a shell string, and from then on no consumer can say what it does except by executing it: validation, diffing, search, and static review all stop at the first value that is code."
+rationale = "Analyzability falls as expressiveness rises. A declarative document can be queried, validated, and rewritten by tools its author never saw; a program in a general language admits only execution, and some of its properties are undecidable for every tool. The weaker form keeps the artifact useful to consumers beyond the one it was written for."
+applies_when = ["A format, configuration surface, or rule language is being chosen or extended.", "Consumers other than the author will read, validate, diff, or transform what is written in it.", "A field is about to accept an expression, a template, a script, or a regular expression where a closed value would do.", "The need is understood well enough to state what the weaker form cannot express."]
+does_not_mean = ["Refuse a general-purpose language when the problem needs one; a weak language stretched past its purpose grows an ad hoc interpreter.", "Minimize features for their own sake; the rule trades power for analyzability and has nothing to say where nothing analyzes the artifact.", "Treat a weak syntax as a weak semantics: a data file that a runner evaluates as shell is exactly as powerful as the shell.", "Forbid escape hatches; it means one explicit, rare escape hatch so that the rest stays analyzable."]
+benefits = ["Artifacts can be validated, queried, and diffed without execution.", "Tools the author never anticipated can consume the data.", "Security review reasons over a closed set of behaviors instead of arbitrary code.", "Termination and freedom from side effects hold by construction."]
+costs = ["Users reach the ceiling of the weak form and need a sanctioned extension point.", "An escape hatch means two languages to learn, document, and maintain.", "Repetition a general language would abstract away, which then invites a templating layer on top."]
+failure_when_overapplied = ["A declarative format gains conditionals, loops, and interpolation one release at a time until it is an undocumented programming language.", "Users route around a constrained surface with generated files or wrapper scripts that no tool inspects.", "A deliberately weak interface forces every consumer to reimplement the missing operation, each one differently.", "Power removed from the author's side reappears in an interpreter nobody reviews."]
+conflicts_with = ["parameterize-do-not-enumerate"]
+related = ["economy-of-mechanism", "unix-composability", "make-illegal-states-unrepresentable", "minimize-attack-surface"]
+review_questions = ["What is the weakest form that expresses every real case here, and what does this form add beyond it?", "Which consumers read this artifact, and which of them can still analyze it without executing it?", "Where a field accepts an expression or a script, what closed value would have served, and why was it not enough?", "If an escape hatch is needed, is it one named place, or does power leak into every field?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Schema or configuration fields whose type is an expression, a template, a script, or a regular expression.", "Hook and task definitions that take a shell string rather than an argument vector.", "Control constructs such as conditionals, loops, and interpolation appearing in a format across versions."]
+checks = ["Flag a schema change that widens a field from an enumeration or literal to an expression or free string.", "Require a stated reason where a configuration value is evaluated rather than read.", "Report the number of evaluated fields per format over time, so accretion is visible."]
+limits = ["Whether the weaker form suffices depends on requirements a tool cannot see.", "Expressive power belongs to the evaluator, not the syntax; a checker reading the file cannot tell a string that is displayed from one that is executed without knowing its consumer."]
+
+[[sources]]
+title = "The Rule of Least Power"
+url = "https://www.w3.org/2001/tag/doc/leastPower.html"
+type = "essay"
+notes = "W3C Technical Architecture Group finding (2006), not a Recommendation. States the rule for Web languages: the less powerful the language, the more one can do with the data stored in it."
+
+[[sources]]
+title = "Principles of Design"
+url = "https://www.w3.org/DesignIssues/Principles.html"
+type = "essay"
+notes = "Berners-Lee's earlier Design Issues note, listing least power beside simplicity, modular design, and tolerance."

@@ -1,6 +1,6 @@
 id = "separation-of-concerns"
 title = "Separation of Concerns"
-aliases = ["SOC"]
+aliases = ["SOC", "Orthogonality"]
 kind = "principle"
 status = "seed"
 domains = ["architecture"]
@@ -8,7 +8,7 @@ summary = "Separate dimensions that change for different reasons so they can be 
 claim = "Organize a system so distinct concerns can be understood, changed, tested, and governed independently where their real dependencies permit it."
 problem = "Interleaved concerns multiply change impact and make it difficult to know which rule, stakeholder, or failure mode a component serves."
 rationale = "Reasoning about one concern at a time reduces cognitive load and localizes the consequences of change."
-applies_when = ["Concerns have different change drivers, owners, policies, or test strategies.", "A boundary can be introduced without duplicating core truth.", "Interactions can be made explicit through contracts."]
+applies_when = ["Concerns have different change drivers, owners, policies, or test strategies.", "A boundary can be introduced without duplicating core truth.", "Interactions can be made explicit through contracts.", "Two concerns can be made orthogonal, so that a change to one leaves the other unchanged."]
 does_not_mean = ["Every concern requires a separate process or repository.", "Cross-cutting concerns disappear.", "Duplication is always preferable to coupling.", "The system should mirror an arbitrary taxonomy."]
 benefits = ["Localized change.", "Clearer tests and ownership.", "More explicit interfaces."]
 costs = ["Additional abstractions and coordination.", "Risk of indirection without meaningful independence.", "Cross-cutting behavior still needs integration."]

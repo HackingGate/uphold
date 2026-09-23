@@ -32,6 +32,18 @@
       "path": "principles/psychological-acceptability.toml"
     },
     {
+      "name": "Abstraction barrier",
+      "key": "abstraction barrier",
+      "tokens": [
+        "abstraction",
+        "barrier"
+      ],
+      "field": "alias",
+      "id": "information-hiding",
+      "title": "Information Hiding",
+      "path": "principles/information-hiding.toml"
+    },
+    {
       "name": "Actionable signal",
       "key": "actionable signal",
       "tokens": [
@@ -42,6 +54,30 @@
       "id": "enforcement-needs-a-trigger",
       "title": "Enforcement Needs a Trigger",
       "path": "principles/enforcement-needs-a-trigger.toml"
+    },
+    {
+      "name": "Acyclic Dependencies Principle",
+      "key": "acyclic dependencies principle",
+      "tokens": [
+        "acyclic",
+        "dependencies",
+        "principle"
+      ],
+      "field": "title",
+      "id": "acyclic-dependencies",
+      "title": "Acyclic Dependencies Principle",
+      "path": "principles/acyclic-dependencies.toml"
+    },
+    {
+      "name": "ADP",
+      "key": "adp",
+      "tokens": [
+        "adp"
+      ],
+      "field": "alias",
+      "id": "acyclic-dependencies",
+      "title": "Acyclic Dependencies Principle",
+      "path": "principles/acyclic-dependencies.toml"
     },
     {
       "name": "Append-only state",
@@ -79,6 +115,38 @@
       "id": "backpressure",
       "title": "Backpressure",
       "path": "principles/backpressure.toml"
+    },
+    {
+      "name": "Be conservative in what you send",
+      "key": "be conservative in what you send",
+      "tokens": [
+        "be",
+        "conservative",
+        "in",
+        "what",
+        "you",
+        "send"
+      ],
+      "field": "alias",
+      "id": "robustness-principle",
+      "title": "Robustness Principle",
+      "path": "principles/robustness-principle.toml"
+    },
+    {
+      "name": "Be liberal in what you accept",
+      "key": "be liberal in what you accept",
+      "tokens": [
+        "be",
+        "liberal",
+        "in",
+        "what",
+        "you",
+        "accept"
+      ],
+      "field": "alias",
+      "id": "robustness-principle",
+      "title": "Robustness Principle",
+      "path": "principles/robustness-principle.toml"
     },
     {
       "name": "Calculator with one_plus_one()",
@@ -122,6 +190,19 @@
       "path": "principles/complete-mediation.toml"
     },
     {
+      "name": "Chesterton's Fence",
+      "key": "chesterton s fence",
+      "tokens": [
+        "chesterton",
+        "s",
+        "fence"
+      ],
+      "field": "title",
+      "id": "chestertons-fence",
+      "title": "Chesterton's Fence",
+      "path": "principles/chestertons-fence.toml"
+    },
+    {
       "name": "Cohesion and coupling",
       "key": "cohesion and coupling",
       "tokens": [
@@ -160,6 +241,42 @@
       "id": "parameterize-do-not-enumerate",
       "title": "Parameterize, Do Not Enumerate",
       "path": "principles/parameterize-do-not-enumerate.toml"
+    },
+    {
+      "name": "Common closure",
+      "key": "common closure",
+      "tokens": [
+        "common",
+        "closure"
+      ],
+      "field": "alias",
+      "id": "high-cohesion-low-coupling",
+      "title": "High Cohesion, Low Coupling",
+      "path": "principles/high-cohesion-low-coupling.toml"
+    },
+    {
+      "name": "Common reuse",
+      "key": "common reuse",
+      "tokens": [
+        "common",
+        "reuse"
+      ],
+      "field": "alias",
+      "id": "high-cohesion-low-coupling",
+      "title": "High Cohesion, Low Coupling",
+      "path": "principles/high-cohesion-low-coupling.toml"
+    },
+    {
+      "name": "Compatibility budget",
+      "key": "compatibility budget",
+      "tokens": [
+        "compatibility",
+        "budget"
+      ],
+      "field": "alias",
+      "id": "deprecation-discipline",
+      "title": "Deprecation Discipline",
+      "path": "principles/deprecation-discipline.toml"
     },
     {
       "name": "Complete Mediation",
@@ -286,6 +403,18 @@
       "path": "principles/graceful-degradation.toml"
     },
     {
+      "name": "Deprecation Discipline",
+      "key": "deprecation discipline",
+      "tokens": [
+        "deprecation",
+        "discipline"
+      ],
+      "field": "title",
+      "id": "deprecation-discipline",
+      "title": "Deprecation Discipline",
+      "path": "principles/deprecation-discipline.toml"
+    },
+    {
       "name": "Distinguish not-violated from not-inspected",
       "key": "distinguish not violated from not inspected",
       "tokens": [
@@ -358,6 +487,19 @@
       "path": "principles/economy-of-mechanism.toml"
     },
     {
+      "name": "Encapsulate what varies",
+      "key": "encapsulate what varies",
+      "tokens": [
+        "encapsulate",
+        "what",
+        "varies"
+      ],
+      "field": "alias",
+      "id": "information-hiding",
+      "title": "Information Hiding",
+      "path": "principles/information-hiding.toml"
+    },
+    {
       "name": "Encapsulation by design decision",
       "key": "encapsulation by design decision",
       "tokens": [
@@ -415,6 +557,22 @@
       "id": "enforcement-needs-a-trigger",
       "title": "Enforcement Needs a Trigger",
       "path": "principles/enforcement-needs-a-trigger.toml"
+    },
+    {
+      "name": "Every observable behavior is a dependency",
+      "key": "every observable behavior is a dependency",
+      "tokens": [
+        "every",
+        "observable",
+        "behavior",
+        "is",
+        "a",
+        "dependency"
+      ],
+      "field": "alias",
+      "id": "hyrums-law",
+      "title": "Hyrum's Law",
+      "path": "principles/hyrums-law.toml"
     },
     {
       "name": "Evidence-bound enforcement",
@@ -572,6 +730,19 @@
       "path": "principles/psychological-acceptability.toml"
     },
     {
+      "name": "Hyrum's Law",
+      "key": "hyrum s law",
+      "tokens": [
+        "hyrum",
+        "s",
+        "law"
+      ],
+      "field": "title",
+      "id": "hyrums-law",
+      "title": "Hyrum's Law",
+      "path": "principles/hyrums-law.toml"
+    },
+    {
       "name": "Idempotency",
       "key": "idempotency",
       "tokens": [
@@ -622,6 +793,18 @@
       "path": "principles/informed-consent.toml"
     },
     {
+      "name": "Interface segregation",
+      "key": "interface segregation",
+      "tokens": [
+        "interface",
+        "segregation"
+      ],
+      "field": "alias",
+      "id": "high-cohesion-low-coupling",
+      "title": "High Cohesion, Low Coupling",
+      "path": "principles/high-cohesion-low-coupling.toml"
+    },
+    {
       "name": "Keep it simple",
       "key": "keep it simple",
       "tokens": [
@@ -657,6 +840,48 @@
       "id": "economy-of-mechanism",
       "title": "Economy of Mechanism",
       "path": "principles/economy-of-mechanism.toml"
+    },
+    {
+      "name": "Know why before you remove",
+      "key": "know why before you remove",
+      "tokens": [
+        "know",
+        "why",
+        "before",
+        "you",
+        "remove"
+      ],
+      "field": "alias",
+      "id": "chestertons-fence",
+      "title": "Chesterton's Fence",
+      "path": "principles/chestertons-fence.toml"
+    },
+    {
+      "name": "Law of Demeter",
+      "key": "law of demeter",
+      "tokens": [
+        "law",
+        "of",
+        "demeter"
+      ],
+      "field": "alias",
+      "id": "high-cohesion-low-coupling",
+      "title": "High Cohesion, Low Coupling",
+      "path": "principles/high-cohesion-low-coupling.toml"
+    },
+    {
+      "name": "Law of implicit interfaces",
+      "key": "law of implicit interfaces",
+      "tokens": [
+        "law",
+        "of",
+        "implicit",
+        "interfaces"
+      ],
+      "field": "alias",
+      "id": "hyrums-law",
+      "title": "Hyrum's Law",
+      "path": "principles/hyrums-law.toml"
     },
     {
       "name": "Layered defenses",
@@ -696,6 +921,21 @@
       "path": "principles/least-common-mechanism.toml"
     },
     {
+      "name": "Least expressive language that suffices",
+      "key": "least expressive language that suffices",
+      "tokens": [
+        "least",
+        "expressive",
+        "language",
+        "that",
+        "suffices"
+      ],
+      "field": "alias",
+      "id": "least-power",
+      "title": "Rule of Least Power",
+      "path": "principles/least-power.toml"
+    },
+    {
       "name": "Least Privilege",
       "key": "least privilege",
       "tokens": [
@@ -706,6 +946,18 @@
       "id": "least-privilege",
       "title": "Least Privilege",
       "path": "principles/least-privilege.toml"
+    },
+    {
+      "name": "Levelized dependencies",
+      "key": "levelized dependencies",
+      "tokens": [
+        "levelized",
+        "dependencies"
+      ],
+      "field": "alias",
+      "id": "acyclic-dependencies",
+      "title": "Acyclic Dependencies Principle",
+      "path": "principles/acyclic-dependencies.toml"
     },
     {
       "name": "Make Illegal States Unrepresentable",
@@ -787,6 +1039,20 @@
       "path": "principles/least-common-mechanism.toml"
     },
     {
+      "name": "Name what you remove",
+      "key": "name what you remove",
+      "tokens": [
+        "name",
+        "what",
+        "you",
+        "remove"
+      ],
+      "field": "alias",
+      "id": "chestertons-fence",
+      "title": "Chesterton's Fence",
+      "path": "principles/chestertons-fence.toml"
+    },
+    {
       "name": "No bypass path",
       "key": "no bypass path",
       "tokens": [
@@ -798,6 +1064,19 @@
       "id": "complete-mediation",
       "title": "Complete Mediation",
       "path": "principles/complete-mediation.toml"
+    },
+    {
+      "name": "No dependency cycles",
+      "key": "no dependency cycles",
+      "tokens": [
+        "no",
+        "dependency",
+        "cycles"
+      ],
+      "field": "alias",
+      "id": "acyclic-dependencies",
+      "title": "Acyclic Dependencies Principle",
+      "path": "principles/acyclic-dependencies.toml"
     },
     {
       "name": "No hidden side effects",
@@ -881,6 +1160,19 @@
       "path": "principles/parameterize-do-not-enumerate.toml"
     },
     {
+      "name": "One-way door",
+      "key": "one way door",
+      "tokens": [
+        "one",
+        "way",
+        "door"
+      ],
+      "field": "alias",
+      "id": "reversible-decisions",
+      "title": "Optimize for Reversible Decisions",
+      "path": "principles/reversible-decisions.toml"
+    },
+    {
       "name": "Operational observability",
       "key": "operational observability",
       "tokens": [
@@ -919,6 +1211,17 @@
       "path": "principles/reversible-decisions.toml"
     },
     {
+      "name": "Orthogonality",
+      "key": "orthogonality",
+      "tokens": [
+        "orthogonality"
+      ],
+      "field": "alias",
+      "id": "separation-of-concerns",
+      "title": "Separation of Concerns",
+      "path": "principles/separation-of-concerns.toml"
+    },
+    {
       "name": "Parameterize, Do Not Enumerate",
       "key": "parameterize do not enumerate",
       "tokens": [
@@ -951,6 +1254,20 @@
         "parse",
         "do",
         "not",
+        "validate"
+      ],
+      "field": "alias",
+      "id": "make-illegal-states-unrepresentable",
+      "title": "Make Illegal States Unrepresentable",
+      "path": "principles/make-illegal-states-unrepresentable.toml"
+    },
+    {
+      "name": "Parse, don't validate",
+      "key": "parse don t validate",
+      "tokens": [
+        "parse",
+        "don",
+        "t",
         "validate"
       ],
       "field": "alias",
@@ -995,6 +1312,19 @@
       "path": "principles/least-privilege.toml"
     },
     {
+      "name": "Postel's law",
+      "key": "postel s law",
+      "tokens": [
+        "postel",
+        "s",
+        "law"
+      ],
+      "field": "alias",
+      "id": "robustness-principle",
+      "title": "Robustness Principle",
+      "path": "principles/robustness-principle.toml"
+    },
+    {
       "name": "Preview before apply",
       "key": "preview before apply",
       "tokens": [
@@ -1006,6 +1336,48 @@
       "id": "informed-consent",
       "title": "Informed Consent for Consequential Actions",
       "path": "principles/informed-consent.toml"
+    },
+    {
+      "name": "Principle of least commitment",
+      "key": "principle of least commitment",
+      "tokens": [
+        "principle",
+        "of",
+        "least",
+        "commitment"
+      ],
+      "field": "alias",
+      "id": "reversible-decisions",
+      "title": "Optimize for Reversible Decisions",
+      "path": "principles/reversible-decisions.toml"
+    },
+    {
+      "name": "Principle of least knowledge",
+      "key": "principle of least knowledge",
+      "tokens": [
+        "principle",
+        "of",
+        "least",
+        "knowledge"
+      ],
+      "field": "alias",
+      "id": "high-cohesion-low-coupling",
+      "title": "High Cohesion, Low Coupling",
+      "path": "principles/high-cohesion-low-coupling.toml"
+    },
+    {
+      "name": "Principle of least power",
+      "key": "principle of least power",
+      "tokens": [
+        "principle",
+        "of",
+        "least",
+        "power"
+      ],
+      "field": "alias",
+      "id": "least-power",
+      "title": "Rule of Least Power",
+      "path": "principles/least-power.toml"
     },
     {
       "name": "Principle of least privilege",
@@ -1034,6 +1406,20 @@
       "id": "least-astonishment",
       "title": "Least Astonishment",
       "path": "principles/least-astonishment.toml"
+    },
+    {
+      "name": "Program to an interface",
+      "key": "program to an interface",
+      "tokens": [
+        "program",
+        "to",
+        "an",
+        "interface"
+      ],
+      "field": "alias",
+      "id": "information-hiding",
+      "title": "Information Hiding",
+      "path": "principles/information-hiding.toml"
     },
     {
       "name": "Prose is not a check",
@@ -1133,6 +1519,32 @@
       "path": "principles/explicit-unknown.toml"
     },
     {
+      "name": "Robustness Principle",
+      "key": "robustness principle",
+      "tokens": [
+        "robustness",
+        "principle"
+      ],
+      "field": "title",
+      "id": "robustness-principle",
+      "title": "Robustness Principle",
+      "path": "principles/robustness-principle.toml"
+    },
+    {
+      "name": "Rule of Least Power",
+      "key": "rule of least power",
+      "tokens": [
+        "rule",
+        "of",
+        "least",
+        "power"
+      ],
+      "field": "title",
+      "id": "least-power",
+      "title": "Rule of Least Power",
+      "path": "principles/least-power.toml"
+    },
+    {
       "name": "Rule of least surprise",
       "key": "rule of least surprise",
       "tokens": [
@@ -1147,6 +1559,19 @@
       "path": "principles/least-astonishment.toml"
     },
     {
+      "name": "Rule of Three",
+      "key": "rule of three",
+      "tokens": [
+        "rule",
+        "of",
+        "three"
+      ],
+      "field": "title",
+      "id": "rule-of-three",
+      "title": "Rule of Three",
+      "path": "principles/rule-of-three.toml"
+    },
+    {
       "name": "Secure by default",
       "key": "secure by default",
       "tokens": [
@@ -1158,6 +1583,18 @@
       "id": "fail-safe-defaults",
       "title": "Fail-Safe Defaults",
       "path": "principles/fail-safe-defaults.toml"
+    },
+    {
+      "name": "Semantic versioning",
+      "key": "semantic versioning",
+      "tokens": [
+        "semantic",
+        "versioning"
+      ],
+      "field": "alias",
+      "id": "deprecation-discipline",
+      "title": "Deprecation Discipline",
+      "path": "principles/deprecation-discipline.toml"
     },
     {
       "name": "Separate Mechanism from Policy",
@@ -1304,6 +1741,30 @@
       "path": "principles/single-authoritative-source.toml"
     },
     {
+      "name": "Stable abstractions",
+      "key": "stable abstractions",
+      "tokens": [
+        "stable",
+        "abstractions"
+      ],
+      "field": "alias",
+      "id": "high-cohesion-low-coupling",
+      "title": "High Cohesion, Low Coupling",
+      "path": "principles/high-cohesion-low-coupling.toml"
+    },
+    {
+      "name": "Stable dependencies",
+      "key": "stable dependencies",
+      "tokens": [
+        "stable",
+        "dependencies"
+      ],
+      "field": "alias",
+      "id": "high-cohesion-low-coupling",
+      "title": "High Cohesion, Low Coupling",
+      "path": "principles/high-cohesion-low-coupling.toml"
+    },
+    {
       "name": "System of Record",
       "key": "system of record",
       "tokens": [
@@ -1330,6 +1791,21 @@
       "path": "principles/compromise-recording.toml"
     },
     {
+      "name": "Three strikes and you refactor",
+      "key": "three strikes and you refactor",
+      "tokens": [
+        "three",
+        "strikes",
+        "and",
+        "you",
+        "refactor"
+      ],
+      "field": "alias",
+      "id": "rule-of-three",
+      "title": "Rule of Three",
+      "path": "principles/rule-of-three.toml"
+    },
+    {
       "name": "Two-key control",
       "key": "two key control",
       "tokens": [
@@ -1354,6 +1830,19 @@
       "id": "separation-of-privilege",
       "title": "Separation of Privilege",
       "path": "principles/separation-of-privilege.toml"
+    },
+    {
+      "name": "Two-way door",
+      "key": "two way door",
+      "tokens": [
+        "two",
+        "way",
+        "door"
+      ],
+      "field": "alias",
+      "id": "reversible-decisions",
+      "title": "Optimize for Reversible Decisions",
+      "path": "principles/reversible-decisions.toml"
     },
     {
       "name": "Two-way door decisions",
@@ -1417,6 +1906,21 @@
       "id": "psychological-acceptability",
       "title": "Psychological Acceptability",
       "path": "principles/psychological-acceptability.toml"
+    },
+    {
+      "name": "Wait for the third instance",
+      "key": "wait for the third instance",
+      "tokens": [
+        "wait",
+        "for",
+        "the",
+        "third",
+        "instance"
+      ],
+      "field": "alias",
+      "id": "rule-of-three",
+      "title": "Rule of Three",
+      "path": "principles/rule-of-three.toml"
     },
     {
       "name": "Zero trust",
