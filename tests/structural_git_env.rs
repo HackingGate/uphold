@@ -65,6 +65,13 @@ use support::syntax::{calls, enclosing_function, function_named, unparsed};
 fn every_command_probe_builds_has_gits_environment_taken_away() {
     let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/probe.rs"))
         .expect("probe.rs is where the rule applies");
+    let git = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/git.rs"))
+        .expect("git.rs is where the list the helper strips lives");
+    assert_eq!(
+        unparsed(&git),
+        None,
+        "src/git.rs did not parse, so the list `detached` strips was read off a fragment"
+    );
 
     assert_eq!(
         unparsed(&source),
@@ -87,7 +94,7 @@ fn every_command_probe_builds_has_gits_environment_taken_away() {
     // sentence, and by a `GIT_DIR` in any other function -- which is the
     // required-shape direction a matcher cannot express, in the file arguing
     // that it cannot.
-    let stripped = stripped_names(&source);
+    let stripped = stripped_names(&source, &git);
     for name in [
         "GIT_DIR",
         "GIT_COMMON_DIR",
@@ -137,19 +144,27 @@ fn bare_constructions(source: &str) -> Vec<String> {
 /// `env_remove`, because both leave the environment in place and the assertion
 /// reading this should not have to tell them apart.
 ///
+/// The names are literals in the helper, or in `git::REPOSITORY_ENVIRONMENT`
+/// where the helper names that constant: the list is one item in `src/git.rs`
+/// because the submodule reads in `supply` strip the same names, and a second
+/// copy here would be the one nobody updated. Followed by name, and only that
+/// one name -- a helper that iterates some other constant strips nothing this
+/// reader can see.
+///
 /// WHAT THIS DOES NOT PROVE, and it is the same boundary the ADR draws. The
 /// helper hands `env_remove` a loop variable, so the argument at the call site
 /// is an identifier: what is read here is that the helper removes SOMETHING and
 /// that the name appears as a literal in the same function. Tying this literal
 /// to that call means following the value into the loop, which is the tier
 /// above a syntax tree.
-fn stripped_names(source: &str) -> Vec<String> {
+fn stripped_names(source: &str, git: &str) -> Vec<String> {
     let Some(helper) = function_named(source, "detached") else {
         return Vec::new();
     };
     let mut cursor = helper.walk();
     let mut pending = vec![helper];
     let mut removes = false;
+    let mut shared = false;
     let mut names = Vec::new();
     while let Some(node) = pending.pop() {
         if node.kind() == "call_expression"
@@ -162,9 +177,39 @@ fn stripped_names(source: &str) -> Vec<String> {
         if node.kind() == "string_literal" {
             names.push(source[node.byte_range()].trim_matches('"').to_owned());
         }
+        if node.kind() == "identifier" && &source[node.byte_range()] == "REPOSITORY_ENVIRONMENT" {
+            shared = true;
+        }
         pending.extend(node.children(&mut cursor));
     }
+    if shared {
+        names.extend(literals_of_const(git, "REPOSITORY_ENVIRONMENT"));
+    }
     if removes { names } else { Vec::new() }
+}
+
+/// The string literals inside the top-level `const` called `name`.
+fn literals_of_const(source: &str, name: &str) -> Vec<String> {
+    let tree = support::syntax::parse(source);
+    let mut top = tree.walk();
+    let Some(item) = tree.root_node().children(&mut top).find(|node| {
+        node.kind() == "const_item"
+            && node
+                .child_by_field_name("name")
+                .is_some_and(|found| &source[found.byte_range()] == name)
+    }) else {
+        return Vec::new();
+    };
+    let mut cursor = item.walk();
+    let mut pending = vec![item];
+    let mut names = Vec::new();
+    while let Some(node) = pending.pop() {
+        if node.kind() == "string_literal" {
+            names.push(source[node.byte_range()].trim_matches('"').to_owned());
+        }
+        pending.extend(node.children(&mut cursor));
+    }
+    names
 }
 
 #[test]
@@ -211,13 +256,40 @@ fn the_check_can_tell_the_helper_from_a_bare_construction() {
     // required-shape assertion nobody has seen fail is a required-shape
     // assertion that may be reading the wrong thing.
     assert_eq!(
-        stripped_names(offending),
+        stripped_names(offending, ""),
         ["GIT_DIR"],
         "the names were not read out of the helper's own body"
     );
     assert!(
-        stripped_names(clean).is_empty(),
+        stripped_names(clean, "").is_empty(),
         "a helper that calls no env_remove was reported as stripping something"
+    );
+
+    // And through the shared constant, both ways: the names are followed into
+    // `git.rs` when the helper iterates that constant, and not when it iterates
+    // a different one that merely sits beside it.
+    let git = r#"
+        pub(crate) const REPOSITORY_ENVIRONMENT: [&str; 1] = ["GIT_DIR"];
+        const SOMETHING_ELSE: [&str; 1] = ["GIT_INDEX_FILE"];
+    "#;
+    let shared = r"
+        fn detached(program: &str) -> Command {
+            let mut command = Command::new(program);
+            for name in crate::git::REPOSITORY_ENVIRONMENT {
+                command.env_remove(name);
+            }
+            command
+        }
+    ";
+    assert_eq!(
+        stripped_names(shared, git),
+        ["GIT_DIR"],
+        "the names were not followed into the constant the helper iterates"
+    );
+    let elsewhere = shared.replace("REPOSITORY_ENVIRONMENT", "SOMETHING_ELSE");
+    assert!(
+        stripped_names(&elsewhere, git).is_empty(),
+        "a helper iterating another constant was credited with the shared list"
     );
 }
 

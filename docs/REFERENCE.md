@@ -2489,7 +2489,10 @@ files it touched.
 
 A **submodule pointer** that moved is expanded inside the submodule and its
 paths prefixed — a member's new lockfile is in the push as surely as one at
-the root. Where the submodule's object store lacks either commit the range
+the root. git is asked there with the hooked repository's environment taken
+away, so the `GIT_DIR` git exports to a hook on a push from a linked worktree
+does not send the question to the superproject's store. Where the submodule's
+object store lacks either commit the range
 cannot be read, so every manifest under it is in scope and the run says so; a
 branch the remote does not have widens the same way, for the push that
 introduces everything. A submodule that is **not checked out** is exit `2`

@@ -566,22 +566,14 @@ fn which(command: &str) -> Option<PathBuf> {
 /// at all. Where it could, the staging would have been written into somebody
 /// else's index, which is the same class of accident with none of the noise.
 ///
-/// Stripped rather than overridden: the list of things git puts in an
-/// environment is git's, and an override answers only for the names somebody
-/// remembered.
+/// The names are `git::REPOSITORY_ENVIRONMENT`, the one list this module and
+/// the submodule reads in `supply` both strip: two copies of it would be two
+/// answers to "what does git export", and the one nobody updated would be the
+/// one a hook ran.
 pub(crate) fn detached(program: &str, directory: &Path) -> Command {
     let mut command = Command::new(program);
     command.current_dir(directory);
-    for name in [
-        "GIT_DIR",
-        "GIT_COMMON_DIR",
-        "GIT_INDEX_FILE",
-        "GIT_WORK_TREE",
-        "GIT_PREFIX",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_CONFIG_PARAMETERS",
-    ] {
+    for name in crate::git::REPOSITORY_ENVIRONMENT {
         command.env_remove(name);
     }
     command

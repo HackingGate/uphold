@@ -972,6 +972,89 @@ fn a_submodule_commit_the_store_does_not_have_widens_to_every_manifest_under_it(
     assert!(journal(&root).contains("guarddog"), "{}", journal(&root));
 }
 
+/// A push from a linked worktree reads the member's range in the member.
+///
+/// git exports `GIT_DIR` to a hook when the push comes from a linked worktree,
+/// and not when it comes from the main checkout. Inherited by the git calls made
+/// INSIDE the submodule, it sent them to the superproject's object store, which
+/// has neither of the member's commits: every bumped submodule read as "moved
+/// to a commit its object store does not have" and was scanned whole, and a
+/// push that touched one lockfile was refused over findings in files nobody
+/// changed. Driven through a real linked worktree, with the `GIT_DIR` git would
+/// hand the hook, and the member's untouched lock is the assertion that the
+/// range was read rather than widened.
+#[test]
+fn a_push_from_a_linked_worktree_reads_the_members_range_in_the_member() {
+    let root = tracked();
+    with_a_submodule(&root);
+    let before = head(&root);
+    let member = root.join("sub");
+    write(&member, "harness/uv.lock", "version = 1\n");
+    commit(&member, "a second lock in the member");
+    let after = commit(&root, "bump the pointer");
+
+    let linked = support::scratch("supply-chain-linked");
+    support::git(
+        &root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            &linked.display().to_string(),
+            &after,
+        ],
+    );
+    // The member's new commit exists only in the main checkout's clone of it,
+    // so that clone is where the linked worktree's own clone is made from.
+    support::git(
+        &linked,
+        &["config", "submodule.sub.url", &member.display().to_string()],
+    );
+    support::git(
+        &linked,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
+            "-q",
+        ],
+    );
+    let git_dir = support::git_command(&linked)
+        .args(["rev-parse", "--absolute-git-dir"])
+        .output()
+        .unwrap();
+    let git_dir = String::from_utf8_lossy(&git_dir.stdout).trim().to_owned();
+    assert!(git_dir.contains("worktrees"), "{git_dir}");
+
+    let tools = stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        ("uv", &recording("echo 'requests==2.0.0'")),
+        ("guarddog", &recording(GUARDDOG_CLEAN)),
+    ]);
+    let mut path = tools.as_os_str().to_owned();
+    path.push(":/usr/bin:/bin");
+    let output = invoke(
+        &linked,
+        &path,
+        &[],
+        &[
+            ("PRE_COMMIT_FROM_REF", &before),
+            ("PRE_COMMIT_TO_REF", &after),
+            ("GIT_DIR", &git_dir),
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let said = text(&output);
+    assert!(!said.contains("does not have"), "{said}");
+    assert!(said.contains("1 lockfile(s) in this range"), "{said}");
+    let ran = journal(&linked);
+    assert!(ran.contains("sub/harness]"), "{ran}");
+    assert!(!ran.contains("sub]"), "{ran}");
+}
+
 /// A submodule that is not checked out is exit 2, not a widening.
 ///
 /// There is no tree to widen INTO. Widening would enumerate an empty directory

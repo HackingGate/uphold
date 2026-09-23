@@ -151,12 +151,13 @@ fn resolve_git() -> PathBuf {
 
 /// What a hook runner exports that would send a fixture's `git` elsewhere.
 ///
-/// The same list `detached` in `src/probe.rs` strips, and the two are copies
-/// rather than one item because this crate is a binary: an integration test
-/// links nothing from `src/`, and the one thing it could share would have to be
-/// a public item of a library that does not exist. Whoever adds a name to one
-/// list adds it to the other; `structural_git_env.rs` reads the other list off
-/// the helper's body, so this is the one a reader has to remember.
+/// The same list as `REPOSITORY_ENVIRONMENT` in `src/git.rs`, which
+/// `probe::detached` and the submodule reads in `supply` strip, and the two are
+/// copies rather than one item because this crate is a binary: an integration
+/// test links nothing from `src/`, and the one thing it could share would have
+/// to be a public item of a library that does not exist. Whoever adds a name to
+/// one list adds it to the other; `structural_git_env.rs` reads the other list
+/// off the source, so this is the one a reader has to remember.
 const GIT_ENVIRONMENT: [&str; 8] = [
     "GIT_DIR",
     "GIT_COMMON_DIR",
@@ -178,9 +179,9 @@ const GIT_ENVIRONMENT: [&str; 8] = [
 /// pointed at: a fixture commit on top of the commit being pushed, and a main
 /// checkout whose config says `core.bare = true`.
 ///
-/// Stripped rather than overridden, for the reason `probe::detached` gives:
-/// the list of what git reads from an environment is git's, and an override
-/// answers only for the names somebody remembered.
+/// Stripped rather than overridden, for the reason `git::REPOSITORY_ENVIRONMENT`
+/// gives: the list of what git reads from an environment is git's, and an
+/// override answers only for the names somebody remembered.
 pub fn git_command(root: &Path) -> Command {
     let mut command = Command::new(real_git());
     command.current_dir(root);

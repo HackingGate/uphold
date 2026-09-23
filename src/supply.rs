@@ -678,12 +678,16 @@ fn collect_range(
 ) -> Result<()> {
     let directory = root.join(prefix);
     let range = format!("{from}..{to}");
-    for line in crate::git::run(
-        &directory,
-        &["diff", "--name-only", "--diff-filter=ACMR", &range],
-    )?
-    .lines()
-    {
+    // A non-empty prefix is a submodule: a repository of its own, which the
+    // hooked repository's environment would answer for instead.
+    let ask = |args: &[&str]| {
+        if prefix.as_os_str().is_empty() {
+            crate::git::run(&directory, args)
+        } else {
+            crate::git::run_elsewhere(&directory, args)
+        }
+    };
+    for line in ask(&["diff", "--name-only", "--diff-filter=ACMR", &range])?.lines() {
         let path = prefix.join(line);
         if interesting(&path) {
             out.insert(path);
@@ -695,7 +699,7 @@ fn collect_range(
     // are written down; without them a bumped submodule reads as one changed
     // file called `sub`, which no scanner reads, and a member's new lockfile is
     // never looked at.
-    for line in crate::git::run(&directory, &["diff", "--raw", &range])?.lines() {
+    for line in ask(&["diff", "--raw", &range])?.lines() {
         let Some((meta, path)) = line.split_once('\t') else {
             continue;
         };
@@ -743,7 +747,7 @@ fn expand_gitlink(
         if is_zero(sha) {
             return Ok(false);
         }
-        Ok(crate::git::try_run(
+        Ok(crate::git::try_run_elsewhere(
             &directory,
             &["cat-file", "-e", &format!("{sha}^{{commit}}")],
         )?

@@ -10,12 +10,65 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Fatal, Result};
 
+/// What git exports to a hook that names the repository the hook fired in.
+///
+/// Several of these are RELATIVE to that repository, and each one outranks
+/// `current_dir`: a git started anywhere with them inherited answers about the
+/// hooked repository, not about the directory it was pointed at. So a git aimed
+/// at any OTHER repository -- a probe's throwaway worktree, a submodule -- has
+/// them taken away, and this is the one list both of those strip.
+///
+/// Stripped rather than overridden: the list of things git puts in an
+/// environment is git's, and an override answers only for the names somebody
+/// remembered.
+pub(crate) const REPOSITORY_ENVIRONMENT: [&str; 8] = [
+    "GIT_DIR",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_WORK_TREE",
+    "GIT_PREFIX",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG_PARAMETERS",
+];
+
 /// Run git, returning stdout. `Ok(None)` where git itself said no -- a ref that
 /// does not exist, a config key that is unset -- which is an answer.
+///
+/// The environment is inherited, and that is the point rather than an
+/// oversight: this is git asked about the repository the hook fired in, and
+/// during `git commit <paths>` the `GIT_INDEX_FILE` it carries is the temporary
+/// index the commit is being built from. Stripped, a staged read would answer
+/// about the index on disk instead.
 pub(crate) fn try_run(root: &Path, args: &[&str]) -> Result<Option<String>> {
-    let output = crate::shim::inner_tool("git")
+    let mut command = crate::shim::inner_tool("git");
+    command.current_dir(root);
+    answer(&mut command, args)
+}
+
+/// The same, in a repository OTHER than the one the hook fired in.
+///
+/// Found by a push from a linked worktree. git exports `GIT_DIR` to a hook
+/// there, and not from the main checkout, so a git run inside a submodule
+/// inherited the superproject's `.git/worktrees/<name>` and asked the
+/// superproject's object store for the member's commits. Neither was there,
+/// every bumped submodule read as a pointer to a commit nobody fetched, and
+/// the scan widened to every manifest under it -- refusing a push over
+/// findings in files it did not change. A submodule is its own repository,
+/// so the hooked repository's environment is taken away before git is asked
+/// about it.
+pub(crate) fn try_run_elsewhere(directory: &Path, args: &[&str]) -> Result<Option<String>> {
+    let mut command = crate::shim::inner_tool("git");
+    command.current_dir(directory);
+    for name in REPOSITORY_ENVIRONMENT {
+        command.env_remove(name);
+    }
+    answer(&mut command, args)
+}
+
+fn answer(command: &mut std::process::Command, args: &[&str]) -> Result<Option<String>> {
+    let output = command
         .args(args)
-        .current_dir(root)
         .output()
         .map_err(|error| Fatal::new(format!("git {}: {error}", args.join(" "))))?;
     if !output.status.success() {
@@ -25,7 +78,16 @@ pub(crate) fn try_run(root: &Path, args: &[&str]) -> Result<Option<String>> {
 }
 
 pub(crate) fn run(root: &Path, args: &[&str]) -> Result<String> {
-    try_run(root, args)?.ok_or_else(|| {
+    required(try_run(root, args)?, args)
+}
+
+/// `try_run_elsewhere`, where git saying no is a failure.
+pub(crate) fn run_elsewhere(directory: &Path, args: &[&str]) -> Result<String> {
+    required(try_run_elsewhere(directory, args)?, args)
+}
+
+fn required(answered: Option<String>, args: &[&str]) -> Result<String> {
+    answered.ok_or_else(|| {
         Fatal::new(format!(
             "git {} failed; the guard cannot see what it is being asked about",
             args.join(" ")
