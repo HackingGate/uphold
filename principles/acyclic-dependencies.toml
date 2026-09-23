@@ -14,7 +14,7 @@ benefits = ["A build and test order exists, so units can be verified bottom up."
 costs = ["Breaking a cycle usually needs an interface, an inversion, or a new unit, which adds indirection.", "Which direction an edge should point is a design judgment the graph does not supply.", "An existing tangle needs a baseline or ratchet before a checker can be enabled."]
 failure_when_overapplied = ["Every cycle is cut with an interface nobody else implements, multiplying abstractions whose only purpose is to satisfy the graph.", "Units are split so finely that the acyclic graph is harder to navigate than the tangle it replaced.", "Cycles move behind reflection, plugin lookup, or a service locator the static graph cannot see, so the checker passes and the coupling remains.", "Unrelated code is merged into one unit to absorb a cycle, trading a visible defect for a cohesion one."]
 conflicts_with = []
-related = ["high-cohesion-low-coupling", "separation-of-concerns", "information-hiding"]
+related = ["high-cohesion-low-coupling", "separation-of-concerns", "information-hiding", "conways-law"]
 review_questions = ["Does this change add an edge between units, and does that edge close a cycle?", "Which unit should own the interface through which the lower unit reaches the higher one?", "If a cycle is broken here, is the new abstraction justified by more than the checker?", "Is there coupling the static graph cannot see, such as reflection, string-keyed lookup, or a shared registry?"]
 
 [enforcement]

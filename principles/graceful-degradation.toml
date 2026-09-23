@@ -1,6 +1,6 @@
 id = "graceful-degradation"
 title = "Graceful Degradation"
-aliases = ["Degraded mode", "Partial availability"]
+aliases = ["Degraded mode", "Partial availability", "Design for failure"]
 kind = "principle"
 status = "seed"
 domains = ["reliability", "distributed-systems"]
@@ -8,7 +8,7 @@ summary = "Preserve truthful, bounded, useful service when full functionality is
 claim = "When a dependency or resource fails, retain a clearly identified subset of safe and useful behavior rather than presenting total failure or false success."
 problem = "All-or-nothing systems lose all user value when a nonessential component fails."
 rationale = "Separating essential from optional capabilities allows the system to preserve value while containing uncertainty and resource pressure."
-applies_when = ["A useful subset can be served without violating safety or truthfulness.", "The degraded state can be detected and communicated.", "Recovery and reconciliation are defined."]
+applies_when = ["A useful subset can be served without violating safety or truthfulness.", "The degraded state can be detected and communicated.", "Recovery and reconciliation are defined.", "Dependency failure is expected in normal operation, so the degraded path is designed and exercised in advance rather than improvised during an incident."]
 does_not_mean = ["Hide failures or return stale data as current.", "Continue unsafe side effects.", "Make degraded behavior permanent by neglecting recovery.", "Pretend all dependencies are optional."]
 benefits = ["Higher practical availability.", "Smaller incident impact.", "Controlled use of stale or partial data where acceptable."]
 costs = ["More states and test cases.", "Potentially inconsistent user experience.", "Reconciliation complexity after recovery."]

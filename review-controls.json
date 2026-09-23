@@ -9,11 +9,13 @@
   "uncontrolled": [
     "complete-mediation",
     "confused-deputy",
+    "conways-law",
     "defense-in-depth",
     "economy-of-mechanism",
     "end-to-end-principle",
     "enforcement-needs-a-trigger",
     "fail-fast",
+    "goodharts-law",
     "graceful-degradation",
     "high-cohesion-low-coupling",
     "hyrums-law",

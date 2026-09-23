@@ -8,14 +8,14 @@ summary = "Place correctness guarantees at the endpoint that has enough context 
 claim = "Functions requiring application-level knowledge should be implemented or verified end to end, even when lower layers provide performance or reliability assistance."
 problem = "A lower layer may report success while the user-level objective still fails because only endpoints know the complete meaning and state."
 rationale = "Only the endpoints possess enough context to establish certain guarantees such as complete transfer, authorization intent, or business-level deduplication."
-applies_when = ["The guarantee depends on application semantics.", "Intermediate layers cannot observe all relevant state.", "Lower-layer checks can be treated as optimization rather than proof."]
+applies_when = ["The guarantee depends on application semantics.", "Intermediate layers cannot observe all relevant state.", "Lower-layer checks can be treated as optimization rather than proof.", "Data crosses several hops that each check their own link, and only a checksum or signature made at the source and verified at the destination covers the whole path."]
 does_not_mean = ["Move every function to the application.", "Remove checks, retries, or integrity mechanisms from lower layers.", "Ignore shared infrastructure guarantees.", "Endpoints should trust no component."]
 benefits = ["Guarantees align with user-level outcomes.", "Reduced false confidence from partial checks.", "Clearer responsibility for final verification."]
 costs = ["Duplicate checking across layers.", "Additional endpoint complexity and latency.", "Some failures are detected later."]
 failure_when_overapplied = ["Applications reimplement infrastructure badly.", "Shared controls are abandoned in favor of inconsistent endpoint logic.", "End-to-end validation is claimed but cannot observe an external side effect."]
 conflicts_with = ["unix-composability"]
 related = ["idempotency", "least-privilege", "single-authoritative-source"]
-review_questions = ["Which layer has enough context to prove the actual objective?", "Is a lower-layer guarantee being mistaken for end-to-end correctness?", "What evidence reaches the endpoint after partial failure?"]
+review_questions = ["Which layer has enough context to prove the actual objective?", "Is a lower-layer guarantee being mistaken for end-to-end correctness?", "What evidence reaches the endpoint after partial failure?", "Does the health check exercise the dependency the request actually needs?"]
 
 [enforcement]
 level = "test"

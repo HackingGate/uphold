@@ -269,7 +269,7 @@ class Controls(unittest.TestCase):
 
     def test_the_denominator_names_the_records_and_not_only_the_count(self):
         # "One record carries a control" means one thing beside two
-        # review-carried records and another beside twenty-seven.
+        # review-carried records and another beside twenty-nine.
         note = review_mod.uncontrolled_note(["b", "c"])
         self.assertIn("2 review-carried record(s) have no control", note)
         self.assertIn("b, c", note)
@@ -525,8 +525,8 @@ class SelfApplication(unittest.TestCase):
 
     def test_the_denominator_is_printed_on_a_run_that_found_nothing_wrong(self):
         # The reader who most needs it is the one skimming a green run: this
-        # repository declares one control and carries twenty-seven records, and
-        # a run that said only "27 record(s) compile" would read like coverage.
+        # repository declares one control and carries twenty-nine records, and
+        # a run that said only "29 record(s) compile" would read like coverage.
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--review"],
             cwd=ROOT,

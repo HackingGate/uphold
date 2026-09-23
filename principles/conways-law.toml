@@ -1,0 +1,37 @@
+id = "conways-law"
+title = "Conway's Law"
+aliases = ["Mirroring hypothesis", "Organization-structure homomorphism"]
+kind = "law"
+status = "seed"
+domains = ["socio-technical", "architecture"]
+summary = "A system's real module boundaries settle where the designing organization's communication boundaries are, whatever the architecture diagram says."
+claim = "Any organization that designs a system will produce a design whose structure is a copy of the organization's communication structure."
+problem = "An architecture is decided on paper, but the interfaces that actually form are the ones between groups of people: boundaries inside a team erode into coupling, and boundaries across teams harden even where the design wanted a single component."
+rationale = "An interface between two components has to be negotiated by the people designing both. Where negotiation is cheap, inside a team, boundaries are crossed freely; where it is expensive, across teams, sites, or vendors, interfaces are kept narrow and stable. The structure of the system therefore follows the cost of communication among its builders."
+applies_when = ["More than one team, site, or vendor contributes to the system.", "The cost of communication differs substantially between parts of the organization.", "A proposed architecture draws boundaries that do not line up with team boundaries.", "A reorganization is planned or has just happened, and the architecture has not caught up."]
+does_not_mean = ["That the inverse Conway maneuver, reshaping teams to obtain a desired architecture, is part of the law; it is a tactic built on the law and carries its own risks.", "That architecture is determined by the org chart; the law concerns communication paths, which an org chart approximates poorly.", "That mirroring is a defect; a boundary that follows a real communication cost is often the right boundary.", "That one team necessarily produces one component; a team can hold several components if it reasons about them separately."]
+benefits = ["Architecture proposals are checked against who will build and change them.", "Coupling that crosses teams is anticipated and made an explicit interface.", "Reorganizations are recognized as architectural changes."]
+costs = ["Aligning teams with components constrains both staffing and design.", "Communication cost is informal and hard to measure.", "A design fitted to the current organization inherits that organization's accidents."]
+failure_when_overapplied = ["Every architectural problem is attributed to the organization and none is fixed in the code.", "Teams are reorganized repeatedly to chase a target architecture, each reorganization disrupting delivery more than the coupling did.", "Components are split per team even where one team owns a tightly coupled whole, producing a distributed monolith.", "The law is cited to justify a boundary that no communication cost explains."]
+conflicts_with = []
+related = ["high-cohesion-low-coupling", "separation-of-concerns", "acyclic-dependencies"]
+review_questions = ["Which teams will build and change the components on each side of this interface, and how often do they talk?", "Where does the intended architecture cross a team boundary it cannot sustain, or ignore one it cannot remove?", "Did a recent reorganization change communication paths this design assumes?", "Is a team change being proposed in order to reshape the architecture, and is that stated as its intent?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Ownership metadata, such as code-owner files, mapped onto components.", "Co-change of files across ownership boundaries in version history.", "Dependency edges between components owned by different teams."]
+checks = ["Report components whose changes routinely need approval from several owning teams.", "Compare the dependency graph with the ownership map and flag cross-team edges not declared as interfaces.", "Flag components with no single owner."]
+limits = ["Ownership files and commit history only approximate communication structure.", "The law explains a correspondence; whether to change the organization or the design is a judgment."]
+
+[[sources]]
+title = "How Do Committees Invent?"
+url = "https://www.melconway.com/Home/Committees_Paper.html"
+type = "paper"
+notes = "Conway, Datamation, April 1968, from the author's site. Argues for a homomorphism from the designing organization's communication structure to the structure of the system it produces."
+
+[[sources]]
+title = "Exploring the duality between product and organizational architectures: A test of the mirroring hypothesis"
+url = "https://doi.org/10.1016/j.respol.2012.04.011"
+type = "paper"
+notes = "MacCormack, Rusnak, and Baldwin, Research Policy 2012. Empirical test comparing loosely and tightly coupled organizations; the mirroring hypothesis is the testable generalization of Conway's observation."

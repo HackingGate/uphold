@@ -19,6 +19,7 @@ opinion nobody asked for. The rules already active here are:
 - `prevent-ai-author`
 - `prevent-public-push`
 - `removed-function-named`
+- `review-current`
 - `workflow-declares-permissions`
 
 Everything below is a constraint whose remainder is a judgment. For each, the
@@ -55,6 +56,21 @@ A program that holds authority of its own and acts on a resource a less privileg
 - Could a caller, or text a caller controls, direct this deputy at something the caller cannot reach itself?
 - When an agent or shim acts for a user, is the target checked against the user's authority or only against its own?
 
+## Conway's Law
+Any organization that designs a system will produce a design whose structure is a copy of the organization's communication structure.
+
+**Applies when**
+- More than one team, site, or vendor contributes to the system.
+- The cost of communication differs substantially between parts of the organization.
+- A proposed architecture draws boundaries that do not line up with team boundaries.
+- A reorganization is planned or has just happened, and the architecture has not caught up.
+
+**Ask**
+- Which teams will build and change the components on each side of this interface, and how often do they talk?
+- Where does the intended architecture cross a team boundary it cannot sustain, or ignore one it cannot remove?
+- Did a recent reorganization change communication paths this design assumes?
+- Is a team change being proposed in order to reshape the architecture, and is that stated as its intent?
+
 ## Defense in Depth
 Protect critical assets and actions with multiple controls that fail differently and cover prevention, detection, containment, and recovery.
 
@@ -67,6 +83,7 @@ Protect critical assets and actions with multiple controls that fail differently
 - How does each layer fail differently?
 - Which layer detects failure of another?
 - Can the layers be tested independently and end to end?
+- When this layer fails, what is the blast radius, and which layer contains it?
 
 ## Economy of Mechanism
 A mechanism whose errors stay invisible in normal use must be small and simple enough to verify completely, because its flaws surface only under the attack or accident it exists to stop.
@@ -89,11 +106,13 @@ Functions requiring application-level knowledge should be implemented or verifie
 - The guarantee depends on application semantics.
 - Intermediate layers cannot observe all relevant state.
 - Lower-layer checks can be treated as optimization rather than proof.
+- Data crosses several hops that each check their own link, and only a checksum or signature made at the source and verified at the destination covers the whole path.
 
 **Ask**
 - Which layer has enough context to prove the actual objective?
 - Is a lower-layer guarantee being mistaken for end-to-end correctness?
 - What evidence reaches the endpoint after partial failure?
+- Does the health check exercise the dependency the request actually needs?
 
 ## Enforcement Needs a Trigger
 A constraint becomes machine enforcement only when it is expressed as a decidable predicate over an observable subject, bound to a condition that fires it and to evidence it emits when it fires. A constraint that cannot say when it applies or what it saw is guidance, and must be shipped and read as guidance.
@@ -124,6 +143,21 @@ When continuing cannot satisfy the contract safely, detect the condition at the 
 - Would continuing preserve a truthful and safe contract?
 - Does the error include enough evidence for recovery?
 
+## Goodhart's Law
+When a measure becomes a target, it ceases to be a good measure, because those it measures move the number by means that decouple it from what it was chosen to indicate.
+
+**Applies when**
+- A metric gates, ranks, rewards, or reports on the people or agents who can influence it.
+- A coverage count, such as a test coverage percentage or an 'N of M rules carry a principle' figure, is published as progress and could be raised by adding annotations rather than enforcement.
+- The metric can be moved by actions that leave the underlying goal where it was.
+- An optimizing agent, human or automated, is given the metric as its objective.
+
+**Ask**
+- What is the cheapest action that raises this number without advancing the goal it stands for?
+- Is this measure used to diagnose, or is someone rewarded or gated by it?
+- What evidence besides the number shows the goal moved, such as a planted fault that must be caught?
+- If an agent optimizes against this metric, what stops it from satisfying the letter and not the intent?
+
 ## Graceful Degradation
 When a dependency or resource fails, retain a clearly identified subset of safe and useful behavior rather than presenting total failure or false success.
 
@@ -131,6 +165,7 @@ When a dependency or resource fails, retain a clearly identified subset of safe 
 - A useful subset can be served without violating safety or truthfulness.
 - The degraded state can be detected and communicated.
 - Recovery and reconciliation are defined.
+- Dependency failure is expected in normal operation, so the degraded path is designed and exercised in advance rather than improvised during an incident.
 
 **Ask**
 - Which capabilities remain safe and truthful without this dependency?
@@ -397,11 +432,13 @@ Each authoritative fact should have one explicitly designated ownership and upda
 - The same fact is represented in multiple services, stores, reports, or workflows.
 - Conflicting updates would be materially expensive or unsafe.
 - A responsible owner can be assigned at an appropriate domain boundary.
+- One fact arrives in several spellings, such as case, encoding, or path form, and is normalized to one canonical form at the boundary so that two copies can be compared for equality.
 
 **Ask**
 - Which component owns the canonical meaning and writes?
 - Can every copy explain its source and refresh policy?
 - What happens when the authority is unavailable?
+- Is there exactly one writer for this fact, and what stops a second component from writing it?
 
 ## Unix Composability
 Prefer small, focused mechanisms connected through stable, inspectable interfaces so that complex behavior can be assembled rather than embedded in one indivisible program.

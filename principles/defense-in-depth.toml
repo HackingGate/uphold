@@ -1,6 +1,6 @@
 id = "defense-in-depth"
 title = "Defense in Depth"
-aliases = ["Layered defenses"]
+aliases = ["Layered defenses", "Fault containment", "Blast radius"]
 kind = "principle"
 status = "seed"
 domains = ["security", "reliability", "ai-harness"]
@@ -9,13 +9,13 @@ claim = "Protect critical assets and actions with multiple controls that fail di
 problem = "A single control inevitably has blind spots, implementation defects, and operational bypasses."
 rationale = "Independent layers reduce common-mode failure and give the system opportunities to detect and contain a breach before irreversible harm."
 applies_when = ["Consequences justify more than one control.", "Controls can be made meaningfully independent.", "Detection and recovery matter in addition to prevention."]
-does_not_mean = ["Add many copies of the same control.", "Treat overlapping tools as evidence of security.", "Ignore usability and operational bypass incentives.", "Replace clear trust boundaries with complexity."]
+does_not_mean = ["Count redundancy as independence; two copies of one mechanism share its defects and fail together.", "Treat overlapping tools as evidence of security.", "Ignore usability and operational bypass incentives.", "Replace clear trust boundaries with complexity."]
 benefits = ["Reduced single-control dependency.", "Earlier detection and smaller blast radius.", "More resilient recovery paths."]
 costs = ["Operational and cognitive complexity.", "Potential inconsistent policy across layers.", "Higher latency and maintenance cost."]
 failure_when_overapplied = ["Several controls share one identity provider or parser and fail together.", "Users bypass an unusable stack of approvals.", "No owner can explain which layer is authoritative."]
 conflicts_with = ["unix-composability", "psychological-acceptability", "enforcement-needs-a-trigger", "economy-of-mechanism"]
 related = ["least-privilege", "observability", "graceful-degradation", "complete-mediation"]
-review_questions = ["How does each layer fail differently?", "Which layer detects failure of another?", "Can the layers be tested independently and end to end?"]
+review_questions = ["How does each layer fail differently?", "Which layer detects failure of another?", "Can the layers be tested independently and end to end?", "When this layer fails, what is the blast radius, and which layer contains it?"]
 
 [enforcement]
 level = "governance"

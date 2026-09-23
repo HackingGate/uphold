@@ -1,0 +1,43 @@
+id = "goodharts-law"
+title = "Goodhart's Law"
+aliases = ["Campbell's law", "When a measure becomes a target"]
+kind = "law"
+status = "seed"
+domains = ["socio-technical"]
+summary = "A number chosen to stand for a goal stops standing for it once people or agents are rewarded or gated by the number."
+claim = "When a measure becomes a target, it ceases to be a good measure, because those it measures move the number by means that decouple it from what it was chosen to indicate."
+problem = "A proxy metric is chosen because it correlates with a goal, then attached to a gate, a dashboard, or a review, and effort flows to the cheapest way of moving the metric, which is rarely the goal."
+rationale = "A proxy correlates with its goal only under the conditions in which the correlation was observed. Targeting it changes those conditions: every action that raises the proxy without raising the goal is now rewarded, and such actions are usually cheaper than the real work. The correlation that justified the measure is consumed by the act of targeting it."
+applies_when = ["A metric gates, ranks, rewards, or reports on the people or agents who can influence it.", "A coverage count, such as a test coverage percentage or an 'N of M rules carry a principle' figure, is published as progress and could be raised by adding annotations rather than enforcement.", "The metric can be moved by actions that leave the underlying goal where it was.", "An optimizing agent, human or automated, is given the metric as its objective."]
+does_not_mean = ["That measurement is useless; the law concerns targets, and a measure used only for diagnosis keeps more of its meaning.", "That every metric is gamed at once; the decay depends on how cheap the gaming action is relative to the real one.", "That the remedy is a better single metric; any single proxy under optimization pressure decays the same way.", "That those who game a metric act in bad faith; the pressure works on honest optimizers too.", "That a coverage figure such as `uphold check --coverage` prints is a score; it is evidence of where rules stand, and a claim added only to raise it enforces nothing more."]
+benefits = ["Metrics are paired with evidence of the goal they stand for, so gaming becomes visible.", "Targets are chosen with their cheapest gaming action in mind.", "Diagnostic measures are kept apart from incentives."]
+costs = ["Pairing a number with a planted control or a sampled audit costs more than the number alone.", "Rotating or withholding metrics reduces transparency.", "Without a target, progress is harder to communicate."]
+failure_when_overapplied = ["Every metric is distrusted and decisions fall back on unmeasured opinion.", "Metrics are hidden from the people they measure, destroying the feedback they were meant to provide.", "Measures change so often that no trend can be read.", "The law is invoked to dismiss any measurement a team dislikes."]
+conflicts_with = []
+related = ["observability", "enforcement-needs-a-trigger", "explicit-unknown", "psychological-acceptability"]
+review_questions = ["What is the cheapest action that raises this number without advancing the goal it stands for?", "Is this measure used to diagnose, or is someone rewarded or gated by it?", "What evidence besides the number shows the goal moved, such as a planted fault that must be caught?", "If an agent optimizes against this metric, what stops it from satisfying the letter and not the intent?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+observable = ["Metrics wired into gates, dashboards, or objectives.", "Changes that raise a metric, and the kind of edit that raised it.", "Divergence between a metric and an independent check of its goal, such as a planted control that should be detected."]
+checks = ["Pair each gated coverage figure with a control that must fire, so a count raised by annotation alone fails the control.", "Flag changes that raise a coverage figure through annotation, suppression, or declaration without any change in behavior.", "Report a metric together with its independent check, never the metric alone."]
+limits = ["Whether a change advances the goal or only the number is a judgment about intent and effect.", "A detector for gaming becomes a target in its turn."]
+
+[[sources]]
+title = "'Improving ratings': audit in the British University system"
+url = "https://doi.org/10.1002/(SICI)1234-981X(199707)5:3%3C305::AID-EURO184%3E3.0.CO;2-4"
+type = "paper"
+notes = "Strathern, European Review 1997. Source of the common phrasing 'when a measure becomes a target, it ceases to be a good measure', generalizing Goodhart's 1975 remark on monetary targets."
+
+[[sources]]
+title = "Goodhart's law"
+url = "https://en.wikipedia.org/wiki/Goodhart%27s_law"
+type = "documentation"
+notes = "Neutral reference tracing Goodhart's original 1975 statement about monetary aggregates and its later generalizations."
+
+[[sources]]
+title = "Assessing the impact of planned social change"
+url = "https://doi.org/10.1016/0149-7189(79)90048-X"
+type = "paper"
+notes = "Campbell, Evaluation and Program Planning 1979. States the parallel law: the more a quantitative indicator is used for social decision-making, the more it is subject to corruption pressures and the more it distorts the processes it monitors."

@@ -13,7 +13,7 @@ does_not_mean = ["Log everything.", "Expose secrets or personal data.", "Use das
 benefits = ["Faster diagnosis and recovery.", "Better evaluation and capacity planning.", "Evidence for audits and design improvement."]
 costs = ["Storage, processing, and instrumentation overhead.", "Privacy and security risk.", "High-cardinality or noisy telemetry can obscure signal."]
 failure_when_overapplied = ["Sensitive prompts, credentials, or payloads are recorded.", "Telemetry cost exceeds product value.", "Teams collect data without ownership, retention, or questions it answers."]
-conflicts_with = ["information-hiding", "minimize-attack-surface", "data-minimization"]
+conflicts_with = ["information-hiding", "minimize-attack-surface", "data-minimization", "reproducible-derived-state"]
 related = ["fail-fast", "graceful-degradation", "idempotency", "explicit-unknown", "informed-consent"]
 review_questions = ["Which failure modes can current telemetry distinguish?", "Can one user-level operation be followed across model and tool calls?", "What sensitive information must be redacted or omitted?"]
 

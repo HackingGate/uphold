@@ -180,6 +180,23 @@ rule = "no-stale-hook-pins"
 # could not check. It reads hook pins only; a dependency lock is not what this
 # rule measures.
 
+[[enforce]]
+principle = "reproducible-derived-state"
+rule = "catalog-reference-current"
+# QUICK_REFERENCE.md and name-index.json are a pure function of principles/,
+# and the hook regenerates both and refuses the tree when the bytes differ. A
+# derived file is then never read in place of its source without having been
+# compared to it. What would make this claim false is the hook exiting 0 over a
+# generated file that has drifted from what the catalog regenerates.
+
+[[enforce]]
+principle = "reproducible-derived-state"
+rule = "review-current"
+# REVIEW.md, AGENTS.md and review-controls.json are the same kind of copy, one
+# compile further from the records, and the same comparison holds them. What
+# would make this claim false is `--review --check` exiting 0 over a compiled
+# document that differs from what --emit would write now.
+
 # What routes to a rule, and what routes to a reviewer.
 #
 # `enforcement.automatable = "yes"` says a machine CAN decide the principle. It
@@ -224,7 +241,7 @@ acyclic-dependencies = "No gate here decides a module graph. uphold is one crate
 # whoever wrote the record is the only reader who knows what violating it looks
 # like, and a fixture in a file is reviewable.
 #
-# One control, deliberately, and the run says so on every invocation: twenty-six
+# One control, deliberately, and the run says so on every invocation: twenty-eight
 # review-carried records have none. That line is the honest reading of what has
 # been demonstrated here, and it is what the next control should be chosen
 # against.
