@@ -1,7 +1,7 @@
 # Principle record schema
 
-Each `principles/*.toml` file other than this document is one canonical record.
-File name and `id` must match.
+Each `principles/*.toml` file is one canonical record. The file name and `id`
+must match.
 
 ## Required top-level fields
 
@@ -144,8 +144,8 @@ can see what `observable` lists. The rungs are defined in
 | `proof` | what a verifier establishes over a stated core |
 
 When present, `rung` is a non-empty list, in ladder order, with no repeats. A
-record whose `automatable` is `no` carries no `rung`: nothing a machine can
-decide has no rung to be seen at. Like the rest of the table, `rung` is design
+record whose `automatable` is `no` carries no `rung`: with nothing a machine
+can decide, there is no rung at which a check could see it. Like the rest of the table, `rung` is design
 input for whoever builds the check; no engine reads it.
 
 ## Sources
@@ -161,7 +161,7 @@ type = "paper"
 notes = "Foundational articulation of information hiding."
 ```
 
-Allowed source types are currently free-form but should normally be one of:
+Source types are free-form but should normally be one of:
 `standard`, `paper`, `book`, `essay`, `documentation`, or `practice`.
 
 ## Tools

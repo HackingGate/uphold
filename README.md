@@ -41,21 +41,21 @@ command.before = ["git push"]
 
 ## A catalog, and the claims held against it
 
-A filtered catalog of engineering principles, and a binary that holds a
-repository to the ones it claims to enforce.
+uphold is two things: a filtered catalog of engineering principles, and a binary
+that holds a repository to the ones it claims to enforce.
 
-Catalogs of principles are common. What is not: a file where a repository names
-the *rule* enforcing each principle, checked against that repository's own
-configuration, so the claim fails loudly when the rule is removed or disabled.
-That file is [`policy/upheld.toml`](policy/upheld.toml). The binary that
-reads it — plus the content rules, the Git guards, and the command shims — is
-`uphold`. You uphold a *principle*; what does it is a *rule*, which is why every
-claim in that file is an `[[enforce]]` block naming one.
+The claims live in [`policy/upheld.toml`](policy/upheld.toml), where a
+repository names the *rule* enforcing each principle. Each claim is checked
+against that repository's own configuration, so it fails when the rule is
+removed or disabled. You uphold a *principle*; what enforces it is a *rule*,
+which is why every claim is an `[[enforce]]` block naming one. The binary,
+`uphold`, reads the claims and also runs the rules themselves: content rules,
+Git guards, command shims and the agent hook.
 
 ## Install
 
-**pre-commit / prek** — same manifest, no Rust toolchain needed (`language: rust`
-bootstraps).
+**pre-commit / prek** — one manifest serves both, and no Rust toolchain is
+needed (`language: rust` bootstraps it).
 
 ```yaml
 # .pre-commit-config.yaml
@@ -74,51 +74,43 @@ repos:
       - id: uphold-guard-manual     # the slow ones, for CI
 ```
 
-One id per stage because the stage is an argument. Pinning all five costs
-nothing: which guards fire is decided by `policy/principles.toml`. The
-scanners are three more ids, unpinned above because they need a host toolchain:
-`uphold-supply-chain` at `pre-push`, which scans what the push changed,
-`uphold-supply-chain-all` at `manual`, which scans everything, and
-`uphold-supply-chain-staged` at `pre-commit`, gitleaks alone over the staged
-diff. Each scanner must be at least the release its output reader was
-measured against (the floors are listed in
-[docs/REFERENCE.md](docs/REFERENCE.md#uphold-supply-chain--six-scanners-one-verdict));
-an older one is exit 2 for its section, so an uphold upgrade that raises a
-floor can newly refuse a push on a host with an old scanner.
+There is one guard id per stage because the stage is an argument. Pinning all
+five is safe: which guards fire is decided by `policy/principles.toml`.
 
-A policy inheriting `credentials` also gets **gitleaks** in the first two, over
-the pushed commits and over every commit. gitleaks owns secret shapes: its rule
-list, entropy thresholds and allowlists replace what the set's regexes did by
-hand. It must be on PATH at the one version this uphold pins, because its rule
-list is compiled into it; a missing gitleaks or another version is exit 2 and
-refuses the push. With mise:
+Three scanner ids are left out above because they need tools on the host:
+
+- `uphold-supply-chain` at `pre-push`, over what the push changed;
+- `uphold-supply-chain-all` at `manual`, over everything;
+- `uphold-supply-chain-staged` at `pre-commit`, gitleaks alone over the staged
+  diff.
+
+Each scanner must be at least the release its output reader was measured
+against ([floors](docs/REFERENCE.md#uphold-supply-chain--six-scanners-one-verdict));
+an older one is exit 2 for its section, so an uphold upgrade that raises a floor
+can newly refuse a push on a host with an old scanner.
+
+A policy inheriting `credentials` also gets **gitleaks**, which owns secret
+shapes and is the only secret-shape check. It must be on PATH at the one version
+this uphold pins; a missing gitleaks or another version is exit 2 and refuses
+the push. With mise:
 
 ```toml
 [tools]
 "aqua:gitleaks/gitleaks" = "8.30.1"
 ```
 
-A `.gitleaks.toml` at the root is handed to gitleaks in place of the bundled
-default, and a `.gitleaksignore` holds the fingerprints of accepted findings.
+The `credentials` set keeps `no-env-secret-values` and
+`no-browser-profile-artifacts`, which no commit scanner covers. Its three regex
+shape rules, deprecated in v1.20.0, are removed; a `policy/upheld.toml` claim
+still naming one is refused with a pointer to `uphold-supply-chain` and
+`uphold-supply-chain-staged`, the ids to claim instead. `.gitleaks.toml`,
+`.gitleaksignore` and the staged-scan fingerprint form are described in
+[REFERENCE](docs/REFERENCE.md#gitleaks-which-owns-secret-shapes).
 
-`uphold-supply-chain-staged` is the same gitleaks at `pre-commit`, over the
-staged diff (`uphold supply-chain --staged`), so a secret is refused before it
-is in local history rather than at the push. It reads no network, so unlike
-the other scanners it costs a commit nothing but the scan. A finding there has
-no commit yet, and its fingerprint is `file:rule:line`; that form in
-`.gitleaksignore` also silences the same finding in the range scan.
-
-gitleaks is the only secret-shape check: the range scan at `pre-push` and
-`--staged` at `pre-commit`. The `credentials` set keeps `no-env-secret-values`
-and `no-browser-profile-artifacts`, an ignored-file shape and a path shape that
-no commit scanner owns. Its three regex shape rules, deprecated in v1.20.0,
-are removed; a `policy/upheld.toml` claim still naming one is refused with a
-pointer to `uphold-supply-chain` and `uphold-supply-chain-staged`, which are
-the ids to claim instead.
-
-**lefthook** — no manifest format, so include the config this repo ships, then
-`lefthook install`. It runs commands rather than bootstrapping a language, so
-the binary must be on PATH, from the `cargo install` line at the top.
+**lefthook** — lefthook has no manifest format, so include the config this
+repository ships, then run `lefthook install`. It runs commands rather than
+bootstrapping a language, so the binary must be on PATH, from the
+`cargo install` line at the top.
 
 ```yaml
 # lefthook.yml
@@ -129,15 +121,19 @@ remotes:
       - hooks/lefthook.yml
 ```
 
-That `ref:` is the one version a lefthook consumer pins, and **Dependabot does
-not watch it**: there is no ecosystem that reads a lefthook config, so no
-updater will raise a pull request when a newer tag lands. What watches it is
-`no-stale-hook-pins`, which reads lefthook `remotes:` as pins and refuses one
-that has fallen behind its upstream or names no `ref:` at all — so the pin is
-watched by a guard rather than by an updater, and you are told it is stale
-rather than handed the bump. For pre-commit `rev:` pins the guard asks only
-whether the tag exists; whether it is the newest is `prek update --check`'s
-question, and this is the entry to copy into your `.pre-commit-config.yaml`:
+**Dependabot does not watch that `ref:`**: no Dependabot ecosystem reads a
+lefthook config, so no pull request is raised when a newer tag lands. The
+`no-stale-hook-pins` guard watches it instead, and refuses a lefthook pin that
+has fallen behind its upstream or names no `ref:`. You are told the pin is
+stale; you are not handed the bump. It reads `lefthook.yml`, `lefthook.yaml`,
+`.lefthook.yml` and `.lefthook.yaml` at any depth, but not `lefthook.toml`,
+`lefthook.json` or the `-local` overlay files, so a pin written in one of those
+is not watched.
+
+For pre-commit `rev:` pins the guard checks only that the tag exists. Whether
+it is the newest is answered by `prek update --check`
+([ADR 0010](docs/adr/0010-who-asks-whether-a-hook-pin-is-current.md)); add it
+to your `.pre-commit-config.yaml`:
 
 ```yaml
   - repo: local
@@ -152,19 +148,14 @@ question, and this is the entry to copy into your `.pre-commit-config.yaml`:
 ```
 
 prek exits 1 both for a pin that would move and for a remote it could not
-reach; its output says which (`would update rev` or `update failed`). It orders
-tags by date, not version, and reports a bare sha as movable
-([ADR 0010](docs/adr/0010-who-asks-whether-a-hook-pin-is-current.md)). It
-reads `lefthook.yml`, `lefthook.yaml`, `.lefthook.yml` and `.lefthook.yaml` at
-any depth; it does not read `lefthook.toml`, `lefthook.json` or the `-local`
-overlay files, so a pin written in one of those is watched by nothing.
+reach; its output distinguishes them (`would update rev` or `update failed`).
 
-**Go repositories** — uphold ships no Go toolchain hooks. A Go gate belongs in
-your own config, as hooks in a `repo: local` block with `language: system`, so
-they use the `go` already on PATH and your choice of vet, linters, `-race` or
-build tags is yours to edit rather than a `rev:` to bump. One thing to copy with
-care: `gofmt -l` prints the files it would reformat and exits `0` regardless, so
-a gate on it has to test the *emptiness* of that output:
+**Go repositories** — uphold ships no Go toolchain hooks. Declare a Go gate in
+your own config as `repo: local` hooks with `language: system`, so they use the
+`go` on PATH and the choice of vet, linters, `-race` or build tags stays in your
+config rather than behind a `rev:`. Note that `gofmt -l` prints the files it
+would reformat and exits `0` regardless, so a gate on it must test that the
+output is empty:
 
 ```yaml
   - repo: local
@@ -193,7 +184,7 @@ principle = "complete-mediation"
 rule = "prevent-ai-author"
 ```
 
-`rule` is the rule's own id, resolved against every seam this repo runs.
+`rule` is the rule's own id, resolved against every seam this repository runs.
 
 ```text
 reconciled 2 enforcement claims:
@@ -201,30 +192,28 @@ reconciled 2 enforcement claims:
   complete-mediation <- prevent-ai-author  enforced by uphold
 ```
 
-A rule enforced at more than one seam is the ordinary case; every seam is
-reported. A claim is refused when no seam supplies the rule, or when it names a
-principle the catalog does not define, or one that is deprecated or marked
+A rule enforced at more than one seam is reported at every seam. A claim is
+refused when no seam supplies the rule, or when it names a principle the catalog
+does not define, one that is deprecated, or one marked
 `enforcement.automatable = "no"`. A seam that could not be read is reported as
 could-not-look, never as a false claim.
 
 A principle with no rule yet does not belong in this file. Build the rule first.
 
-The split is which question the mode asks. Anything that decides whether a check
-passed reads the policy, and the loader that resolves the policy is the binary,
-so it lives there — one answer, not two programs entitled to disagree. What is
-left in the script reads the catalog and renders prose for a person, and cannot
-disagree with the engine about anything.
+Every mode that decides whether a check passed reads the policy, so it lives in
+the binary, which owns the loader. `uphold_check.py` keeps only the modes that
+read the catalog and render prose for a person.
 
-Exit codes, everywhere: `0` clean, `1` a claim is false / a violation, `2` could
-not look — see [`explicit-unknown`](principles/explicit-unknown.toml).
+Exit codes, everywhere: `0` clean, `1` a claim is false or a violation was
+found, `2` could not look — see [`explicit-unknown`](principles/explicit-unknown.toml).
 
 At `scan --text`, `guard --text` and `hook`, the step from what each kind of rule
 answered about a piece of text to the exit code is model-checked with Kani, over
 every seam and every combination of answers: `0` only when every kind the seam
-consults looked and found nothing, `2` whenever one could not look. That proof
-starts where the rules have answered. The rule bodies, the shim's
-per-rule dispatch and everything that reads a file or runs a process are tested,
-not proven; [CONTRIBUTING](CONTRIBUTING.md#proving-the-fail-closed-property) has
+consults looked and found nothing, `2` whenever one could not look. The proof
+starts where the rules have answered. The rule bodies, the shim's per-rule
+dispatch and everything that reads a file or runs a process are tested, not
+proven; [CONTRIBUTING](CONTRIBUTING.md#proving-the-fail-closed-property) has
 the harnesses and what they cost.
 
 ## Commands
@@ -235,7 +224,7 @@ uphold scan --text -            # a commit message, release note, PR body
 uphold check                    # the claims in policy/upheld.toml still hold
 uphold check --coverage         # which rules here carry a principle
 uphold rules --effective        # every rule inheritance resolved to, and where each runs
-uphold guard --stage pre-push   # the guards for that git hook
+uphold guard --stage pre-push   # the guards for that Git hook
 uphold shim gh pr create ...    # stand in front of a command, then exec
 uphold shim --install           # link this binary under each command's name
 uphold shim --status            # what is linked, and whether PATH reaches it
@@ -245,7 +234,7 @@ uphold supply-chain             # six scanners over the pushed range; a missing 
 uphold supply-chain --all       # the same over every manifest and every commit
 
 uphold hooks --identity ../a ../b   # do these repositories declare the same hooks
-uphold hooks --install              # write the hooks git runs, as tracked files
+uphold hooks --install              # write the hooks Git runs, as tracked files
 uphold probe                        # can each declared hook actually refuse
 
 uphold_check.py --explain ID    # one record in full; also accepts a name
@@ -257,63 +246,61 @@ uphold_check.py --review        # what routes to the review tier
 
 ## The four seams
 
-One config file, `policy/principles.toml`, one flat id namespace. A rule says
+One config file, `policy/principles.toml`, one flat id namespace. A rule states
 **what it checks** in the field it writes, and **where it runs** in up to three
-tables — an absent table is a place the rule does not run. Full field reference:
+tables; an absent table is a place the rule does not run. Full field reference:
 [`docs/REFERENCE.md`](docs/REFERENCE.md).
 
 **`uphold scan`** evaluates content rules over the repository's own files,
-using ripgrep's search libraries, so a pattern written against `rg` keeps
-meaning what it meant. "Its own files" is **what git tracks**, not a directory
-walk: a tracked file some ignore pattern also matches is still pushed and still
-cloned, and walking the tree hid exactly those from every rule. A selected file
-that cannot be read is **not** reported clean — it is named, with its reason, and
-the run exits `2`. `--text -` runs it over prose that never becomes a file. `uphold rules --effective` prints what
-inheritance actually resolved to, so nothing has to re-derive it.
+using ripgrep's search libraries, so a pattern written for `rg` means the same
+thing here. "Its own files" means **what Git tracks**, not a directory walk: a
+tracked file that an ignore pattern also matches is still pushed and cloned, so
+it is still scanned. A selected file that cannot be read is **not** reported
+clean; it is named with its reason, and the run exits `2`. `--text -` scans text
+that never becomes a file. `uphold rules --effective` prints what inheritance
+resolved to.
 
-**`uphold guard --stage STAGE`** reads an *act* rather than a tree: the
-message about to be recorded, the identity about to be stamped, the range about
-to be pushed. Eleven built-in guards, registered by `git.hooks`. A file's
+**`uphold guard --stage STAGE`** reads an *act* rather than a tree: the message
+about to be recorded, the identity about to be stamped, the range about to be
+pushed. There are eleven built-in guards, registered by `git.hooks`. A file's
 **name** is committed text too, and at a push the guards also read the commit
 **messages** the push publishes. `UPHOLD_ALLOW=<id>` overrides one invocation.
 
-**`uphold shim`** stands in front of a command, checks what the invocation
-is about to publish, and execs through. A pull-request body reaches a public API
-without passing a single hook; so does a branch name, an issue title, and a
-commit written under `--no-verify`. Put a link named for the command on PATH
-ahead of the real one — that is what a multicall binary is for, and why there is
-nothing to install but a link. Where the body is composed in an **editor**, the
-shim makes itself the editor and checks what the editor leaves in the file when
-it closes — so there is no invocation whose published text goes unread.
+**`uphold shim`** stands in front of a command, checks what the invocation is
+about to publish, and execs the real command. A pull-request body reaches a
+public API without passing any Git hook; so do a branch name, an issue title and
+a commit made with `--no-verify`. A link named for the command, placed on PATH
+ahead of the real one, is the whole installation, because `uphold` is a
+multicall binary. Where the text is composed in an **editor**, the shim makes
+itself the editor and checks what the editor leaves in the file, so no
+invocation publishes text the shim has not read.
 
-`uphold shim --install` makes those links, one per command this repository
-declares, in one directory (`~/.local/uphold/shims`) the operator adds to PATH —
-so the whole seam is one entry to add, inspect or drop, and `--status` says which
-of them the shell would actually reach. `uphold shim --hook bash|zsh|fish` is the
-other install: the same links, on PATH only inside a tree that declares a policy,
-in the shape `direnv` uses. What the shim *does* is per repository either way —
-no policy where the command was typed and it execs the real one and says nothing.
-The reasoning, and what was deliberately not built:
-[ADR 0002](docs/adr/0002-the-reach-of-a-command-shim.md).
+`uphold shim --install` creates those links, one per command this repository
+declares, in one directory (`~/.local/uphold/shims`) the operator adds to PATH;
+`--status` reports which of them the shell actually reaches.
+`uphold shim --hook bash|zsh|fish` is the alternative: the same links, on PATH
+only inside a tree that declares a policy, in the way `direnv` works. Either
+way, the behavior is per repository: where no policy applies, the shim execs the
+real command and prints nothing. The reasoning, and what was deliberately not
+built: [ADR 0002](docs/adr/0002-the-reach-of-a-command-shim.md).
 
-**`uphold hook <harness>`** is the shim's answer for a caller that spawns no
-process. An agent reaching a forge through an MCP server posts a pull-request
-body over HTTPS from inside its own process: no command, no `argv[0]`, no link
-to install, and every rule that reads a published string sees nothing. What
-replaces `argv[0]` is the harness's own pre-call decision point, which hands a
-hook the pending call as JSON on stdin and reads a verdict back — so the same
-rules the shim runs are reached from a seam that needs no process at all.
+**`uphold hook <harness>`** covers a caller that spawns no process. An agent
+reaching a forge through an MCP server posts a pull-request body over HTTPS from
+inside its own process: there is no command, no `argv[0]` and no link to
+install. In place of `argv[0]`, the harness's own pre-call decision point hands
+the hook the pending call as JSON on stdin and reads a verdict back, so the
+rules the shim runs are reached without a process.
 
-This does not replace the shim, and installing it is not a reason to stop
-installing one. The shim reaches a human at a terminal, a CI step and a script,
-whatever launched them; the hook reaches every transport a harness can make and
-none of it when the harness is a different one. Neither contains the other. It
-also arrives *earlier* than the other three, which refuse at commit or at exec,
-after the work is staged.
+The hook does not replace the shim. The shim reaches a person at a terminal, a
+CI step and a script, whatever launched them; the hook reaches every transport
+one harness can use and nothing from any other harness. Neither covers the
+other. The hook also refuses *earlier* than the other three seams, which refuse
+at commit or at exec, after the work is staged.
 
-Which calls are sent here is the harness's own matcher, not a second one in this
-binary. The harness a name does not describe is refused rather than guessed at,
-because the pointers into its event are not derivable from its name.
+Which calls reach the hook is decided by the harness's own matcher, not by a
+second matcher in this binary. An unknown harness name is refused rather than
+guessed at, because where to find the text in its event cannot be derived from
+its name.
 
 ```jsonc
 // ~/.claude/settings.json
@@ -323,27 +310,26 @@ because the pointers into its event are not derivable from its name.
 ]}}
 ```
 
-**`uphold hooks --identity DIR...`** and **`uphold probe`** ask the two
-questions a single repository cannot answer about itself. A forked hook
-declaration is byte-perfect in every tree that holds it, so only a comparison
-across repositories shows that the copies stopped agreeing — and a hook that
-*cannot fail* reports the same green tick as one that keeps finding nothing, so
-only planting something it must refuse tells the two apart. The probe does that
-in a throwaway `git worktree`, never in the tree you are standing in. Both read
-`policy/hooks.toml`: waivers for the first, fixtures for the second.
+**`uphold hooks --identity DIR...`** and **`uphold probe`** answer two questions
+a single repository cannot answer about itself. A forked hook declaration is
+valid in every tree that holds it, so only a comparison across repositories
+shows that the copies have diverged. A hook that *cannot fail* reports the same
+pass as one that keeps finding nothing, so only planting something it must
+refuse tells the two apart. The probe does that in a temporary `git worktree`,
+never in the current tree. Both read `policy/hooks.toml`: waivers for the first,
+fixtures for the second.
 
 ## The catalog
 
 Canonical records are TOML under [`principles/`](principles/). Every entry must
 state what it claims, the problem it addresses, where it applies and where it
-does not, its costs and conflicts and failure modes, whether it is enforceable
-by review/lint/test/runtime/governance, and its sources. Every field, plus the
-`kind`, `status` and enforcement-level vocabularies:
-[`principles/SCHEMA.md`](principles/SCHEMA.md). A record is typed by what it
-is, a `kind` from a closed list of fifteen (law, theorem, principle, heuristic,
-metric and the rest), and may also state the rungs at which a check can see it
-(`enforcement.rung`) and the tools that illustrate it (`[[tools]]`); a field
-the schema does not name fails validation.
+does not, its costs, conflicts and failure modes, whether it is enforceable by
+review, lint, test, runtime or governance, and its sources. A record has a
+`kind` from a closed list of fifteen (law, theorem, principle, heuristic,
+metric and the rest), and may state the rungs at which a check can see it
+(`enforcement.rung`) and the tools that illustrate it (`[[tools]]`). A field the
+schema does not name fails validation. Every field and vocabulary:
+[`principles/SCHEMA.md`](principles/SCHEMA.md).
 
 ```toml
 id = "single-authoritative-source"
@@ -363,7 +349,7 @@ automatable = "partially"
 checks = ["Require an owner for every canonical data entity."]
 ```
 
-Lookup takes a name or an id — both go through one analysis chain (NFKC,
+Lookup takes a name or an id. Both go through one normalization (NFKC,
 casefold, drop combining marks, non-alphanumeric to separator), so
 `Fail-Safe Defaults` and `fail safe defaults` are one key.
 [`name-index.json`](name-index.json) publishes that mapping for non-Python
@@ -378,10 +364,10 @@ consumers.
 
 Requires Python 3.11+ (`tomllib`). Everything this repository runs on itself is
 listed in [`.pre-commit-config.yaml`](.pre-commit-config.yaml) and its
-[`lefthook.yml`](lefthook.yml) equivalent. The two ask the same questions of the
-tree, with one exception a lefthook box has to know about: the whitespace and
-parse checks from `pre-commit-hooks` are Python hooks with no standalone binary,
-so lefthook cannot run them and `uphold scan` does not cover them either.
+[`lefthook.yml`](lefthook.yml) equivalent. The two check the same things, with
+one exception: the whitespace and parse checks from `pre-commit-hooks` are
+Python hooks with no standalone binary, so lefthook cannot run them and
+`uphold scan` does not cover them.
 
 ```sh
 prek install                                  # or: pre-commit install
@@ -394,7 +380,7 @@ Individual steps:
 uv run --no-project scripts/validate.py        # schema and relationship validation
 uv run --no-project scripts/build_reference.py # rebuild the generated files after edits
 uv run --no-project python -m unittest discover -s tests
-cargo run --quiet -- check                  # this repo's own claims, reconciled
+cargo run --quiet -- check                  # this repository's own claims, reconciled
 cargo run --quiet -- guard --stage manual   # every pin still names a ref
 ```
 

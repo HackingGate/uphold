@@ -46,7 +46,7 @@ a second rule engine in a binary whose rule engine is regex.
   exit is 0, so a rule that forgets `severity: error` is a gate that cannot
   fail.
 - *Top-level keys.* An unknown key at the top level of a rule, or of
-  `sgconfig.yml`, is dropped without a word. `constraint:` for `constraints:`
+  `sgconfig.yml`, is dropped silently. `constraint:` for `constraints:`
   runs the rule without its constraint. `ruleDir:` for `ruleDirs:` runs no rule
   at all, and a project with no rule exits 0.
 

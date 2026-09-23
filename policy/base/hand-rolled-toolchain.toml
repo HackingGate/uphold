@@ -37,7 +37,7 @@
 # that shape: a `mv` into a `~/.local` that does not exist yet on a fresh
 # runner; a vendor release carrying darwin and windows assets and no Linux one
 # at all, which resolves cleanly, reports a version, and fails at install time
-# on the architecture nobody developed on. A version manager meets those on
+# on an architecture that was never tested locally. A version manager meets those on
 # behalf of every consumer at once. Fifteen lines of shell meet them one
 # repository at a time, in CI, months apart.
 #
@@ -95,8 +95,8 @@ not.
 
 The measured failures of the hand-written form are not stale versions. They are
 a `mv` into a directory that does not exist on a fresh runner, and a vendor
-release with no Linux asset on the architecture nobody developed on -- each one
-found once per repository, in CI, long after it was written.
+release with no Linux asset on an architecture that was never tested locally --
+each one found once per repository, in CI, long after it was written.
 """
 # The pipeline, not the URL. `no-pinned-versioned-fetch` in `unmanaged-pins`
 # already refuses a version typed into a fetched URL, and it is deliberately
@@ -133,10 +133,10 @@ of the problem the download does not: the binary is now on PATH at a version no
 manifest records, so every later check reports the tool as present and none of
 them can say which one.
 
-Let the version manager own the binary, and link the version IT resolved --
-`ln -sfn "$(mise which zig)" /usr/local/bin/zig` -- when a link is genuinely
-needed because the caller reads no shell profile (compose, a systemd unit, a
-non-interactive ssh). The link then makes the tool findable without also
+Let the version manager own the binary, and link the version the manager
+resolved -- `ln -sfn "$(mise which zig)" /usr/local/bin/zig` -- when a link is
+genuinely needed because the caller reads no shell profile (compose, a systemd
+unit, a non-interactive ssh). The link then makes the tool findable without also
 deciding which one it is.
 """
 # Scoped to a link into `$HOME/.local`, which is where a hand-rolled installer

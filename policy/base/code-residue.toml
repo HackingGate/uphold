@@ -28,7 +28,7 @@
 #
 # WHO TAKES IT. A tree whose comments have already been rewritten to cite
 # durable contracts -- a document in the repository, a named constant, the
-# test that proves the behaviour -- rather than the tracker item that once
+# test that proves the behavior -- rather than the tracker item that once
 # argued for them. There the rule finds nothing on the day it is taken and
 # refuses the next comment that reaches for an issue number instead of an
 # explanation. A tree that has not done that rewriting takes `process-residue`
@@ -43,10 +43,10 @@
 # both or in neither.
 #
 # STYLESHEETS ARE UNDER NEITHER RULE. In a CSS, Sass, Less or Stylus file a
-# hash and digits is a colour far more often than a citation, and a colour in
+# hash and digits is a color far more often than a citation, and a color in
 # an argument list sits after a comma, where the list-separator arm reads a
-# bare number. The pattern steps past the colour contexts it can name; the
-# rest -- a colour after a keyword such as `solid`, a colour before a bare
+# bare number. The pattern steps past the color contexts it can name; the
+# rest -- a color after a keyword such as `solid`, a color before a bare
 # length -- are every other shape a declaration takes, which is why these files
 # are left out rather than chased one shape at a time.
 #
@@ -69,15 +69,15 @@ stages = ["pre-commit", "manual"]
 [rule.no-task-tracker-references-in-code]
 message = """
 Source, configuration, and build files must not depend on volatile issue or
-PR records. State the durable contract and rationale in a comment, or link to
-repository documentation. Issues may link to code; code must not depend on
-issues. Keep logs, bug reports, and benchmark results in issues, and edit
+pull request records. State the durable contract and rationale in a comment, or
+link to repository documentation. Issues may link to code; code must not depend
+on issues. Keep logs, bug reports, and benchmark results in issues, and edit
 chronology in Git history.
 """
 # The expression is the one `no-task-tracker-references` compiles, arm for
 # arm, and the argument for each arm is written above that rule: what an
 # unqualified repository name needs, what a bare number needs before it, why a
-# list separator counts and which colours it steps past, and why the words
+# list separator counts and which colors it steps past, and why the words
 # `issue` and `pr` are read in any case. It is duplicated rather than referenced because a rule is a table of
 # its own and there is nothing in the policy language to point one rule's
 # pattern at another's; the corpus holds the two to the same samples.

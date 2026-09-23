@@ -31,7 +31,7 @@
 # needs it reads it from there.
 #
 # THE FORGE IS ASKED SECOND, and only about a destination the allow-list has
-# already refused. A workspace pinned to one organisation refused a
+# already refused. A workspace pinned to one organization refused a
 # `gh issue create` on a public repository the same operator owns, and had no
 # way to say otherwise: a set cannot be handed a parameter, so the only lever
 # left was UPHOLD_ALLOW, which switches the guard off rather than answering it.

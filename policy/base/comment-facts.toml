@@ -39,7 +39,7 @@
 # recover it. `doc-claims` records the same finding from the other side -- every
 # attempt there to catch the UNANCHORED facts by pattern produced no true
 # findings at any filter strength, because which record a value came from is
-# what the prose leaves out. So this refuses the SHAPE, which is recognisable
+# what the prose leaves out. So this refuses the SHAPE, which is recognizable
 # without knowing what the number measures: digits, optional space, a unit.
 #
 # THE REMEDY FOR A MEASUREMENT OF THE AUTHOR'S OWN DATA IS TO DROP IT. Delete

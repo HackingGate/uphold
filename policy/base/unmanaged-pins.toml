@@ -134,8 +134,7 @@ files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "READ
 message = """
 Do not curl or wget a versioned URL. The version in the path is a pin nothing
 watches, and the failure mode is not a stale dependency -- it is a 404 on a URL
-that stopped existing, in the middle of a build, long after whoever typed it
-moved on.
+that stopped existing, in the middle of a build, long after the pin was written.
 """
 regexp = '(?i)(curl|wget)\b.*https?://\S+/v?[0-9]+\.[0-9]+\.[0-9]'
 files.include = ["."]

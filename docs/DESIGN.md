@@ -1,17 +1,18 @@
 # Design notes
 
 Why the pieces in [the README](../README.md) are shaped the way they are. None
-of this is needed to use the tool.
+of this is needed to use the tool; [REFERENCE.md](REFERENCE.md) says what each
+piece does.
 
 ## Principles are defeasible constraints
 
-Not commandments. A principle earns a place in the catalog only when it improves
-a decision or exposes a predictable failure mode. A principle without scope
-conditions is a slogan; a principle without trade-offs is marketing; a principle
-without an enforcement path cannot be treated as policy.
+Principles are not commandments. A principle earns a place in the catalog only
+when it improves a decision or exposes a predictable failure mode. A principle
+without scope conditions is a slogan; a principle without trade-offs is
+marketing; a principle without an enforcement path cannot be treated as policy.
 
-Not every entry is a principle, either: the catalog is typed by epistemic kind,
-so a law, a theorem, a heuristic and a metric each say what they are
+Not every entry is a principle: the catalog is typed by epistemic kind, so a
+law, a theorem, a heuristic and a metric each say what they are
 ([ADR 0011](adr/0011-what-an-entry-is-where-it-is-used-and-how-a-check-sees-it.md)).
 
 The collection begins with software and systems engineering because those are
@@ -21,126 +22,118 @@ security, data, product decisions, organizations, and AI harnesses.
 ## The catalog text is design input, never a payload
 
 A principle is not a configuration value. Turning one into a rule that fires is
-work you or an agent do once, in the tier that can observe the property. What
-this repository ships is the step after that: a check that the rule you built is
+work a person or an agent does once, in the tier that can observe the property.
+What this repository ships is the step after that: a check that the rule is
 still installed and still enabled.
 
 Read a record with `--explain` while writing the rule. Never let a tool carry
-the prose into a runtime — a tool holding prose has no condition on which to
+the prose into a runtime: a tool holding prose has no condition on which to
 emit it, so it emits always and is ignored, or never and enforces nothing. That
 is the [`enforcement-needs-a-trigger`](../principles/enforcement-needs-a-trigger.toml)
 record, and this repository is bound by it. `enforcement.checks` describes
-candidate checks in English; English is not a predicate. The declaration format
-carries ids and rule names only, for that reason.
-
-An `enforcement.level` is a statement about where a rule *could* live, not a
-licence to ship the record's prose to that level.
+candidate checks in English, and English is not a predicate, so the declaration
+format carries ids and rule names only.
 
 ## Why the review tier is not what that record refuses
 
 A reviewer reading a change *has* a condition: the change. The failure arrives
-instead through **length** — guidance long enough to be skimmed is guidance
-emitted always. So `max_lines` (default 900) is not a nicety, it is the other
-half of the carve-out, and the record was amended to say so. It refuses this
-tier without the ceiling.
+instead through **length**, because guidance long enough to be skimmed is
+guidance emitted always. So `max_lines` (default 900) is the other half of the
+exception rather than a convenience, and the record was amended to say so: it
+refuses this tier without the ceiling.
 
-Over budget fails the build and says to shorten records or narrow
-`include_domains`. Deterministic, not a ranking heuristic: one that quietly
-drops the tail is the same always-emitted failure with a scoreboard, and the
-reader cannot tell a short document from a truncated one.
+Over budget fails the build instead of truncating. A ranking heuristic that
+quietly drops the tail is the same always-emitted failure with a score
+attached, and the reader cannot tell a short document from a truncated one.
 
-**The standing asymmetry points one way on purpose.** A static rule has no
-length ceiling and a prompt rule does, so every mechanizable rule is cheaper to
-push down into a static tier than to leave in the review tier.
+**The asymmetry is deliberate.** A static rule has no length ceiling and a
+review-tier entry does, so every mechanizable rule is cheaper to move into a
+static tier than to leave in the review tier.
 
-The preamble names every active static rule and says not to re-enforce them.
-Repeating what a rule already refuses costs a reviewer's attention and buys a
-second opinion nobody asked for.
+The preamble names every active static rule and says not to re-enforce them,
+because repeating what a rule already refuses costs a reviewer's attention and
+buys a second opinion nobody asked for.
 
-Compiled entries are `claim`, `applies_when` and `review_questions` — those
-three were already written as a prompt; nothing was designed for this and it
-still fits. Nothing else crosses over: a reviewer handed costs, conflicts and
-sources has been handed the catalog.
+A compiled entry is `claim`, `applies_when` and `review_questions`: those three
+fields were already written as prompts, so the tier needed no new schema.
+Nothing else crosses over; a reviewer handed costs, conflicts and sources has
+been handed the catalog.
 
 ### `automatable = "yes"` is a property of the principle, not the repository
 
 `backpressure` says a machine can check bounded queues; a catalog with no queue
 in it cannot carry that rule however true the field is. Hence
-`[review.no_subject_here]`, which takes a reason rather than a bare list — one
-nobody wrote is one nobody can review. Amending the record instead would make
-the catalog describe one repository rather than the principle, and the next
-consumer would read `partially` and believe it.
+`[review.no_subject_here]`, which takes a reason rather than a bare list: an
+exemption nobody explained is one nobody can review. Amending the record
+instead would make the catalog describe one repository rather than the
+principle, and the next consumer would read `partially` and believe it.
 
 ### A control is the probe fixture, one tier up
 
 The compiled document cannot say whether any entry in it can produce a finding.
 A record nobody has raised and a record that says nothing a reviewer could act
-on are the same silence in every report anybody reads, and counting citations
-does not separate them — it needs N reviews to accumulate first, and then still
-answers "was it used" rather than "could it fire".
+on are the same silence in every report, and counting citations does not
+separate them: it needs many reviews to accumulate first, and even then answers
+"was it used" rather than "could it fire".
 
 `uphold probe` already refuses that shape for a git hook: a hook seen only
 passing is indistinguishable from one that cannot fail, so a fixture it must
 refuse is written down and planted. `[[review.control]]` is the same fixture for
-a record — `catches`, a change the record must be named for; `misses`, a change
-it must not fire on — and the refusals are borrowed with it. An empty `catches`
-is refused for exactly probe's reason about an empty `refuses`: a reviewer
-handed nothing either names the record, crediting it with a finding nobody
-planted, or does not, and reports a live record as dead.
+a record (`catches`, a change the record must be named for; `misses`, a change
+it must not fire on), and it borrows probe's refusals, listed in
+[REFERENCE.md](REFERENCE.md#controls-can-a-record-produce-a-finding-at-all).
 
-It measures capability and not applicability. A control is a change the record's
+A control measures capability, not applicability. It is a change the record's
 `applies_when` describes by construction, so a caught control removes "dead"
-from the reasons a record is quiet and leaves "nothing violated it" — the weaker
+from the reasons a record is quiet and leaves "nothing violated it", the weaker
 claim a citation count can then honestly support.
 
 A control over an `automatable = "yes"` record is refused, because such a record
-is not in the document a reviewer is handed at all — `route` drops it at *a rule
+is not in the document a reviewer is handed: `route` drops it as *a rule
 enforces it; a reviewer repeating it is noise*. Failing that control would
-report a reviewer for missing what nobody showed them; passing it would reward
-one for repeating a static rule. Either way it measures the harness.
+fault a reviewer for missing what nobody showed them; passing it would reward
+one for repeating a static rule. Either way it would measure the harness.
 
 The count **and the names** of review-carried records with no control print on
-every run, refusal or not, in the words probe prints its own denominator in.
+every run, refusal or not, in the same form probe uses for its own denominator.
 One control beside twenty-nine records is a different claim from one beside
-two, and the reader who most needs the difference is the one skimming a green
-run.
+two, and the reader who most needs the difference is the one skimming a
+passing run.
 
-The honest exposure is probe's as well: a control is written by whoever wrote
-the record, so it can be written easy. The answer is the same — it lives in
-`policy/upheld.toml` where a diff can read it.
+Controls share probe's weakness: whoever wrote the record also writes its
+control, and can make it easy to pass. The mitigation is also the same: the
+control lives in `policy/upheld.toml`, where a diff shows it.
 
 Driving an actual reviewer against a control needs a model, a budget and a
 verdict nothing here can make deterministic, so the harness is out of scope and
-`[review] emit_controls` is the seam to it: `record`, `catches` and `misses` as
-JSON, generated under the same `--check` gate as the document. Three fields and
-no more — a harness also handed the claim and the questions would be carrying a
-second copy of the compiled document, going stale on its own schedule, which is
-the failure `single-authoritative-source` names.
+`[review] emit_controls` is the seam to it. It exports the controls and nothing
+from the catalog: a harness also handed the claim and the questions would carry
+a second copy of the compiled document, going stale on its own schedule, which
+is the failure `single-authoritative-source` names.
 
 ### Why `emit` is still per-document and not per-record
 
-`[review] emit` names targets of more than one shape today: `REVIEW.md` for a
-person and `AGENTS.md` for an agent are two names for one compiled document, and
-`emit_controls` names a machine-read export of a different kind entirely. So the
-field is already a list of destinations rather than a list of documents, and the
-generalization on the table — selecting which records reach which target — is a
-change to what is *selected*, not to how many things are written.
+`[review] emit` already names targets of more than one shape: `REVIEW.md` for a
+person and `AGENTS.md` for an agent are two names for one compiled document,
+and `emit_controls` names a machine-read export of a different kind. The field
+is a list of destinations rather than a list of documents, and the
+generalization under consideration, selecting which records reach which
+target, changes what is *selected*, not how many things are written.
 
-A unit emitted alone would have to carry the automatable-exclusion inline. The
-preamble is what currently says *do not re-enforce the static rules, they run
-first*, and it is emitted once at the top of the whole document; a record
-emitted on its own arrives with no preamble, and a reviewer reading it has
-nothing telling them which findings a rule already refuses. That is not a
-formatting detail — the exclusion is the reason the tier is worth a reviewer's
-attention at all.
+A unit emitted alone would have to carry the automatable exclusion inline. The
+preamble is what says *do not re-enforce the static rules, they run first*, and
+it is emitted once at the top of the whole document; a record emitted on its own
+arrives without it, and its reviewer has nothing saying which findings a rule
+already refuses. The exclusion is what makes the tier worth a reviewer's
+attention, so losing it is not a formatting detail.
 
 Adoption is deferred until two conditions hold together: the compiled document
 approaches its `max_lines` ceiling, so selection buys something the ceiling is
 otherwise about to take; and controls exist over the records that would be
 selected, so a unit that is never selected fails to catch its own control and
-says so. Until then a conditionally-loaded unit that is never selected produces
+says so. Until then a conditionally loaded unit that is never selected produces
 no finding and no citation, and neither absence is distinguishable from a quiet
-tree — a failure one step earlier than failing to fire, with less evidence than
+tree: a failure one step earlier than failing to fire, with less evidence than
 the always-read document leaves.
 
 ## Coverage is not the reconcile
@@ -163,17 +156,17 @@ cmd-shims: 1 of 3 rules carry a principle
 
 An unreadable tier counts `?` rather than `0`, because a hole in the denominator
 reported as zero reads as coverage that was never measured. An unclaimed rule is
-not a defect to fix by writing a claim; which principle a rule serves is a
-judgment, and a mode that failed a build over a missing one would be paid for in
-claims nobody believes.
+not a defect to fix by writing a claim: which principle a rule serves is a
+judgment, and a mode that failed the build over a missing one would be
+satisfied with claims nobody believes.
 
 ## Why OSCAL, and why only the mapping
 
-NIST's OSCAL component-definition model says the same thing `[[enforce]]` says:
-here is a component, here are the controls it implements. Its ecosystem —
-[compliance-trestle](https://github.com/oscal-compass/compliance-trestle) and
-Compliance-to-Policy — already turns that into policy for several engines and
-normalizes their results back, which is worth more than a private format is.
+NIST's OSCAL component-definition model says what `[[enforce]]` says: here is a
+component, here are the controls it implements. Its ecosystem
+([compliance-trestle](https://github.com/oscal-compass/compliance-trestle) and
+Compliance-to-Policy) already turns that into policy for several engines and
+normalizes their results back, which a private format would forgo.
 
 The export reconciles first and emits only what held: a component definition is
 an assertion to an outside reader, and exporting an unreconciled one would
@@ -181,23 +174,21 @@ publish a claim this tool had just failed to confirm.
 
 **The catalog does not cross over, deliberately.** An OSCAL control has no place
 for `applies_when`, `costs`, `conflicts_with`, or a record admitting no machine
-can observe it — the nearest available slot is an untyped `prop` that no
-consumer reads and no schema checks. OSCAL models compliance requirements, and a
-requirement does not have costs or conflict with another requirement. Four
-fields ride along as props in this repository's namespace — the rule id, the
-seam, the record's `enforcement.level` and its `automatable` — because
-`automatable` is the one thing that changes what a reader may conclude from a
-passing check.
+can observe it; the nearest slot is an untyped `prop` that no consumer reads and
+no schema checks. OSCAL models compliance requirements, and a requirement does
+not have costs or conflict with another requirement. Of the four props the
+export adds, `automatable` is the one that matters: it changes what a reader
+may conclude from a passing check.
 
 ## The name index is a value, not a table
 
 Every record's `aliases` reach the generated index, because readers arrive with
-the name of the catalog title (`Parameterize, Do Not Enumerate`) or with the
-name of the failure (`combinatorial explosion`).
+the catalog title (`Parameterize, Do Not Enumerate`) or with the name of the
+failure (`combinatorial explosion`).
 
 `scripts/catalog.py` builds the lookup from the records; QUICK_REFERENCE.md
 renders it, `--explain` answers from it, and `name-index.json` publishes it for
-anything that is not Python. Nothing reads the Markdown back — a row's column
+anything that is not Python. Nothing reads the Markdown back: a row's column
 order and its `|` escaping are layout decisions, and recovering a name from one
 means undoing both.
 
@@ -208,64 +199,65 @@ refuses a catalog where a search would have two answers.
 
 ## One flat id namespace
 
-It is what lets a claim name a rule by id alone. It also deletes a class of
-drift that only existed while the checks were seven separate table names: any
-consumer reasoning about "the rules" had to carry its own list of what those
-names were, and one such list was short by one — a `language_rule` claim was
+A single namespace of rule ids lets a claim name a rule by id alone. It also
+removes a class of drift that existed while the checks were seven separate
+table names: any consumer reasoning about "the rules" had to carry its own list
+of those names, and one such list was short by one. A `language_rule` claim was
 reported as enforcing nothing while it was in fact enforced, and neither side
 could catch it.
 
 ## Guards: `git.hooks` is the whole registration
 
-These lists were a `match` arm in the binary until v3, so a repository could not
-add a hook, drop one it found too slow, or read its own answer out of its own
-configuration. The trade-offs are lines a reader can edit rather than arguments
-sealed in a source comment: the tree-wide name scan is not at `pre-commit`
-because it asks the forge about every distinct name in the tree.
+The hook lists were a `match` arm in the binary until v3, so a repository could
+not add a hook, drop one it found too slow, or read its own answer out of its
+own configuration. The trade-offs are now lines a reader can edit rather than
+arguments sealed in a source comment: for example, the tree-wide name scan is
+not at `pre-commit` because it asks the forge about every distinct name in the
+tree.
 
 There was **no configuration file** for these before: allow-lists, visibility
 pins and owner pins were environment variables, and the `<OWNER>_`-prefixed
-scheme existed only because environment was the only surface while one machine
-holds several workspaces. A per-workspace file *is* the workspace scope.
+scheme existed only because the environment was the only surface while one
+machine holds several workspaces. A per-workspace file *is* the workspace scope.
 
 ### Which bytes a guard reads
 
 The index is the tree the next commit will have. The working tree is not: a line
 staged and then edited away is in the commit and not on disk.
 
-At a push there is no index at all — what becomes shared is a commit, and the
+At a push there is no index at all: what becomes shared is a commit, and the
 working tree beside it may be on another branch. So the artifact is the pushed
 commit's whole tree *plus every blob the pushed range introduces*. Neither half
-covers the other: the tree catches what arrived before this range, the range
-catches a blob added in one pushed commit and deleted in the next, which is in
-the remote's history permanently and in no tip tree.
+covers the other: the tree catches what arrived before this range, and the
+range catches a blob added in one pushed commit and deleted in the next, which
+is in the remote's history permanently and in no tip tree.
 
-The range's commit *messages* are read there as well, and they are a carrier of
-their own rather than part of either half. `commit-msg` fires only when `git
-commit` writes a message: `git commit-tree`, a rebase, a cherry-pick, `git am`,
-`--no-verify` and a fast-forward carrying somebody else's commit in from a
-hookless clone all record a message no hook ever read — and everything else at
-pre-push reads the tree. So a subject line naming a private repository reached a
-remote with every hook green and no override of any kind.
+The range's commit *messages* are read there as well, as a carrier of their own
+rather than part of either half. `commit-msg` fires only when `git commit`
+writes a message: `git commit-tree`, a rebase, a cherry-pick, `git am`,
+`--no-verify`, and a fast-forward carrying somebody else's commit in from a
+hookless clone all record a message no hook ever read, and everything else at
+pre-push reads the tree. So a subject line naming a private repository reached
+a remote with every hook passing and no override in use.
 
 ### One override spelling
 
-`UPHOLD_ALLOW` replaced five differently-named variables. The id is in it,
-so what was switched off is legible in a shell history and in a CI log. It stays
+`UPHOLD_ALLOW` replaced five differently named variables. The id is in it, so
+what was switched off is legible in a shell history and in a CI log. It stays
 in the environment and is deliberately not a rule field: a bypass belongs to one
-invocation by whoever is standing there, and written into the policy file it
-would be committed, reviewed once, and permanent — which is not a bypass.
+invocation by whoever is running it, and written into the policy file it would
+be committed, reviewed once, and permanent, which is not a bypass.
 
 ## Evidence: what a provider reports and what a policy may read
 
 Most guards read their own artifact and decide on the spot, and for a rule
-about bytes that is the right shape. For a rule about what a change *means* --
-which functions it removes, what the message says it intends -- the reader is
+about bytes that is the right shape. For a rule about what a change *means*
+(which functions it removes, what the message says it intends) the reader is
 the part most likely to be replaced, and a rule written against the reader is
 rewritten with it. So there is a seam. A **provider** reads one artifact and
-reports **evidence**, one normalized shape: a kind, a subject, properties, and
-the provenance a reader of a refusal needs -- which provider, at what
-**strength**, over which **revision**. A **policy** is handed the body of
+reports **evidence** in one normalized shape: a kind, a subject, properties,
+and the provenance a reader of a refusal needs (which provider, at what
+**strength**, over which **revision**). A **policy** is handed the body of
 everything reported and decides. It never names a provider;
 `tests/structural_evidence.rs` reads the provider names off `src/evidence/`
 and refuses a policy file that spells one.
@@ -281,22 +273,22 @@ so the seam exists before the first one does.
 A provider that could not look says so in its answer, as a variant and never as
 an empty list. The parser provider answers `Unavailable` for a file with an
 `ERROR` node on either side, naming the file and the line, because the
-recovered tree is unpredictably shorter than the file -- measured in ADR 0008,
-where one missing brace hides one function of two from the walk and an
-unterminated string hides none. What follows is decided the same way every
-time: parser unavailable and the diff pattern silent is exit 2; parser
-unavailable and the diff pattern found a removal is a refusal; two `Proven`
-providers disagreeing about one subject is a refusal naming both.
+recovered tree is unpredictably shorter than the file. ADR 0008 measured this:
+one missing brace hides one function of two from the walk, and an unterminated
+string hides none. What follows is decided the same way every time: parser
+unavailable and the diff pattern silent is exit 2; parser unavailable and the
+diff pattern found a removal is a refusal; two `Proven` providers disagreeing
+about one subject is a refusal naming both.
 
 It is not a rule DSL and not a plugin API. A policy is a Rust predicate in this
 binary dispatched like every other built-in, a provider is a Rust type compiled
 in, and the trait between them is the shape of an answer to ADR 0005's third
-question for readers that live inside the binary. ADR 0003, 0005 and 0008
+question for readers that live inside the binary. ADRs 0003, 0005 and 0008
 carry the argument.
 
 ## Shims: what is data and what is code
 
-Most of a bash spec was already data — `SPEC_MATCH` and the `SPEC_*_FLAGS` were
+Most of a bash spec was already data: `SPEC_MATCH` and the `SPEC_*_FLAGS` were
 space-separated lists. Only two functions carried logic:
 
 - **`spec_target`** was a forge API call in two specs and git-remote-URL parsing
@@ -309,12 +301,12 @@ space-separated lists. Only two functions carried logic:
 directory on a registry the whole world can read: there is no repository, no
 owner and no visibility endpoint in that sentence. What decides is a field in
 `package.json` and whether the registry is the public one. Bending a forge's
-question to fit is how a framework quietly becomes the shape of its first two
+question to fit is how a framework quietly takes the shape of its first two
 examples.
 
 **`git` is why a shim is not just a flag table.** Its published text is
-*positional* — `git push origin fix/acme-outage` puts that name on a public
-forge — so `collect = "git-refs"` replaces the argv walk rather than forking the
+*positional* (`git push origin fix/acme-outage` puts that name on a public
+forge), so `collect = "git-refs"` replaces the argv walk rather than forking the
 shim.
 
 ### `before` scopes a checker
@@ -324,41 +316,31 @@ pull-request body was also asked about a branch name on `git push` and a tarball
 on `npm publish`, and every one of those answers was a pass over a subject the
 rule had nothing to say about.
 
-The kind in `UPHOLD_KIND` is not decoration — a checker that greps prose for
-a private name and one that judges a branch name are not the same checker, and
-only the kind tells them apart.
+`UPHOLD_KIND` carries the kind for the same reason: a checker that greps prose
+for a private name and one that judges a branch name are not the same checker,
+and only the kind tells them apart.
 
 ## Where the private-name list lives
 
 A public repository cannot hold the list of what must not be published, and
-neither can a command string with a name written into it — it travels with the
+neither can a command string with a name written into it: it travels with the
 policy exactly as a list would. So `private_owners_file` (or the command form,
 `private_owners_from`) reads from outside the tree. A literal `private_owners`
 list is right for a repository staying private, and the audit reports it as a
 finding for one being published.
 
-`uphold audit --for-publication` is one shot rather than a hook because the
-event it fires on happens once and is not a commit.
-
-### What the audit cannot see
-
-- **`refs/pull/<n>/head`.** A forge retains pull-request head refs permanently
-  and renders them on the closed pull request. Rewriting the default branch does
-  not touch them. These *are* scanned — fetched explicitly, because a clone does
-  not carry them by default and an audit reading only local refs would report
-  clean over exactly the surface that survives the fix.
-- **Comment edit history.** Editing a comment does not remove what it said; the
-  previous revision stays readable and no API route deletes one. This cannot be
-  scanned, and is reported as unreadable.
-
-Nothing found in what could be read is *not* the same as clean, and the report
-says so.
+`uphold audit --for-publication` is a one-off command rather than a hook
+because the event it guards happens once and is not a commit. Pull-request head
+refs are fetched and scanned, and comment edit history is reported as
+unreadable; [REFERENCE.md](REFERENCE.md#uphold-audit---for-publication) covers
+both. Nothing found in what could be read is *not* the same as clean, and the
+report says so.
 
 ## Running the tools over this repository
 
-It runs all three seams over itself, for the reason git-guards ran its guards
-over its own source: a rule that cannot survive its own tree is one nobody
-should be asked to adopt. Its own declaration is in
+This repository runs all three seams over itself, for the reason git-guards ran
+its guards over its own source: a rule that cannot survive its own tree is one
+nobody should be asked to adopt. Its own declaration is in
 [`policy/upheld.toml`](../policy/upheld.toml).
 
 This repository defines **why and when** a rule exists; the seams implement it.
@@ -369,16 +351,16 @@ is enforced at another seam.
 pin has fallen behind the newest upstream tag, and whether the ref it names
 exists at all. The first half is asked of lefthook refs only; for a pre-commit
 `rev:` it belongs to `prek update --check`, run by the consumer
-([ADR 0010](adr/0010-who-asks-whether-a-hook-pin-is-current.md)). They were two checkers for a while -- a `check_hook_pins.py`
-script beside the guard -- and that arrangement is the drift this section warns
-about: the two read the same `rev:` lines, reached the same remote, and were
-free to return different verdicts. They did. The guard counted a pin whose
-remote it could not reach as passed, while the script called the same pin
-unresolvable, so which answer a repository got depended on which seam ran. One
-`git ls-remote` now answers both, and a pin that could not be checked is exit 2
-rather than either verdict.
+([ADR 0010](adr/0010-who-asks-whether-a-hook-pin-is-current.md)). They were
+two checkers for a while (a `check_hook_pins.py` script beside the guard), and
+that arrangement is the drift this section warns about: the two read the same
+`rev:` lines, reached the same remote, and were free to return different
+verdicts, and did. The guard counted a pin whose remote it could not reach as
+passed, while the script called the same pin unresolvable, so the answer a
+repository got depended on which seam ran. One `git ls-remote` now answers both,
+and a pin that could not be checked is exit 2 rather than either verdict.
 
 A pin bumped ahead of a release that was never cut still fails at hook-init,
-before any hook runs, so nothing downstream of the clone can report it -- which
-is why the guard is installed at pre-push and at the manual stage, the last two
+before any hook runs, so nothing downstream of the clone can report it. That is
+why the guard is installed at pre-push and at the manual stage, the last two
 moments that are still upstream of somebody else's clone.

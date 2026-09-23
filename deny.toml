@@ -1,7 +1,7 @@
 # What this crate is allowed to depend on, and under what terms.
 #
 # `cargo deny` answers three questions no rule in `policy/principles.toml` can:
-# whether a dependency carries a published advisory, whether its licence is one
+# whether a dependency carries a published advisory, whether its license is one
 # this repository may ship under, and whether the tree has quietly acquired two
 # copies of the same crate or a source nobody named. Those are facts about the
 # dependency graph rather than about this tree's files, which is exactly the

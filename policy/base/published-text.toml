@@ -77,8 +77,8 @@ commands = ["gh", "git push"]
 [rule.no-published-host-identity]
 builtin = "text-literals"
 message = """
-Use neutral placeholders -- example-user, example-host, example.test --
-instead of values read off the machine you are standing on.
+Use neutral placeholders -- example-user, example-host, example.test,
+/srv/example -- instead of values taken from the local machine.
 """
 command.before = ["gh", "git push"]
 command.scope = "always"
@@ -92,7 +92,7 @@ builtin = "text-guards"
 message = """
 Published text must satisfy the repository's text-capable guards. A
 pull-request body reaches a public API without passing a single git hook,
-which is the whole reason this seam exists.
+which is why this check runs at publish time.
 """
 command.before = ["gh", "git push"]
 command.scope = "always"
@@ -105,11 +105,11 @@ command.scope = "always"
 # down; this one does not stand down, and that is the point.
 #
 # What it does NOT refuse, because this seam is where it was measured: a schema
-# id of the shape `<owner>.<document>.v<N>`. An organisation that publishes
+# id of the shape `<owner>.<document>.v<N>`. An organization that publishes
 # document formats carries its own name in every id it publishes, and reading
-# those as the organisation named on its own left a pull-request body unable to
+# those as the organization named on its own left a pull-request body unable to
 # say which schema it was adding -- with the ids being exactly what the change
-# was about. `<Owner>/<repo>` and the organisation alone are refused as before;
+# was about. `<Owner>/<repo>` and the organization alone are refused as before;
 # see REFERENCE.md, "Why the owner list is worth declaring".
 [rule.no-published-private-repo-names]
 builtin = "no-private-repo-names"

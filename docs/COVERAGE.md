@@ -169,7 +169,7 @@ are how a gate observes it.
 | [Dynamic taint analysis](https://en.wikipedia.org/wiki/Taint_checking) | untrusted bytes tracked through a running program to where they are used | [Triton](https://triton-library.github.io/) |
 | [Deadlock analysis](https://en.wikipedia.org/wiki/Deadlock_(computer_science)) | lock-order cycles seen in one run, which can deadlock in another | [Helgrind](https://valgrind.org/docs/manual/hg-manual.html), [ThreadSanitizer](https://clang.llvm.org/docs/ThreadSanitizer.html) |
 
-## Languages by rungs
+## Languages by rung
 
 | rung | Rust | Go | Python | TypeScript | shell |
 | --- | --- | --- | --- | --- | --- |
@@ -179,7 +179,7 @@ are how a gate observes it.
 | proof | `consumer-owned external gate`: Verus | `consumer-owned external gate`: Gobra | `consumer-owned external gate`: CrossHair, Nagini | `not covered` | `not covered` |
 
 Dafny, compiled to Go or Python for a verified core, is a proof entry that
-belongs to no one column: `consumer-owned external gate`, Dafny.
+belongs to no single column: `consumer-owned external gate`, Dafny.
 
 The Rust proof cell is about a consumer's Rust tree. Verifying this binary's own
 evaluator core with Verus is issue 213; that is this repository as its own
@@ -209,8 +209,8 @@ file, not the staged list, decides what each rule reads. `language: system`
 because the binary is the consumer's, like its compiler; this repository adds
 the entry to its own config only once it has a rule directory to run.
 
-`ast-grep` answers "nothing to report" in three places where the answer is
-"did not look", measured on 0.45.3. An adopter owns all three:
+In three cases `ast-grep` reports nothing where it did not look (measured on
+0.45.3). An adopter must handle all three:
 
 - **Every rule sets `severity: error`.** A rule with no `severity` is a
   `hint`: its findings print and the exit is 0.
@@ -232,17 +232,17 @@ the entry to its own config only once it has a rule directory to run.
   and the companion exits 0 over it. `fn broken( {` is one such file, repaired
   by an inserted `)`. No `ast-grep` rule matches a MISSING node. The backstop
   is the semantic row: the compiler or linter refuses that file.
-- **Top-level keys are read by eye.** `ast-grep` refuses a misspelled key
+- **Top-level keys need checking in review.** `ast-grep` refuses a misspelled key
   inside `rule:`, and drops one at the top level of a rule or of
-  `sgconfig.yml` without a word: `constraint:` for `constraints:` runs the rule
+  `sgconfig.yml` silently: `constraint:` for `constraints:` runs the rule
   without its constraint, and `ruleDir:` for `ruleDirs:` runs no rule and
-  exits 0. Check these in review.
+  exits 0.
 
 ## Rules a stock linter already carries
 
 Four structural rules were proposed for this binary, one per language. Each is
-already a stock rule in the linter the semantic row names, so the pointer is
-the whole of uphold's part:
+already a stock rule in the linter the semantic row names, so uphold's only
+part is the pointer:
 
 | language | the rule | where it already is |
 | --- | --- | --- |

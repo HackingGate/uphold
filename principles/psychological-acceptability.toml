@@ -22,7 +22,7 @@ level = "review"
 automatable = "partially"
 observable = ["Suppression comments, skip directives, and disabled hooks in the tree.", "Rate of failures on unrelated changes.", "Growth of exemption or baseline files."]
 checks = ["Report the count and location of suppressions per rule.", "Fail when a rule's suppressions grow instead of shrink over a window.", "Track how many repositories still have the hook installed after adoption."]
-limits = ["A tool can count bypasses; it cannot tell an unreasonable control from a lazy team.", "Whether the remaining friction is worth the harm prevented is a judgment."]
+limits = ["A tool can count bypasses; it cannot tell an unreasonable control from a team that has not tried to comply.", "Whether the remaining friction is worth the harm prevented is a judgment."]
 
 [[sources]]
 title = "The Protection of Information in Computer Systems"

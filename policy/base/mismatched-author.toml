@@ -22,7 +22,7 @@
 # every commit after it.
 #
 # WHY IT IS ITS OWN SET rather than a rule inside one already here. Three
-# neighbours could have taken it and each would have been a different claim:
+# neighbors could have taken it and each would have been a different claim:
 #
 # * `unowned-push` asks where a ref is going and answers from a destination the
 #   repository has named. This asks who is writing and answers from the machine.

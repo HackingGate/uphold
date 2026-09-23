@@ -12,9 +12,9 @@ This record fixes the three fields, the vocabulary each is drawn from, the rule
 for the two relationship fields, and why no wrapper around a consumer's tool
 ships from here.
 
-## Decision
+## Decisions
 
-* **`kind` says what the entry is, from a closed list of fifteen:** `law`,
+- **`kind` says what the entry is, from a closed list of fifteen:** `law`,
   `theorem`, `principle`, `heuristic`, `philosophy`, `pattern`,
   `anti-pattern`, `tactic`, `practice`, `method`, `model`, `property`,
   `representation`, `metric`, `decision-procedure`. Each is an epistemic
@@ -23,22 +23,22 @@ ships from here.
   where a law applies, which is `domains`. A kind outside the list fails
   validation. [`principles/SCHEMA.md`](../../principles/SCHEMA.md) gives each
   kind's meaning, and a test holds its table equal to the validator's set.
-* **`domains` says where the entry is used, from a closed list of twenty
+- **`domains` says where the entry is used, from a closed list of twenty
   technical areas** in [`principles/SCHEMA.md`](../../principles/SCHEMA.md#domains),
   held equal to `DOMAINS` in `scripts/validate.py` by a test. A record's list is
   non-empty with no repeats, and a value outside the list fails validation. A
   `[review].include_domains` filter naming any other value exits 2, since a
   filter no record can match would compile an empty review document.
-* **`enforcement.rung` says how a check sees the entry:** at which rungs of
+- **`enforcement.rung` says how a check sees the entry:** at which rungs of
   the ladder in [`docs/COVERAGE.md`](../COVERAGE.md#rungs) (`text`, `syntax`,
   `semantic`, `proof`) what `observable` lists can be read. It is optional,
   written in ladder order with no repeats, and refused on a record whose
   `automatable` is `no`.
-* **`[[tools]]` names illustrative tools.** Optional, with `name`, `url` and
+- **`[[tools]]` names illustrative tools.** Optional, with `name`, `url` and
   `notes` only. A tool's name may not be a record's name under the index's
   lookup key: the concept is the record, and the tool is one example of
   something that observes it.
-* **A field the schema does not name is refused**, at the top level and inside
+- **A field the schema does not name is refused**, at the top level and inside
   `[enforcement]`, `[[sources]]` and `[[tools]]`.
 
 ## Precedent: two questions wearing one name
@@ -95,13 +95,13 @@ tool. `docs/COVERAGE.md` states why: one tool per job, and a wrapper of the
 consumer's toolchain shipped from here would be a second copy of the
 consumer's gate, coupled to an uphold release.
 
-## Consequences
+## What this changes today
 
-* A record with a kind outside the fifteen, a domain outside the twenty, a
+- A record with a kind outside the fifteen, a domain outside the twenty, a
   field the schema does not name, or a one-sided conflict cannot be committed.
-* `QUICK_REFERENCE.md` groups every record by kind and by domain, and shows a
+- `QUICK_REFERENCE.md` groups every record by kind and by domain, and shows a
   record's rungs beside its enforcement level when it states them.
-* `uphold_check.py --explain` prints a record's rungs and tools when it has
+- `uphold_check.py --explain` prints a record's rungs and tools when it has
   them, with the tools headed as illustrative.
-* No record states a rung or a tool yet. Adding them is a content change,
+- No record states a rung or a tool yet. Adding them is a content change,
   record by record, with a source for each claim.

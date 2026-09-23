@@ -27,7 +27,7 @@ copies. That is the drift `policy/base/` was invented to end, sitting at the
 one seam no set was allowed to reach.
 
 Both decisions are right, and holding both as stated leaves the fleet
-transcribing forever. The resolution is to notice they are about different
+transcribing indefinitely. The resolution is to notice they are about different
 halves of the seam.
 
 ## The split: the shim is a decision, the checker is a rule
@@ -35,13 +35,13 @@ halves of the seam.
 A shim and the checkers it consults were already two things — `validate_shims`
 refuses either one standing alone. They have different owners:
 
-* **The shim is the repository's.** Which commands this tree stands in front
+- **The shim is the repository's.** Which commands this tree stands in front
   of, which verbs carry text, which flags mean what — that is a decision about
   a real command on a real machine, made visibly, in the tree it binds. No set
   ships one. `parse_bundled` now refuses a set that tries, rather than letting
-  only `.rules` be adopted and the table vanish in silence.
+  only `.rules` be adopted and the table be dropped silently.
 
-* **The checker is the engine's.** "Published text satisfies the text-capable
+- **The checker is the engine's.** "Published text satisfies the text-capable
   guards" is not a per-repository judgment; it is the same rule everywhere,
   which is why six repositories had written it out byte-alike. A set may carry
   it — under a ceiling, and only into a repository that has already made the
@@ -67,8 +67,8 @@ decision, exactly where ADR 0002 wants it.
 
 **In-process consultations instead of a shipped shell line.** The hand copies
 ran `uphold scan --text -` and `uphold guard --text -` as subprocesses. A set
-may not ship a shell command, and the subprocess had a second defect the
-objection did not even need: it answered with whatever `uphold` PATH happened
+may not ship a shell command, and the subprocess had a second defect,
+independent of that objection: it answered with whatever `uphold` PATH happened
 to reach, which is not necessarily the binary that asked. `text-guards` and
 `text-literals` are the same two consultations as built-ins — the dispatch
 `guard --text` and `scan --text` already run, reached without a process, a
@@ -83,7 +83,7 @@ the consultation is one level deep however a policy is written.
 
 ## What was deliberately not built
 
-* **A per-repository command list handed to the set.** This repository stands
+- **A per-repository command list handed to the set.** This repository stands
   in front of `glab` and `npm` as well; the set ships `["gh", "git push"]`,
   the two lines all six transcriptions shared. A rule arriving from a set
   cannot be handed a parameter, and the documented override — shadow the id,
@@ -91,7 +91,7 @@ the consultation is one level deep however a policy is written.
   that can. This policy does exactly that, so the shape is exercised where it
   ships.
 
-* **Attaching to every declared shim implicitly.** "Run wherever the
+- **Attaching to every declared shim implicitly.** "Run wherever the
   repository put a shim" reads well until a repository shims a command whose
   subjects are not prose — `npm` is shimmed here for its tarball metadata, and
   `no-published-markers` deliberately does not stand in front of it, because a

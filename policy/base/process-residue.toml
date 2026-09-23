@@ -119,10 +119,10 @@ files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "**/docs/adr/**"]
 [rule.no-task-tracker-references]
 message = """
 Source, configuration, and documentation must not depend on volatile
-issue or PR records. State the durable contract and rationale here, or link to
-repository documentation. Issues may link to code; code must not depend on
-issues. Keep logs, bug reports, and benchmark results in issues, and edit
-chronology in Git history.
+issue or pull request records. State the durable contract and rationale here,
+or link to repository documentation. Issues may link to code; code must not
+depend on issues. Keep logs, bug reports, and benchmark results in issues, and
+edit chronology in Git history.
 """
 # Unqualified repository names require a lowercase letter, and bare numbers
 # require a lowercase prose word, an opening delimiter, or a list separator
@@ -131,11 +131,11 @@ chronology in Git history.
 # are admitted because a citation list names its repository once and leaves
 # every later item bare, and a comma directly before a hash number in a
 # comment is such a list far more often than anything else. The one thing
-# after a separator the arm reads past is a colour: three or six digits that
+# after a separator the arm reads past is a color: three or six digits that
 # a closing paren, a semicolon, a comma, a percent sign or a percentage
-# follows, which is a colour in a `color-mix` or gradient argument list. The
+# follows, which is a color in a `color-mix` or gradient argument list. The
 # regex engine has no lookahead, so the arm is split in two: every digit count
-# a colour cannot have, and a colour's count followed by something none of
+# a color cannot have, and a color's count followed by something none of
 # those is. The words `issue` and `pr` are admitted in any case, because a
 # sentence that opens with one of them capitalised is the commonest way a
 # document cites a tracker, and the lowercase prose-word arm reads past it.
@@ -153,8 +153,8 @@ files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "**/testdata/**"]
 
 [rule.no-process-history-references]
 message = """
-Do not reference process-history records (issue/PR/thread numbers) in final
-docs. Extract the durable rule or final state instead.
+Do not reference process-history records (issue, pull request, or thread
+numbers) in final docs. Extract the durable rule or final state instead.
 """
 # One arm, the narrative form: a sentence that points at a conversation rather
 # than at a record. The forms that name a record -- a tracker URL, and the word
@@ -196,7 +196,7 @@ files.include = ["."]
 files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go"]
 
 # The residue a PROCESS leaves in a policy file, which is the same category as
-# the six rules above it: a rule copied out of a bundled set is the artefact of
+# the six rules above it: a rule copied out of a bundled set is the artifact of
 # somebody having once had no other way to get it, kept long after the set
 # existed. It reads the policy rather than the tree, which is why it is the one
 # rule here with no `files` table.

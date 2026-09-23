@@ -28,72 +28,71 @@ uv run --no-project uphold_check.py --review --emit
 prek run --all-files --hook-stage manual    # or: pre-commit run ...
 ```
 
-## Two lines in a fork that are not yours
+Write `enforcement.checks` as a brief for whoever builds the check, and
+`enforcement.limits` as what that person will not be able to observe. Neither is
+a check. No field of a record is emitted by a tool at runtime: prose has no
+condition on which to emit it, so it would be emitted always and ignored, or
+never. Adding an entry to `policy/upheld.toml` requires a rule that already
+fires.
 
-`policy/principles.toml` is this repository's own policy, and it is also the
-worked example — so it declares facts about *this* checkout that a fork has to
-change. Both are at the top of the file:
+## Repository facts a fork must change
+
+`policy/principles.toml` is this repository's own policy and also the worked
+example, so it declares facts about *this* checkout that a fork has to change.
+Both are at the top of the file:
 
 ```toml
 owner = "HackingGate"     # where this repository's pushes may go
 visibility = "public"     # whether what it publishes is readable by everyone
 ```
 
-`owner` is not a claim on the project. `unowned-push` refuses to run without it
-because the alternative — reading the owner off `origin` — is tautological for
-the one remote most likely to be wrong: repointing `origin` at somebody else's
-remote also repoints the allow-list. So a fork changes that line to its own
-owner, and `prevent-public-push` refuses the first push until it does. That is
-the guard working, not a misconfiguration.
+`owner` is not a claim on the project. `unowned-push` requires it because the
+alternative, reading the owner from `origin`, is circular for the remote most
+likely to be wrong: repointing `origin` elsewhere would also repoint the
+allow-list. A fork changes that line to its own owner, and
+`prevent-public-push` refuses the first push until it does. That is the guard
+working as intended.
 
-`visibility` decides whether the private-name guards fire here at all. A private
-fork sets `private` and they stand down; a public one leaves `public`.
+`visibility` decides whether the private-name guards run at all. A private fork
+sets `private` and they stand down; a public one keeps `public`.
 
-A workspace holding many repositories writes both lines many times — measured
-across one fleet, 78 `owner` lines for seven distinct values. `owner_from` and
+A workspace holding many repositories repeats both lines many times; one fleet
+had 78 `owner` lines with seven distinct values. `owner_from` and
 `visibility_from` take a command whose stdout is the value instead, so the fact
-lives once outside the tree. They move the declaration and never look it up:
-every way the command can fail to answer is exit `2`, because what a missing
-declaration falls back to is the owner read off `origin` and the forge's view of
-a visibility that is about to change. See
+is stored once outside the tree. Every way the command can fail to answer is
+exit `2`. See
 [REFERENCE.md](docs/REFERENCE.md#reading-a-repository-fact-from-a-command).
 
-A third fact is about *your machine* rather than your fork, and no line in the
-policy file carries it. The `private-names` set the policy inherits reads
+A third fact concerns *your machine* rather than your fork, and no line in the
+policy file carries it. The `private-names` set reads
 `$XDG_CONFIG_HOME/principles/private-owners` (else
-`$HOME/.config/principles/private-owners`) for the organisations whose names
-must not be published, and it says the file may be absent: on a clone without
-it, the guard reports on stderr that the file is not there and what is not being
-checked without it, and your commit proceeds. You do not have to create
-anything. If you keep such a list, put it at that path, or point
-`private_owners_file` at it from the top of the policy file, and the two forms
-the note names start being checked as well. See
+`$HOME/.config/principles/private-owners`) for the organizations whose names
+must not be published. The file is optional: without it, the guard reports on
+stderr what is not being checked, and the commit proceeds. If you keep such a
+list, put it at that path, or point `private_owners_file` at it from the top of
+the policy file, and the two forms the note names are checked as well. See
 [REFERENCE.md](docs/REFERENCE.md#where-the-owner-list-lives).
 
 ## Working on the engine
 
-The checks sit on three rungs, and which rung one sits on is a statement about
-what it costs to run. The commit stage is what can answer from the tree in front
-of it: `cargo fmt --check`, the catalog gates, the content scan, and the guards
-registered for the stage. Nothing there compiles the test tree and nothing there
-opens a socket.
+The checks run at three stages, chosen by cost. The commit stage runs what can
+answer from the tree alone: `cargo fmt --check`, the catalog gates, the content
+scan, and the guards registered for the stage. Nothing there compiles the test
+tree or opens a socket.
 
-The push stage is where the crate is built and exercised:
+The push stage builds and tests the crate:
 
 ```sh
 cargo test --quiet                    # the engine suite
 cargo clippy --quiet --all-targets    # the lint profile declared in Cargo.toml
 ```
 
-Both stood in front of every commit until they did not. A full compile and test
-pass at every save point is how a gate teaches `--no-verify` — the cost lands on
-the commits that touch no Rust as well, and a flag learned to skip a slow suite
-skips the guards standing beside it. At `pre-push` the same two still refuse
-before anything leaves the machine, which is the moment refusing is worth the
-wait. `uphold guard --stage pre-push` runs there with them.
+These used to run at every commit. A full compile and test pass on every commit
+costs time even on commits that touch no Rust, and encourages `--no-verify`,
+which also skips the guards. At `pre-push` they still refuse before anything
+leaves the machine. `uphold guard --stage pre-push` runs there with them.
 
-The manual rung is the host and the network, which neither a staged file nor a
-pushed range can react to:
+The manual stage covers the host and the network:
 
 ```sh
 scripts/deps.sh check          # rustup, rustc >= the MSRV, python3, the coverage pair
@@ -102,44 +101,47 @@ uphold guard --stage manual    # the guards that ask a remote about a pin or a n
 ```
 
 All three are `manual`-stage hooks under pre-commit and prek, and named groups
-under lefthook (`lefthook run preflight`, `lefthook run coverage`, `lefthook run
-uphold-manual`), so whichever runner is installed can reach them. The coverage
-floor lives in `scripts/coverage.sh` and nowhere else — the workflow calls the
-same script, so the number that fails a push is the number that fails locally.
-Raise it in the commit that earns it.
+under lefthook (`lefthook run preflight`, `lefthook run coverage`,
+`lefthook run uphold-manual`). The coverage floor is defined only in
+`scripts/coverage.sh`; the workflow calls the same script, so CI and local runs
+enforce the same number. Raise it in the commit that earns it.
 
-Editing anything under `policy/base/` means regenerating the set lock in the
-same commit, because a bundled set ships inside the binary and its diff exists
-nowhere else:
+Editing anything under `policy/base/` requires regenerating the set lock in the
+same commit, because a bundled set ships inside the binary and would otherwise
+change with no diff:
 
 ```sh
 cargo run --quiet -- rules --sets --json > policy/base/sets.lock.json
 ```
 
-`tests/base_set_lock.rs` refuses a tree where the two disagree. Read the diff
-before you regenerate — it is what a consumer would have felt and never seen.
+`tests/base_set_lock.rs` refuses a tree where the two disagree. Review the
+lock diff: it is the change consumers will receive.
 
-A rule added to a bundled set needs a line in `tests/base_set_corpus.rs`: at
+A rule added to a bundled set needs an entry in `tests/base_set_corpus.rs`: at
 least one sample it must refuse, and the forms it must let through.
 `every_content_rule_in_every_bundled_set_is_in_the_corpus` fails without one.
-The reason it is mandatory rather than encouraged is that a rule which stops
-matching produces **no output at all** — the gate goes green and stays green,
-and no report anywhere says the check has stopped working.
+This is mandatory because a rule that stops matching produces **no output at
+all**: the gate stays green and nothing reports that the check stopped working.
+
+The MSRV is written twice, in `Cargo.toml` as `rust-version` and in
+`toolchain.toml` as the rustc `want`, because cargo and the preflight cannot read
+each other's manifest. Bump both together; `tests/test_toolchain.py` refuses a
+tree where they disagree. Nothing builds the crate on that version: every build
+runs on the `stable` that `rust-toolchain.toml` names, and cargo uses the MSRV
+when resolving dependencies.
 
 ### Where a test's fixture lives
 
-Every CLI test builds a real repository, under `<temp>/uphold-tests/<pid>/`, and
-the first fixture in a run sweeps every sibling whose process is gone. Use
+Every CLI test builds a real repository under `<temp>/uphold-tests/<pid>/`, and
+the first fixture in a run removes every sibling whose process has exited. Use
 `support::scratch("name")` in `tests/`, `crate::fixture::scratch("name")` in
-`src/`, and do not reach for `std::env::temp_dir()` directly.
+`src/`, and do not use `std::env::temp_dir()` directly.
 
-The reason is measured rather than stylistic: the old shape cleared a fixture on
-the way IN and never on the way out, which frees nothing, because the directory
-name carries the pid precisely so that it cannot collide with a live run. One
-working session left 84,992 directories under `/tmp`, filled 15 GB of a 16 GB
-tmpfs, and killed a `cargo mutants` run with `No space left on device` -- which
-that run then reported as 158 mutants "unviable". A tool reporting a measurement
-it could not make is what this repository exists to refuse.
+The previous approach cleared a fixture on creation and never afterwards, which
+freed nothing, because the directory name includes the pid so it cannot collide
+with a live run. One working session left 84,992 directories under `/tmp`,
+filled 15 GB of a 16 GB tmpfs, and caused a `cargo mutants` run to fail with
+`No space left on device`, which it then reported as 158 mutants "unviable".
 
 ### The dependency graph
 
@@ -148,26 +150,23 @@ cargo install cargo-deny
 cargo deny check
 ```
 
-`deny.toml` says what this crate may depend on and under what terms: advisories,
-licences named one at a time, no wildcard version, and crates.io as the only
-source. It answers three questions no rule in `policy/principles.toml` can,
-because they are facts about the dependency graph rather than about this tree's
-files -- which is the boundary between a rule here and an external provider.
+`deny.toml` defines what this crate may depend on and under what terms:
+advisories, licences named one at a time, no wildcard versions, and crates.io as
+the only source. These are facts about the dependency graph rather than about
+the tree's files, so no rule in `policy/principles.toml` can check them.
 
-It is deliberately not wired into a hook. The advisory half reaches the network,
-and this repository already decided where that belongs: `no-stale-hook-pins`
-runs at pre-push and manual and not at every commit, because a check that adds a
-network round trip to a commit is one somebody switches off.
+It is not wired into a hook. The advisory check uses the network, and network
+checks run at pre-push or manual, not at every commit, for the same reason
+`no-stale-hook-pins` does.
 
-Keep the licence allow-list to what the tree carries. `cargo deny` reports an
-allowance that matched nothing, and an entry describing no dependency reads as a
-decision while doing nothing.
+Keep the license allow-list to what the tree uses. `cargo deny` reports an
+allowance that matched nothing; remove such entries.
 
 ### Mutation testing
 
-Coverage says a line ran. It does not say a test would have noticed the line
-being wrong, and the failures this repository keeps having are exactly that
-shape: a check that could not look reporting a pass.
+Coverage shows that a line ran, not that a test would notice the line being
+wrong. The recurring failure mode here is of that kind: a check that could not
+look reporting a pass.
 
 ```sh
 cargo install cargo-mutants
@@ -175,18 +174,16 @@ cargo mutants --file src/check.rs -j 4      # one module, minutes
 cargo mutants -j 4                          # the crate, hours
 ```
 
-Scope it. Measured here: `src/check.rs` is 98 mutants and about eight minutes
-at `-j 4`; the crate is 1,573 mutants, which is hours. One module at a time is
-the useful unit, and the modules worth starting from are the ones that decide an
-exit state -- `check.rs`, `config.rs`, `guard/mod.rs`, `pins.rs` -- because the
-failures this repository keeps having are `UNKNOWN -> PASS` and those are where
-an unknown becomes a verdict.
+Run it one module at a time. Measured here: `src/check.rs` is 98 mutants and
+about eight minutes at `-j 4`; the crate is 1,573 mutants, which takes hours.
+Start with the modules that decide an exit state (`check.rs`, `config.rs`,
+`guard/mod.rs`, `pins.rs`), because those are where an unknown becomes a
+verdict.
 
-A surviving mutant is a claim about the tests, not about the code: something
-could be wrong here and every test would still pass. Read it before writing
-anything. Some survivors are equivalent mutants and some are unreachable, and
-both are worth a sentence in the commit rather than a test written to silence
-them.
+A surviving mutant says something about the tests, not the code: the code could
+be wrong here and every test would still pass. Read it before writing anything.
+Some survivors are equivalent or unreachable; note those in the commit message
+rather than writing a test to silence them.
 
 ### Proving the fail-closed property
 
@@ -198,50 +195,35 @@ lefthook run proofs                        # the same, as the manual group
 
 Two places in this crate turn an unknown into a number a caller acts on, and
 each carries a `#[cfg(kani)] mod proofs` that states what it must do over every
-input rather than over the handful a unit test can name.
+input rather than over the few a unit test can name.
 
 `error::verdict` and `Exit::of`, over every pair of counts and every run: a run
 that could not look never exits 0, a violation outranks an unread surface,
-clean means read everything and found nothing, and a run that stopped on an
-error exits 2. Change `could_not_look > 0` to `could_not_look > 1` and every
-in-crate unit test still passes -- including the four that test `verdict`
-directly, since they name 3 and 0 and never 1. Kani refuses in 15 milliseconds,
-with the counterexample.
+clean means everything was read and nothing found, and a run that stopped on an
+error exits 2. Changing `could_not_look > 0` to `could_not_look > 1` passes
+every in-crate unit test, including the four that test `verdict` directly,
+since they use 3 and 0 and never 1. Kani refuses it in 15 milliseconds, with the
+counterexample.
 
-`text::over_kinds`, the step every published-text seam but the shim takes from
-what each kind of rule answered to the verdict, over every seam and every
+`text::over_kinds`, the step every published-text seam except the shim takes
+from what each kind of rule answered to the verdict, over every seam and every
 combination of answers: clean exactly when every consulted kind looked and
 found nothing, exit 2 whenever one could not look, each consulted kind asked
-once and no other kind asked at all, and the same answers giving the same
-verdict. `text::load_for` is proven to hand a policy that did not load on as an
-error, with `config::load` replaced by a loader that always fails. Swallowing a
-kind's error in `over_kinds`, or skipping one consulted kind, fails three of the
-five.
+once and no other kind asked, and the same answers giving the same verdict.
+`text::load_for` is proven to return an error for a policy that did not load,
+with `config::load` replaced by a loader that always fails. Swallowing a kind's
+error in `over_kinds`, or skipping one consulted kind, fails three of the five.
 
-What the harnesses do not reach is stated in them: the rule bodies (a regex, a
-literal search, a command source, a guard reading the repository), the shim's
-per-rule dispatch, and everything that reads a file or runs a process. Those
-stay under the tests they have.
+The harnesses state what they do not reach: the rule bodies (a regex, a literal
+search, a command source, a guard reading the repository), the shim's per-rule
+dispatch, and everything that reads a file or runs a process. Those remain
+covered by tests.
 
-Manual, not pre-push. Two of the harnesses take one to two minutes of solver
-time each, and the toolchain is half a gigabyte fetched by `cargo kani setup`,
-which is past what a push should wait for and not something every contributor
-has. CI runs them as a job of their own; locally they are `lefthook run
-proofs`, or the `kani` hook at the manual stage of pre-commit and prek.
-
-The MSRV is written twice, in `Cargo.toml` as `rust-version` and in
-`toolchain.toml` as the rustc `want`, because cargo and the preflight cannot read
-each other's manifest. Bump both together; `tests/test_toolchain.py` refuses a
-tree where they disagree. Nothing builds the crate on that version: every build
-runs on the `stable` that `rust-toolchain.toml` names, and the number's work is
-done by cargo, which resolves dependencies against it.
-
-Write `enforcement.checks` as a brief for whoever builds the check, and
-`enforcement.limits` as what that person will not be able to observe. Neither is
-a check. No field of a record is ever emitted by a tool at runtime: a tool
-carrying prose has no condition on which to emit it, so it emits always and
-teaches readers to skip it, or never and enforced nothing. Adding an entry to
-`policy/upheld.toml` requires a rule that already fires.
+The proofs run at the manual stage, not pre-push. Two of the harnesses take one
+to two minutes of solver time each, and `cargo kani setup` fetches a toolchain
+of about half a gigabyte. CI runs them as a separate job; locally they are
+`lefthook run proofs`, or the `kani` hook at the manual stage of pre-commit and
+prek.
 
 ## Cutting a release
 
@@ -251,13 +233,12 @@ Bump `version` in `Cargo.toml`, merge, then:
 git tag vX.Y.Z && git push --tags
 ```
 
-The tag is the whole trigger. `.github/workflows/release.yml` is generated by
+The tag is the only trigger. `.github/workflows/release.yml` is generated by
 `dist` from `dist-workspace.toml` and builds the archives, the shell installer
-and the GitHub Release. The release body is the install instructions and the
+and the GitHub Release. The release body holds the install instructions and the
 artifact table; the change record is the merged pull requests between the
-previous tag and this one, which git history and the compare view already
-hold. Edit the workflow through `dist-workspace.toml` and `dist generate`,
-never by hand: the next `dist init` rewrites it.
+previous tag and this one. Edit the workflow through `dist-workspace.toml` and
+`dist generate`, never by hand, because the next `dist init` rewrites it.
 
 ## Rejection criteria
 

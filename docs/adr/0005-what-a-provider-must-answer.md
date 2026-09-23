@@ -5,7 +5,7 @@ Status: Accepted
 This record defines the contract an external analyzer has to satisfy to be named
 in `policy/upheld.toml`. It is written last on purpose. The instruction it
 follows was to define the abstraction only after the prototypes revealed the
-common minimum, and not from tool names -- so what is below comes from seven
+common minimum, and not from tool names — so what is below comes from seven
 evaluations that were run rather than from a survey:
 
 `cargo-deny`, `zizmor`, `cargo-mutants`, `cargo-fuzz`, `ast-grep`, `semgrep` and
@@ -34,7 +34,7 @@ from another repository. The id exists in that repository, and no amount of
 reading files here will show what it enforces. What can be verified is the pin,
 which is what `no-stale-hook-pins` already does.
 
-Neither class ever tells this tool what an id MEANS. That is question 2.
+Neither class ever tells this tool what an id *means*. That is question 2.
 
 ### 2. Has the refusal been seen?
 
@@ -49,20 +49,20 @@ sanitizer was after its sink and a CodeQL query with no model for the builder
 API both ran, both reported, and neither reported the thing it was written for.
 
 The prototypes in this repository each carry their negative control for the same
-reason -- the structural rules have fixtures with the defect in them, and the
+reason — the structural rules have fixtures with the defect in them, and the
 `kani` proofs were driven to a failure by a one-character mutation before being
 believed.
 
 ### 3. Can it say "I could not look", and does it?
 
-This is the question the whole exercise kept producing, at every tier, and it is
-the reason this record exists at all.
+This is the question every evaluation raised, at every tier, and it is the
+reason this record exists.
 
 | tier | what a clean run looked like over a source it could not read |
 | --- | --- |
 | `ast-grep` | exit 0, no output, over a file whose parse collapsed three lines above the defect |
 | CodeQL | `Successfully created database`, zero rows; the `parse_error` is four rows in a channel already carrying 1,689 diagnostics at the same severity |
-| a pin check | an unreachable remote counted as a pin that resolved -- this repository's own, before `no-stale-hook-pins` |
+| a pin check | an unreachable remote counted as a pin that resolved — this repository's own, before `no-stale-hook-pins` |
 | a hook | a hook that cannot fail prints the same green tick as one that keeps finding nothing |
 
 The pattern does not weaken as the analysis gets more expensive. It gets harder
@@ -76,8 +76,8 @@ rule matching `kind: ERROR`, which catches ERROR recovery and not recovery that
 only inserts a MISSING node; [ADR 0009](0009-a-consumers-structural-rules-are-ast-greps.md)
 names what covers the rest. For CodeQL it is a diagnostics query with a filter
 that knows which tag and which file to look for. For a hook it is a probe. A
-provider that answers the question itself -- as this binary's own scan does,
-exiting 2 over a path it could not open -- needs no pairing, and that is the
+provider that answers the question itself — as this binary's own scan does,
+exiting 2 over a path it could not open — needs no pairing, and that is the
 property worth preferring a provider for.
 
 ## What the contract is not
@@ -122,8 +122,8 @@ check somebody disables wholesale enforces nothing at all.
 
 ## What this changes today
 
-Nothing in the binary. It names the one feature the evaluations argue for --
+Nothing in the binary. It names the one feature the evaluations argue for —
 verifying that a claimed id is present in a provider's own local configuration
--- and records why the rest of the provider model needs no new mechanism: an
+— and records why the rest of the provider model needs no new mechanism: an
 `ast-grep`, `zizmor` or `cargo-deny` rule id is claimable through the local tier
 already, exactly as a formatter's hook id is.

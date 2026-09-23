@@ -39,7 +39,7 @@ owner = "HackingGate"
 #
 # What the flip published, and what no rewrite reaches: commit 188970b2, on the
 # retained head ref of the pull request that merged it, names a private
-# organisation in its message. The squashed commit on the default branch does
+# organization in its message. The squashed commit on the default branch does
 # not. The remaining copy is the forge's to remove, not a rewrite's.
 visibility = "public"
 
@@ -129,7 +129,7 @@ files.include = ["tests", "src/guard/unicode.rs"]
 # word, each without knowing the others had.
 
 # A tracked doc states what holds; the story of how it came to hold lives in
-# git history and the tracker. Prose that says a name became another name goes
+# Git history and the tracker. Prose that says a name became another name goes
 # stale the day either name moves again, and nothing marks it stale.
 #
 # Only the cheap, high-precision slice is mechanized. Words deliberately NOT in
@@ -148,8 +148,8 @@ files.include = ["tests", "src/guard/unicode.rs"]
 [rule.no-before-after-narrative]
 message = """
 State what holds, not what it replaced. A tracked doc that says a name became
-another name goes stale the day either name moves again, and the story of the
-change belongs in git history and the tracker rather than in the page.
+another name goes stale the day either name moves again, and the change record
+belongs in Git history and the tracker rather than in the page.
 """
 regexp = '(?i)\b(?:became|was renamed|renamed to|formerly|previously (?:called|named|spelled)|used to be)\b'
 files.glob = ["*.md"]
@@ -176,8 +176,8 @@ files.exclude = ["CHANGELOG*", "**/tests/**", "**/test/**"]
 [rule.no-before-after-narrative-in-source]
 message = """
 State what holds, not what it replaced. A comment that explains what the code
-used to do goes stale the day either version moves again, and the story of the
-change belongs in the commit that made it.
+used to do goes stale the day either version moves again, and the change
+record belongs in the commit that made it.
 """
 comment_regexp = '(?i)\b(?:used to be|used to (?:use|call|return|do|have|rely)|previously[,:]?\s+(?:this|we|it|the)|no longer (?:needed|used|required|necessary))\b'
 files.include = ["src", "scripts", "uphold_check.py"]
@@ -320,7 +320,7 @@ files.min_selected = 2
 [rule.no-published-host-identity]
 message = """
 Use neutral placeholders -- example-user, example-host, example.test,
-/srv/example -- instead of values read off the machine you are standing on.
+/srv/example -- instead of values taken from the local machine.
 """
 builtin = "text-literals"
 # Every command a shim collects a subject from. A hostname reaches a public
@@ -347,14 +347,14 @@ command.scope = "always"
 [rule.no-published-markers]
 message = """
 A pull-request body reaches a public API without passing a single hook, which
-is the whole reason this seam exists.
+is why this check runs at publish time.
 """
 builtin = "text-guards"
 # Not `npm publish`: a package directory is not prose, and asking a guard that
 # reads prose about one produces a pass over a subject it has nothing to say
 # about. `git push` is here, and leaving it out was wrong. The three
 # text-capable guards read an authorship trailer, an unusual character and a
-# private organisation's name -- and a branch name is the second-likeliest place
+# private organization's name -- and a branch name is the second-likeliest place
 # in this workspace for the third of those to land, after a commit message.
 # `fix/acme-outage` goes onto a public forge in the ref list, in the pull
 # request it suggests and in every notification, and pre-push is handed the refs
@@ -407,7 +407,7 @@ command.scope = "always"
 
 # A release is titled by its tag. The release list is a version picker, and
 # every entry in this repository's is its tag -- except the one that was not,
-# published as a sentence while every neighbour read vX.Y.Z, and renamed by
+# published as a sentence while every neighbor read vX.Y.Z, and renamed by
 # hand afterwards. The prose belongs in the notes; the format belongs to a
 # rule, so the next inconsistent title is refused before it is published
 # rather than renamed after.
