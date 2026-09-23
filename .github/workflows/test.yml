@@ -32,6 +32,8 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # The Python below is stdlib-only, so what this pins is the INTERPRETER
       # and nothing else. `ubuntu-slim` ships whatever python3 it ships, and
@@ -55,6 +57,8 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -115,6 +119,8 @@ jobs:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -158,6 +164,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: model-checking/kani-github-action@v1.1
         with:
@@ -195,6 +203,8 @@ jobs:
         tool: [pre-commit, prek, lefthook]
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # Four hooks in .pre-commit-config.yaml are `language: system` and spelt
       # `uv run --no-project ...`, so uv has to be on PATH for the runner that
@@ -313,6 +323,8 @@ jobs:
         tool: [pre-commit, prek, lefthook]
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # pre-commit and prek bootstrap their own Rust; lefthook has no manifest
       # contract and no language to bootstrap, so the binary has to be built and
@@ -389,6 +401,8 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # The reconcile is the binary's now, so this job needs one. It builds
       # rather than pinning a release because what is under test is this
