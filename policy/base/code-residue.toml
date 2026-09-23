@@ -77,8 +77,8 @@ chronology in Git history.
 # The expression is the one `no-task-tracker-references` compiles, arm for
 # arm, and the argument for each arm is written above that rule: what an
 # unqualified repository name needs, what a bare number needs before it, why a
-# list separator counts and which colours it steps past, and why the words `issue` and `pr` are read in any
-# case. It is duplicated rather than referenced because a rule is a table of
+# list separator counts and which colours it steps past, and why the words
+# `issue` and `pr` are read in any case. It is duplicated rather than referenced because a rule is a table of
 # its own and there is nothing in the policy language to point one rule's
 # pattern at another's; the corpus holds the two to the same samples.
 regexp = 'github\.com/[^[:space:])]+/(?:issues|pull)/[0-9]+|\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]*[a-z][A-Za-z0-9_.-]*)#[0-9]+\b|(?:^|\b[a-z]+[\t ]+|(?i:\b(?:issue|pr)[\t ]+)|\(|\[)#[0-9]+\b|[,;/][\t ]*#(?:[0-9]{1,2}|[0-9]{4,5}|[0-9]{7,})\b|[,;/][\t ]*#(?:[0-9]{3}|[0-9]{6})(?:[^\w\t ),;%]|[\t ]*$|[\t ]+(?:[^\t ),;%0-9]|[0-9]+(?:[^0-9%]|$)))'
