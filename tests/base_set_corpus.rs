@@ -624,6 +624,32 @@ fn a_stylesheet_is_not_read_by_the_code_tracker_rule() {
     }
 }
 
+#[test]
+fn a_conflict_left_in_a_test_file_is_one_finding() {
+    // The rule read no test files, so a conflict resolved everywhere but a test
+    // passed the scan. Each path is one of the three shapes the set used to
+    // leave out, and the marker block in it is one finding.
+    for path in [
+        "tests/merge.rs",
+        "pkg/test/fixture.txt",
+        "pkg/merge_test.go",
+    ] {
+        let case = Case {
+            set: "process-residue",
+            rule: "no-merge-conflict-markers",
+            path,
+            refuses: &[],
+            allows: &[],
+        };
+        let (code, report) = verdict(
+            &case,
+            "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> topic\n",
+        );
+        assert_eq!(code, 1, "{path}: {report}");
+        assert_eq!(findings_under(&report, case.rule), 1, "{path}: {report}");
+    }
+}
+
 /// The lines of a report that open a finding under exactly this id.
 ///
 /// Counted against the whole line, because one tracker id is a prefix of the

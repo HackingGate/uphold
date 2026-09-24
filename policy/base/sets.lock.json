@@ -71,11 +71,6 @@
       },
       {
         "files": {
-          "exclude": [
-            "**/tests/**",
-            "**/test/**",
-            "**/*_test.go"
-          ],
           "exclude_cfg_test": false,
           "include": [
             "."

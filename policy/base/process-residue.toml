@@ -63,8 +63,12 @@ Do not commit Git merge-conflict markers. Resolve the conflict and remove the
 # not false-positive. Needs multiline to span the block.
 regexp = '^<{7} [\s\S]*?^={7}$[\s\S]*?^>{7} '
 files.multiline = true
+# Test files included. A conflict left in a test is a conflict all the same,
+# and the whole-block pattern is what keeps a test's own `=======` underline
+# from matching, so a directory-wide exclusion bought nothing but the gap. A
+# repository whose tests carry a real marker block as a fixture excludes that
+# path with an `[override.no-merge-conflict-markers]` of its own.
 files.include = ["."]
-files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go"]
 
 [rule.no-hardcoded-home-paths]
 message = """
