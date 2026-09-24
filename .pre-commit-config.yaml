@@ -157,6 +157,15 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit, manual]
+      # The host-identity rules over the message, which the tree scan above
+      # never reads: this repository's run of the published `uphold-scan-text`.
+      - id: scan-text-commit-msg
+        name: "content policy (stage: commit-msg)"
+        entry: cargo run --quiet -- scan --text
+        language: system
+        pass_filenames: true
+        always_run: true
+        stages: [commit-msg]
       - id: guards-commit-msg
         name: "guards (stage: commit-msg)"
         entry: cargo run --quiet -- guard --stage commit-msg --message
