@@ -19,9 +19,8 @@
 # The one difference from the other two runners is where the binary comes from.
 # pre-commit and prek build it themselves, because `language: rust` is part of
 # their manifest contract; lefthook runs commands and has no such contract, so
-# `uphold` must be on PATH:
-#
-#   cargo install --git https://github.com/HackingGate/uphold --tag v1.21.0
+# `uphold` must be on PATH, installed at the tag this config is pinned to with
+# the `cargo install` line at the top of the README.
 #
 # The names below are prefixed `uphold-` on purpose. A remote config is
 # merged into the consumer's own, and two commands sharing a name under one hook
