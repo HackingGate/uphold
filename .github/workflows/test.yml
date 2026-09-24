@@ -295,7 +295,12 @@ jobs:
           pipx install bashate
           pipx install ruff
 
+      # Without the staged secret scan, which needs a gitleaks this runner does
+      # not install. The other two legs run the manual stage, where that hook
+      # is not registered, so this keeps the three asking the same question.
       - if: matrix.tool == 'lefthook'
+        env:
+          LEFTHOOK_EXCLUDE: supply-chain-staged
         run: lefthook run pre-commit --all-files
 
       # The manual-stage pair, at the seam lefthook has for them. Coverage is

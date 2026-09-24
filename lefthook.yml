@@ -22,6 +22,11 @@ pre-commit:
       run: cargo run --quiet -- scan
     guards:
       run: cargo run --quiet -- guard --stage pre-commit
+    # gitleaks over the index, the commit-time half of the secret scan the
+    # `credentials` set leaves to it. The command hooks/lefthook.yml tells a
+    # lefthook consumer to write; no stdin, because it reads the index itself.
+    supply-chain-staged:
+      run: cargo run --quiet -- supply-chain --staged
     # The lint profile lives in Cargo.toml, so all three runners hold the crate
     # to the same set. What differs is when a contributor hears about it: a
     # profile only CI reads is one whose first reader is a failed push.

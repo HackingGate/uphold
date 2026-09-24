@@ -196,6 +196,19 @@ repos:
       # Only at pre-push, not at manual. CI runs the manual stage and installs
       # none of the scanners, so `supply-chain --all` there would be exit 2 on
       # every run. It belongs in a job that installs them.
+      # gitleaks over the index, so a secret is refused before it is in local
+      # history rather than at the push that would publish it. The content half
+      # of the secret check: the `credentials` set this repository inherits
+      # carries only the committed-file rules. pre-commit only, like the
+      # published `uphold-supply-chain-staged`: CI runs the manual stage and
+      # installs no gitleaks.
+      - id: uphold-supply-chain-staged
+        name: uphold supply-chain --staged
+        entry: cargo run --quiet -- supply-chain --staged
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
       - id: uphold-supply-chain
         name: uphold supply-chain
         entry: cargo run --quiet -- supply-chain
