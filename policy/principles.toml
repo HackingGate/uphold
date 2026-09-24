@@ -107,6 +107,16 @@ sets = [
     # this repository stands in front of `glab` and `npm` as well and a rule
     # arriving from a set cannot be handed a wider command list.
     "published-text",
+    # The tool-provisioning pair: a tool fetched and unpacked by hand, and a
+    # version typed where no manifest holds it. Two overrides at the end of
+    # this file say where each does not read, and why.
+    "hand-rolled-toolchain",
+    "unmanaged-pins",
+    # The committed-file half of the secret check; the content half is
+    # gitleaks, run through `uphold supply-chain` from the hook files.
+    "credentials",
+    # A commit whose author is not the identity the repository commits as.
+    "mismatched-author",
 ]
 
 # The engine's own tests write Japanese, because the two rules they exercise --
@@ -555,3 +565,23 @@ files.exclude = [
     "src/anchors.rs",
     "tests/scan_cli.rs",
 ]
+
+# The reference table describes `hand-rolled-toolchain` by quoting the form it
+# refuses, which is the reason the set already leaves README.md and
+# CONTRIBUTING.md out. The list is the set's own with this one path added,
+# because an override's `files.exclude` replaces the set's rather than extending
+# it.
+[override.no-hand-rolled-tool-install]
+files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "CONTRIBUTING.md", "third_party/**", "vendor/**", "docs/REFERENCE.md"]
+
+# dist writes .github/workflows/release.yml on `dist generate`, including the
+# versioned installer URL for dist itself, and a hand edit does not survive the
+# next generate. That version is held in dist-workspace.toml as
+# `cargo-dist-version`, which is the manifest the rule asks for; the workflow
+# line is its rendering. The set's exclude list is repeated for the reason the
+# override above gives.
+[override.no-pinned-release-download]
+files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "third_party/**", "vendor/**", ".github/workflows/release.yml"]
+
+[override.no-pinned-versioned-fetch]
+files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "third_party/**", "vendor/**", ".github/workflows/release.yml"]
