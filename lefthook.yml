@@ -109,6 +109,10 @@ uphold-manual:
 
 commit-msg:
   commands:
+    # The host-identity rules over the message, which a tree scan never reads:
+    # the command hooks/lefthook.yml runs as `uphold-scan-text`.
+    scan-text:
+      run: cargo run --quiet -- scan --text {1}
     guards:
       run: cargo run --quiet -- guard --stage commit-msg --message {1}
 
