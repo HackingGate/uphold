@@ -3235,3 +3235,49 @@ fn a_marker_past_the_depth_a_probe_needs_is_the_loop_and_refuses() {
     assert!(stderr.contains("UPHOLD_SHIM_INNER=3"), "{stderr}");
     assert!(stderr.contains("Nothing was published"), "{stderr}");
 }
+
+/// A rule that refuses one verb by its command line, through a shim whose other
+/// verbs are judged by their flags alone.
+const ARGV_PER_VERB_POLICY: &str = r#"
+[rule.no-release-create]
+message = "Cut a release from the release workflow, not by hand."
+regexp = '^release create'
+subjects = ["argv"]
+command.before = ["faux"]
+command.scope = "always"
+
+[[shim]]
+command = "faux"
+match = ["release:create", "pr:create"]
+text_flags = ["-b", "--body"]
+scope = "always"
+
+  [[shim.verbs]]
+  match = ["release:create"]
+  text_flags = ["-n", "--notes"]
+  argv_subject = true
+"#;
+
+#[test]
+fn a_verbs_entry_can_hand_the_rules_the_command_line_for_that_verb_alone() {
+    let root = workspace(ARGV_PER_VERB_POLICY);
+    let refused = shim(&root, &["faux", "release", "create", "v1.0.0"]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        !stdout(&refused).contains("faux ran:"),
+        "{}",
+        stdout(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("no-release-create"),
+        "{}",
+        stderr(&refused)
+    );
+
+    // The table leaves `argv_subject` off, so a verb the entry does not name
+    // is never judged by its command line: a body that starts with the refused
+    // words is text, and text is not what the rule asks about.
+    let other = shim(&root, &["faux", "pr", "create", "-b", "release create"]);
+    assert_eq!(code(&other), 0, "{}", stderr(&other));
+    assert!(stdout(&other).contains("faux ran:"), "{}", stdout(&other));
+}

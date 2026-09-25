@@ -160,10 +160,49 @@ a vocabulary nobody wrote — here `issue close --body`, a flag the real command
 does not accept — and reading a flag a command will not take is the shim
 claiming to have checked a subject that was never published.
 
-`text_flags`, `title_flags`, `file_flags`, `path_flags`, `skip_flags` and
-`web_flags` may be overridden. `target_flags` may not: `-R`/`--repo` means the same thing on every
+`text_flags`, `title_flags`, `file_flags`, `path_flags`, `skip_flags`,
+`web_flags` and `argv_subject` may be overridden. `target_flags` may not: `-R`/`--repo` means the same thing on every
 verb, and a per-verb answer to "which repository is this going to" would be a way
-to publish somewhere the table did not expect.
+to publish somewhere the table did not expect. An entry that leaves
+`argv_subject` out keeps the table's value; the flag lists are replaced whether
+given or not.
+
+### Judging the command line itself: `argv_subject`
+
+`text_flags` and the other lists hand the rules the values a command publishes.
+A rule whose subject is the invocation, not any text the invocation carries,
+such as "no release is cut by hand", has nothing to read there. `argv_subject =
+true` on a `[[shim]]` adds one more subject of kind `argv`: every word after the
+command's own name, joined by single spaces (`release create v1.2.0 --notes x`
+for `gh release create v1.2.0 --notes x`). It is added beside the flag values,
+not instead of them.
+
+The `argv` subject exists at the shim seam only. `uphold hook` receives a tool
+call, not a command line, and `--text`, the git hooks and the scan receive text;
+none of them has an `argv` to hand a rule. A rule meant for it names the kind so
+the flag values are not asked the same question:
+
+```toml
+[rule.no-release-by-hand]
+message = "Cut a release from the release workflow."
+regexp = '^release create\b'
+subjects = ["argv"]
+command.before = ["gh"]
+command.scope = "always"
+
+[[shim]]
+command = "gh"
+match = ["pr:create", "release:create"]
+text_flags = ["-b", "--body"]
+
+  [[shim.verbs]]
+  match = ["release:create"]
+  text_flags = ["-n", "--notes"]
+  argv_subject = true      # this verb only; the table's value is false
+```
+
+A `gh api` or `glab api` call is read with that verb's own grammar and hands no
+`argv` subject, whatever the table says.
 
 ### A baseline entry may be asked to say who excused it and why
 

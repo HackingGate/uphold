@@ -168,6 +168,12 @@ pub(crate) struct VerbFlags {
     pub skip_flags: Vec<String>,
     #[serde(default)]
     pub web_flags: Vec<String>,
+    /// The table's `argv_subject` for these verbs, where given. An option
+    /// rather than a list because it is one answer, and absent means the
+    /// table's: an entry written to change a flag vocabulary must not also
+    /// switch the command line on or off as a side effect.
+    #[serde(default)]
+    pub argv_subject: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -202,6 +208,9 @@ pub(crate) struct Shim {
     pub skip_flags: Vec<String>,
     #[serde(default)]
     pub web_flags: Vec<String>,
+    /// Hand the rules the whole command line, after the command's own name, as
+    /// one subject of kind `argv`. For a rule whose subject is the invocation
+    /// itself -- `release create` -- rather than any text a flag carries.
     #[serde(default)]
     pub argv_subject: bool,
     /// The environment variable this command reads to find its editor.
@@ -1102,6 +1111,9 @@ impl Shim {
         effective.path_flags.clone_from(&entry.path_flags);
         effective.skip_flags.clone_from(&entry.skip_flags);
         effective.web_flags.clone_from(&entry.web_flags);
+        if let Some(argv_subject) = entry.argv_subject {
+            effective.argv_subject = argv_subject;
+        }
         std::borrow::Cow::Owned(effective)
     }
 
@@ -1493,7 +1505,7 @@ impl Shim {
                 collected.web = false;
             }
         }
-        if self.argv_subject {
+        if effective.argv_subject {
             collected.subjects.push(Subject {
                 kind: "argv",
                 value: argv.join(" "),
