@@ -965,7 +965,18 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
             } else {
                 hooks.join(", ")
             };
-            println!("  {}  ({at})", rule.id);
+            // Which parts of an inherited rule this policy changed, so a
+            // reworded message or a widened selection reads as local rather
+            // than as the set's.
+            if rule.overridden.is_empty() {
+                println!("  {}  ({at})", rule.id);
+            } else {
+                println!(
+                    "  {}  ({at})  [override: {}]",
+                    rule.id,
+                    rule.overridden.join(", ")
+                );
+            }
         }
         return Ok(Exit::Clean);
     }
@@ -995,7 +1006,20 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
             }
             json_string(seam, &mut document);
         }
-        document.push_str("]}");
+        document.push(']');
+        // Only where an override changed something, so the line of every rule
+        // no override touches is what it was before the field existed.
+        if !rule.overridden.is_empty() {
+            document.push_str(", \"overridden\": [");
+            for (position, field) in rule.overridden.iter().enumerate() {
+                if position > 0 {
+                    document.push_str(", ");
+                }
+                json_string(field, &mut document);
+            }
+            document.push(']');
+        }
+        document.push('}');
     }
     if !policy.rules.is_empty() {
         document.push('\n');

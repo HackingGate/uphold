@@ -145,8 +145,9 @@ command.before = ["gh", "git push"]
 #
 # `gh` alone, not `glab`: `gh` is the line every hand copy named, and the
 # `commands` ceiling above admits nothing wider. A repository whose shim tables
-# also stand in front of `glab` shadows this id with the same built-in and the
-# wider `command.before`, which is the override ADR 0006 documents.
+# also stand in front of `glab` or `git push` adds them with
+# `[override.unowned-forge-target] command.before_append`, which keeps the rule
+# the set's rather than a copy of it.
 [rule.unowned-forge-target]
 builtin = "prevent-unowned-target"
 owner_required = true

@@ -930,6 +930,12 @@ pub(crate) struct Rule {
     /// seam, is two rules free to drift.
     #[serde(rename = "seams")]
     pub at_seams: Option<Vec<String>>,
+    /// The fields an `[override.<id>]` table in the loading policy changed on
+    /// this inherited rule, so `uphold rules --effective` can say which parts are
+    /// local.
+    /// Filled in by the loader and by nothing else, for the reason `origin` is.
+    #[serde(skip)]
+    pub overridden: Vec<&'static str>,
 }
 
 impl Rule {
@@ -951,6 +957,7 @@ impl Rule {
             command: None,
             subjects: None,
             at_seams: None,
+            overridden: Vec::new(),
         }
     }
 
@@ -984,6 +991,7 @@ impl Rule {
             command: written.command,
             subjects: written.subjects,
             at_seams: written.seams,
+            overridden: Vec::new(),
         })
     }
 

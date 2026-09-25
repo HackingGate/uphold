@@ -714,29 +714,52 @@ inherited defines is an error. `inherit.paths` merges extra policy files,
 repository-relative, after the bundled sets.
 
 A repository's own rule of the same `id` replaces the inherited one **whole**,
-so it is the spelling for a rule that checks something different. To move only
-**where** an inherited rule reads, write an override:
+so it is the spelling for a rule that checks something different. To adjust an
+inherited rule while keeping its check, write an override:
 
 ```toml
 [override.no-task-tracker-references]
 files.exclude = ["src/**"]
+
+[override.unowned-forge-target]
+command.before_append = ["git push"]     # added to the set's command.before
+
+[override.prevent-unusual-unicode-in-files]
+allow = ["U+3000"]                       # added to the set's allowances
+message = "Only the ideographic space is admitted in these files."
+
+[override.no-broken-doc-links]
+require_any_link = false                 # no internal link here yet
 ```
 
-The inherited rule is kept — `regexp`, `message`, `builtin`, provenance and
-all — and the `files` keys written here replace the set's. An override may
-carry `files.include`, `files.exclude` and `files.glob`, and nothing else; a
-key the override does not name keeps the set's value, so `files.exclude` alone
-leaves the set's `include` and `glob` standing. A tightening the set ships
-later reaches the narrowed rule on the next pin bump, which is what a full copy
+The inherited rule is kept, with its `regexp` or `builtin`, its provenance and
+every field the override does not name. What an override may carry is what
+leaves the check alone:
+
+| field | effect | refused where |
+|---|---|---|
+| `files.include`, `files.exclude`, `files.glob` | replaces the set's value | — |
+| `command.before_append` | adds commands to the set's `command.before` | the rule stands in front of no command, or already names the entry |
+| `allow` | adds allowances to the set's list | the rule's built-in reads no `allow` |
+| `require_any_link` | sets the `links-resolve` floor | the rule is not `links-resolve` |
+| `message` | replaces the wording | — |
+
+`uphold rules --effective` prints the fields an override changed beside the rule
+(`[override: allow, message]`, and `"overridden"` in `--json`), so a reworded
+message reads as this repository's and not the set's. A tightening the set ships
+later reaches the adjusted rule on the next pin bump, which is what a full copy
 under the same `id` cannot promise: it pins the pattern at whatever the set
 shipped the day it was pasted.
 
-Three shapes are refused at load, each naming the table:
+Four shapes are refused at load, each naming the table:
 
-- an override carrying any other key — `regexp`, `message`, `files.multiline`
-  — with the three it may carry listed. A copy that changes the check is a rule
-  of the repository's own and is written as `[rule.<id>]` in full, where the
-  shadow note below reports it;
+- an override carrying any other key, such as `regexp`, `builtin`,
+  `command.scope` or `files.multiline`, with the fields it may carry listed.
+  A copy that changes what the rule matches is a rule of the repository's own
+  and is written as `[rule.<id>]` in full, where the shadow note below reports
+  it;
+- an additive field with nothing to adjust, per the table above, or an empty
+  `allow` or `command.before_append`;
 - an override of an `id` nothing inherited defines, or one that
   `inherit.disabled_rules` drops;
 - an override beside an own `[rule.<id>]` of the same `id`: the rule replaces
@@ -753,8 +776,8 @@ from without appearing in any file in the repository it runs in:
   [set: unreviewed-history]`. A reader greps their policy for that id and finds
   nothing, because the whole declaration is one word in an `[inherit]` line.
 - **A same-id rule that changes the CHECK is reported at load**, on stderr, as
-  a note and not a refusal. Narrowing where an inherited rule reads is the
-  `[override.<id>]` table above; replacing a compiled-in `builtin` with a
+  a note and not a refusal. Adjusting an inherited rule without changing its
+  check is the `[override.<id>]` table above; replacing a compiled-in `builtin` with a
   `regexp` of your own under the same id is a private copy of somebody else's
   rule, and it is invisible to everything else here — the id resolves, so
   every claim naming it reconciles green.
