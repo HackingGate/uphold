@@ -518,3 +518,98 @@ fn a_call_with_no_strings_and_no_policy_is_allowed() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(stdout(&output), "");
 }
+
+/// The reason a refusal gives, for the tests that read it.
+fn reason(output: &Output) -> String {
+    let document: Value = serde_json::from_str(stdout(output).trim()).unwrap();
+    document
+        .pointer("/hookSpecificOutput/permissionDecisionReason")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_owned()
+}
+
+/// A rule's refusal carries its message, not only its id.
+///
+/// The reader here is the agent that made the call, and the message is what
+/// says what to do instead -- the same text the shim and `--text` print.
+#[test]
+fn a_rule_refusal_carries_the_rules_message() {
+    let root = workspace("hook-message", Some(&format!("{PROSE_POLICY}{SHIMS}")));
+    let output = hook(
+        &root,
+        "claude-code",
+        &event("mcp__github__create_issue", "It is arguably fine."),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let reason = reason(&output);
+    assert!(
+        reason.contains("State the claim, or state what is unknown about it."),
+        "{reason}"
+    );
+}
+
+/// A `regexp` rule standing in front of `gh`, refusing a release by name at the
+/// shim and, through `seams`, at the hook.
+const RELEASE_POLICY: &str = "\
+[[shim]]
+command = \"gh\"
+match = [\"release:create\"]
+argv_subject = true
+
+[rule.no-release-by-hand]
+message = \"Cut a release from the release workflow.\"
+regexp = '^release create|__create_release$'
+subjects = [\"argv\", \"tool\"]
+seams = [\"shim\", \"hook\"]
+command.before = [\"gh\"]
+command.scope = \"always\"
+";
+
+/// The rule the shim enforces is enforced when the same publish goes through an
+/// MCP server, where it names the hook in `seams`. The tool name is the
+/// subject, so the refusal is by what the call is rather than by what it says.
+#[test]
+fn a_regexp_rule_naming_the_hook_refuses_the_tool_call_by_its_name() {
+    let root = workspace("hook-regexp-seams", Some(RELEASE_POLICY));
+    let refused = hook(
+        &root,
+        "claude-code",
+        &event("mcp__github__create_release", "v1.2.0"),
+    );
+    assert_eq!(code(&refused), 0, "{}", stderr(&refused));
+    let reason = reason(&refused);
+    assert!(reason.contains("no-release-by-hand"), "{reason}");
+    assert!(
+        reason.contains("Cut a release from the release workflow."),
+        "{reason}"
+    );
+
+    // A body that only mentions the command is text, and the rule asks about
+    // the tool: a pull request describing a release is not a release.
+    let clean = hook(
+        &root,
+        "claude-code",
+        &event(
+            "mcp__github__create_pull_request",
+            "Stop running gh release create by hand.",
+        ),
+    );
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert_eq!(stdout(&clean), "", "{}", stdout(&clean));
+}
+
+/// Without `seams`, a `regexp` rule stays where it ran before the field
+/// existed: at the shim, and not over every tool call.
+#[test]
+fn a_regexp_rule_that_does_not_name_the_hook_is_not_asked_there() {
+    let policy = RELEASE_POLICY.replace("seams = [\"shim\", \"hook\"]\n", "");
+    let root = workspace("hook-regexp-default", Some(&policy));
+    let output = hook(
+        &root,
+        "claude-code",
+        &event("mcp__github__create_release", "v1.2.0"),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "", "{}", stdout(&output));
+}

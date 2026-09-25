@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{CommandWhere, Files, Git, Origin};
 use crate::error::{Fatal, Result};
+use crate::text::{Judged, Seam};
 
 /// What a rule checks. NOT a field -- there is nothing in the file to read it
 /// from, because the field the author wrote IS the answer.
@@ -191,6 +192,7 @@ pub(crate) struct Written {
     pub git: Option<Git>,
     pub command: Option<CommandWhere>,
     pub subjects: Option<Vec<String>>,
+    pub seams: Option<Vec<String>>,
     pub require_any_link: Option<bool>,
     pub allow_outside_repo: Option<bool>,
     pub require_any_anchor: Option<bool>,
@@ -921,6 +923,19 @@ pub(crate) struct Rule {
     /// rule a subject that HAS a kind, so writing it anywhere else is refused
     /// as configuration read by nothing.
     pub subjects: Option<Vec<String>>,
+    /// Which of the published-text seams run this rule -- `"shim"`, `"hook"`,
+    /// `"text"` (`scan --text` and `guard --text`). Absent means every seam
+    /// its kind runs at, which is every rule written before this existed. A
+    /// field rather than a second rule: the same regexp written twice, once per
+    /// seam, is two rules free to drift.
+    #[serde(rename = "seams")]
+    pub at_seams: Option<Vec<String>>,
+    /// The fields an `[override.<id>]` table in the loading policy changed on
+    /// this inherited rule, so `uphold rules --effective` can say which parts are
+    /// local.
+    /// Filled in by the loader and by nothing else, for the reason `origin` is.
+    #[serde(skip)]
+    pub overridden: Vec<&'static str>,
 }
 
 impl Rule {
@@ -941,6 +956,8 @@ impl Rule {
             git: None,
             command: None,
             subjects: None,
+            at_seams: None,
+            overridden: Vec::new(),
         }
     }
 
@@ -973,6 +990,8 @@ impl Rule {
             git: written.git,
             command: written.command,
             subjects: written.subjects,
+            at_seams: written.seams,
+            overridden: Vec::new(),
         })
     }
 
@@ -1055,6 +1074,18 @@ impl Rule {
             crate::guard::TEXT_GUARDS.contains(&builtin)
                 || crate::guard::TARGET_GUARDS.contains(&builtin)
         })
+    }
+
+    /// Whether a shim consults this rule: a kind that can stand in front of a
+    /// command, and a `seams` that does not leave the shim out. A rule whose
+    /// `seams` names only the hook or `--text` still writes `command.before`,
+    /// which says what it is about, and needs no `[[shim]]` to run.
+    pub(crate) fn consulted_by_a_shim(&self) -> bool {
+        self.stands_in_front_of_a_command()
+            && self
+                .at_seams
+                .as_ref()
+                .is_none_or(|seams| seams.iter().any(|seam| seam == Seam::Command.name()))
     }
 
     // -- the built-in parameters, absent-as-default --------------------------
@@ -1288,7 +1319,7 @@ impl Rule {
         static DEFAULTS: OnceLock<Files> = OnceLock::new();
         self.files
             .as_ref()
-            .map_or_else(|| DEFAULTS.get_or_init(Files::default), |files| files)
+            .unwrap_or_else(|| DEFAULTS.get_or_init(Files::default))
     }
 
     /// Whether this rule searches files at all. Absent `files.*` keys are the
@@ -1351,10 +1382,40 @@ impl Rule {
         }
         // `shim::run` consults the rules `stands_in_front_of_a_command` names,
         // and `validate` refuses `command.before` on anything else.
-        if self.command.is_some() {
+        if self.command.is_some() && self.consulted_by_a_shim() {
             seams.push("shim");
         }
+        // The harness hook, for a rule standing in front of a command. A rule
+        // with no `command.before` reaches it too -- the literal rules do --
+        // but those already name the seam that reads the tree, and the
+        // question this list answers is where a rule runs at all.
+        if self.command.is_some() && self.judged_at(Seam::Hook) {
+            seams.push("hook");
+        }
+        // `scan --text` over a commit message, which a prose rule standing in
+        // front of a command reaches -- see `prose::over_text`. Asked of the
+        // scan seam, because `scan --text` is what a hook config runs at
+        // commit-msg and what `uphold check` can find installed.
+        if self.command.is_some() && self.judged_at(Seam::Scan) {
+            seams.push("text");
+        }
         seams
+    }
+
+    /// Whether the published-text seam `seam` runs this rule.
+    ///
+    /// Without `seams`, the answer is [`Seam::runs_by_default`], and a kind that judges no text is run by no
+    /// such seam. With it, the declared list decides; `validate_seams` has
+    /// already refused a name the kind cannot run at, so the list never widens
+    /// a rule past what its kind can do.
+    pub(crate) fn judged_at(&self, seam: Seam) -> bool {
+        let Some(kind) = Judged::of(self) else {
+            return false;
+        };
+        self.at_seams.as_ref().map_or_else(
+            || seam.runs_by_default(kind),
+            |named| named.iter().any(|name| name == seam.name()),
+        )
     }
 
     /// Whether this rule stands in front of `command` invoked as `argv`.
@@ -1619,6 +1680,7 @@ impl Rule {
         }
 
         self.validate_subjects()?;
+        self.validate_seams()?;
 
         if self.files.is_none() && self.git.is_none() && self.command.is_none() {
             return Err(Fatal::new(format!(
@@ -1797,10 +1859,67 @@ impl Rule {
         )
     }
 
+    /// The `seams` half of [`Rule::validate`]: the list names seams this
+    /// rule's kind can run at, beside the table that makes it published-text
+    /// rule at all.
+    fn validate_seams(&self) -> Result<()> {
+        let Some(seams) = self.at_seams.as_ref() else {
+            return Ok(());
+        };
+        if self.command.is_none() {
+            return Err(Fatal::new(format!(
+                "rule {:?}: `seams` chooses among the seams that judge published text, and \
+                 only `command.before` makes a rule one of those -- written anywhere else it \
+                 is read by nothing. Add `command.before`, or drop it",
+                self.id
+            )));
+        }
+        if seams.is_empty() {
+            return Err(Fatal::new(format!(
+                "rule {:?}: `seams = []` runs the rule nowhere while reading as though it \
+                 had been scoped. Drop the rule, or name a seam",
+                self.id
+            )));
+        }
+        // What a kind may be declared at: every seam that consults it, which
+        // for the pattern rules is wider than where they run by default. See
+        // `Seam::runs_by_default`.
+        let can: Vec<Seam> = match Judged::of(self) {
+            Some(kind @ (Judged::Prose | Judged::Patterns)) => {
+                [Seam::Command, Seam::Hook, Seam::Scan]
+                    .into_iter()
+                    .filter(|seam| seam.consults(kind))
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        if can.is_empty() {
+            return Err(Fatal::new(format!(
+                "rule {:?}: `seams` scopes the pattern rules (`regexp`, `require_regexp`, \
+                 `prose_regexp`), and this rule is a {}. A guard and an `exec` checker run \
+                 where their kind runs",
+                self.id,
+                self.kind()
+            )));
+        }
+        for name in seams {
+            if !can.iter().any(|seam| seam.name() == name) {
+                let names: Vec<&str> = can.iter().map(|seam| seam.name()).collect();
+                return Err(Fatal::new(format!(
+                    "rule {:?}: a {} rule cannot run at the seam {name:?}. It can run at {}",
+                    self.id,
+                    self.kind(),
+                    names.join(", ")
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// The `subjects` half of [`Rule::validate`]: the filter names kinds a
     /// shim collects, beside the one table that hands this rule a subject.
     fn validate_subjects(&self) -> Result<()> {
-        const KINDS: [&str; 5] = ["text", "title", "path", "ref", "argv"];
+        const KINDS: [&str; 6] = ["text", "title", "path", "ref", "argv", "tool"];
         let Some(kinds) = self.subjects.as_ref() else {
             return Ok(());
         };

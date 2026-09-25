@@ -164,6 +164,14 @@ pub(crate) struct Installed {
     /// every lefthook command name. A claim may name a formatter, a linter, or
     /// a hook this repository wrote, and those are rules that fire here.
     pub local: BTreeSet<String>,
+    /// Whether a harness configuration tracked here runs `uphold hook`.
+    pub hook: bool,
+    /// Whether a hook here runs the rules over a commit message (`scan --text`
+    /// or `guard --text`), which is the `text` seam.
+    pub text: bool,
+    /// Hooks pinned at a stage where what they read cannot exist. See
+    /// `misplaced_range_ids`.
+    pub misplaced: Vec<String>,
 }
 
 impl Installed {
@@ -216,6 +224,22 @@ fn published() -> Result<(BTreeSet<String>, BTreeMap<String, String>)> {
     Ok((scans, guards))
 }
 
+/// The published ids that run the rules over a commit message: `uphold scan
+/// --text` at commit-msg. The `text` seam a prose rule reaches, read off the
+/// manifest for the reason [`published`] is.
+fn published_text() -> Result<BTreeSet<String>> {
+    let hooks: Vec<PublishedHook> = serde_saphyr::from_str(MANIFEST)
+        .map_err(|error| Fatal::yaml(Path::new(".pre-commit-hooks.yaml"), &error))?;
+    Ok(hooks
+        .into_iter()
+        .filter(|hook| {
+            let words: Vec<&str> = hook.entry.split_whitespace().collect();
+            matches!(words.as_slice(), [_, "scan" | "guard", rest @ ..] if rest.contains(&"--text"))
+        })
+        .map(|hook| hook.id)
+        .collect())
+}
+
 #[derive(Debug, Deserialize)]
 struct PreCommitConfig {
     #[serde(default)]
@@ -236,6 +260,49 @@ struct PreCommitRepo {
 struct PinnedHook {
     #[serde(default)]
     id: String,
+    /// The consumer's own `stages:`, where it overrides the manifest's.
+    #[serde(default)]
+    stages: Option<Vec<String>>,
+}
+
+/// The ids that read a pushed range, and the stage names under which one
+/// exists. pre-commit still accepts `push` for `pre-push`.
+const RANGE_IDS: &[&str] = &["uphold-supply-chain"];
+const RANGE_STAGES: &[&str] = &["pre-push", "push"];
+
+/// A range id pinned at a stage where no push range exists.
+///
+/// `uphold-supply-chain` reads the refs git hands a pre-push hook, and at any
+/// other stage there are none, so every run there is exit 2 with the no-range
+/// refusal. One consumer pinned it at `manual` for a weekly sweep and the job
+/// was red for weeks with nothing surfacing it beyond a scheduled run nobody
+/// read. Asked here, at the commit, because this is the reader that opens the
+/// file the mistake is written in.
+fn misplaced_range_ids(repos: &[PreCommitRepo]) -> Vec<String> {
+    let mut found = Vec::new();
+    for hook in repos.iter().flat_map(|entry| entry.hooks.iter()) {
+        if !RANGE_IDS.contains(&hook.id.as_str()) {
+            continue;
+        }
+        let Some(stages) = &hook.stages else {
+            continue;
+        };
+        let without: Vec<&str> = stages
+            .iter()
+            .map(String::as_str)
+            .filter(|stage| !RANGE_STAGES.contains(stage))
+            .collect();
+        if !without.is_empty() {
+            found.push(format!(
+                ".pre-commit-config.yaml runs `{}` at {}, where no push range exists, so \
+                 every run there exits 2. The range id belongs at pre-push; the sweep for CI \
+                 or a schedule is `uphold-supply-chain-all`",
+                hook.id,
+                without.join(", ")
+            ));
+        }
+    }
+    found
 }
 
 /// Every hook id a pre-commit config installs, from any repository.
@@ -253,7 +320,7 @@ struct PinnedHook {
 ///
 /// The same set answers the `local` tier: a claim may name a formatter, a
 /// linter, or a hook this repository wrote, and those are rules that fire here.
-fn pinned_ids(root: &Path) -> Result<Option<BTreeSet<String>>> {
+fn pinned_ids(root: &Path) -> Result<Option<(BTreeSet<String>, Vec<String>)>> {
     let path = root.join(".pre-commit-config.yaml");
     if !path.is_file() {
         return Ok(None);
@@ -269,13 +336,14 @@ fn pinned_ids(root: &Path) -> Result<Option<BTreeSet<String>>> {
              could-not-look",
         ));
     };
+    let misplaced = misplaced_range_ids(&repos);
     let mut every = BTreeSet::new();
     for entry in repos {
         for hook in entry.hooks {
             every.insert(hook.id);
         }
     }
-    Ok(Some(every))
+    Ok(Some((every, misplaced)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -339,7 +407,9 @@ fn lefthook_seams(root: &Path, guards: &BTreeMap<String, String>) -> Result<Inst
                 continue;
             }
             direct = true;
-            if subcommand == "scan" && !words.contains(&"--text") {
+            if words.contains(&"--text") {
+                found.text = true;
+            } else if subcommand == "scan" {
                 found.scan = true;
             } else if subcommand == "guard" {
                 // What the binary was TOLD, ahead of where it was written: the
@@ -389,6 +459,8 @@ fn lefthook_seams(root: &Path, guards: &BTreeMap<String, String>) -> Result<Inst
         // wires every stage the manifest publishes. Including it is the one
         // form that needs no per-stage reading.
         found.scan = true;
+        // That file runs `scan --text` at commit-msg.
+        found.text = true;
         found.stages.extend(guards.keys().cloned());
         found.how.push(String::from(
             "lefthook.yml includes this repository as a remote",
@@ -451,11 +523,14 @@ fn runs_in(value: &serde_json::Value) -> Vec<String> {
 
 pub(crate) fn installed(root: &Path) -> Result<Installed> {
     let (scans, guards) = published()?;
+    let texts = published_text()?;
     let mut found = Installed::default();
 
     match pinned_ids(root) {
-        Ok(Some(ids)) => {
+        Ok(Some((ids, misplaced))) => {
+            found.misplaced = misplaced;
             found.scan = ids.iter().any(|id| scans.contains(id));
+            found.text = ids.iter().any(|id| texts.contains(id));
             for (stage, hook) in &guards {
                 if ids.contains(hook) {
                     found.stages.insert(stage.clone());
@@ -483,10 +558,20 @@ pub(crate) fn installed(root: &Path) -> Result<Installed> {
     match lefthook_seams(root, &guards) {
         Ok(lefthook) => {
             found.scan = found.scan || lefthook.scan;
+            found.text = found.text || lefthook.text;
             found.stages.extend(lefthook.stages);
             found.how.extend(lefthook.how);
             found.local.extend(lefthook.local);
         }
+        Err(error) => found.unreadable.push(error.to_string()),
+    }
+
+    match harness_hook(root) {
+        Ok(Some(at)) => {
+            found.hook = true;
+            found.how.push(format!("{at} runs `uphold hook`"));
+        }
+        Ok(None) => {}
         Err(error) => found.unreadable.push(error.to_string()),
     }
 
@@ -498,13 +583,60 @@ pub(crate) fn installed(root: &Path) -> Result<Installed> {
     Ok(found)
 }
 
+/// The harness settings a repository tracks, which register `uphold hook`
+/// for every session started in it.
+///
+/// `.claude/settings.json` and not `settings.local.json`: the local file is
+/// untracked by the harness's own convention, so it says what one machine does
+/// and not what this repository asks of every checkout.
+const HARNESS_SETTINGS: &[&str] = &[".claude/settings.json"];
+
+/// The tracked harness settings file that runs `uphold hook`, if any.
+///
+/// Every string in the document is looked at rather than one path into it:
+/// the harness nests a command under an event, a matcher and a list, and a
+/// pointer written for today's shape is one that misses tomorrow's in the
+/// green direction. A file that is not JSON is could-not-look.
+fn harness_hook(root: &Path) -> Result<Option<String>> {
+    fn runs_hook(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::String(text) => text.split([';', '&', '|']).any(|command| {
+                let mut words = command.split_whitespace();
+                words
+                    .next()
+                    .is_some_and(|program| program.rsplit('/').next() == Some("uphold"))
+                    && words.next() == Some("hook")
+            }),
+            serde_json::Value::Array(items) => items.iter().any(runs_hook),
+            serde_json::Value::Object(fields) => fields.values().any(runs_hook),
+            _ => false,
+        }
+    }
+    for name in HARNESS_SETTINGS {
+        let path = root.join(name);
+        if !path.is_file() {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).map_err(|error| Fatal::at(&path, error))?;
+        let document: serde_json::Value =
+            serde_json::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
+        if document.get("hooks").is_some_and(runs_hook) {
+            return Ok(Some((*name).to_owned()));
+        }
+    }
+    Ok(None)
+}
+
 /// Which seams supply each resolved rule, and what could not be established.
 ///
 /// `Rule::seams` is the loader's answer to where a rule runs; this asks whether
-/// that place is installed here. A `shim` rule is the one seam no runner
-/// configuration can settle -- whether the shim is on PATH ahead of the real
-/// command is not written in any file this reads -- so it is reported as
-/// unestablished rather than credited to whichever seam happens to be on.
+/// that place is installed here, by the standard every seam is held to: what
+/// this repository's own configuration declares. A pinned hook id counts
+/// without asking whether `pre-commit install` was run, and a `[[shim]]` table
+/// for the command a rule names counts without asking whether the link is on
+/// PATH. Neither is written in any file this reads, and holding one seam to a
+/// stricter standard than the others made every shim-only rule unclaimable.
+/// The hook counts where a tracked harness settings file runs `uphold hook`.
 pub(crate) fn suppliers(policy: &Policy, installed: &Installed) -> Supply {
     let mut supplied: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut unestablished: Vec<String> = Vec::new();
@@ -536,8 +668,25 @@ pub(crate) fn suppliers(policy: &Policy, installed: &Installed) -> Supply {
                     }
                 }
                 "shim" => {
-                    unestablished.push(format!("{} (stands in front of a command)", rule.id));
+                    let declared: Vec<&str> = rule
+                        .command
+                        .iter()
+                        .flat_map(|where_| where_.before.iter())
+                        .filter_map(|line| line.split_whitespace().next())
+                        .filter(|name| policy.shims.iter().any(|shim| shim.command == *name))
+                        .collect::<BTreeSet<&str>>()
+                        .into_iter()
+                        .collect();
+                    if declared.is_empty() {
+                        unestablished.push(format!("{} (stands in front of a command)", rule.id));
+                    } else {
+                        by.push(format!("the `{}` shim", declared.join("`, `")));
+                    }
                 }
+                "text" if installed.text => by.push(String::from("uphold scan --text")),
+                "text" => unestablished.push(format!("{} (--text over a commit message)", rule.id)),
+                "hook" if installed.hook => by.push(String::from("uphold hook")),
+                "hook" => unestablished.push(format!("{} (harness hook)", rule.id)),
                 _ => {}
             }
         }
@@ -655,11 +804,22 @@ pub(crate) fn run(root: &Path, policy: &Policy, coverage: bool) -> Result<Exit> 
         failures.push(failure);
     }
 
+    // A hook that can only fail where it is pinned is a defect in the file this
+    // reconcile reads, whatever it is claimed for, so it is refused beside the
+    // claims rather than inside them.
+    if !installed.misplaced.is_empty() {
+        eprintln!("hook configuration refused:");
+        for misplaced in &installed.misplaced {
+            eprintln!("- {misplaced}");
+        }
+    }
     if !failures.is_empty() {
         eprintln!("enforcement claims refused ({DECLARATION}):");
         for failure in &failures {
             eprintln!("- {failure}");
         }
+    }
+    if !failures.is_empty() || !installed.misplaced.is_empty() {
         return Ok(Exit::Violations);
     }
 

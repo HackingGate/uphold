@@ -247,11 +247,14 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
 
     for verdict in text::judged(text::Seam::Hook, &root, &policy, label, &text)? {
         match verdict {
+            // The message as well as the finding. At the shim and at `--text`
+            // the message is what tells the author what to do instead; here the
+            // reader is an agent, and an id alone gives it nothing to act on.
             Verdict::Rule(failure) => writeln!(
                 report,
                 "policy check failed: {}\n{}\n",
                 failure.label,
-                failure.body.trim_end()
+                failure.report()
             ),
             Verdict::Guard(refusal) => writeln!(
                 report,

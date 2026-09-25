@@ -350,28 +350,48 @@ pub(crate) struct Inherit {
 /// The three `files` keys an `[override.<id>]` table may replace.
 const OVERRIDE_FIELDS: [&str; 3] = ["include", "exclude", "glob"];
 
-/// A narrowing of one inherited rule's file selection: `[override.<id>]`.
+/// Everything an `[override.<id>]` table may carry, for the refusals that list
+/// it.
+const OVERRIDE_MAY_CARRY: &str = "`files.include`, `files.exclude`, `files.glob`, \
+     `command.before_append`, `allow`, `require_any_link` and `message`";
+
+/// An adjustment to one inherited rule that keeps its check: `[override.<id>]`.
 ///
-/// The other spelling of "read fewer files", an own `[rule.<id>]` under the
-/// inherited id, replaces the inherited rule WHOLE. A repository that wants one
-/// directory left out that way restates the set's `regexp` and `message` byte
-/// for byte, and a tightening the set ships later never reaches the copy --
-/// nothing reports the drift, because the id resolves and the copy is, by
-/// every check here, a rule. This table is the spelling for the narrowing
+/// The other spelling, an own `[rule.<id>]` under the inherited id, replaces the
+/// inherited rule WHOLE. A repository that wants one directory left out that
+/// way restates the set's `regexp` and `message` byte for byte, and a
+/// tightening the set ships later never reaches the copy -- nothing reports the
+/// drift, because the id resolves and the copy is, by every check here, a
+/// rule. This table is the spelling for everything that leaves the check
 /// alone: the inherited rule is kept, provenance and all, and only the fields
 /// written here move.
 ///
-/// Three fields and no fourth, by construction. `include`, `exclude` and
-/// `glob` decide WHERE a rule reads and nothing about what it reads for; an
-/// override that could reach the check would be the private copy
+/// What it may carry is what cannot change what the rule matches:
+///
+/// - `files.include`, `files.exclude`, `files.glob`: where the rule reads,
+///   replacing the inherited value.
+/// - `command.before_append`: more commands the rule stands in front of, added
+///   to the inherited `command.before`.
+/// - `allow`: more allowances, added to the inherited list, on a built-in that
+///   reads one. An entry can grant a character and never revoke one.
+/// - `require_any_link`: the floor under a `links-resolve` selection, which a
+///   repository with no internal links yet has to be able to turn off.
+/// - `message`: the wording, replaced, and reported as local by
+///   `uphold rules --effective`.
+///
+/// `regexp`, `builtin` and every other check field stay refused: an override
+/// that could reach the check would be the private copy
 /// [`report_reshaped_shadows`] exists to report, spelled so as to escape it.
-/// A field the override does not name keeps the inherited value, which is what
-/// makes `files.exclude` alone a complete sentence.
+/// A field the override does not name keeps the inherited value.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Override {
     pub include: Option<Vec<String>>,
     pub exclude: Option<Vec<String>>,
     pub glob: Option<Vec<String>>,
+    pub before_append: Option<Vec<String>>,
+    pub allow: Option<Vec<String>>,
+    pub require_any_link: Option<bool>,
+    pub message: Option<String>,
 }
 
 impl Override {
@@ -383,78 +403,305 @@ impl Override {
     /// wrote `regexp` here has to be told that the check is not the override's
     /// to change, and where to write it instead.
     fn of_table(id: &str, table: toml::Table) -> Result<Self> {
-        let may_carry = || {
-            let [first, second, last] = OVERRIDE_FIELDS;
-            format!("`files.{first}`, `files.{second}` and `files.{last}`")
+        let refused = |key: &str| {
+            Fatal::new(format!(
+                "`[override.{id}]` carries `{key}`, and an override may carry only \
+                 {OVERRIDE_MAY_CARRY}. It keeps the inherited check whole; a change to \
+                 what the rule matches is a rule of this repository's own, written as \
+                 `[rule.{id}]` in full"
+            ))
         };
-        let mut files = None;
-        for (key, value) in table {
-            if key != "files" {
-                return Err(Fatal::new(format!(
-                    "`[override.{id}]` carries `{key}`, and an override may carry only {}. \
-                     It keeps the inherited rule whole and moves where the rule reads; a \
-                     change to anything else is a rule of this repository's own, written \
-                     as `[rule.{id}]` in full",
-                    may_carry()
-                )));
-            }
-            files = Some(value);
-        }
-        let files = match files {
-            None => toml::Table::new(),
-            Some(toml::Value::Table(files)) => files,
-            Some(_) => {
-                return Err(Fatal::new(format!(
-                    "`[override.{id}]` `files` is not a table. Write {} as keys under it",
-                    may_carry()
-                )));
-            }
+        let typed = |key: &str, error: &toml::de::Error| {
+            Fatal::new(format!("`[override.{id}]` `{key}`: {}", error.message()))
+        };
+        let subtable = |key: &str, value: toml::Value| match value {
+            toml::Value::Table(fields) => Ok(fields),
+            _ => Err(Fatal::new(format!(
+                "`[override.{id}]` `{key}` is not a table. Write its fields as keys under it"
+            ))),
         };
         let mut this = Self::default();
-        for (key, value) in files {
-            if !OVERRIDE_FIELDS.contains(&key.as_str()) {
-                return Err(Fatal::new(format!(
-                    "`[override.{id}]` carries `files.{key}`, and an override may carry \
-                     only {}. It keeps the inherited rule whole and moves where the rule \
-                     reads; a change to anything else is a rule of this repository's own, \
-                     written as `[rule.{id}]` in full",
-                    may_carry()
-                )));
-            }
-            let list: Vec<String> = value.try_into().map_err(|error| {
-                Fatal::new(format!(
-                    "`[override.{id}]` `files.{key}`: {}",
-                    error.message()
-                ))
-            })?;
+        for (key, value) in table {
             match key.as_str() {
-                "include" => this.include = Some(list),
-                "exclude" => this.exclude = Some(list),
-                _ => this.glob = Some(list),
+                "files" => {
+                    for (field, list) in subtable("files", value)? {
+                        if !OVERRIDE_FIELDS.contains(&field.as_str()) {
+                            return Err(refused(&format!("files.{field}")));
+                        }
+                        let list: Vec<String> = list
+                            .try_into()
+                            .map_err(|error| typed(&format!("files.{field}"), &error))?;
+                        match field.as_str() {
+                            "include" => this.include = Some(list),
+                            "exclude" => this.exclude = Some(list),
+                            _ => this.glob = Some(list),
+                        }
+                    }
+                }
+                "command" => {
+                    for (field, list) in subtable("command", value)? {
+                        if field != "before_append" {
+                            return Err(refused(&format!("command.{field}")));
+                        }
+                        this.before_append = Some(
+                            list.try_into()
+                                .map_err(|error| typed("command.before_append", &error))?,
+                        );
+                    }
+                }
+                "allow" => {
+                    this.allow = Some(value.try_into().map_err(|error| typed("allow", &error))?);
+                }
+                "require_any_link" => {
+                    this.require_any_link = Some(
+                        value
+                            .try_into()
+                            .map_err(|error| typed("require_any_link", &error))?,
+                    );
+                }
+                "message" => {
+                    this.message =
+                        Some(value.try_into().map_err(|error| typed("message", &error))?);
+                }
+                _ => return Err(refused(&key)),
             }
         }
-        if this.include.is_none() && this.exclude.is_none() && this.glob.is_none() {
+        if this.written().is_empty() {
             return Err(Fatal::new(format!(
-                "`[override.{id}]` sets none of {}, so it changes nothing about the \
-                 inherited rule. Drop the table",
-                may_carry()
+                "`[override.{id}]` sets none of {OVERRIDE_MAY_CARRY}, so it changes nothing \
+                 about the inherited rule. Drop the table"
             )));
+        }
+        for (key, list) in [
+            ("command.before_append", &this.before_append),
+            ("allow", &this.allow),
+        ] {
+            if list.as_ref().is_some_and(Vec::is_empty) {
+                return Err(Fatal::new(format!(
+                    "`[override.{id}]` `{key} = []` adds nothing. Drop the line"
+                )));
+            }
         }
         Ok(this)
     }
 
-    /// Replace the named fields on `files` and leave the rest as inherited.
-    fn apply(&self, files: &mut Files) {
-        if let Some(include) = &self.include {
-            files.include = Some(include.clone());
+    /// The fields this override writes, by the name a reader wrote them under.
+    /// What `uphold rules --effective` reports as local.
+    fn written(&self) -> Vec<&'static str> {
+        [
+            self.include.is_some().then_some("files.include"),
+            self.exclude.is_some().then_some("files.exclude"),
+            self.glob.is_some().then_some("files.glob"),
+            self.before_append
+                .is_some()
+                .then_some("command.before_append"),
+            self.allow.is_some().then_some("allow"),
+            self.require_any_link
+                .is_some()
+                .then_some("require_any_link"),
+            self.message.is_some().then_some("message"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    /// Apply the written fields to the inherited rule `id`, leaving the rest as
+    /// inherited.
+    ///
+    /// Refused where a field has nothing on this rule to adjust: a
+    /// `before_append` on a rule that stands in front of no command would make
+    /// a content rule a command rule, and an `allow` on a check that reads no
+    /// allowances would be read by nothing. Each is a field that looks like it
+    /// works.
+    fn apply(&self, id: &str, rule: &mut Rule) -> Result<()> {
+        if self.include.is_some() || self.exclude.is_some() || self.glob.is_some() {
+            let files = rule.files.get_or_insert_with(Files::default);
+            if let Some(include) = &self.include {
+                files.include = Some(include.clone());
+            }
+            if let Some(exclude) = &self.exclude {
+                files.exclude.clone_from(exclude);
+            }
+            if let Some(glob) = &self.glob {
+                files.glob.clone_from(glob);
+            }
         }
-        if let Some(exclude) = &self.exclude {
-            files.exclude.clone_from(exclude);
+        if let Some(append) = &self.before_append {
+            let Some(where_) = rule.command.as_mut() else {
+                return Err(Fatal::new(format!(
+                    "`[override.{id}]` `command.before_append` adds to a `command.before` the \
+                     inherited rule does not have. It stands in front of no command, and \
+                     making it one is a rule of this repository's own"
+                )));
+            };
+            for line in append {
+                if where_.before.contains(line) {
+                    return Err(Fatal::new(format!(
+                        "`[override.{id}]` `command.before_append` names {line:?}, which the \
+                         inherited rule already stands in front of. Drop the entry"
+                    )));
+                }
+                where_.before.push(line.clone());
+            }
         }
-        if let Some(glob) = &self.glob {
-            files.glob.clone_from(glob);
+        if let Some(allow) = &self.allow {
+            let reads = rule
+                .builtin()
+                .is_some_and(|builtin| crate::guard::parameters(builtin).contains(&"allow"));
+            let Some(parameters) = rule.parameters_mut().filter(|_| reads) else {
+                return Err(Fatal::new(format!(
+                    "`[override.{id}]` carries `allow`, and the inherited rule reads no \
+                     allowances, so the entries would be read by nothing"
+                )));
+            };
+            parameters
+                .allow
+                .get_or_insert_with(Vec::new)
+                .extend(allow.iter().cloned());
+        }
+        if let Some(floor) = self.require_any_link {
+            let reads = rule.builtin() == Some("links-resolve");
+            let Some(parameters) = rule.parameters_mut().filter(|_| reads) else {
+                return Err(Fatal::new(format!(
+                    "`[override.{id}]` carries `require_any_link`, which only the \
+                     `links-resolve` built-in reads"
+                )));
+            };
+            parameters.require_any_link = Some(floor);
+        }
+        if let Some(message) = &self.message {
+            rule.message = Some(message.clone());
+        }
+        rule.overridden = self.written();
+        Ok(())
+    }
+}
+
+/// `[supply_chain]` in a repository's own policy.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SupplyChain {
+    /// `[[supply_chain.waive]]`: findings this repository has looked at and
+    /// holds not to be a reason to refuse a push. See [`Waiver`].
+    #[serde(default)]
+    pub waive: Vec<Waiver>,
+}
+
+/// The scanners a waiver may name. guarddog alone: it is the one scanner whose
+/// findings `uphold supply-chain` reads out of its report, and the other four
+/// each carry their own suppression in their own configuration -- an OSV
+/// `osv-scanner.toml`, a cargo-deny `deny.toml`, a zizmor config, cargo-vet's
+/// audits -- where a second one here would be two lists of exceptions free to
+/// disagree.
+const WAIVABLE_SCANNERS: [&str; 1] = ["guarddog"];
+
+/// The ecosystems a guarddog waiver may name, as its `package` spells them.
+const WAIVABLE_ECOSYSTEMS: [&str; 2] = ["pypi", "npm"];
+
+/// One confirmed false positive: a scanner's rule, on one package at one
+/// version, with the reason it was judged one.
+///
+/// Keyed on the VERSION, so a bump is read fresh: what was looked at is that
+/// release, and the next one is a different tarball with a different reason to
+/// be suspicious or not. A waived finding is still printed, marked waived with
+/// its reason, so the verdict says what was not held against the push rather
+/// than hiding it, and a waiver that matched nothing in a run that read its
+/// ecosystem is reported, so a stale one gets removed.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Waiver {
+    /// `guarddog`.
+    pub scanner: String,
+    /// `<ecosystem>:<name>@<version>` -- `pypi:pandas@3.0.6`,
+    /// `npm:@scope/pkg@1.2.0`.
+    pub package: String,
+    /// The scanner's rule, as it names it: guarddog's `metadata_mismatch`.
+    pub check: String,
+    /// Why this finding is not a reason to refuse. Required, because a waiver
+    /// nobody can re-judge is a switch nobody can turn back on.
+    pub reason: String,
+}
+
+impl Waiver {
+    /// `(ecosystem, name, version)`, or `None` where `package` is not the
+    /// three-part spelling. Validated at load, so a loaded waiver always has
+    /// one.
+    pub(crate) fn parts(&self) -> Option<(&str, &str, &str)> {
+        let (ecosystem, rest) = self.package.split_once(':')?;
+        // `rsplit`, because an npm scope carries its own `@`.
+        let (name, version) = rest.rsplit_once('@')?;
+        (!name.is_empty() && !version.is_empty()).then_some((ecosystem, name, version))
+    }
+
+    /// Whether this waiver covers `check` reported on `name` at `version` in
+    /// `ecosystem`.
+    pub(crate) fn covers(&self, ecosystem: &str, name: &str, version: &str, check: &str) -> bool {
+        self.check == check
+            && self
+                .parts()
+                .is_some_and(|parts| parts == (ecosystem, name, version))
+    }
+
+    fn validate(&self) -> Result<()> {
+        let at = format!("`[[supply_chain.waive]]` for {:?}", self.package);
+        if !WAIVABLE_SCANNERS.contains(&self.scanner.as_str()) {
+            return Err(Fatal::new(format!(
+                "{at} names the scanner {:?}. A waiver here is for {}; every other scanner \
+                 carries its own suppression in its own configuration, and a second list \
+                 here would be two sets of exceptions free to disagree",
+                self.scanner,
+                WAIVABLE_SCANNERS.join(", ")
+            )));
+        }
+        match self.parts() {
+            Some((ecosystem, _, _)) if WAIVABLE_ECOSYSTEMS.contains(&ecosystem) => {}
+            _ => {
+                return Err(Fatal::new(format!(
+                    "{at}: `package` is `<ecosystem>:<name>@<version>`, with the ecosystem one \
+                     of {} -- `pypi:pandas@3.0.6`. A waiver with no version would outlive \
+                     the release it was judged on",
+                    WAIVABLE_ECOSYSTEMS.join(", ")
+                )));
+            }
+        }
+        if self.check.trim().is_empty() {
+            return Err(Fatal::new(format!(
+                "{at}: `check` is empty. Name the scanner's rule, as guarddog reports it \
+                 (`metadata_mismatch`): a waiver of every rule on a package is not a \
+                 finding somebody looked at"
+            )));
+        }
+        if self.reason.trim().is_empty() {
+            return Err(Fatal::new(format!(
+                "{at}: `reason` is empty. Say why the finding is not a reason to refuse, so \
+                 the next reader can judge whether it still holds"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Every waiver this policy declares, held to its shape, and none twice.
+fn validate_waivers(path: &Path, waivers: &[Waiver]) -> Result<()> {
+    for (index, waiver) in waivers.iter().enumerate() {
+        waiver.validate().map_err(|error| Fatal::at(path, error))?;
+        if waivers.iter().take(index).any(|earlier| {
+            earlier.scanner == waiver.scanner
+                && earlier.package == waiver.package
+                && earlier.check == waiver.check
+        }) {
+            return Err(Fatal::at(
+                path,
+                format!(
+                    "`[[supply_chain.waive]]` waives {} on {} twice. Keep one, with the \
+                     reason that holds",
+                    waiver.check, waiver.package
+                ),
+            ));
         }
     }
+    Ok(())
 }
 
 /// Where a rule in a loaded policy came from.
@@ -668,6 +915,10 @@ pub(crate) struct PolicyFile {
     overrides: BTreeMap<String, Override>,
     #[serde(default, rename = "shim")]
     pub shims: Vec<crate::shim::Shim>,
+    /// `[supply_chain]`: what this repository has said about its own
+    /// dependency scan. See [`SupplyChain`].
+    #[serde(default)]
+    pub supply_chain: Option<SupplyChain>,
     /// Whether every path-baseline entry must say who excused it and why.
     ///
     /// Off by default, and the default is not neutrality -- it is what every
@@ -978,6 +1229,8 @@ pub(crate) struct Policy {
     /// and "inherited and overridden" is precisely the case a check about
     /// hand-copied rules must stay silent about.
     pub inherited_sets: Vec<String>,
+    /// The repository's own `[supply_chain]`, or the empty one.
+    pub supply_chain: SupplyChain,
 }
 
 impl Policy {
@@ -1243,6 +1496,19 @@ fn refuse_set_header(path: &Path, file: &PolicyFile) -> Result<()> {
 /// Refused rather than dropped, for the reason an inherited `[[shim]]` is: a
 /// table read by nothing looks like configuration that works.
 fn refuse_inherited_override(path: &Path, file: &PolicyFile, kind: &str) -> Result<()> {
+    // A waiver is about this repository's own lockfile, for the reason an
+    // override is about this repository's own rules: a file somebody else's
+    // `[inherit]` line reads has no lockfile to have looked at.
+    if file.supply_chain.is_some() {
+        return Err(Fatal::at(
+            path,
+            format!(
+                "`[supply_chain]` waives findings on a repository's own dependencies, and \
+                 {kind} has none. Move it to the policy of the repository whose lockfile \
+                 the finding is in"
+            ),
+        ));
+    }
     if let Some(id) = file.overrides.keys().next() {
         return Err(Fatal::at(
             path,
@@ -1627,7 +1893,9 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
             ));
         }
         for rule in narrowed {
-            narrowing.apply(rule.files.get_or_insert_with(Files::default));
+            narrowing
+                .apply(id, rule)
+                .map_err(|error| Fatal::at(policy_path, error))?;
         }
     }
     rules.extend(file.rules.values().cloned());
@@ -1700,6 +1968,12 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         }
     }
 
+    validate_waivers(
+        policy_path,
+        file.supply_chain
+            .as_ref()
+            .map_or(&[], |supply| supply.waive.as_slice()),
+    )?;
     validate_unique(policy_path, &rules)?;
     for rule in &rules {
         rule.validate()?;
@@ -1733,6 +2007,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         rules,
         shims: file.shims,
         inherited_sets: inherit.sets.clone(),
+        supply_chain: file.supply_chain.clone().unwrap_or_default(),
     })
 }
 
@@ -2145,7 +2420,7 @@ fn validate_shim_unresolved(
         }
         let by_a_rule = rules
             .iter()
-            .filter(|rule| rule.stands_in_front_of_a_command())
+            .filter(|rule| rule.consulted_by_a_shim())
             .any(|rule| {
                 rule.command.as_ref().is_some_and(|where_| {
                     matches!(where_.scope, Some(crate::shim::Scope::PublicTarget))
@@ -2210,10 +2485,7 @@ fn validate_shims(policy_path: &Path, rules: &[Rule], shims: &[crate::shim::Shim
     // ordinary shape, since a command usually has more than one thing said
     // about it -- and the policy loads, the shim reports itself checked, and
     // the pattern rule that was supposed to stand in front of it never runs.
-    for rule in rules
-        .iter()
-        .filter(|rule| rule.stands_in_front_of_a_command())
-    {
+    for rule in rules.iter().filter(|rule| rule.consulted_by_a_shim()) {
         let Some(where_) = rule.command.as_ref() else {
             continue;
         };
@@ -2241,10 +2513,7 @@ fn validate_shims(policy_path: &Path, rules: &[Rule], shims: &[crate::shim::Shim
     // "drop the entry" is a cure only for a rule written in this file, and a
     // rule arriving from a bundled set has no entry here to drop.
     let mut checked: BTreeMap<&str, &Rule> = BTreeMap::new();
-    for rule in rules
-        .iter()
-        .filter(|rule| rule.stands_in_front_of_a_command())
-    {
+    for rule in rules.iter().filter(|rule| rule.consulted_by_a_shim()) {
         for name in rule
             .command
             .iter()
@@ -2277,10 +2546,18 @@ fn validate_shims(policy_path: &Path, rules: &[Rule], shims: &[crate::shim::Shim
             // an inherited rule are the repository's: declare the table, or
             // stop inheriting the set.
             let cure = match &rule.origin {
+                // The second sentence is for the repository that publishes
+                // through an agent's tool calls or checks its commit messages
+                // with `--text`, and reached for this set to cover those: the
+                // set's rules are consultations a shim makes, and those seams
+                // already make the same consultations without it.
                 Origin::Set(set) => format!(
                     "This rule arrives from the bundled set {set:?}, which supplies the \
                      checker and never the shim. Declare `[[shim]]` with \
-                     `command = {name:?}`, or drop {set:?} from `[inherit] sets`"
+                     `command = {name:?}`, or drop {set:?} from `[inherit] sets`. A \
+                     repository with no shim does not need the set for its other seams: \
+                     `uphold hook`, `scan --text` and `guard --text` consult the literal \
+                     rules and every text guard this policy declares on their own"
                 ),
                 _ => format!("Declare `[[shim]]` with `command = {name:?}`, or drop the entry"),
             };
@@ -2700,7 +2977,9 @@ mod tests {
                 rule.is_some(),
                 "{builtin}: the rule did not survive the load"
             );
-            assert_eq!(rule.unwrap().seams(), vec!["shim"], "{builtin}");
+            // And at the hook, which runs every text-capable guard over what a
+            // tool call is about to publish.
+            assert_eq!(rule.unwrap().seams(), vec!["shim", "hook"], "{builtin}");
         }
     }
 
@@ -3197,19 +3476,99 @@ mod tests {
     }
 
     /// The seams a prose rule reaches, which is what `uphold check` reconciles
-    /// a claim against. A rule declaring both tables runs at both, and reading
+    /// a claim against. A rule declaring both tables runs at every seam both
+    /// reach, and reading
     /// it as scan-only would credit a shim-seam claim to a scan that never
     /// consults the command.
     #[test]
-    fn a_prose_rule_runs_at_the_scan_and_at_the_shim() {
+    fn a_prose_rule_runs_at_every_seam_it_reaches() {
         let policy = policy_from(
             "[rule.shape]\nmessage = \"x\"\nprose_regexp = 'arguably'\nfiles.include = [\".\"]\n\
              command.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\n",
         )
         .unwrap();
         let rule = policy.rules.first().unwrap();
-        assert_eq!(rule.seams(), ["scan", "shim"]);
+        assert_eq!(rule.seams(), ["scan", "shim", "hook", "text"]);
         assert!(rule.stands_in_front_of_a_command());
+    }
+
+    /// `seams` narrows a rule to the seams it names, and the shim is not asked
+    /// about a rule that leaves it out -- so such a rule needs no `[[shim]]`.
+    #[test]
+    fn seams_narrows_where_a_rule_runs() {
+        let policy = policy_from(
+            "[rule.shape]\nmessage = \"x\"\nprose_regexp = 'arguably'\n\
+             seams = [\"hook\"]\ncommand.before = [\"gh\"]\n",
+        )
+        .unwrap();
+        let rule = policy.rules.first().unwrap();
+        assert_eq!(rule.seams(), ["hook"]);
+        assert!(!rule.consulted_by_a_shim());
+
+        // A rule scoped to `text` alone runs somewhere, and says where.
+        let text_only = policy_from(
+            "[rule.shape]\nmessage = \"x\"\nprose_regexp = 'arguably'\n\
+             seams = [\"text\"]\ncommand.before = [\"gh\"]\n",
+        )
+        .unwrap();
+        assert_eq!(text_only.rules.first().unwrap().seams(), ["text"]);
+        assert!(rule.judged_at(crate::text::Seam::Hook));
+        assert!(!rule.judged_at(crate::text::Seam::Scan));
+        assert!(!rule.judged_at(crate::text::Seam::Command));
+    }
+
+    /// A `regexp` rule reaches the hook only by naming it: every one written
+    /// before `seams` was written for a shim's subjects.
+    #[test]
+    fn a_regexp_rule_runs_at_the_hook_only_where_it_says_so() {
+        let shim = "\n[[shim]]\ncommand = \"gh\"\nmatch = [\"release:create\"]\n";
+        let default = policy_from(&format!(
+            "[rule.r]\nmessage = \"x\"\nregexp = '^release create'\ncommand.before = [\"gh\"]\n{shim}"
+        ))
+        .unwrap();
+        assert_eq!(default.rules.first().unwrap().seams(), ["shim"]);
+        let named = policy_from(&format!(
+            "[rule.r]\nmessage = \"x\"\nregexp = '^release create'\nseams = [\"shim\", \"hook\"]\n\
+             command.before = [\"gh\"]\n{shim}"
+        ))
+        .unwrap();
+        assert_eq!(named.rules.first().unwrap().seams(), ["shim", "hook"]);
+    }
+
+    /// Every way `seams` can be written so that it would be read by nothing,
+    /// or would widen a rule past what its kind can do, is refused at load.
+    #[test]
+    fn a_seams_list_that_cannot_hold_is_refused() {
+        let cases = [
+            (
+                "[rule.r]\nmessage = \"x\"\nregexp = 'a'\nfiles.include = [\".\"]\nseams = [\"shim\"]\n",
+                "only `command.before`",
+            ),
+            (
+                "[rule.r]\nmessage = \"x\"\nprose_regexp = 'a'\nseams = []\ncommand.before = [\"gh\"]\n",
+                "`seams = []`",
+            ),
+            (
+                "[rule.r]\nmessage = \"x\"\nregexp = 'a'\nseams = [\"text\"]\ncommand.before = [\"gh\"]\n",
+                "cannot run at the seam \"text\"",
+            ),
+            (
+                "[rule.r]\nmessage = \"x\"\nprose_regexp = 'a'\nseams = [\"commit\"]\ncommand.before = [\"gh\"]\n",
+                "cannot run at the seam \"commit\"",
+            ),
+            (
+                "[rule.r]\nmessage = \"x\"\nexec = 'true'\nseams = [\"hook\"]\ncommand.before = [\"gh\"]\n",
+                "scopes the pattern rules",
+            ),
+        ];
+        for (policy, expected) in cases {
+            let error = policy_from(&format!(
+                "{policy}\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\n"
+            ))
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(expected), "{policy}\n{error}");
+        }
     }
 
     #[test]
@@ -3472,9 +3831,127 @@ mod tests {
                 "{text}"
             );
             assert!(
-                text.contains("only `files.include`, `files.exclude` and `files.glob`"),
+                text.contains("only `files.include`, `files.exclude`, `files.glob`"),
                 "{text}"
             );
+        }
+    }
+
+    /// The additive fields: each changes the inherited rule and leaves its
+    /// check, its origin and every field it did not name as shipped.
+    #[test]
+    fn an_override_may_add_seams_and_allowances_and_reword_the_message() {
+        let policy = policy_from(
+            "owner = \"example-owner\"\n\
+             [inherit]\nsets = [\"published-text\", \"invisible-characters\"]\n\n\
+             [override.unowned-forge-target]\ncommand.before_append = [\"git push\"]\n\n\
+             [override.prevent-unusual-unicode-in-files]\nallow = [\"U+3000\"]\n\
+             message = \"Only the ideographic space is admitted here.\"\n\n\
+             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\"]\n\n\
+             [[shim]]\ncommand = \"git\"\nmatch = [\"push:*\"]\n",
+        )
+        .unwrap();
+        let rule = |id: &str| policy.rules.iter().find(|rule| rule.id == id).unwrap();
+
+        let target = rule("unowned-forge-target");
+        assert_eq!(target.command.as_ref().unwrap().before, ["gh", "git push"]);
+        assert_eq!(target.origin, Origin::Set("published-text".into()));
+        assert_eq!(target.overridden, ["command.before_append"]);
+
+        let unicode = rule("prevent-unusual-unicode-in-files");
+        assert_eq!(
+            unicode.parameters().unwrap().allow.as_deref(),
+            Some(["U+3000".to_owned()].as_slice())
+        );
+        assert_eq!(
+            unicode.message(),
+            "Only the ideographic space is admitted here."
+        );
+        assert_eq!(unicode.overridden, ["allow", "message"]);
+        assert_eq!(unicode.builtin(), Some("prevent-unusual-unicode-in-files"));
+    }
+
+    /// A waiver belongs to the repository whose lockfile it is about: refused
+    /// in a file somebody else's `[inherit]` line reads, and refused twice.
+    #[test]
+    fn a_supply_chain_waiver_is_the_repositorys_own_and_is_written_once() {
+        let waiver = "[[supply_chain.waive]]\nscanner = \"guarddog\"\n\
+             package = \"pypi:pandas@3.0.6\"\ncheck = \"metadata_mismatch\"\n\
+             reason = \"extras read as required\"\n";
+        let dir = crate::fixture::scratch("config-waiver");
+        std::fs::create_dir_all(dir.join("policy")).unwrap();
+        std::fs::write(dir.join("policy/org.toml"), waiver).unwrap();
+        let path = dir.join("policy/principles.toml");
+        std::fs::write(&path, "[inherit]\npaths = [\"policy/org.toml\"]\n").unwrap();
+        let error = load(&dir, &path).unwrap_err().to_string();
+        assert!(error.contains("an inherited file has none"), "{error}");
+
+        let twice = policy_from(&format!("{waiver}\n{waiver}"))
+            .unwrap_err()
+            .to_string();
+        assert!(twice.contains("twice"), "{twice}");
+
+        let once = policy_from(waiver).unwrap();
+        assert_eq!(once.supply_chain.waive.len(), 1);
+        assert!(once.supply_chain.waive.first().unwrap().covers(
+            "pypi",
+            "pandas",
+            "3.0.6",
+            "metadata_mismatch"
+        ));
+    }
+
+    /// `require_any_link = false` on the `broken-links` rule, for a repository
+    /// whose markdown has no internal link yet -- a decision written in the
+    /// policy rather than a copy of the rule.
+    #[test]
+    fn an_override_may_turn_off_the_link_floor() {
+        let policy = policy_from(
+            "[inherit]\nsets = [\"broken-links\"]\n\n\
+             [override.no-broken-doc-links]\nrequire_any_link = false\n",
+        )
+        .unwrap();
+        let rule = policy.rules.first().unwrap();
+        assert!(!rule.require_any_link());
+        assert_eq!(rule.builtin(), Some("links-resolve"));
+    }
+
+    /// Each additive field is refused where the inherited rule has nothing for
+    /// it to adjust, because there it would be read by nothing.
+    #[test]
+    fn an_additive_override_field_with_nothing_to_adjust_is_refused() {
+        for (body, expected) in [
+            (
+                "[override.no-task-tracker-references]\ncommand.before_append = [\"gh\"]\n",
+                "stands in front of no command",
+            ),
+            (
+                "[override.no-task-tracker-references]\nallow = [\"U+3000\"]\n",
+                "reads no allowances",
+            ),
+            (
+                "[override.no-task-tracker-references]\nrequire_any_link = false\n",
+                "only the `links-resolve` built-in reads",
+            ),
+            (
+                "[override.no-task-tracker-references]\nallow = []\n",
+                "`allow = []` adds nothing",
+            ),
+            (
+                "[override.no-task-tracker-references]\ncommand.scope = \"always\"\n",
+                "carries `command.scope`",
+            ),
+            (
+                "[override.no-task-tracker-references]\nbuiltin = \"links-resolve\"\n",
+                "carries `builtin`",
+            ),
+        ] {
+            let error = policy_from(&format!(
+                "[inherit]\nsets = [\"process-residue\"]\n\n{body}"
+            ))
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(expected), "{body}\n{error}");
         }
     }
 

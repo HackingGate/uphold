@@ -31,9 +31,13 @@
 #
 # The cost is stated rather than discovered: a repository whose markdown holds
 # no links at all fails this rule on the day it inherits the set. That is the
-# rule working, and the answer is either a first link or `require_any_link =
-# false` written under this id, which is a decision recorded in the policy
-# instead of a silence.
+# rule working, and the answer is either a first link or
+#
+#   [override.no-broken-doc-links]
+#   require_any_link = false
+#
+# which is a decision recorded in the policy instead of a silence, and keeps the
+# rule itself the set's.
 #
 # PROVENANCE. Promoted here after being found hand-copied into 13 of the 46
 # policy files across the consuming fleet, byte-identical in 12 of them; the

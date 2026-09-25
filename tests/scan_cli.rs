@@ -1951,6 +1951,91 @@ fn an_override_narrows_an_inherited_rule_without_restating_it() {
     assert!(!text.contains("src/lib.rs"), "{text}");
 }
 
+/// `uphold rules --effective` says which fields of an inherited rule this policy changed,
+/// so a reworded message reads as local and not as the set's.
+#[test]
+fn the_effective_rules_name_what_an_override_changed() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        "[inherit]\nsets = [\"broken-links\"]\n\n\
+         [override.no-broken-doc-links]\nrequire_any_link = false\n\
+         message = \"Repoint the link.\"\n",
+    );
+    let human = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["rules", "--effective"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_eq!(code(&human), 0, "{}", stderr(&human));
+    assert!(
+        stdout(&human)
+            .contains("no-broken-doc-links  (scan)  [override: require_any_link, message]"),
+        "{}",
+        stdout(&human)
+    );
+    let json = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["rules", "--effective", "--json"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        stdout(&json).contains("\"overridden\": [\"require_any_link\", \"message\"]"),
+        "{}",
+        stdout(&json)
+    );
+}
+
+/// The `broken-links` floor, turned off by an override for a repository whose
+/// markdown has no internal link yet. Without the override the set refuses the
+/// selection as covering nothing; with it the rule is the set's and still reads
+/// every link it finds.
+#[test]
+fn an_override_turns_off_the_link_floor_and_keeps_the_rule() {
+    let root = workspace();
+    write(
+        &root,
+        "README.md",
+        "# widget\n\nSee [the forge](https://example.test/widget).\n",
+    );
+    write(
+        &root,
+        "policy/principles.toml",
+        "[inherit]\nsets = [\"broken-links\"]\n",
+    );
+    repository(&root);
+    add(&root);
+    let floored = scan(&root);
+    assert_eq!(code(&floored), 1, "{}", stderr(&floored));
+    assert!(
+        stderr(&floored).contains("found no resolvable link"),
+        "{}",
+        stderr(&floored)
+    );
+
+    write(
+        &root,
+        "policy/principles.toml",
+        "[inherit]\nsets = [\"broken-links\"]\n\n\
+         [override.no-broken-doc-links]\nrequire_any_link = false\n",
+    );
+    add(&root);
+    let clean = scan(&root);
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+
+    // Still the rule: a link that resolves to nothing is refused.
+    write(&root, "docs/guide.md", "See [the design](missing.md).\n");
+    add(&root);
+    let broken = scan(&root);
+    assert_eq!(code(&broken), 1, "{}", stderr(&broken));
+    assert!(
+        stderr(&broken).contains("no-broken-doc-links"),
+        "{}",
+        stderr(&broken)
+    );
+}
+
 // --- a guard's own file scope is not the scan's to fail on -----------------
 
 #[test]

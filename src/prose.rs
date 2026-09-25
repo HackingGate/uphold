@@ -28,6 +28,7 @@ use crate::comments::{self, Language};
 use crate::config::{CheckKind, Policy};
 use crate::error::{Fatal, Result};
 use crate::report::Failure;
+use crate::text::Seam;
 
 /// One run of prose, unwrapped.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -269,7 +270,11 @@ pub(crate) fn compile(pattern: &str, id: &str) -> Result<Regex> {
 /// content rule is scoped by `files.*` to particular paths, and firing it at a
 /// commit message would be guesswork -- the argument `text.rs` makes about
 /// pattern rules generally, and it holds here.
-pub(crate) fn over_text(policy: &Policy, text: &str) -> Result<Vec<Failure>> {
+///
+/// And only the rules whose `seams`, where given, names `seam`: a rule written
+/// to refuse a command through the shim and the hook is not asked about a
+/// commit message that merely mentions the command.
+pub(crate) fn over_text(policy: &Policy, seam: Seam, text: &str) -> Result<Vec<Failure>> {
     let mut failures = Vec::new();
     for rule in policy.of_check(CheckKind::ProseRegexp) {
         if rule
@@ -277,6 +282,9 @@ pub(crate) fn over_text(policy: &Policy, text: &str) -> Result<Vec<Failure>> {
             .as_ref()
             .is_none_or(|where_| where_.before.is_empty())
         {
+            continue;
+        }
+        if !rule.judged_at(seam) {
             continue;
         }
         // The same waiver the shim seam honours for the same rule. A prose rule

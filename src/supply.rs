@@ -89,6 +89,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::config::Waiver;
 use crate::error::{Exit, Fatal, Result, verdict};
 
 /// The zizmor policy run where the repository has none of its own.
@@ -131,7 +132,7 @@ enum Section {
 }
 
 /// One section: its banner, and the function that runs it.
-type SectionRun = (&'static str, fn(&Path, &Scope) -> Result<Section>);
+type SectionRun<'a> = (&'static str, &'a dyn Fn(&Path, &Scope) -> Result<Section>);
 
 /// The file names a scanner here reads. Everything else in a diff -- source,
 /// documentation, a test fixture -- changes nothing any of these five tools
@@ -176,7 +177,10 @@ pub(crate) const SECRETS_SET: &str = "credentials";
 
 /// `uphold supply-chain`. `secrets` is whether the policy inherits
 /// [`SECRETS_SET`].
-pub(crate) fn run(root: &Path, scope: &Scope, secrets: bool) -> Result<Exit> {
+///
+/// `waivers` are the repository's `[[supply_chain.waive]]` entries, which only
+/// the guarddog section reads.
+pub(crate) fn run(root: &Path, scope: &Scope, secrets: bool, waivers: &[Waiver]) -> Result<Exit> {
     let manifests_moved = !matches!(scope, Scope::Changed(paths, _) if paths.is_empty());
     if !manifests_moved && !secrets {
         println!(
@@ -187,17 +191,18 @@ pub(crate) fn run(root: &Path, scope: &Scope, secrets: bool) -> Result<Exit> {
     }
     let mut failed = 0_usize;
     let mut unread = 0_usize;
-    let mut sections: Vec<SectionRun> = Vec::new();
+    let guarded = |at: &Path, over: &Scope| guarddog(at, over, waivers);
+    let mut sections: Vec<SectionRun<'_>> = Vec::new();
     if manifests_moved {
-        let dependencies: [SectionRun; 5] = [
+        let dependencies: [SectionRun<'_>; 5] = [
             (
                 "OSV -- known vulnerabilities and reported-malicious packages",
-                osv,
+                &osv,
             ),
-            ("zizmor -- workflow security", zizmor),
-            ("cargo-deny -- origin, advisories, bans, licenses", deny),
-            ("cargo-vet -- has anyone looked at this dependency", vet),
-            ("guarddog -- publisher identity and typosquats", guarddog),
+            ("zizmor -- workflow security", &zizmor),
+            ("cargo-deny -- origin, advisories, bans, licenses", &deny),
+            ("cargo-vet -- has anyone looked at this dependency", &vet),
+            ("guarddog -- publisher identity and typosquats", &guarded),
         ];
         sections.extend(dependencies);
     } else {
@@ -209,9 +214,9 @@ pub(crate) fn run(root: &Path, scope: &Scope, secrets: bool) -> Result<Exit> {
     sections.push((
         "gitleaks -- committed secrets",
         if secrets {
-            gitleaks
+            &gitleaks
         } else {
-            gitleaks_not_asked
+            &gitleaks_not_asked
         },
     ));
     for (title, section) in sections {
@@ -1318,7 +1323,20 @@ enum Read {
 /// the module header sets, and the reason is that the alternative is running
 /// it for nothing. `risks` is guarddog's own list of what it objected to and
 /// nothing is re-judged: the count is reported, not recomputed.
-fn guarddog_read(at: &str, code: Option<i32>, stdout: &str, stderr: &str) -> Read {
+///
+/// A risk a waiver covers is printed as waived, with the waiver's reason, and
+/// is not held against the run; the index of each waiver that matched is
+/// recorded in the ledger, with every package a report named, so the section
+/// can report the waivers that did not.
+fn guarddog_read(
+    at: &str,
+    ecosystem: &str,
+    waivers: &[Waiver],
+    ledger: &mut Ledger,
+    code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+) -> Read {
     // Its own admission first, because it survives whatever the report is.
     if let Some(reason) = rules_that_did_not_run(stdout).or_else(|| rules_that_did_not_run(stderr))
     {
@@ -1363,12 +1381,53 @@ fn guarddog_read(at: &str, code: Option<i32>, stdout: &str, stderr: &str) -> Rea
                 )
             ));
         }
-        let risks = result
+        // The version guarddog resolved, which for npm is the release a range
+        // in `package.json` picked and not the range itself.
+        let version = result
+            .get("package_version")
+            .or_else(|| entry.get("version"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        ledger
+            .seen
+            .insert((ecosystem.to_owned(), (*name).to_owned()));
+        let mut risks = 0_usize;
+        for risk in result
             .get("risks")
             .and_then(serde_json::Value::as_array)
-            .map_or(0, Vec::len);
+            .map_or(&[][..], Vec::as_slice)
+        {
+            // The rule that raised it, as a waiver names it; `name` is the
+            // risk's own id, for a risk no single rule raised.
+            let rule = risk
+                .get("threat_rule")
+                .or_else(|| risk.get("capability_rule"))
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| risk.get("name").and_then(serde_json::Value::as_str))
+                .unwrap_or("");
+            let waiver = waivers
+                .iter()
+                .position(|waiver| waiver.covers(ecosystem, name, version, rule));
+            match waiver {
+                Some(index) => {
+                    ledger.matched.insert(index);
+                    let reason = waivers
+                        .get(index)
+                        .map_or("", |covering| covering.reason.as_str());
+                    println!(
+                        "   waived: {rule} on {ecosystem}:{name}@{version} at {at} -- {reason}"
+                    );
+                }
+                None => risks += 1,
+            }
+        }
         if risks > 0 {
-            objected.push(format!("{name} ({risks} risk(s))"));
+            let at_version = if version.is_empty() {
+                String::new()
+            } else {
+                format!("@{version}")
+            };
+            objected.push(format!("{name}{at_version} ({risks} risk(s))"));
         }
     }
     if objected.is_empty() {
@@ -1381,7 +1440,18 @@ fn guarddog_read(at: &str, code: Option<i32>, stdout: &str, stderr: &str) -> Rea
     }
 }
 
-fn guarddog(root: &Path, scope: &Scope) -> Result<Section> {
+/// What the guarddog reports of one run said about the waivers.
+#[derive(Default)]
+struct Ledger {
+    /// The waivers, by index, that covered a risk.
+    matched: BTreeSet<usize>,
+    /// Every `(ecosystem, package)` a report named.
+    seen: BTreeSet<(String, String)>,
+    /// The ecosystems a report was read for at all.
+    read: BTreeSet<&'static str>,
+}
+
+fn guarddog(root: &Path, scope: &Scope, waivers: &[Waiver]) -> Result<Section> {
     let (python, npm) = match scope {
         Scope::Whole => (
             find_named(root, "uv.lock")?,
@@ -1410,6 +1480,7 @@ fn guarddog(root: &Path, scope: &Scope) -> Result<Section> {
     let mut refused = false;
     let mut unrun: Option<String> = None;
     let mut checked = 0_usize;
+    let mut ledger = Ledger::default();
     for lock in python {
         let directory = lock.parent().unwrap_or(root);
         checked += 1;
@@ -1448,12 +1519,18 @@ fn guarddog(root: &Path, scope: &Scope) -> Result<Section> {
             .map_err(|error| Fatal::new(format!("could not run guarddog: {error}")))?;
         match guarddog_read(
             &directory.display().to_string(),
+            "pypi",
+            waivers,
+            &mut ledger,
             status.status.code(),
             &String::from_utf8_lossy(&status.stdout),
             &String::from_utf8_lossy(&status.stderr),
         ) {
-            Read::Clean => {}
+            Read::Clean => {
+                ledger.read.insert("pypi");
+            }
             Read::Risks(said) => {
+                ledger.read.insert("pypi");
                 println!("   FAILED: guarddog pypi: {said}");
                 refused = true;
             }
@@ -1471,12 +1548,18 @@ fn guarddog(root: &Path, scope: &Scope) -> Result<Section> {
             .map_err(|error| Fatal::new(format!("could not run guarddog: {error}")))?;
         match guarddog_read(
             &directory.display().to_string(),
+            "npm",
+            waivers,
+            &mut ledger,
             status.status.code(),
             &String::from_utf8_lossy(&status.stdout),
             &String::from_utf8_lossy(&status.stderr),
         ) {
-            Read::Clean => {}
+            Read::Clean => {
+                ledger.read.insert("npm");
+            }
             Read::Risks(said) => {
+                ledger.read.insert("npm");
                 println!("   FAILED: guarddog npm: {said}");
                 refused = true;
             }
@@ -1484,6 +1567,29 @@ fn guarddog(root: &Path, scope: &Scope) -> Result<Section> {
         }
     }
     println!("   {checked} Python/npm manifest(s) checked");
+    // A waiver that matched nothing, where the run could have matched it, is
+    // one whose version moved or whose finding went away. "Could have" is the
+    // package appearing in a report, or, over the whole tree, its ecosystem
+    // being read at all -- a range scan reads only the manifests that moved,
+    // and a waiver about one that did not is not stale for it. Reported and
+    // not refused: the push it would have excused is not less safe for it,
+    // and the line that names it is the prompt to delete it.
+    for (index, waiver) in waivers.iter().enumerate() {
+        let Some((ecosystem, name, _)) = waiver.parts() else {
+            continue;
+        };
+        let could = ledger
+            .seen
+            .contains(&(ecosystem.to_owned(), name.to_owned()))
+            || (matches!(scope, Scope::Whole) && ledger.read.contains(ecosystem));
+        if could && !ledger.matched.contains(&index) {
+            println!(
+                "   waiver matched nothing in this run: {} on {} -- remove it if the \
+                 version moved or the finding is gone",
+                waiver.check, waiver.package
+            );
+        }
+    }
     // A finding outranks an unrun rule, which is this crate's own ranking: a
     // refusal is something somebody looked at and objected to. The unrun rules
     // are printed either way, so the red that does appear says what was
@@ -1808,6 +1914,28 @@ mod tests {
                 floor.tool
             );
         }
+    }
+
+    /// The CI recipe installs every scanner a section reads, and the gitleaks
+    /// this binary is pinned to: a recipe missing one is a scheduled job that
+    /// exits 2 every week.
+    #[test]
+    fn the_ci_recipe_installs_every_scanner() {
+        let reference = include_str!("../docs/REFERENCE.md");
+        let start = reference.find("### A scheduled sweep in CI").unwrap_or(0);
+        let recipe = reference
+            .get(start..)
+            .and_then(|rest| rest.split("```yaml").next())
+            .unwrap_or_default();
+        for floor in FLOORS {
+            assert!(
+                recipe.contains(&format!("{}\" = ", floor.tool)),
+                "the CI recipe in docs/REFERENCE.md installs no {}",
+                floor.tool
+            );
+        }
+        let gitleaks = format!("\"aqua:gitleaks/gitleaks\" = \"{GITLEAKS_VERSION}\"");
+        assert!(recipe.contains(&gitleaks), "{recipe}");
     }
 
     #[test]

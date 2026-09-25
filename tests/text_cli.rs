@@ -354,6 +354,27 @@ fn a_prose_rule_with_no_command_is_left_out_of_the_text_seam() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
+/// A prose rule whose `seams` leaves `text` out is not asked about a commit
+/// message. The rule refuses a command through the shim and the hook, and a
+/// message that only mentions the command -- a changelog line, a note about the
+/// rule itself -- is not that command being run.
+#[test]
+fn a_prose_rule_whose_seams_leave_out_text_is_not_asked_at_the_text_seam() {
+    let root = workspace(
+        "[rule.no-release-by-hand]\n\
+         message = \"cut a release from the workflow\"\n\
+         prose_regexp = '(?i)\\bgh release create\\b'\n\
+         seams = [\"shim\", \"hook\"]\n\
+         command.before = [\"gh\"]\n\n\
+         [[shim]]\ncommand = \"gh\"\nmatch = [\"release:create\"]\nargv_subject = true\n",
+    );
+    let message = b"Refuse gh release create outside the workflow.\n";
+    let scanned = scan_text(&root, message, EXAMPLE_HOME);
+    assert_eq!(code(&scanned), 0, "{}", stderr(&scanned));
+    let guarded = guard_text(&root, message, EXAMPLE_HOME, None);
+    assert_eq!(code(&guarded), 0, "{}", stderr(&guarded));
+}
+
 // ── a schema id is not a repository name ─────────────────────────────
 
 /// The private-name guard at the text seam, with the owner declared on the rule

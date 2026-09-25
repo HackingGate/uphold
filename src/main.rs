@@ -87,6 +87,7 @@ mod git;
 mod guard;
 mod hook;
 mod hooks;
+mod init;
 mod install;
 mod out;
 mod pins;
@@ -116,6 +117,8 @@ usage:
   uphold check                       reconcile policy/upheld.toml against what runs
   uphold check --coverage            which rules run here and carry no principle
   uphold audit --for-publication     what a private->public flip would republish
+  uphold init --owner OWNER          write a first policy, claims and hook config
+              --visibility public|private|internal [--lefthook]
   uphold hooks --identity DIR...     do these repositories declare the same hooks
   uphold hooks --install             write the hooks git runs, as tracked files
                [--adopt | --check]   take over a hand-written copy; or only report
@@ -182,6 +185,46 @@ const POLICY_NAMES: [&str; 2] = ["principles.toml", "rg-policy.toml"];
 /// which is the one thing the boundary exists to stop.
 fn is_repository_root(directory: &Path) -> bool {
     directory.join(".git").symlink_metadata().is_ok()
+}
+
+/// `uphold init`, at the root of the repository it writes into.
+///
+/// The root and not somewhere under it: a policy written into a subdirectory
+/// is found only from there, and one written above the repository belongs to
+/// whatever encloses it.
+fn init_command(rest: &[OsString]) -> Result<Exit> {
+    let usage = || {
+        Fatal::new(format!(
+            "usage: uphold init --owner OWNER --visibility public|private|internal \
+             [--lefthook]\n\n{USAGE}"
+        ))
+    };
+    let mut owner: Option<String> = None;
+    let mut visibility: Option<String> = None;
+    let mut runner = init::Runner::PreCommit;
+    let mut words = rest.iter();
+    while let Some(word) = words.next() {
+        match text_of(word)? {
+            "--owner" => owner = Some(text_of(words.next().ok_or_else(usage)?)?.to_owned()),
+            "--visibility" => {
+                visibility = Some(text_of(words.next().ok_or_else(usage)?)?.to_owned());
+            }
+            "--lefthook" => runner = init::Runner::Lefthook,
+            _ => return Err(usage()),
+        }
+    }
+    let (Some(owner), Some(visibility)) = (owner, visibility) else {
+        return Err(usage());
+    };
+    let root = std::env::current_dir()?;
+    if !is_repository_root(&root) {
+        return Err(Fatal::new(format!(
+            "{} is not the root of a git repository. Run `uphold init` where `.git` is, so \
+             the policy it writes is the one every hook in this repository finds",
+            root.display()
+        )));
+    }
+    init::run(&root, &owner, &visibility, runner)
 }
 
 /// Walk up from the working directory until a policy file appears, stopping at
@@ -313,6 +356,7 @@ fn run() -> Result<Exit> {
             print!("{USAGE}");
             Ok(Exit::Clean)
         }
+        "init" => init_command(rest),
         "scan" => scan_command(rest),
         "guard" => guard_command(rest),
         "audit" => audit_command(rest),
@@ -408,10 +452,11 @@ fn run() -> Result<Exit> {
             // workflows, and a superproject that only tracks submodules is
             // still where its own workflows live.
             let (root, policy) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
-            // Loaded for one fact, whether it inherits the set that asks for
-            // gitleaks. A policy that will not load is exit 2 here as it is
+            // Loaded for two facts: whether it inherits the set that asks for
+            // gitleaks, and the guarddog findings it has waived. A policy that will not load is exit 2 here as it is
             // everywhere else: which sections apply cannot be known without it.
-            let secrets = config::load(&root, &policy)?
+            let loaded = config::load(&root, &policy)?;
+            let secrets = loaded
                 .inherited_sets
                 .iter()
                 .any(|set| set == supply::SECRETS_SET);
@@ -429,15 +474,20 @@ fn run() -> Result<Exit> {
                 // instead would report on a range nobody asked about.
                 let push = runner::push(&root, None, None)?;
                 if push.source == runner::Source::Absent {
+                    // The two ways this is reached by mistake, named: the
+                    // range id pinned at a stage with no push, and a CI step
+                    // that meant the sweep.
                     return Err(Fatal::new(
                         "no push to scan: this was not run from a pre-push hook, and no range \
                          was named. Pass --base REV to scan what one range changed, or --all \
-                         to scan every manifest in the tree",
+                         to scan every manifest in the tree. As a hook, `uphold-supply-chain` \
+                         belongs at pre-push; at manual, in CI or on a schedule the sweep is \
+                         `uphold-supply-chain-all`",
                     ));
                 }
                 supply::scope_for_push(&root, &push.refs)?
             };
-            supply::run(&root, &scope, secrets)
+            supply::run(&root, &scope, secrets, &loaded.supply_chain.waive)
         }
         "probe" => {
             let usage = || {
@@ -965,7 +1015,18 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
             } else {
                 hooks.join(", ")
             };
-            println!("  {}  ({at})", rule.id);
+            // Which parts of an inherited rule this policy changed, so a
+            // reworded message or a widened selection reads as local rather
+            // than as the set's.
+            if rule.overridden.is_empty() {
+                println!("  {}  ({at})", rule.id);
+            } else {
+                println!(
+                    "  {}  ({at})  [override: {}]",
+                    rule.id,
+                    rule.overridden.join(", ")
+                );
+            }
         }
         return Ok(Exit::Clean);
     }
@@ -995,7 +1056,20 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
             }
             json_string(seam, &mut document);
         }
-        document.push_str("]}");
+        document.push(']');
+        // Only where an override changed something, so the line of every rule
+        // no override touches is what it was before the field existed.
+        if !rule.overridden.is_empty() {
+            document.push_str(", \"overridden\": [");
+            for (position, field) in rule.overridden.iter().enumerate() {
+                if position > 0 {
+                    document.push_str(", ");
+                }
+                json_string(field, &mut document);
+            }
+            document.push(']');
+        }
+        document.push('}');
     }
     if !policy.rules.is_empty() {
         document.push('\n');

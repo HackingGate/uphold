@@ -80,7 +80,8 @@ direction too — `git.hooks` or `files.*` beside it, where nothing hands it a
 destination, would be a rule looking at nothing and reporting clean.
 
 A pattern rule at this seam may also say **which subjects** it is asked about,
-with `subjects` — a list drawn from `text`, `title`, `path`, `ref`, `argv` —
+with `subjects` — a list drawn from `text`, `title`, `path`, `ref`, `argv`,
+`tool` —
 and the filter narrows every kind of checker the same way. Absent means every
 subject, which is every rule written before the field existed; `subjects`
 anywhere but beside `command.before` is refused, because nothing else hands a
@@ -96,10 +97,52 @@ command.scope = "always"     # a format is a fact about the text, not the destin
 ```
 
 The same shape reaches a branch- or tag-naming convention through
-`subjects = ["ref"]` on `git push`. These rules run at the shim seam only —
-`uphold hook` hands a harness's call to the text guards, the literal rules and
-the prose rules, and a pattern scoped to one command's subjects has no flag
-vocabulary there.
+`subjects = ["ref"]` on `git push`. By default a `regexp` or `require_regexp`
+rule runs at the shim seam only, because it was written about the subjects a
+shim collects; `seams`, below, can add the hook.
+
+### `seams` — which published-text seams run a rule
+
+Three seams judge text a command or a tool call is about to publish: the shim
+(`shim`), `uphold hook` (`hook`), and `uphold scan --text` with `uphold guard
+--text` (`text`, one name for both). A pattern rule standing in front of a
+command may name the ones that run it:
+
+```toml
+[rule.no-release-by-hand]
+message = "Cut a release from the release workflow."
+regexp = '^release create|__create_release$'
+subjects = ["argv", "tool"]
+seams = ["shim", "hook"]
+command.before = ["gh"]
+command.scope = "always"
+```
+
+Absent means where the kind runs today:
+
+| kind | default | may name |
+|---|---|---|
+| `prose_regexp` | `shim`, `hook`, `text` | any of the three |
+| `regexp`, `require_regexp` | `shim` | `shim`, `hook` |
+
+The field needs `command.before`, which is what makes a rule a published-text
+rule, and it is refused on any other kind: a guard and an `exec` checker run
+where their kind runs. An empty list, and a seam the kind cannot run at, are
+refused at load. A rule whose `seams` leaves out `shim` is not consulted by a
+shim and needs no `[[shim]]` table for the command it names.
+
+The case it exists for is the one above. Written as a `prose_regexp` rule so the
+hook would reach it, the rule also ran at `--text`, so a commit message that
+only *mentions* `gh release create` was refused. Leaving `text` out of `seams`
+keeps it at the two seams that publish.
+
+**At the hook, a pattern rule is handed two subjects**: the call's strings, as
+kind `text`, and the tool's name, as kind `tool`. The tool name is the hook's
+nearest thing to a command line, and a rule that refuses a call by what it *is*
+names `tool` in `subjects` so a body that only mentions the command is not
+refused. Which tool names correspond to which command is written in the rule's
+own pattern: a table of MCP tool names per shim verb would be missing the tool a
+server added last week.
 
 `text-guards` and `text-literals` are the same dispatches `uphold guard
 --text` and `uphold scan --text` run, as built-ins: every text-capable guard
@@ -160,10 +203,51 @@ a vocabulary nobody wrote — here `issue close --body`, a flag the real command
 does not accept — and reading a flag a command will not take is the shim
 claiming to have checked a subject that was never published.
 
-`text_flags`, `title_flags`, `file_flags`, `path_flags`, `skip_flags` and
-`web_flags` may be overridden. `target_flags` may not: `-R`/`--repo` means the same thing on every
+`text_flags`, `title_flags`, `file_flags`, `path_flags`, `skip_flags`,
+`web_flags` and `argv_subject` may be overridden. `target_flags` may not: `-R`/`--repo` means the same thing on every
 verb, and a per-verb answer to "which repository is this going to" would be a way
-to publish somewhere the table did not expect.
+to publish somewhere the table did not expect. An entry that leaves
+`argv_subject` out keeps the table's value; the flag lists are replaced whether
+given or not.
+
+### Judging the command line itself: `argv_subject`
+
+`text_flags` and the other lists hand the rules the values a command publishes.
+A rule whose subject is the invocation, not any text the invocation carries,
+such as "no release is cut by hand", has nothing to read there. `argv_subject =
+true` on a `[[shim]]` adds one more subject of kind `argv`: every word after the
+command's own name, joined by single spaces (`release create v1.2.0 --notes x`
+for `gh release create v1.2.0 --notes x`). It is added beside the flag values,
+not instead of them.
+
+The `argv` subject exists at the shim seam only. `uphold hook` receives a tool
+call, not a command line, and hands the tool's name as a subject of kind `tool`
+instead (see [`seams`](#seams--which-published-text-seams-run-a-rule));
+`--text`, the git hooks and the scan receive text and have no `argv` to hand a
+rule. A rule meant for it names the kind so
+the flag values are not asked the same question:
+
+```toml
+[rule.no-release-by-hand]
+message = "Cut a release from the release workflow."
+regexp = '^release create\b'
+subjects = ["argv"]
+command.before = ["gh"]
+command.scope = "always"
+
+[[shim]]
+command = "gh"
+match = ["pr:create", "release:create"]
+text_flags = ["-b", "--body"]
+
+  [[shim.verbs]]
+  match = ["release:create"]
+  text_flags = ["-n", "--notes"]
+  argv_subject = true      # this verb only; the table's value is false
+```
+
+A `gh api` or `glab api` call is read with that verb's own grammar and hands no
+`argv` subject, whatever the table says.
 
 ### A baseline entry may be asked to say who excused it and why
 
@@ -630,29 +714,52 @@ inherited defines is an error. `inherit.paths` merges extra policy files,
 repository-relative, after the bundled sets.
 
 A repository's own rule of the same `id` replaces the inherited one **whole**,
-so it is the spelling for a rule that checks something different. To move only
-**where** an inherited rule reads, write an override:
+so it is the spelling for a rule that checks something different. To adjust an
+inherited rule while keeping its check, write an override:
 
 ```toml
 [override.no-task-tracker-references]
 files.exclude = ["src/**"]
+
+[override.unowned-forge-target]
+command.before_append = ["git push"]     # added to the set's command.before
+
+[override.prevent-unusual-unicode-in-files]
+allow = ["U+3000"]                       # added to the set's allowances
+message = "Only the ideographic space is admitted in these files."
+
+[override.no-broken-doc-links]
+require_any_link = false                 # no internal link here yet
 ```
 
-The inherited rule is kept — `regexp`, `message`, `builtin`, provenance and
-all — and the `files` keys written here replace the set's. An override may
-carry `files.include`, `files.exclude` and `files.glob`, and nothing else; a
-key the override does not name keeps the set's value, so `files.exclude` alone
-leaves the set's `include` and `glob` standing. A tightening the set ships
-later reaches the narrowed rule on the next pin bump, which is what a full copy
+The inherited rule is kept, with its `regexp` or `builtin`, its provenance and
+every field the override does not name. What an override may carry is what
+leaves the check alone:
+
+| field | effect | refused where |
+|---|---|---|
+| `files.include`, `files.exclude`, `files.glob` | replaces the set's value | — |
+| `command.before_append` | adds commands to the set's `command.before` | the rule stands in front of no command, or already names the entry |
+| `allow` | adds allowances to the set's list | the rule's built-in reads no `allow` |
+| `require_any_link` | sets the `links-resolve` floor | the rule is not `links-resolve` |
+| `message` | replaces the wording | — |
+
+`uphold rules --effective` prints the fields an override changed beside the rule
+(`[override: allow, message]`, and `"overridden"` in `--json`), so a reworded
+message reads as this repository's and not the set's. A tightening the set ships
+later reaches the adjusted rule on the next pin bump, which is what a full copy
 under the same `id` cannot promise: it pins the pattern at whatever the set
 shipped the day it was pasted.
 
-Three shapes are refused at load, each naming the table:
+Four shapes are refused at load, each naming the table:
 
-- an override carrying any other key — `regexp`, `message`, `files.multiline`
-  — with the three it may carry listed. A copy that changes the check is a rule
-  of the repository's own and is written as `[rule.<id>]` in full, where the
-  shadow note below reports it;
+- an override carrying any other key, such as `regexp`, `builtin`,
+  `command.scope` or `files.multiline`, with the fields it may carry listed.
+  A copy that changes what the rule matches is a rule of the repository's own
+  and is written as `[rule.<id>]` in full, where the shadow note below reports
+  it;
+- an additive field with nothing to adjust, per the table above, or an empty
+  `allow` or `command.before_append`;
 - an override of an `id` nothing inherited defines, or one that
   `inherit.disabled_rules` drops;
 - an override beside an own `[rule.<id>]` of the same `id`: the rule replaces
@@ -669,8 +776,8 @@ from without appearing in any file in the repository it runs in:
   [set: unreviewed-history]`. A reader greps their policy for that id and finds
   nothing, because the whole declaration is one word in an `[inherit]` line.
 - **A same-id rule that changes the CHECK is reported at load**, on stderr, as
-  a note and not a refusal. Narrowing where an inherited rule reads is the
-  `[override.<id>]` table above; replacing a compiled-in `builtin` with a
+  a note and not a refusal. Adjusting an inherited rule without changing its
+  check is the `[override.<id>]` table above; replacing a compiled-in `builtin` with a
   `regexp` of your own under the same id is a private copy of somebody else's
   rule, and it is invisible to everything else here — the id resolves, so
   every claim naming it reconciles green.
@@ -2038,9 +2145,13 @@ of them are reached from a seam that needs a process to have been spawned.
 
 `hook` is that seam without the process. The harness hands over the pending call
 and reads a verdict back, and the rules it consults are the literal rules, the
-text-capable guards **and the `prose_regexp` rules that stand in front of a
-command** — the same dispatches `scan --text` and `guard --text` reach, through
-the same functions. A prose rule naming `gh` is asked here for the reason it is
+text-capable guards, **the `prose_regexp` rules that stand in front of a
+command**, and the `regexp` and `require_regexp` rules whose
+[`seams`](#seams--which-published-text-seams-run-a-rule) names `hook` — the same
+dispatches `scan --text` and `guard --text` reach, through the same functions.
+A refused rule is reported with its `message`, as at every other seam: the reader
+here is the agent that made the call, and the message is what tells it what to do
+instead. A prose rule naming `gh` is asked here for the reason it is
 asked at `commit-msg`: this seam is what an agent uses *instead of* `gh`, so a
 sentence shape refused when a person publishes it and allowed when an agent
 publishes it would be the same rule with two answers. A prose rule that names no
@@ -2282,6 +2393,62 @@ repository and refuse every push with exit `2` on any machine without the
 scanners installed. A lefthook consumer opts in by writing the command in its
 own file.
 
+### A scheduled sweep in CI
+
+`uphold-supply-chain-all` exits `2` on a runner that lacks a scanner the tree
+needs, so pinning it only makes sense in a job that installs them. It is also a
+`manual`-stage id, so nothing runs it until something asks for that stage. The
+recipe below does both: [mise](https://mise.jdx.dev/) installs the scanners from
+one file, which a contributor's machine reads too, and the job runs the manual
+stage weekly, where a new advisory against an untouched dependency is found.
+
+```toml
+# mise.toml
+[tools]
+"aqua:google/osv-scanner" = "latest"
+"aqua:zizmorcore/zizmor" = "latest"
+"aqua:EmbarkStudios/cargo-deny" = "latest"
+"cargo:cargo-vet" = "latest"          # only where a supply-chain/ store exists
+"pipx:guarddog" = "latest"
+"aqua:astral-sh/uv" = "latest"        # guarddog reads `uv export`, not uv.lock
+"aqua:gitleaks/gitleaks" = "8.30.1"   # only where the policy inherits credentials
+```
+
+```yaml
+# .github/workflows/supply-chain.yml
+name: Supply chain
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0              # gitleaks under --all reads every commit
+      - uses: jdx/mise-action@v4
+      - uses: j178/prek-action@v3.0.0
+        with:
+          extra-args: --all-files --hook-stage manual
+```
+
+`latest` and not a version for the five dependency scanners: each floor above
+is the oldest release whose output the readers here were measured against, and
+a newer one satisfies it. gitleaks is the exception, pinned for the reason given
+[below](#gitleaks-which-owns-secret-shapes). A lefthook consumer writes the same
+job with `lefthook run` and a named group holding
+`uphold supply-chain --all`.
+
+Pin `uphold-supply-chain` itself only at `pre-push`. At any other stage there
+is no pushed range, and every run is exit `2`. `uphold check` refuses a
+`.pre-commit-config.yaml` that pins it anywhere else, naming the stage and the
+id for the sweep, and the no-range refusal names both ids.
+
 ### gitleaks, which owns secret shapes
 
 The sixth section is **gitleaks**, the only secret-shape check: token formats,
@@ -2430,6 +2597,41 @@ Its older admission, "Some rules failed to run while scanning \<package\>" at
 exit 0 — the two email-domain rules time out routinely — is still read, and
 still names the packages and how many rules. None of that is a finding: it is
 the record that the question was asked and nobody answered.
+
+### Waiving a confirmed guarddog false positive
+
+Because the findings are read here, a finding somebody has looked at and judged
+a false positive has to be recordable here too. Without that, one such finding
+refuses every push that touches the lockfile, and the only levers are
+`UPHOLD_ALLOW` per invocation or dropping guarddog. The waiver goes in the
+repository's own policy:
+
+```toml
+[[supply_chain.waive]]
+scanner = "guarddog"
+package = "pypi:pandas@3.0.6"          # <ecosystem>:<name>@<version>; pypi or npm
+check = "metadata_mismatch"            # the guarddog rule, as its report names it
+reason = "compares optional extras against the required dependencies"
+```
+
+- **It is keyed on the version.** The next release is a different package with
+  its own reasons to be suspicious or not, so a bump is read fresh. For npm the
+  version is the one guarddog resolved, not the range in `package.json`.
+- **A waived finding is still printed**, as `waived: metadata_mismatch on
+  pypi:pandas@3.0.6 at <dir> -- <reason>`. The verdict says what was not held
+  against the push; it does not hide it.
+- **A waiver that matched nothing is reported**, where the run could have
+  matched it: the package appeared in a report, or `--all` read its ecosystem.
+  A range scan reads only the manifests that moved, so a waiver about one that
+  did not move is not called stale.
+- `scanner` is `guarddog` alone. The other scanners carry their own
+  suppression in their own configuration (`osv-scanner.toml`, `deny.toml`,
+  zizmor's config, cargo-vet's audits), and a second list here would be two
+  sets of exceptions free to disagree.
+- Refused at load, as exit `2`: another scanner, a `package` without an
+  ecosystem or a version, an empty `check` or `reason`, the same waiver twice,
+  and `[supply_chain]` in a bundled set or an `inherit.paths` file, which have
+  no lockfile of their own.
 
 ### How the other three report could-not-look
 
@@ -2745,6 +2947,16 @@ own hooks, which means the programs it already trusts on every commit.
 uphold check --coverage       # every rule this repository runs, vs the claims
 uphold_check.py --oscal > component-definition.json
 ```
+
+The reconcile credits a rule to each seam this repository's own configuration
+declares for it: the scan and a git stage where a hook id or lefthook command
+runs them, a shim where a `[[shim]]` table names the command in the rule's
+`command.before`, `--text` where a hook runs `uphold scan --text` over the
+commit message (`uphold-scan-text`, or the same command under lefthook), and the
+hook where a tracked `.claude/settings.json` runs `uphold hook`. Each is what the repository asks for rather than what a machine
+has installed. A pinned hook id counts without asking whether `pre-commit
+install` ran, and a shim table counts without asking whether the link is on
+PATH. A settings file that is not JSON is exit `2`.
 
 `--coverage` counts the direction the reconcile cannot — a rule firing under no
 claim is invisible to a reconcile. It reports and does not refuse: `0`, or `2`

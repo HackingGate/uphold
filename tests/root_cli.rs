@@ -497,3 +497,93 @@ fn a_report_that_could_not_be_written_is_not_a_report() {
         stderr(&output)
     );
 }
+
+/// `uphold init` writes a first policy that loads, reconciles and scans clean,
+/// and refuses a tree that already has one.
+#[test]
+fn init_writes_a_policy_that_reconciles_and_refuses_to_write_a_second() {
+    let root = support::scratch("init");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    let uphold = |args: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+        command.args(args).current_dir(&root);
+        support::without_git_environment(&mut command);
+        command.output().unwrap()
+    };
+
+    let written = uphold(&["init", "--owner", "example-owner", "--visibility", "public"]);
+    assert_eq!(
+        written.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&written.stderr)
+    );
+    let policy = std::fs::read_to_string(root.join("policy/principles.toml")).unwrap();
+    assert!(policy.contains("owner = \"example-owner\""), "{policy}");
+    let hooks = std::fs::read_to_string(root.join(".pre-commit-config.yaml")).unwrap();
+    assert!(
+        hooks.contains(&format!("rev: v{}", env!("CARGO_PKG_VERSION"))),
+        "{hooks}"
+    );
+
+    let check = uphold(&["check"]);
+    assert_eq!(
+        check.status.code(),
+        Some(0),
+        "{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    support::git(&root, &["add", "-A"]);
+    let scan = uphold(&["scan"]);
+    assert_eq!(
+        scan.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&scan.stderr)
+    );
+
+    let again = uphold(&["init", "--owner", "someone-else", "--visibility", "public"]);
+    assert_eq!(again.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&again.stderr).contains("already has a policy"),
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+    let unchanged = std::fs::read_to_string(root.join("policy/principles.toml")).unwrap();
+    assert_eq!(unchanged, policy);
+}
+
+/// An existing hook configuration is left as it is, and the block is printed.
+#[test]
+fn init_leaves_an_existing_hook_config_alone() {
+    let root = support::scratch("init-hooks");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    std::fs::write(root.join(".pre-commit-config.yaml"), "repos: []\n").unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command
+        .args([
+            "init",
+            "--owner",
+            "example-owner",
+            "--visibility",
+            "private",
+        ])
+        .current_dir(&root);
+    support::without_git_environment(&mut command);
+    let output = command.output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read_to_string(root.join(".pre-commit-config.yaml")).unwrap(),
+        "repos: []\n"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("was left as it is"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
