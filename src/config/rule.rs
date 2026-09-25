@@ -1288,7 +1288,7 @@ impl Rule {
         static DEFAULTS: OnceLock<Files> = OnceLock::new();
         self.files
             .as_ref()
-            .map_or_else(|| DEFAULTS.get_or_init(Files::default), |files| files)
+            .unwrap_or_else(|| DEFAULTS.get_or_init(Files::default))
     }
 
     /// Whether this rule searches files at all. Absent `files.*` keys are the
