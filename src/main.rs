@@ -87,6 +87,7 @@ mod git;
 mod guard;
 mod hook;
 mod hooks;
+mod init;
 mod install;
 mod out;
 mod pins;
@@ -116,6 +117,8 @@ usage:
   uphold check                       reconcile policy/upheld.toml against what runs
   uphold check --coverage            which rules run here and carry no principle
   uphold audit --for-publication     what a private->public flip would republish
+  uphold init --owner OWNER          write a first policy, claims and hook config
+              --visibility public|private|internal [--lefthook]
   uphold hooks --identity DIR...     do these repositories declare the same hooks
   uphold hooks --install             write the hooks git runs, as tracked files
                [--adopt | --check]   take over a hand-written copy; or only report
@@ -182,6 +185,46 @@ const POLICY_NAMES: [&str; 2] = ["principles.toml", "rg-policy.toml"];
 /// which is the one thing the boundary exists to stop.
 fn is_repository_root(directory: &Path) -> bool {
     directory.join(".git").symlink_metadata().is_ok()
+}
+
+/// `uphold init`, at the root of the repository it writes into.
+///
+/// The root and not somewhere under it: a policy written into a subdirectory
+/// is found only from there, and one written above the repository belongs to
+/// whatever encloses it.
+fn init_command(rest: &[OsString]) -> Result<Exit> {
+    let usage = || {
+        Fatal::new(format!(
+            "usage: uphold init --owner OWNER --visibility public|private|internal \
+             [--lefthook]\n\n{USAGE}"
+        ))
+    };
+    let mut owner: Option<String> = None;
+    let mut visibility: Option<String> = None;
+    let mut runner = init::Runner::PreCommit;
+    let mut words = rest.iter();
+    while let Some(word) = words.next() {
+        match text_of(word)? {
+            "--owner" => owner = Some(text_of(words.next().ok_or_else(usage)?)?.to_owned()),
+            "--visibility" => {
+                visibility = Some(text_of(words.next().ok_or_else(usage)?)?.to_owned());
+            }
+            "--lefthook" => runner = init::Runner::Lefthook,
+            _ => return Err(usage()),
+        }
+    }
+    let (Some(owner), Some(visibility)) = (owner, visibility) else {
+        return Err(usage());
+    };
+    let root = std::env::current_dir()?;
+    if !is_repository_root(&root) {
+        return Err(Fatal::new(format!(
+            "{} is not the root of a git repository. Run `uphold init` where `.git` is, so \
+             the policy it writes is the one every hook in this repository finds",
+            root.display()
+        )));
+    }
+    init::run(&root, &owner, &visibility, runner)
 }
 
 /// Walk up from the working directory until a policy file appears, stopping at
@@ -313,6 +356,7 @@ fn run() -> Result<Exit> {
             print!("{USAGE}");
             Ok(Exit::Clean)
         }
+        "init" => init_command(rest),
         "scan" => scan_command(rest),
         "guard" => guard_command(rest),
         "audit" => audit_command(rest),

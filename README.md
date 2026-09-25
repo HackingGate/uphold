@@ -54,6 +54,14 @@ Git guards, command shims and the agent hook.
 
 ## Install
 
+`uphold init --owner OWNER --visibility public|private|internal` at a
+repository's root writes a first `policy/principles.toml` (four bundled sets and
+the `gh` and `git` shim tables), a `policy/upheld.toml` with two claims those
+sets supply, and the `.pre-commit-config.yaml` below at this binary's version
+(`--lefthook` writes the `lefthook.yml` instead). It refuses a tree that already
+has a policy, and leaves an existing hook config as it is, printing the block to
+add. The owner and the visibility are stated, never read from `origin`.
+
 **pre-commit / prek** — one manifest serves both, and no Rust toolchain is
 needed (`language: rust` bootstraps it).
 
@@ -220,6 +228,7 @@ the harnesses and what they cost.
 ## Commands
 
 ```sh
+uphold init --owner OWNER --visibility public   # a first policy, claims and hook config
 uphold scan                     # content rules over the tree
 uphold scan --text -            # a commit message, release note, PR body
 uphold check                    # the claims in policy/upheld.toml still hold
