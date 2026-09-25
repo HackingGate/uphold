@@ -578,6 +578,132 @@ impl Override {
     }
 }
 
+/// `[supply_chain]` in a repository's own policy.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SupplyChain {
+    /// `[[supply_chain.waive]]`: findings this repository has looked at and
+    /// holds not to be a reason to refuse a push. See [`Waiver`].
+    #[serde(default)]
+    pub waive: Vec<Waiver>,
+}
+
+/// The scanners a waiver may name. guarddog alone: it is the one scanner whose
+/// findings `uphold supply-chain` reads out of its report, and the other four
+/// each carry their own suppression in their own configuration -- an OSV
+/// `osv-scanner.toml`, a cargo-deny `deny.toml`, a zizmor config, cargo-vet's
+/// audits -- where a second one here would be two lists of exceptions free to
+/// disagree.
+const WAIVABLE_SCANNERS: [&str; 1] = ["guarddog"];
+
+/// The ecosystems a guarddog waiver may name, as its `package` spells them.
+const WAIVABLE_ECOSYSTEMS: [&str; 2] = ["pypi", "npm"];
+
+/// One confirmed false positive: a scanner's rule, on one package at one
+/// version, with the reason it was judged one.
+///
+/// Keyed on the VERSION, so a bump is read fresh: what was looked at is that
+/// release, and the next one is a different tarball with a different reason to
+/// be suspicious or not. A waived finding is still printed, marked waived with
+/// its reason, so the verdict says what was not held against the push rather
+/// than hiding it, and a waiver that matched nothing in a run that read its
+/// ecosystem is reported, so a stale one gets removed.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Waiver {
+    /// `guarddog`.
+    pub scanner: String,
+    /// `<ecosystem>:<name>@<version>` -- `pypi:pandas@3.0.6`,
+    /// `npm:@scope/pkg@1.2.0`.
+    pub package: String,
+    /// The scanner's rule, as it names it: guarddog's `metadata_mismatch`.
+    pub check: String,
+    /// Why this finding is not a reason to refuse. Required, because a waiver
+    /// nobody can re-judge is a switch nobody can turn back on.
+    pub reason: String,
+}
+
+impl Waiver {
+    /// `(ecosystem, name, version)`, or `None` where `package` is not the
+    /// three-part spelling. Validated at load, so a loaded waiver always has
+    /// one.
+    pub(crate) fn parts(&self) -> Option<(&str, &str, &str)> {
+        let (ecosystem, rest) = self.package.split_once(':')?;
+        // `rsplit`, because an npm scope carries its own `@`.
+        let (name, version) = rest.rsplit_once('@')?;
+        (!name.is_empty() && !version.is_empty()).then_some((ecosystem, name, version))
+    }
+
+    /// Whether this waiver covers `check` reported on `name` at `version` in
+    /// `ecosystem`.
+    pub(crate) fn covers(&self, ecosystem: &str, name: &str, version: &str, check: &str) -> bool {
+        self.check == check
+            && self
+                .parts()
+                .is_some_and(|parts| parts == (ecosystem, name, version))
+    }
+
+    fn validate(&self) -> Result<()> {
+        let at = format!("`[[supply_chain.waive]]` for {:?}", self.package);
+        if !WAIVABLE_SCANNERS.contains(&self.scanner.as_str()) {
+            return Err(Fatal::new(format!(
+                "{at} names the scanner {:?}. A waiver here is for {}; every other scanner \
+                 carries its own suppression in its own configuration, and a second list \
+                 here would be two sets of exceptions free to disagree",
+                self.scanner,
+                WAIVABLE_SCANNERS.join(", ")
+            )));
+        }
+        match self.parts() {
+            Some((ecosystem, _, _)) if WAIVABLE_ECOSYSTEMS.contains(&ecosystem) => {}
+            _ => {
+                return Err(Fatal::new(format!(
+                    "{at}: `package` is `<ecosystem>:<name>@<version>`, with the ecosystem one \
+                     of {} -- `pypi:pandas@3.0.6`. A waiver with no version would outlive \
+                     the release it was judged on",
+                    WAIVABLE_ECOSYSTEMS.join(", ")
+                )));
+            }
+        }
+        if self.check.trim().is_empty() {
+            return Err(Fatal::new(format!(
+                "{at}: `check` is empty. Name the scanner's rule, as guarddog reports it \
+                 (`metadata_mismatch`): a waiver of every rule on a package is not a \
+                 finding somebody looked at"
+            )));
+        }
+        if self.reason.trim().is_empty() {
+            return Err(Fatal::new(format!(
+                "{at}: `reason` is empty. Say why the finding is not a reason to refuse, so \
+                 the next reader can judge whether it still holds"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Every waiver this policy declares, held to its shape, and none twice.
+fn validate_waivers(path: &Path, waivers: &[Waiver]) -> Result<()> {
+    for (index, waiver) in waivers.iter().enumerate() {
+        waiver.validate().map_err(|error| Fatal::at(path, error))?;
+        if waivers.iter().take(index).any(|earlier| {
+            earlier.scanner == waiver.scanner
+                && earlier.package == waiver.package
+                && earlier.check == waiver.check
+        }) {
+            return Err(Fatal::at(
+                path,
+                format!(
+                    "`[[supply_chain.waive]]` waives {} on {} twice. Keep one, with the \
+                     reason that holds",
+                    waiver.check, waiver.package
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Where a rule in a loaded policy came from.
 ///
 /// Not a field either -- nothing in a file says it, because a file cannot: the
@@ -789,6 +915,10 @@ pub(crate) struct PolicyFile {
     overrides: BTreeMap<String, Override>,
     #[serde(default, rename = "shim")]
     pub shims: Vec<crate::shim::Shim>,
+    /// `[supply_chain]`: what this repository has said about its own
+    /// dependency scan. See [`SupplyChain`].
+    #[serde(default)]
+    pub supply_chain: Option<SupplyChain>,
     /// Whether every path-baseline entry must say who excused it and why.
     ///
     /// Off by default, and the default is not neutrality -- it is what every
@@ -1099,6 +1229,8 @@ pub(crate) struct Policy {
     /// and "inherited and overridden" is precisely the case a check about
     /// hand-copied rules must stay silent about.
     pub inherited_sets: Vec<String>,
+    /// The repository's own `[supply_chain]`, or the empty one.
+    pub supply_chain: SupplyChain,
 }
 
 impl Policy {
@@ -1364,6 +1496,19 @@ fn refuse_set_header(path: &Path, file: &PolicyFile) -> Result<()> {
 /// Refused rather than dropped, for the reason an inherited `[[shim]]` is: a
 /// table read by nothing looks like configuration that works.
 fn refuse_inherited_override(path: &Path, file: &PolicyFile, kind: &str) -> Result<()> {
+    // A waiver is about this repository's own lockfile, for the reason an
+    // override is about this repository's own rules: a file somebody else's
+    // `[inherit]` line reads has no lockfile to have looked at.
+    if file.supply_chain.is_some() {
+        return Err(Fatal::at(
+            path,
+            format!(
+                "`[supply_chain]` waives findings on a repository's own dependencies, and \
+                 {kind} has none. Move it to the policy of the repository whose lockfile \
+                 the finding is in"
+            ),
+        ));
+    }
     if let Some(id) = file.overrides.keys().next() {
         return Err(Fatal::at(
             path,
@@ -1823,6 +1968,12 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         }
     }
 
+    validate_waivers(
+        policy_path,
+        file.supply_chain
+            .as_ref()
+            .map_or(&[], |supply| supply.waive.as_slice()),
+    )?;
     validate_unique(policy_path, &rules)?;
     for rule in &rules {
         rule.validate()?;
@@ -1856,6 +2007,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         rules,
         shims: file.shims,
         inherited_sets: inherit.sets.clone(),
+        supply_chain: file.supply_chain.clone().unwrap_or_default(),
     })
 }
 
@@ -3714,6 +3866,36 @@ mod tests {
         );
         assert_eq!(unicode.overridden, ["allow", "message"]);
         assert_eq!(unicode.builtin(), Some("prevent-unusual-unicode-in-files"));
+    }
+
+    /// A waiver belongs to the repository whose lockfile it is about: refused
+    /// in a file somebody else's `[inherit]` line reads, and refused twice.
+    #[test]
+    fn a_supply_chain_waiver_is_the_repositorys_own_and_is_written_once() {
+        let waiver = "[[supply_chain.waive]]\nscanner = \"guarddog\"\n\
+             package = \"pypi:pandas@3.0.6\"\ncheck = \"metadata_mismatch\"\n\
+             reason = \"extras read as required\"\n";
+        let dir = crate::fixture::scratch("config-waiver");
+        std::fs::create_dir_all(dir.join("policy")).unwrap();
+        std::fs::write(dir.join("policy/org.toml"), waiver).unwrap();
+        let path = dir.join("policy/principles.toml");
+        std::fs::write(&path, "[inherit]\npaths = [\"policy/org.toml\"]\n").unwrap();
+        let error = load(&dir, &path).unwrap_err().to_string();
+        assert!(error.contains("an inherited file has none"), "{error}");
+
+        let twice = policy_from(&format!("{waiver}\n{waiver}"))
+            .unwrap_err()
+            .to_string();
+        assert!(twice.contains("twice"), "{twice}");
+
+        let once = policy_from(waiver).unwrap();
+        assert_eq!(once.supply_chain.waive.len(), 1);
+        assert!(once.supply_chain.waive.first().unwrap().covers(
+            "pypi",
+            "pandas",
+            "3.0.6",
+            "metadata_mismatch"
+        ));
     }
 
     /// `require_any_link = false` on the `broken-links` rule, for a repository

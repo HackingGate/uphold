@@ -2542,6 +2542,41 @@ exit 0 — the two email-domain rules time out routinely — is still read, and
 still names the packages and how many rules. None of that is a finding: it is
 the record that the question was asked and nobody answered.
 
+### Waiving a confirmed guarddog false positive
+
+Because the findings are read here, a finding somebody has looked at and judged
+a false positive has to be recordable here too. Without that, one such finding
+refuses every push that touches the lockfile, and the only levers are
+`UPHOLD_ALLOW` per invocation or dropping guarddog. The waiver goes in the
+repository's own policy:
+
+```toml
+[[supply_chain.waive]]
+scanner = "guarddog"
+package = "pypi:pandas@3.0.6"          # <ecosystem>:<name>@<version>; pypi or npm
+check = "metadata_mismatch"            # the guarddog rule, as its report names it
+reason = "compares optional extras against the required dependencies"
+```
+
+- **It is keyed on the version.** The next release is a different package with
+  its own reasons to be suspicious or not, so a bump is read fresh. For npm the
+  version is the one guarddog resolved, not the range in `package.json`.
+- **A waived finding is still printed**, as `waived: metadata_mismatch on
+  pypi:pandas@3.0.6 at <dir> -- <reason>`. The verdict says what was not held
+  against the push; it does not hide it.
+- **A waiver that matched nothing is reported**, where the run could have
+  matched it: the package appeared in a report, or `--all` read its ecosystem.
+  A range scan reads only the manifests that moved, so a waiver about one that
+  did not move is not called stale.
+- `scanner` is `guarddog` alone. The other scanners carry their own
+  suppression in their own configuration (`osv-scanner.toml`, `deny.toml`,
+  zizmor's config, cargo-vet's audits), and a second list here would be two
+  sets of exceptions free to disagree.
+- Refused at load, as exit `2`: another scanner, a `package` without an
+  ecosystem or a version, an empty `check` or `reason`, the same waiver twice,
+  and `[supply_chain]` in a bundled set or an `inherit.paths` file, which have
+  no lockfile of their own.
+
 ### How the other three report could-not-look
 
 `tool_read()` hands each scanner's exit code, stdout and stderr to a reader

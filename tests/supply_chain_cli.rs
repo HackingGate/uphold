@@ -1747,3 +1747,118 @@ fn staged_with_a_range_flag_is_a_usage_error() {
         assert!(journal(&root).is_empty(), "{}", journal(&root));
     }
 }
+
+/// guarddog 3.2.0's report on `swagger-ui-express` 5.0.1, trimmed to the keys
+/// read here: its `metadata_mismatch` finding is the registry `test` script and
+/// the tarball's differing only by npm's publish-time rewrite.
+const GUARDDOG_MISMATCH: &str = "echo '[{\"dependency\":\"swagger-ui-express\",\
+    \"version\":\"5.0.1\",\"result\":{\"errors\":{},\"issues\":1,\
+    \"results\":{\"metadata_mismatch\":\"test script differs\"},\
+    \"package_version\":\"5.0.1\",\"risks\":[{\"name\":\"risk.metadata.manifest-mismatch\",\
+    \"threat_rule\":\"metadata_mismatch\",\"severity\":\"medium\"}]}}]'\nexit 0";
+
+/// The policy of [`repository`], with one waiver appended.
+fn waiving(root: &Path, package: &str) {
+    let path = root.join("policy/principles.toml");
+    let policy = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        path,
+        format!(
+            "{policy}\n[[supply_chain.waive]]\nscanner = \"guarddog\"\npackage = \"{package}\"\n\
+             check = \"metadata_mismatch\"\nreason = \"npm rewrites the test script at publish\"\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// A confirmed false positive, waived for the release it was judged on, is
+/// printed as waived with its reason and not held against the run.
+#[test]
+fn a_waived_guarddog_finding_is_printed_and_not_held_against_the_run() {
+    let root = repository();
+    std::fs::create_dir_all(root.join("web")).unwrap();
+    std::fs::write(root.join("web/package.json"), "{\"name\": \"web\"}\n").unwrap();
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_MISMATCH)]);
+
+    let refused = supply(&root, Some(&tools));
+    assert_eq!(code(&refused), 1, "{}", text(&refused));
+    assert!(
+        text(&refused).contains("objected to swagger-ui-express@5.0.1"),
+        "{}",
+        text(&refused)
+    );
+
+    waiving(&root, "npm:swagger-ui-express@5.0.1");
+    let waived = supply(&root, Some(&tools));
+    assert_eq!(code(&waived), 0, "{}", text(&waived));
+    let said = text(&waived);
+    let line = said
+        .lines()
+        .find(|line| line.contains("waived: metadata_mismatch on npm:swagger-ui-express@5.0.1"))
+        .unwrap_or_default();
+    assert!(
+        line.ends_with("-- npm rewrites the test script at publish"),
+        "{line}"
+    );
+    assert!(said.contains("all checks passed"), "{said}");
+}
+
+/// A waiver keyed on a version stops applying when the version moves: the
+/// next release is read fresh, and the waiver is named as matching nothing.
+#[test]
+fn a_waiver_for_another_version_does_not_apply_and_is_reported_stale() {
+    let root = repository();
+    std::fs::create_dir_all(root.join("web")).unwrap();
+    std::fs::write(root.join("web/package.json"), "{\"name\": \"web\"}\n").unwrap();
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_MISMATCH)]);
+    waiving(&root, "npm:swagger-ui-express@5.0.0");
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 1, "{}", text(&output));
+    let said = text(&output);
+    assert!(
+        said.contains("objected to swagger-ui-express@5.0.1"),
+        "{said}"
+    );
+    assert!(
+        said.contains(
+            "waiver matched nothing in this run: metadata_mismatch on \
+             npm:swagger-ui-express@5.0.0"
+        ),
+        "{said}"
+    );
+}
+
+/// A waiver with no reason, or no version, is refused at load: exit 2 before
+/// any scanner runs.
+#[test]
+fn a_waiver_without_a_reason_or_a_version_is_refused_at_load() {
+    for (package, reason, expected) in [
+        ("npm:swagger-ui-express@5.0.1", "", "`reason` is empty"),
+        (
+            "npm:swagger-ui-express",
+            "why",
+            "`<ecosystem>:<name>@<version>`",
+        ),
+        ("cargo:serde@1.0.0", "why", "`<ecosystem>:<name>@<version>`"),
+    ] {
+        let root = repository();
+        let path = root.join("policy/principles.toml");
+        let policy = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                "{policy}\n[[supply_chain.waive]]\nscanner = \"guarddog\"\npackage = \"{package}\"\n\
+                 check = \"metadata_mismatch\"\nreason = \"{reason}\"\n"
+            ),
+        )
+        .unwrap();
+        let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_CLEAN)]);
+        let output = supply(&root, Some(&tools));
+        assert_eq!(code(&output), 2, "{package}: {}", text(&output));
+        assert!(
+            text(&output).contains(expected),
+            "{package}: {}",
+            text(&output)
+        );
+    }
+}
