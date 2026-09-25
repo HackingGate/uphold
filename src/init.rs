@@ -193,13 +193,25 @@ pub(crate) fn run(root: &Path, owner: &str, visibility: &str, runner: Runner) ->
     std::fs::create_dir_all(&directory).map_err(|error| Fatal::at(&directory, error))?;
     let policy_path = directory.join("principles.toml");
     let claims_path = directory.join("upheld.toml");
-    let mut written = vec![policy_path.clone(), claims_path.clone()];
-    std::fs::write(&policy_path, policy(owner, visibility))
-        .map_err(|error| Fatal::at(&policy_path, error))?;
-    std::fs::write(&claims_path, CLAIMS).map_err(|error| Fatal::at(&claims_path, error))?;
+    let mut planned = vec![
+        (policy_path.clone(), policy(owner, visibility)),
+        (claims_path, CLAIMS.to_owned()),
+    ];
     if write_hooks {
-        std::fs::write(&hook_path, &hook_text).map_err(|error| Fatal::at(&hook_path, error))?;
-        written.push(hook_path);
+        planned.push((hook_path, hook_text.clone()));
+    }
+    // All or nothing. A write that fails part-way would leave a policy file
+    // behind, and the next `uphold init` refuses a tree that has one -- so the
+    // person would be deleting by hand what this command half-wrote.
+    let mut written = Vec::new();
+    for (path, text) in planned {
+        if let Err(error) = std::fs::write(&path, text) {
+            for done in &written {
+                std::fs::remove_file(done).ok();
+            }
+            return Err(Fatal::at(&path, error));
+        }
+        written.push(path);
     }
 
     // Loaded before anything is reported as written. A first policy this binary

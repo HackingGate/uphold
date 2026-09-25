@@ -2951,8 +2951,9 @@ uphold_check.py --oscal > component-definition.json
 The reconcile credits a rule to each seam this repository's own configuration
 declares for it: the scan and a git stage where a hook id or lefthook command
 runs them, a shim where a `[[shim]]` table names the command in the rule's
-`command.before`, and the hook where a tracked `.claude/settings.json` runs
-`uphold hook`. Each is what the repository asks for rather than what a machine
+`command.before`, `--text` where a hook runs `uphold scan --text` over the
+commit message (`uphold-scan-text`, or the same command under lefthook), and the
+hook where a tracked `.claude/settings.json` runs `uphold hook`. Each is what the repository asks for rather than what a machine
 has installed. A pinned hook id counts without asking whether `pre-commit
 install` ran, and a shim table counts without asking whether the link is on
 PATH. A settings file that is not JSON is exit `2`.

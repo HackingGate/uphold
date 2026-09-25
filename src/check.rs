@@ -166,6 +166,9 @@ pub(crate) struct Installed {
     pub local: BTreeSet<String>,
     /// Whether a harness configuration tracked here runs `uphold hook`.
     pub hook: bool,
+    /// Whether a hook here runs the rules over a commit message (`scan --text`
+    /// or `guard --text`), which is the `text` seam.
+    pub text: bool,
     /// Hooks pinned at a stage where what they read cannot exist. See
     /// `misplaced_range_ids`.
     pub misplaced: Vec<String>,
@@ -219,6 +222,22 @@ fn published() -> Result<(BTreeSet<String>, BTreeMap<String, String>)> {
         }
     }
     Ok((scans, guards))
+}
+
+/// The published ids that run the rules over a commit message: `uphold scan
+/// --text` at commit-msg. The `text` seam a prose rule reaches, read off the
+/// manifest for the reason [`published`] is.
+fn published_text() -> Result<BTreeSet<String>> {
+    let hooks: Vec<PublishedHook> = serde_saphyr::from_str(MANIFEST)
+        .map_err(|error| Fatal::yaml(Path::new(".pre-commit-hooks.yaml"), &error))?;
+    Ok(hooks
+        .into_iter()
+        .filter(|hook| {
+            let words: Vec<&str> = hook.entry.split_whitespace().collect();
+            matches!(words.as_slice(), [_, "scan" | "guard", rest @ ..] if rest.contains(&"--text"))
+        })
+        .map(|hook| hook.id)
+        .collect())
 }
 
 #[derive(Debug, Deserialize)]
@@ -388,7 +407,9 @@ fn lefthook_seams(root: &Path, guards: &BTreeMap<String, String>) -> Result<Inst
                 continue;
             }
             direct = true;
-            if subcommand == "scan" && !words.contains(&"--text") {
+            if words.contains(&"--text") {
+                found.text = true;
+            } else if subcommand == "scan" {
                 found.scan = true;
             } else if subcommand == "guard" {
                 // What the binary was TOLD, ahead of where it was written: the
@@ -438,6 +459,8 @@ fn lefthook_seams(root: &Path, guards: &BTreeMap<String, String>) -> Result<Inst
         // wires every stage the manifest publishes. Including it is the one
         // form that needs no per-stage reading.
         found.scan = true;
+        // That file runs `scan --text` at commit-msg.
+        found.text = true;
         found.stages.extend(guards.keys().cloned());
         found.how.push(String::from(
             "lefthook.yml includes this repository as a remote",
@@ -500,12 +523,14 @@ fn runs_in(value: &serde_json::Value) -> Vec<String> {
 
 pub(crate) fn installed(root: &Path) -> Result<Installed> {
     let (scans, guards) = published()?;
+    let texts = published_text()?;
     let mut found = Installed::default();
 
     match pinned_ids(root) {
         Ok(Some((ids, misplaced))) => {
             found.misplaced = misplaced;
             found.scan = ids.iter().any(|id| scans.contains(id));
+            found.text = ids.iter().any(|id| texts.contains(id));
             for (stage, hook) in &guards {
                 if ids.contains(hook) {
                     found.stages.insert(stage.clone());
@@ -533,6 +558,7 @@ pub(crate) fn installed(root: &Path) -> Result<Installed> {
     match lefthook_seams(root, &guards) {
         Ok(lefthook) => {
             found.scan = found.scan || lefthook.scan;
+            found.text = found.text || lefthook.text;
             found.stages.extend(lefthook.stages);
             found.how.extend(lefthook.how);
             found.local.extend(lefthook.local);
@@ -657,6 +683,8 @@ pub(crate) fn suppliers(policy: &Policy, installed: &Installed) -> Supply {
                         by.push(format!("the `{}` shim", declared.join("`, `")));
                     }
                 }
+                "text" if installed.text => by.push(String::from("uphold scan --text")),
+                "text" => unestablished.push(format!("{} (--text over a commit message)", rule.id)),
                 "hook" if installed.hook => by.push(String::from("uphold hook")),
                 "hook" => unestablished.push(format!("{} (harness hook)", rule.id)),
                 _ => {}

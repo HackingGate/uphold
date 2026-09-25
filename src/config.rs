@@ -3481,14 +3481,14 @@ mod tests {
     /// it as scan-only would credit a shim-seam claim to a scan that never
     /// consults the command.
     #[test]
-    fn a_prose_rule_runs_at_the_scan_the_shim_and_the_hook() {
+    fn a_prose_rule_runs_at_every_seam_it_reaches() {
         let policy = policy_from(
             "[rule.shape]\nmessage = \"x\"\nprose_regexp = 'arguably'\nfiles.include = [\".\"]\n\
              command.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\n",
         )
         .unwrap();
         let rule = policy.rules.first().unwrap();
-        assert_eq!(rule.seams(), ["scan", "shim", "hook"]);
+        assert_eq!(rule.seams(), ["scan", "shim", "hook", "text"]);
         assert!(rule.stands_in_front_of_a_command());
     }
 
@@ -3504,6 +3504,14 @@ mod tests {
         let rule = policy.rules.first().unwrap();
         assert_eq!(rule.seams(), ["hook"]);
         assert!(!rule.consulted_by_a_shim());
+
+        // A rule scoped to `text` alone runs somewhere, and says where.
+        let text_only = policy_from(
+            "[rule.shape]\nmessage = \"x\"\nprose_regexp = 'arguably'\n\
+             seams = [\"text\"]\ncommand.before = [\"gh\"]\n",
+        )
+        .unwrap();
+        assert_eq!(text_only.rules.first().unwrap().seams(), ["text"]);
         assert!(rule.judged_at(crate::text::Seam::Hook));
         assert!(!rule.judged_at(crate::text::Seam::Scan));
         assert!(!rule.judged_at(crate::text::Seam::Command));

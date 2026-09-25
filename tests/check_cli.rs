@@ -1039,3 +1039,44 @@ fn the_range_supply_chain_id_at_a_stage_with_no_range_is_refused() {
     let fine = check(&root, &[]);
     assert_eq!(code(&fine), 0, "{}{}", stdout(&fine), stderr(&fine));
 }
+
+/// A prose rule scoped to `text` is supplied where a hook runs `scan --text`
+/// over the commit message, and not by the tree scan.
+#[test]
+fn a_claim_on_a_text_only_rule_is_credited_to_scan_text() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        "[rule.no-hedge]\nmessage = \"state it\"\nprose_regexp = '(?i)\\barguably\\b'\n\
+         seams = [\"text\"]\ncommand.before = [\"gh\"]\n",
+    );
+    write(
+        &root,
+        "policy/upheld.toml",
+        "[[enforce]]\nprinciple = \"complete-mediation\"\nrule = \"no-hedge\"\n",
+    );
+    write(&root, ".pre-commit-config.yaml", SCAN_ONLY);
+    let absent = check(&root, &[]);
+    assert_eq!(code(&absent), 1, "{}{}", stdout(&absent), stderr(&absent));
+
+    write(
+        &root,
+        ".pre-commit-config.yaml",
+        "repos:\n  - repo: https://github.com/HackingGate/uphold\n    rev: v2.0.0\n    \
+         hooks:\n      - id: uphold-scan-text\n",
+    );
+    let present = check(&root, &[]);
+    assert_eq!(
+        code(&present),
+        0,
+        "{}{}",
+        stdout(&present),
+        stderr(&present)
+    );
+    assert!(
+        stdout(&present).contains("no-hedge  enforced by uphold scan --text"),
+        "{}",
+        stdout(&present)
+    );
+}

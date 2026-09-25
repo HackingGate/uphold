@@ -1392,6 +1392,13 @@ impl Rule {
         if self.command.is_some() && self.judged_at(Seam::Hook) {
             seams.push("hook");
         }
+        // `scan --text` over a commit message, which a prose rule standing in
+        // front of a command reaches -- see `prose::over_text`. Asked of the
+        // scan seam, because `scan --text` is what a hook config runs at
+        // commit-msg and what `uphold check` can find installed.
+        if self.command.is_some() && self.judged_at(Seam::Scan) {
+            seams.push("text");
+        }
         seams
     }
 
