@@ -202,11 +202,13 @@ pub(crate) fn run(root: &Path, owner: &str, visibility: &str, runner: Runner) ->
     }
     // All or nothing. A write that fails part-way would leave a policy file
     // behind, and the next `uphold init` refuses a tree that has one -- so the
-    // person would be deleting by hand what this command half-wrote.
+    // person would be deleting by hand what this command half-wrote. The path
+    // that failed is removed too: `write` may have created it before failing,
+    // and every path here was absent when this run started (checked above).
     let mut written = Vec::new();
     for (path, text) in planned {
         if let Err(error) = std::fs::write(&path, text) {
-            for done in &written {
+            for done in written.iter().chain(std::iter::once(&path)) {
                 std::fs::remove_file(done).ok();
             }
             return Err(Fatal::at(&path, error));
