@@ -430,10 +430,15 @@ fn run() -> Result<Exit> {
                 // instead would report on a range nobody asked about.
                 let push = runner::push(&root, None, None)?;
                 if push.source == runner::Source::Absent {
+                    // The two ways this is reached by mistake, named: the
+                    // range id pinned at a stage with no push, and a CI step
+                    // that meant the sweep.
                     return Err(Fatal::new(
                         "no push to scan: this was not run from a pre-push hook, and no range \
                          was named. Pass --base REV to scan what one range changed, or --all \
-                         to scan every manifest in the tree",
+                         to scan every manifest in the tree. As a hook, `uphold-supply-chain` \
+                         belongs at pre-push; at manual, in CI or on a schedule the sweep is \
+                         `uphold-supply-chain-all`",
                     ));
                 }
                 supply::scope_for_push(&root, &push.refs)?

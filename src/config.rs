@@ -3532,27 +3532,22 @@ mod tests {
     #[test]
     fn a_seams_list_that_cannot_hold_is_refused() {
         let cases = [
-            // no command.before
             (
                 "[rule.r]\nmessage = \"x\"\nregexp = 'a'\nfiles.include = [\".\"]\nseams = [\"shim\"]\n",
                 "only `command.before`",
             ),
-            // empty
             (
                 "[rule.r]\nmessage = \"x\"\nprose_regexp = 'a'\nseams = []\ncommand.before = [\"gh\"]\n",
                 "`seams = []`",
             ),
-            // a regexp rule at --text
             (
                 "[rule.r]\nmessage = \"x\"\nregexp = 'a'\nseams = [\"text\"]\ncommand.before = [\"gh\"]\n",
                 "cannot run at the seam \"text\"",
             ),
-            // a name that is no seam
             (
                 "[rule.r]\nmessage = \"x\"\nprose_regexp = 'a'\nseams = [\"commit\"]\ncommand.before = [\"gh\"]\n",
                 "cannot run at the seam \"commit\"",
             ),
-            // an exec checker
             (
                 "[rule.r]\nmessage = \"x\"\nexec = 'true'\nseams = [\"hook\"]\ncommand.before = [\"gh\"]\n",
                 "scopes the pattern rules",

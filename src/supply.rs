@@ -1916,6 +1916,28 @@ mod tests {
         }
     }
 
+    /// The CI recipe installs every scanner a section reads, and the gitleaks
+    /// this binary is pinned to: a recipe missing one is a scheduled job that
+    /// exits 2 every week.
+    #[test]
+    fn the_ci_recipe_installs_every_scanner() {
+        let reference = include_str!("../docs/REFERENCE.md");
+        let start = reference.find("### A scheduled sweep in CI").unwrap_or(0);
+        let recipe = reference
+            .get(start..)
+            .and_then(|rest| rest.split("```yaml").next())
+            .unwrap_or_default();
+        for floor in FLOORS {
+            assert!(
+                recipe.contains(&format!("{}\" = ", floor.tool)),
+                "the CI recipe in docs/REFERENCE.md installs no {}",
+                floor.tool
+            );
+        }
+        let gitleaks = format!("\"aqua:gitleaks/gitleaks\" = \"{GITLEAKS_VERSION}\"");
+        assert!(recipe.contains(&gitleaks), "{recipe}");
+    }
+
     #[test]
     fn the_documentation_names_the_pinned_gitleaks() {
         let line = format!("\"aqua:gitleaks/gitleaks\" = \"{GITLEAKS_VERSION}\"");

@@ -166,6 +166,9 @@ pub(crate) struct Installed {
     pub local: BTreeSet<String>,
     /// Whether a harness configuration tracked here runs `uphold hook`.
     pub hook: bool,
+    /// Hooks pinned at a stage where what they read cannot exist. See
+    /// `misplaced_range_ids`.
+    pub misplaced: Vec<String>,
 }
 
 impl Installed {
@@ -238,6 +241,49 @@ struct PreCommitRepo {
 struct PinnedHook {
     #[serde(default)]
     id: String,
+    /// The consumer's own `stages:`, where it overrides the manifest's.
+    #[serde(default)]
+    stages: Option<Vec<String>>,
+}
+
+/// The ids that read a pushed range, and the stage names under which one
+/// exists. pre-commit still accepts `push` for `pre-push`.
+const RANGE_IDS: &[&str] = &["uphold-supply-chain"];
+const RANGE_STAGES: &[&str] = &["pre-push", "push"];
+
+/// A range id pinned at a stage where no push range exists.
+///
+/// `uphold-supply-chain` reads the refs git hands a pre-push hook, and at any
+/// other stage there are none, so every run there is exit 2 with the no-range
+/// refusal. One consumer pinned it at `manual` for a weekly sweep and the job
+/// was red for weeks with nothing surfacing it beyond a scheduled run nobody
+/// read. Asked here, at the commit, because this is the reader that opens the
+/// file the mistake is written in.
+fn misplaced_range_ids(repos: &[PreCommitRepo]) -> Vec<String> {
+    let mut found = Vec::new();
+    for hook in repos.iter().flat_map(|entry| entry.hooks.iter()) {
+        if !RANGE_IDS.contains(&hook.id.as_str()) {
+            continue;
+        }
+        let Some(stages) = &hook.stages else {
+            continue;
+        };
+        let without: Vec<&str> = stages
+            .iter()
+            .map(String::as_str)
+            .filter(|stage| !RANGE_STAGES.contains(stage))
+            .collect();
+        if !without.is_empty() {
+            found.push(format!(
+                ".pre-commit-config.yaml runs `{}` at {}, where no push range exists, so \
+                 every run there exits 2. The range id belongs at pre-push; the sweep for CI \
+                 or a schedule is `uphold-supply-chain-all`",
+                hook.id,
+                without.join(", ")
+            ));
+        }
+    }
+    found
 }
 
 /// Every hook id a pre-commit config installs, from any repository.
@@ -255,7 +301,7 @@ struct PinnedHook {
 ///
 /// The same set answers the `local` tier: a claim may name a formatter, a
 /// linter, or a hook this repository wrote, and those are rules that fire here.
-fn pinned_ids(root: &Path) -> Result<Option<BTreeSet<String>>> {
+fn pinned_ids(root: &Path) -> Result<Option<(BTreeSet<String>, Vec<String>)>> {
     let path = root.join(".pre-commit-config.yaml");
     if !path.is_file() {
         return Ok(None);
@@ -271,13 +317,14 @@ fn pinned_ids(root: &Path) -> Result<Option<BTreeSet<String>>> {
              could-not-look",
         ));
     };
+    let misplaced = misplaced_range_ids(&repos);
     let mut every = BTreeSet::new();
     for entry in repos {
         for hook in entry.hooks {
             every.insert(hook.id);
         }
     }
-    Ok(Some(every))
+    Ok(Some((every, misplaced)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -456,7 +503,8 @@ pub(crate) fn installed(root: &Path) -> Result<Installed> {
     let mut found = Installed::default();
 
     match pinned_ids(root) {
-        Ok(Some(ids)) => {
+        Ok(Some((ids, misplaced))) => {
+            found.misplaced = misplaced;
             found.scan = ids.iter().any(|id| scans.contains(id));
             for (stage, hook) in &guards {
                 if ids.contains(hook) {
@@ -728,11 +776,22 @@ pub(crate) fn run(root: &Path, policy: &Policy, coverage: bool) -> Result<Exit> 
         failures.push(failure);
     }
 
+    // A hook that can only fail where it is pinned is a defect in the file this
+    // reconcile reads, whatever it is claimed for, so it is refused beside the
+    // claims rather than inside them.
+    if !installed.misplaced.is_empty() {
+        eprintln!("hook configuration refused:");
+        for misplaced in &installed.misplaced {
+            eprintln!("- {misplaced}");
+        }
+    }
     if !failures.is_empty() {
         eprintln!("enforcement claims refused ({DECLARATION}):");
         for failure in &failures {
             eprintln!("- {failure}");
         }
+    }
+    if !failures.is_empty() || !installed.misplaced.is_empty() {
         return Ok(Exit::Violations);
     }
 

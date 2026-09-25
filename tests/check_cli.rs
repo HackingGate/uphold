@@ -1009,3 +1009,33 @@ fn a_claim_with_a_blank_principle_or_a_blank_rule_is_unreadable() {
     assert_eq!(code(&second), 2, "{}", stderr(&second));
     assert!(stderr(&second).contains("blank"), "{}", stderr(&second));
 }
+
+/// The range id pinned at a stage where no push range exists is refused at the
+/// commit, naming the stage and the id the sweep is: every run there would be
+/// exit 2, and a scheduled job that is red for weeks surfaces nothing.
+#[test]
+fn the_range_supply_chain_id_at_a_stage_with_no_range_is_refused() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", GUARD_POLICY);
+    write(&root, "policy/upheld.toml", "");
+    let config = |stages: &str| {
+        format!(
+            "repos:\n  - repo: https://github.com/HackingGate/uphold\n    rev: v2.0.0\n    \
+             hooks:\n      - id: uphold-supply-chain\n        stages: {stages}\n"
+        )
+    };
+    write(&root, ".pre-commit-config.yaml", &config("[manual]"));
+    let output = check(&root, &[]);
+    assert_eq!(code(&output), 1, "{}{}", stdout(&output), stderr(&output));
+    let said = stderr(&output);
+    assert!(
+        said.contains("runs `uphold-supply-chain` at manual"),
+        "{said}"
+    );
+    assert!(said.contains("`uphold-supply-chain-all`"), "{said}");
+
+    // At pre-push, the stage it ships at, it is where it belongs.
+    write(&root, ".pre-commit-config.yaml", &config("[pre-push]"));
+    let fine = check(&root, &[]);
+    assert_eq!(code(&fine), 0, "{}{}", stdout(&fine), stderr(&fine));
+}

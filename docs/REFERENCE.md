@@ -2393,6 +2393,62 @@ repository and refuse every push with exit `2` on any machine without the
 scanners installed. A lefthook consumer opts in by writing the command in its
 own file.
 
+### A scheduled sweep in CI
+
+`uphold-supply-chain-all` exits `2` on a runner that lacks a scanner the tree
+needs, so pinning it only makes sense in a job that installs them. It is also a
+`manual`-stage id, so nothing runs it until something asks for that stage. The
+recipe below does both: [mise](https://mise.jdx.dev/) installs the scanners from
+one file, which a contributor's machine reads too, and the job runs the manual
+stage weekly, where a new advisory against an untouched dependency is found.
+
+```toml
+# mise.toml
+[tools]
+"aqua:google/osv-scanner" = "latest"
+"aqua:zizmorcore/zizmor" = "latest"
+"aqua:EmbarkStudios/cargo-deny" = "latest"
+"cargo:cargo-vet" = "latest"          # only where a supply-chain/ store exists
+"pipx:guarddog" = "latest"
+"aqua:astral-sh/uv" = "latest"        # guarddog reads `uv export`, not uv.lock
+"aqua:gitleaks/gitleaks" = "8.30.1"   # only where the policy inherits credentials
+```
+
+```yaml
+# .github/workflows/supply-chain.yml
+name: Supply chain
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0              # gitleaks under --all reads every commit
+      - uses: jdx/mise-action@v4
+      - uses: j178/prek-action@v3.0.0
+        with:
+          extra-args: --all-files --hook-stage manual
+```
+
+`latest` and not a version for the five dependency scanners: each floor above
+is the oldest release whose output the readers here were measured against, and
+a newer one satisfies it. gitleaks is the exception, pinned for the reason given
+[below](#gitleaks-which-owns-secret-shapes). A lefthook consumer writes the same
+job with `lefthook run` and a named group holding
+`uphold supply-chain --all`.
+
+Pin `uphold-supply-chain` itself only at `pre-push`. At any other stage there
+is no pushed range, and every run is exit `2`. `uphold check` refuses a
+`.pre-commit-config.yaml` that pins it anywhere else, naming the stage and the
+id for the sweep, and the no-range refusal names both ids.
+
 ### gitleaks, which owns secret shapes
 
 The sixth section is **gitleaks**, the only secret-shape check: token formats,

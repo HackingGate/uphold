@@ -692,6 +692,14 @@ fn no_range_and_no_flag_refuses_and_names_the_two_flags_that_supply_one() {
     let said = text(&output);
     assert!(said.contains("--base"), "{said}");
     assert!(said.contains("--all"), "{said}");
+    // And the two hook ids, because the usual way here is the range id pinned
+    // at a stage with no push: the refusal names where it belongs and what the
+    // sweep is called.
+    assert!(
+        said.contains("`uphold-supply-chain` belongs at pre-push"),
+        "{said}"
+    );
+    assert!(said.contains("`uphold-supply-chain-all`"), "{said}");
     assert!(journal(&root).is_empty(), "{}", journal(&root));
 }
 

@@ -80,7 +80,8 @@ five is safe: which guards fire is decided by `policy/principles.toml`.
 Three scanner ids are left out above because they need tools on the host:
 
 - `uphold-supply-chain` at `pre-push`, over what the push changed;
-- `uphold-supply-chain-all` at `manual`, over everything;
+- `uphold-supply-chain-all` at `manual`, over everything, from a scheduled job
+  that installs the scanners ([recipe](docs/REFERENCE.md#a-scheduled-sweep-in-ci));
 - `uphold-supply-chain-staged` at `pre-commit`, gitleaks alone over the staged
   diff.
 
