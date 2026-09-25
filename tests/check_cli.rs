@@ -412,8 +412,8 @@ fn a_rule_enforced_at_two_seams_reports_both() {
     assert!(stdout(&output).contains("pre-push"), "{}", stdout(&output));
 }
 
-/// A prose rule declaring both tables is supplied by the scan and is reported
-/// as standing in front of a command too.
+/// A prose rule declaring both tables is supplied by the scan and by the shim
+/// table it names.
 ///
 /// `uphold check` needs no arm of its own for a new check kind, and this is the
 /// test that says so: the seams come from `Rule::seams`, so a kind that reads
@@ -421,7 +421,7 @@ fn a_rule_enforced_at_two_seams_reports_both() {
 /// be wrong is either half alone -- crediting a scan-only claim to the shim, or
 /// losing the shim seam because the rule also reads files.
 #[test]
-fn a_prose_rule_at_both_seams_is_credited_to_the_scan_and_named_at_the_command() {
+fn a_prose_rule_at_both_seams_is_credited_to_the_scan_and_to_the_shim() {
     let root = workspace();
     write(
         &root,
@@ -439,25 +439,18 @@ fn a_prose_rule_at_both_seams_is_credited_to_the_scan_and_named_at_the_command()
     let output = check(&root, &[]);
     assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
     assert!(
-        stdout(&output).contains("uphold scan"),
+        stdout(&output).contains("uphold scan, the `gh` shim"),
         "{}",
         stdout(&output)
     );
-
-    let coverage = check(&root, &["--coverage"]);
-    assert!(
-        stdout(&coverage).contains("stands in front of a command"),
-        "{}",
-        stdout(&coverage)
-    );
 }
 
+/// A rule whose only seam is a shim is supplied by the `[[shim]]` table for the
+/// command it names -- the same standard a pinned hook id is held to, which
+/// counts without asking whether `pre-commit install` ran. It is still not
+/// credited to the scan, which never consults the command.
 #[test]
-fn a_claim_on_a_shim_only_rule_is_refused_and_not_credited_to_the_scan() {
-    // The seam an empty hook list could not express. `command.before` runs when
-    // the shim is on PATH ahead of the real command, which no runner
-    // configuration settles -- so it is not the file scan, and reading it as
-    // one reconciled this claim green over a rule nothing runs.
+fn a_claim_on_a_shim_only_rule_is_credited_to_the_shim_and_not_the_scan() {
     let root = workspace();
     write(
         &root,
@@ -473,14 +466,80 @@ fn a_claim_on_a_shim_only_rule_is_refused_and_not_credited_to_the_scan() {
         "[[enforce]]\nprinciple = \"complete-mediation\"\nrule = \"no-published-markers\"\n",
     );
     let output = check(&root, &[]);
-    assert_eq!(code(&output), 1, "{}{}", stdout(&output), stderr(&output));
-
-    let coverage = check(&root, &["--coverage"]);
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
     assert!(
-        stdout(&coverage).contains("stands in front of a command"),
+        stdout(&output).contains("no-published-markers  enforced by the `gh` shim\n"),
         "{}",
-        stdout(&coverage)
+        stdout(&output)
     );
+}
+
+/// A rule scoped to the hook alone, the shape a rule takes when it must not
+/// fire at `--text`.
+const HOOK_ONLY_POLICY: &str = "\
+[rule.no-release-by-hand]
+message = \"Cut a release from the release workflow.\"
+prose_regexp = '(?i)\\bgh release create\\b'
+seams = [\"hook\"]
+command.before = [\"gh\"]
+";
+
+const HOOK_ONLY_CLAIM: &str = "\
+[[enforce]]
+principle = \"complete-mediation\"
+rule = \"no-release-by-hand\"
+";
+
+/// A hook-only rule is supplied where a tracked harness settings file runs
+/// `uphold hook`, and refused where nothing does.
+#[test]
+fn a_claim_on_a_hook_only_rule_is_credited_to_a_registered_hook() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", HOOK_ONLY_POLICY);
+    write(&root, "policy/upheld.toml", HOOK_ONLY_CLAIM);
+    let absent = check(&root, &[]);
+    assert_eq!(code(&absent), 1, "{}{}", stdout(&absent), stderr(&absent));
+    assert!(
+        stderr(&absent).contains("which no seam here supplies"),
+        "{}",
+        stderr(&absent)
+    );
+
+    write(
+        &root,
+        ".claude/settings.json",
+        r#"{"hooks": {"PreToolUse": [{"matcher": "mcp__github__.*",
+            "hooks": [{"type": "command", "command": "uphold hook claude-code"}]}]}}"#,
+    );
+    let present = check(&root, &[]);
+    assert_eq!(
+        code(&present),
+        0,
+        "{}{}",
+        stdout(&present),
+        stderr(&present)
+    );
+    assert!(
+        stdout(&present).contains("no-release-by-hand  enforced by uphold hook"),
+        "{}",
+        stdout(&present)
+    );
+    assert!(
+        stdout(&present).contains(".claude/settings.json runs `uphold hook`"),
+        "{}",
+        stdout(&present)
+    );
+}
+
+/// A settings file that is not JSON is could-not-look, not an absent hook.
+#[test]
+fn an_unreadable_harness_settings_file_is_two() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", HOOK_ONLY_POLICY);
+    write(&root, "policy/upheld.toml", HOOK_ONLY_CLAIM);
+    write(&root, ".claude/settings.json", "{ not json");
+    let output = check(&root, &[]);
+    assert_eq!(code(&output), 2, "{}{}", stdout(&output), stderr(&output));
 }
 
 #[test]

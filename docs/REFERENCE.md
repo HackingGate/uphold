@@ -80,7 +80,8 @@ direction too — `git.hooks` or `files.*` beside it, where nothing hands it a
 destination, would be a rule looking at nothing and reporting clean.
 
 A pattern rule at this seam may also say **which subjects** it is asked about,
-with `subjects` — a list drawn from `text`, `title`, `path`, `ref`, `argv` —
+with `subjects` — a list drawn from `text`, `title`, `path`, `ref`, `argv`,
+`tool` —
 and the filter narrows every kind of checker the same way. Absent means every
 subject, which is every rule written before the field existed; `subjects`
 anywhere but beside `command.before` is refused, because nothing else hands a
@@ -96,10 +97,52 @@ command.scope = "always"     # a format is a fact about the text, not the destin
 ```
 
 The same shape reaches a branch- or tag-naming convention through
-`subjects = ["ref"]` on `git push`. These rules run at the shim seam only —
-`uphold hook` hands a harness's call to the text guards, the literal rules and
-the prose rules, and a pattern scoped to one command's subjects has no flag
-vocabulary there.
+`subjects = ["ref"]` on `git push`. By default a `regexp` or `require_regexp`
+rule runs at the shim seam only, because it was written about the subjects a
+shim collects; `seams`, below, can add the hook.
+
+### `seams` — which published-text seams run a rule
+
+Three seams judge text a command or a tool call is about to publish: the shim
+(`shim`), `uphold hook` (`hook`), and `uphold scan --text` with `uphold guard
+--text` (`text`, one name for both). A pattern rule standing in front of a
+command may name the ones that run it:
+
+```toml
+[rule.no-release-by-hand]
+message = "Cut a release from the release workflow."
+regexp = '^release create|__create_release$'
+subjects = ["argv", "tool"]
+seams = ["shim", "hook"]
+command.before = ["gh"]
+command.scope = "always"
+```
+
+Absent means where the kind runs today:
+
+| kind | default | may name |
+|---|---|---|
+| `prose_regexp` | `shim`, `hook`, `text` | any of the three |
+| `regexp`, `require_regexp` | `shim` | `shim`, `hook` |
+
+The field needs `command.before`, which is what makes a rule a published-text
+rule, and it is refused on any other kind: a guard and an `exec` checker run
+where their kind runs. An empty list, and a seam the kind cannot run at, are
+refused at load. A rule whose `seams` leaves out `shim` is not consulted by a
+shim and needs no `[[shim]]` table for the command it names.
+
+The case it exists for is the one above. Written as a `prose_regexp` rule so the
+hook would reach it, the rule also ran at `--text`, so a commit message that
+only *mentions* `gh release create` was refused. Leaving `text` out of `seams`
+keeps it at the two seams that publish.
+
+**At the hook, a pattern rule is handed two subjects**: the call's strings, as
+kind `text`, and the tool's name, as kind `tool`. The tool name is the hook's
+nearest thing to a command line, and a rule that refuses a call by what it *is*
+names `tool` in `subjects` so a body that only mentions the command is not
+refused. Which tool names correspond to which command is written in the rule's
+own pattern: a table of MCP tool names per shim verb would be missing the tool a
+server added last week.
 
 `text-guards` and `text-literals` are the same dispatches `uphold guard
 --text` and `uphold scan --text` run, as built-ins: every text-capable guard
@@ -178,8 +221,10 @@ for `gh release create v1.2.0 --notes x`). It is added beside the flag values,
 not instead of them.
 
 The `argv` subject exists at the shim seam only. `uphold hook` receives a tool
-call, not a command line, and `--text`, the git hooks and the scan receive text;
-none of them has an `argv` to hand a rule. A rule meant for it names the kind so
+call, not a command line, and hands the tool's name as a subject of kind `tool`
+instead (see [`seams`](#seams--which-published-text-seams-run-a-rule));
+`--text`, the git hooks and the scan receive text and have no `argv` to hand a
+rule. A rule meant for it names the kind so
 the flag values are not asked the same question:
 
 ```toml
@@ -2077,9 +2122,13 @@ of them are reached from a seam that needs a process to have been spawned.
 
 `hook` is that seam without the process. The harness hands over the pending call
 and reads a verdict back, and the rules it consults are the literal rules, the
-text-capable guards **and the `prose_regexp` rules that stand in front of a
-command** — the same dispatches `scan --text` and `guard --text` reach, through
-the same functions. A prose rule naming `gh` is asked here for the reason it is
+text-capable guards, **the `prose_regexp` rules that stand in front of a
+command**, and the `regexp` and `require_regexp` rules whose
+[`seams`](#seams--which-published-text-seams-run-a-rule) names `hook` — the same
+dispatches `scan --text` and `guard --text` reach, through the same functions.
+A refused rule is reported with its `message`, as at every other seam: the reader
+here is the agent that made the call, and the message is what tells it what to do
+instead. A prose rule naming `gh` is asked here for the reason it is
 asked at `commit-msg`: this seam is what an agent uses *instead of* `gh`, so a
 sentence shape refused when a person publishes it and allowed when an agent
 publishes it would be the same rule with two answers. A prose rule that names no
@@ -2784,6 +2833,15 @@ own hooks, which means the programs it already trusts on every commit.
 uphold check --coverage       # every rule this repository runs, vs the claims
 uphold_check.py --oscal > component-definition.json
 ```
+
+The reconcile credits a rule to each seam this repository's own configuration
+declares for it: the scan and a git stage where a hook id or lefthook command
+runs them, a shim where a `[[shim]]` table names the command in the rule's
+`command.before`, and the hook where a tracked `.claude/settings.json` runs
+`uphold hook`. Each is what the repository asks for rather than what a machine
+has installed. A pinned hook id counts without asking whether `pre-commit
+install` ran, and a shim table counts without asking whether the link is on
+PATH. A settings file that is not JSON is exit `2`.
 
 `--coverage` counts the direction the reconcile cannot — a rule firing under no
 claim is invisible to a reconcile. It reports and does not refuse: `0`, or `2`

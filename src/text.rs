@@ -205,8 +205,15 @@ impl Seam {
             // lean on -- this is reached from wherever a session was started,
             // frequently with no policy at all -- so it asks the literal rules
             // itself, and it asks the other two because a body an MCP server
-            // posts is the same body `gh` would have posted.
-            Self::Hook => &[Judged::Literals, Judged::Guards, Judged::Prose],
+            // posts is the same body `gh` would have posted. The pattern rules
+            // are reached here too, but run only where a rule's own `seams`
+            // names the hook -- see [`Seam::runs_by_default`].
+            Self::Hook => &[
+                Judged::Literals,
+                Judged::Guards,
+                Judged::Prose,
+                Judged::Patterns,
+            ],
             // The literal rules the way a policy asks for them, through
             // `text-literals`; and the two kinds no other seam can run, because
             // the invocation names the subject they are scoped to.
@@ -222,6 +229,30 @@ impl Seam {
     /// Whether this seam consults that kind of rule.
     pub(crate) fn consults(self, judged: Judged) -> bool {
         self.consults_every().contains(&judged)
+    }
+
+    /// Whether a rule of kind `judged` that declares no `seams` runs here.
+    ///
+    /// Every kind this seam consults, but one. A `regexp` rule standing in
+    /// front of a command was written about the subjects a shim collects -- a
+    /// title, a ref, a command line -- and every such rule written before
+    /// `seams` existed ran at the shim alone. Running it over every tool call
+    /// the hook sees would be a refusal nobody asked for on an upgrade, so the
+    /// hook runs a pattern rule only where the rule names it.
+    pub(crate) fn runs_by_default(self, judged: Judged) -> bool {
+        self.consults(judged) && !matches!((self, judged), (Self::Hook, Judged::Patterns))
+    }
+
+    /// What a rule's `seams` list calls this seam. The two `--text` seams are
+    /// one name: they are handed the same text by the same kind of caller, and
+    /// a rule that runs at one and not the other would be a distinction about
+    /// which subcommand a hook file happened to spell.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Scan | Self::Guard => "text",
+            Self::Hook => "hook",
+            Self::Command => "shim",
+        }
     }
 }
 
@@ -288,19 +319,85 @@ pub(crate) fn judged(
                     .map(Verdict::Guard)
                     .collect()
             }
-            Judged::Prose => crate::prose::over_text(policy, text)?
+            Judged::Prose => crate::prose::over_text(policy, seam, text)?
                 .into_iter()
                 .map(Verdict::Rule)
                 .collect(),
-            // The shim's two, and the shim does not arrive here: it holds a
-            // subject and a per-rule scope this function is not given, so it
-            // dispatches rule by rule through `Judged::of` instead. Reached
-            // only if `Seam::Command` is ever handed to this function, and
-            // running a path-scoped rule over pathless text is the one thing
-            // this file exists to refuse.
-            Judged::Patterns | Judged::Consultation => Vec::new(),
+            // Only the hook consults these here, and only the rules whose
+            // `seams` names it -- see `Seam::runs_by_default`.
+            Judged::Patterns => patterns_over(policy, seam, label, text)?
+                .into_iter()
+                .map(Verdict::Rule)
+                .collect(),
+            // The shim's, and the shim does not arrive here: it holds a subject
+            // and a per-rule scope this function is not given, so it dispatches
+            // rule by rule through `Judged::of` instead.
+            Judged::Consultation => Vec::new(),
         })
     })
+}
+
+/// The pattern rules a seam runs over published text, each asked about the
+/// subjects its `subjects` selects.
+///
+/// Two subjects at the hook: the call's text, as kind `text`, and what the call
+/// is called, as kind `tool`. The tool name is the hook's nearest thing to a
+/// command line -- `mcp__github__create_release` is to an MCP server what
+/// `release create` is to `gh` -- and handing it over as a kind of its own lets
+/// a rule refuse the call by name without also refusing every body that
+/// mentions it. Which tool names mean which command is the rule's to say, in its
+/// own pattern: a table of MCP names per shim verb would be a list that is
+/// missing the tool a server added last week.
+fn patterns_over(policy: &Policy, seam: Seam, label: &str, text: &str) -> Result<Vec<Failure>> {
+    // The shim runs its pattern rules itself, over the subjects it collected,
+    // and never through this function; were it ever handed here, running its
+    // rules over one pathless blob is the guess this module exists to refuse.
+    if seam != Seam::Hook {
+        return Ok(Vec::new());
+    }
+    let subjects = [
+        crate::shim::Subject {
+            kind: "text",
+            value: text.to_owned(),
+        },
+        crate::shim::Subject {
+            kind: "tool",
+            value: label.to_owned(),
+        },
+    ];
+    let mut failures = Vec::new();
+    for rule in &policy.rules {
+        if !matches!(rule.kind(), CheckKind::Regexp | CheckKind::RequireRegexp)
+            || rule.command.is_none()
+            || !rule.judged_at(seam)
+        {
+            continue;
+        }
+        if crate::guard::bypassed(&rule.id) {
+            eprintln!("uphold: {} bypassed by UPHOLD_ALLOW", rule.id);
+            continue;
+        }
+        let mut found = Vec::new();
+        for subject in subjects
+            .iter()
+            .filter(|subject| rule.selects_subject(subject.kind))
+        {
+            if let Some(finding) = crate::shim::pattern_finding(rule, subject)? {
+                found.push(if policy.redact_matches {
+                    format!(
+                        "{}: the {} subject: [REDACTED_MATCH]",
+                        rule.id, subject.kind
+                    )
+                } else {
+                    finding
+                });
+            }
+        }
+        if !found.is_empty() {
+            failures.push(Failure::new(&rule.id, rule.message(), found.join("\n")));
+        }
+    }
+    Ok(failures)
 }
 
 pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<Exit> {

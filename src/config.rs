@@ -2145,7 +2145,7 @@ fn validate_shim_unresolved(
         }
         let by_a_rule = rules
             .iter()
-            .filter(|rule| rule.stands_in_front_of_a_command())
+            .filter(|rule| rule.consulted_by_a_shim())
             .any(|rule| {
                 rule.command.as_ref().is_some_and(|where_| {
                     matches!(where_.scope, Some(crate::shim::Scope::PublicTarget))
@@ -2210,10 +2210,7 @@ fn validate_shims(policy_path: &Path, rules: &[Rule], shims: &[crate::shim::Shim
     // ordinary shape, since a command usually has more than one thing said
     // about it -- and the policy loads, the shim reports itself checked, and
     // the pattern rule that was supposed to stand in front of it never runs.
-    for rule in rules
-        .iter()
-        .filter(|rule| rule.stands_in_front_of_a_command())
-    {
+    for rule in rules.iter().filter(|rule| rule.consulted_by_a_shim()) {
         let Some(where_) = rule.command.as_ref() else {
             continue;
         };
@@ -2241,10 +2238,7 @@ fn validate_shims(policy_path: &Path, rules: &[Rule], shims: &[crate::shim::Shim
     // "drop the entry" is a cure only for a rule written in this file, and a
     // rule arriving from a bundled set has no entry here to drop.
     let mut checked: BTreeMap<&str, &Rule> = BTreeMap::new();
-    for rule in rules
-        .iter()
-        .filter(|rule| rule.stands_in_front_of_a_command())
-    {
+    for rule in rules.iter().filter(|rule| rule.consulted_by_a_shim()) {
         for name in rule
             .command
             .iter()
@@ -2700,7 +2694,9 @@ mod tests {
                 rule.is_some(),
                 "{builtin}: the rule did not survive the load"
             );
-            assert_eq!(rule.unwrap().seams(), vec!["shim"], "{builtin}");
+            // And at the hook, which runs every text-capable guard over what a
+            // tool call is about to publish.
+            assert_eq!(rule.unwrap().seams(), vec!["shim", "hook"], "{builtin}");
         }
     }
 
@@ -3197,19 +3193,96 @@ mod tests {
     }
 
     /// The seams a prose rule reaches, which is what `uphold check` reconciles
-    /// a claim against. A rule declaring both tables runs at both, and reading
+    /// a claim against. A rule declaring both tables runs at every seam both
+    /// reach, and reading
     /// it as scan-only would credit a shim-seam claim to a scan that never
     /// consults the command.
     #[test]
-    fn a_prose_rule_runs_at_the_scan_and_at_the_shim() {
+    fn a_prose_rule_runs_at_the_scan_the_shim_and_the_hook() {
         let policy = policy_from(
             "[rule.shape]\nmessage = \"x\"\nprose_regexp = 'arguably'\nfiles.include = [\".\"]\n\
              command.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\n",
         )
         .unwrap();
         let rule = policy.rules.first().unwrap();
-        assert_eq!(rule.seams(), ["scan", "shim"]);
+        assert_eq!(rule.seams(), ["scan", "shim", "hook"]);
         assert!(rule.stands_in_front_of_a_command());
+    }
+
+    /// `seams` narrows a rule to the seams it names, and the shim is not asked
+    /// about a rule that leaves it out -- so such a rule needs no `[[shim]]`.
+    #[test]
+    fn seams_narrows_where_a_rule_runs() {
+        let policy = policy_from(
+            "[rule.shape]\nmessage = \"x\"\nprose_regexp = 'arguably'\n\
+             seams = [\"hook\"]\ncommand.before = [\"gh\"]\n",
+        )
+        .unwrap();
+        let rule = policy.rules.first().unwrap();
+        assert_eq!(rule.seams(), ["hook"]);
+        assert!(!rule.consulted_by_a_shim());
+        assert!(rule.judged_at(crate::text::Seam::Hook));
+        assert!(!rule.judged_at(crate::text::Seam::Scan));
+        assert!(!rule.judged_at(crate::text::Seam::Command));
+    }
+
+    /// A `regexp` rule reaches the hook only by naming it: every one written
+    /// before `seams` was written for a shim's subjects.
+    #[test]
+    fn a_regexp_rule_runs_at_the_hook_only_where_it_says_so() {
+        let shim = "\n[[shim]]\ncommand = \"gh\"\nmatch = [\"release:create\"]\n";
+        let default = policy_from(&format!(
+            "[rule.r]\nmessage = \"x\"\nregexp = '^release create'\ncommand.before = [\"gh\"]\n{shim}"
+        ))
+        .unwrap();
+        assert_eq!(default.rules.first().unwrap().seams(), ["shim"]);
+        let named = policy_from(&format!(
+            "[rule.r]\nmessage = \"x\"\nregexp = '^release create'\nseams = [\"shim\", \"hook\"]\n\
+             command.before = [\"gh\"]\n{shim}"
+        ))
+        .unwrap();
+        assert_eq!(named.rules.first().unwrap().seams(), ["shim", "hook"]);
+    }
+
+    /// Every way `seams` can be written so that it would be read by nothing,
+    /// or would widen a rule past what its kind can do, is refused at load.
+    #[test]
+    fn a_seams_list_that_cannot_hold_is_refused() {
+        let cases = [
+            // no command.before
+            (
+                "[rule.r]\nmessage = \"x\"\nregexp = 'a'\nfiles.include = [\".\"]\nseams = [\"shim\"]\n",
+                "only `command.before`",
+            ),
+            // empty
+            (
+                "[rule.r]\nmessage = \"x\"\nprose_regexp = 'a'\nseams = []\ncommand.before = [\"gh\"]\n",
+                "`seams = []`",
+            ),
+            // a regexp rule at --text
+            (
+                "[rule.r]\nmessage = \"x\"\nregexp = 'a'\nseams = [\"text\"]\ncommand.before = [\"gh\"]\n",
+                "cannot run at the seam \"text\"",
+            ),
+            // a name that is no seam
+            (
+                "[rule.r]\nmessage = \"x\"\nprose_regexp = 'a'\nseams = [\"commit\"]\ncommand.before = [\"gh\"]\n",
+                "cannot run at the seam \"commit\"",
+            ),
+            // an exec checker
+            (
+                "[rule.r]\nmessage = \"x\"\nexec = 'true'\nseams = [\"hook\"]\ncommand.before = [\"gh\"]\n",
+                "scopes the pattern rules",
+            ),
+        ];
+        for (policy, expected) in cases {
+            let error = policy_from(&format!(
+                "{policy}\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\n"
+            ))
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(expected), "{policy}\n{error}");
+        }
     }
 
     #[test]

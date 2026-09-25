@@ -2011,6 +2011,14 @@ fn json_bool_field(text: &str, field: &str) -> bool {
 /// that refused a shape in a document and allowed it in the body announcing
 /// that document would be one rule with two answers.
 fn pattern_refusal(rule: &Rule, subject: &Subject) -> Result<Option<String>> {
+    Ok(pattern_finding(rule, subject)?.map(|finding| format!("{finding}\n{}", rule.message())))
+}
+
+/// What a pattern rule found in one subject, as the line a report names it by,
+/// without the rule's message. Split from [`pattern_refusal`] for the hook,
+/// whose report carries the message as its own paragraph, the way `--text`
+/// prints it.
+pub(crate) fn pattern_finding(rule: &Rule, subject: &Subject) -> Result<Option<String>> {
     let multiline = rule.files().multiline;
     if let Some(pattern) = rule.prose_regexp() {
         let matcher = crate::prose::compile(pattern, &rule.id)?;
@@ -2021,11 +2029,8 @@ fn pattern_refusal(rule: &Rule, subject: &Subject) -> Result<Option<String>> {
             return Ok(None);
         };
         return Ok(Some(format!(
-            "{}: the {} subject matches {pattern:?}: {}\n{}",
-            rule.id,
-            subject.kind,
-            span.text,
-            rule.message()
+            "{}: the {} subject matches {pattern:?}: {}",
+            rule.id, subject.kind, span.text
         )));
     }
     if let Some(pattern) = rule.require_regexp() {
@@ -2036,10 +2041,8 @@ fn pattern_refusal(rule: &Rule, subject: &Subject) -> Result<Option<String>> {
         )?;
         if hits.is_empty() {
             return Ok(Some(format!(
-                "{}: the {} subject does not satisfy {pattern:?}\n{}",
-                rule.id,
-                subject.kind,
-                rule.message()
+                "{}: the {} subject does not satisfy {pattern:?}",
+                rule.id, subject.kind
             )));
         }
         return Ok(None);
@@ -2056,11 +2059,10 @@ fn pattern_refusal(rule: &Rule, subject: &Subject) -> Result<Option<String>> {
         return Ok(None);
     };
     Ok(Some(format!(
-        "{}: the {} subject matches {pattern:?}: {}\n{}",
+        "{}: the {} subject matches {pattern:?}: {}",
         rule.id,
         subject.kind,
-        hit.text.trim_end(),
-        rule.message()
+        hit.text.trim_end()
     )))
 }
 
@@ -2833,7 +2835,7 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
     // checkpoint that opened an editor, read the file back, consulted nobody and
     // exited 0.
     //
-    // Asked of `stands_in_front_of_a_command` rather than spelled out, which is
+    // Asked of `consulted_by_a_shim` rather than spelled out, which is
     // the fourth reader of that question and the reason it is one function: this
     // list and the one in `run` were the same four arms written twice, and a
     // kind added to one of them is a checker the editor checkpoint does not
@@ -2841,7 +2843,7 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
     // standing at it.
     let named: Vec<&Rule> = policy
         .before_command(name, &opened_for)
-        .filter(|rule| rule.stands_in_front_of_a_command())
+        .filter(|rule| rule.consulted_by_a_shim())
         .collect();
     if named.is_empty() {
         // Nothing to consult, and the text exists now: this is a checkpoint
@@ -2911,7 +2913,7 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
         let Some(kind) = crate::text::Judged::of(rule) else {
             continue;
         };
-        if !crate::text::Seam::Command.consults(kind) {
+        if !rule.judged_at(crate::text::Seam::Command) {
             continue;
         }
         match kind {
@@ -3135,12 +3137,12 @@ pub(crate) fn run(
     // refused all three, on the true-but-unhelpful grounds that a built-in is
     // not an `exec`. The field means what they meant now.
     //
-    // One predicate, and `validate` refuses `command.before` on every rule it
-    // answers no for -- so filtering here on the same question can drop nothing
-    // a policy was allowed to load, and cannot fall behind a kind added to it.
+    // One predicate, and `validate` refuses `command.before` on every rule
+    // whose kind it answers no for -- so filtering here drops nothing a policy
+    // was allowed to load but the rules whose `seams` leaves the shim out.
     let checkers: Vec<&Rule> = policy
         .before_command(name, &words)
-        .filter(|rule| rule.stands_in_front_of_a_command())
+        .filter(|rule| rule.consulted_by_a_shim())
         .collect();
     let mut refusals: Vec<String> = Vec::new();
     // Whether any refusal below is about WHERE this would publish rather than
@@ -3351,7 +3353,7 @@ pub(crate) fn run(
                     let Some(kind) = crate::text::Judged::of(rule) else {
                         continue;
                     };
-                    if !crate::text::Seam::Command.consults(kind) {
+                    if !rule.judged_at(crate::text::Seam::Command) {
                         continue;
                     }
                     match kind {

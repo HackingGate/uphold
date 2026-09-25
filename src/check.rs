@@ -164,6 +164,8 @@ pub(crate) struct Installed {
     /// every lefthook command name. A claim may name a formatter, a linter, or
     /// a hook this repository wrote, and those are rules that fire here.
     pub local: BTreeSet<String>,
+    /// Whether a harness configuration tracked here runs `uphold hook`.
+    pub hook: bool,
 }
 
 impl Installed {
@@ -490,6 +492,15 @@ pub(crate) fn installed(root: &Path) -> Result<Installed> {
         Err(error) => found.unreadable.push(error.to_string()),
     }
 
+    match harness_hook(root) {
+        Ok(Some(at)) => {
+            found.hook = true;
+            found.how.push(format!("{at} runs `uphold hook`"));
+        }
+        Ok(None) => {}
+        Err(error) => found.unreadable.push(error.to_string()),
+    }
+
     if found.nothing() && found.how.is_empty() {
         found.how.push(String::from(
             "no runner configuration here runs `uphold scan` or `uphold guard`",
@@ -498,13 +509,60 @@ pub(crate) fn installed(root: &Path) -> Result<Installed> {
     Ok(found)
 }
 
+/// The harness settings a repository tracks, which register `uphold hook`
+/// for every session started in it.
+///
+/// `.claude/settings.json` and not `settings.local.json`: the local file is
+/// untracked by the harness's own convention, so it says what one machine does
+/// and not what this repository asks of every checkout.
+const HARNESS_SETTINGS: &[&str] = &[".claude/settings.json"];
+
+/// The tracked harness settings file that runs `uphold hook`, if any.
+///
+/// Every string in the document is looked at rather than one path into it:
+/// the harness nests a command under an event, a matcher and a list, and a
+/// pointer written for today's shape is one that misses tomorrow's in the
+/// green direction. A file that is not JSON is could-not-look.
+fn harness_hook(root: &Path) -> Result<Option<String>> {
+    fn runs_hook(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::String(text) => text.split([';', '&', '|']).any(|command| {
+                let mut words = command.split_whitespace();
+                words
+                    .next()
+                    .is_some_and(|program| program.rsplit('/').next() == Some("uphold"))
+                    && words.next() == Some("hook")
+            }),
+            serde_json::Value::Array(items) => items.iter().any(runs_hook),
+            serde_json::Value::Object(fields) => fields.values().any(runs_hook),
+            _ => false,
+        }
+    }
+    for name in HARNESS_SETTINGS {
+        let path = root.join(name);
+        if !path.is_file() {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).map_err(|error| Fatal::at(&path, error))?;
+        let document: serde_json::Value =
+            serde_json::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
+        if document.get("hooks").is_some_and(runs_hook) {
+            return Ok(Some((*name).to_owned()));
+        }
+    }
+    Ok(None)
+}
+
 /// Which seams supply each resolved rule, and what could not be established.
 ///
 /// `Rule::seams` is the loader's answer to where a rule runs; this asks whether
-/// that place is installed here. A `shim` rule is the one seam no runner
-/// configuration can settle -- whether the shim is on PATH ahead of the real
-/// command is not written in any file this reads -- so it is reported as
-/// unestablished rather than credited to whichever seam happens to be on.
+/// that place is installed here, by the standard every seam is held to: what
+/// this repository's own configuration declares. A pinned hook id counts
+/// without asking whether `pre-commit install` was run, and a `[[shim]]` table
+/// for the command a rule names counts without asking whether the link is on
+/// PATH. Neither is written in any file this reads, and holding one seam to a
+/// stricter standard than the others made every shim-only rule unclaimable.
+/// The hook counts where a tracked harness settings file runs `uphold hook`.
 pub(crate) fn suppliers(policy: &Policy, installed: &Installed) -> Supply {
     let mut supplied: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut unestablished: Vec<String> = Vec::new();
@@ -536,8 +594,23 @@ pub(crate) fn suppliers(policy: &Policy, installed: &Installed) -> Supply {
                     }
                 }
                 "shim" => {
-                    unestablished.push(format!("{} (stands in front of a command)", rule.id));
+                    let declared: Vec<&str> = rule
+                        .command
+                        .iter()
+                        .flat_map(|where_| where_.before.iter())
+                        .filter_map(|line| line.split_whitespace().next())
+                        .filter(|name| policy.shims.iter().any(|shim| shim.command == *name))
+                        .collect::<BTreeSet<&str>>()
+                        .into_iter()
+                        .collect();
+                    if declared.is_empty() {
+                        unestablished.push(format!("{} (stands in front of a command)", rule.id));
+                    } else {
+                        by.push(format!("the `{}` shim", declared.join("`, `")));
+                    }
                 }
+                "hook" if installed.hook => by.push(String::from("uphold hook")),
+                "hook" => unestablished.push(format!("{} (harness hook)", rule.id)),
                 _ => {}
             }
         }
