@@ -952,35 +952,24 @@ fn pruned(value: serde_json::Value) -> serde_json::Value {
     }
 }
 
-/// One JSON string, escaped.
+/// One entry of `uphold rules --effective --json`.
 ///
-/// Hand-written rather than pulled in with a serialization crate, because this
-/// is the only JSON this binary emits and a rule id is the only thing in it
-/// that is not a fixed literal. The escapes are the ones RFC 8259 requires: the
-/// two structural characters, and every control character below U+0020, which
-/// a `\u` escape covers whatever it is.
-fn json_string(value: &str, into: &mut String) {
-    into.push('"');
-    for character in value.chars() {
-        match character {
-            '"' => into.push_str("\\\""),
-            '\\' => into.push_str("\\\\"),
-            '\n' => into.push_str("\\n"),
-            '\r' => into.push_str("\\r"),
-            '\t' => into.push_str("\\t"),
-            control if control < ' ' => {
-                // Two digits is the whole range: everything below U+0020 fits
-                // in a byte, and `from_digit` is total for a value under 16, so
-                // the fallback below is unreachable rather than a guess.
-                let code = u32::from(control);
-                into.push_str("\\u00");
-                into.push(char::from_digit(code >> 4, 16).unwrap_or('0'));
-                into.push(char::from_digit(code & 0xf, 16).unwrap_or('0'));
-            }
-            ordinary => into.push(ordinary),
-        }
-    }
-    into.push('"');
+/// A struct rather than `serde_json::json!`, because a `json!` object sorts its
+/// keys and the field order is part of what a reader diffs.
+#[derive(serde::Serialize)]
+struct EffectiveRule<'rule> {
+    id: &'rule str,
+    git_hooks: &'rule [String],
+    /// `git_hooks` alone cannot answer where a hookless rule runs, and a caller
+    /// that has to guess guesses the scan -- which is how a claim on a rule
+    /// whose only place is `command.before` reconciled green in a repository
+    /// where nothing runs it. The loader knows; it says so here.
+    seams: Vec<&'static str>,
+    /// Which fields of an inherited rule an override changed. Only where one
+    /// did, so the entry of every rule no override touches is what it was
+    /// before the field existed.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    overridden: &'rule [&'static str],
 }
 
 /// Every rule this repository actually resolves to, after inheritance.
@@ -1031,51 +1020,19 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
         return Ok(Exit::Clean);
     }
 
-    let mut document = String::from("[");
-    for (index, rule) in policy.rules.iter().enumerate() {
-        if index > 0 {
-            document.push(',');
-        }
-        document.push_str("\n  {\"id\": ");
-        json_string(&rule.id, &mut document);
-        document.push_str(", \"git_hooks\": [");
-        for (position, hook) in rule.hooks().iter().enumerate() {
-            if position > 0 {
-                document.push_str(", ");
-            }
-            json_string(hook, &mut document);
-        }
-        // `git_hooks` alone cannot answer where a hookless rule runs, and a
-        // caller that has to guess guesses the scan -- which is how a claim on
-        // a rule whose only place is `command.before` reconciled green in a
-        // repository where nothing runs it. The loader knows; it says so here.
-        document.push_str("], \"seams\": [");
-        for (position, seam) in rule.seams().iter().enumerate() {
-            if position > 0 {
-                document.push_str(", ");
-            }
-            json_string(seam, &mut document);
-        }
-        document.push(']');
-        // Only where an override changed something, so the line of every rule
-        // no override touches is what it was before the field existed.
-        if !rule.overridden.is_empty() {
-            document.push_str(", \"overridden\": [");
-            for (position, field) in rule.overridden.iter().enumerate() {
-                if position > 0 {
-                    document.push_str(", ");
-                }
-                json_string(field, &mut document);
-            }
-            document.push(']');
-        }
-        document.push('}');
-    }
-    if !policy.rules.is_empty() {
-        document.push('\n');
-    }
-    document.push(']');
-    println!("{document}");
+    let document: Vec<EffectiveRule<'_>> = policy
+        .rules
+        .iter()
+        .map(|rule| EffectiveRule {
+            id: &rule.id,
+            git_hooks: rule.hooks(),
+            seams: rule.seams(),
+            overridden: &rule.overridden,
+        })
+        .collect();
+    let text = serde_json::to_string_pretty(&document)
+        .map_err(|error| Fatal::new(format!("could not render the effective rules: {error}")))?;
+    println!("{text}");
     Ok(Exit::Clean)
 }
 
