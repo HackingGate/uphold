@@ -2091,6 +2091,47 @@ fn a_shell_alias_is_a_could_not_look_rather_than_an_absence() {
     );
 }
 
+#[test]
+fn a_quoted_word_in_an_alias_is_one_word_as_git_reads_it() {
+    // git splits an alias the way a shell does. Split on whitespace, the
+    // quoted push option below was two words: `skip"` read as the remote and
+    // `origin` as the refspec, so the branch HEAD names -- the one git pushes
+    // when no refspec is given -- went out unread.
+    let root = workspace(GIT_REFS_POLICY);
+    plumbing_git(&root);
+    support::git(
+        &root,
+        &["symbolic-ref", "HEAD", "refs/heads/fix/acme-outage"],
+    );
+    support::git(&root, &["config", "alias.pd", "push -o \"ci skip\""]);
+    support::git(&root, &["config", "alias.ps", "push -o 'ci skip'"]);
+
+    for verb in ["pd", "ps"] {
+        let output = shim(&root, &["git", verb, "origin"]);
+        assert_eq!(code(&output), 1, "{verb}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("git ran:"), "{verb}");
+    }
+}
+
+#[test]
+fn an_alias_with_an_unclosed_quote_is_a_could_not_look() {
+    // Which words an unclosed quote makes is a guess, and a guess is not a
+    // reading. git refuses to run such an alias itself; the shim says so
+    // rather than falling back to splitting on whitespace.
+    let root = workspace(GIT_REFS_POLICY);
+    plumbing_git(&root);
+    support::git(&root, &["config", "alias.pq", "push -o \"ci skip"]);
+
+    let output = shim(&root, &["git", "pq", "origin", "fix/ordinary"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("git ran:"), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("unclosed quote"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 // ── which words the refspecs are ─────────────────────────────────────
 
 #[test]
