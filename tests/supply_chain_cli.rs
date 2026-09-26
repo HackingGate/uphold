@@ -1870,3 +1870,321 @@ fn a_waiver_without_a_reason_or_a_version_is_refused_at_load() {
         );
     }
 }
+
+// ── direct references: git sources, URLs and paths guarddog cannot look up ──
+
+/// A repository whose policy declares `owner = "example-org"`.
+fn owned_by_example_org() -> PathBuf {
+    let root = repository();
+    let path = root.join("policy/principles.toml");
+    let policy = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(path, format!("owner = \"example-org\"\n{policy}")).unwrap();
+    root
+}
+
+/// A git remote standing in for `https://github.com/example-org/example-kit`,
+/// with an annotated tag `v0.1.0` on its first commit and `main` one commit
+/// past it, and a git config that sends the forge URL to it.
+///
+/// Returns the config file, for `GIT_CONFIG_GLOBAL`, and the two commits. The
+/// remote is real, so `git ls-remote` is the real command answering; only the
+/// URL is rewritten, by git's own `insteadOf`.
+fn example_kit_remote() -> (PathBuf, String, String) {
+    let base = support::scratch("supply-chain-forge");
+    let remote = base.join("forge/example-org/example-kit");
+    std::fs::create_dir_all(&remote).unwrap();
+    support::git(&remote, &["init", "-q", "-b", "main"]);
+    support::git(&remote, &["config", "user.name", "Test"]);
+    support::git(&remote, &["config", "user.email", "test@example.test"]);
+    let tagged = commit(&remote, "the tagged release");
+    support::git(&remote, &["tag", "-a", "v0.1.0", "-m", "v0.1.0"]);
+    let tip = commit(&remote, "past the tag");
+    let config = base.join("gitconfig");
+    std::fs::write(
+        &config,
+        format!(
+            "[url \"file://{}/\"]\n\tinsteadOf = https://github.com/\n",
+            base.join("forge").display()
+        ),
+    )
+    .unwrap();
+    (config, tagged, tip)
+}
+
+/// A `uv.lock` whose one git source names `tag` at `commit`.
+fn lock_naming(root: &Path, tag: &str, commit: &str) {
+    std::fs::write(
+        root.join("uv.lock"),
+        format!(
+            "version = 1\n[[package]]\nname = \"example-kit\"\nversion = \"0.1.0\"\n\
+             source = {{ git = \"https://github.com/example-org/example-kit?tag={tag}#{commit}\" }}\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// Stubs whose `uv export` prints `lines`, and whose guarddog answers an
+/// export still holding a direct reference the way the real tool does -- a
+/// 404 from `PyPI` -- and records every run. A `uv.lock` is written where the
+/// test wrote none, because the section reads nothing without one.
+fn exporting(root: &Path, lines: &[&str]) -> PathBuf {
+    if !root.join("uv.lock").exists() {
+        std::fs::write(root.join("uv.lock"), "version = 1\n").unwrap();
+    }
+    let quoted: Vec<String> = lines.iter().map(|line| format!("'{line}'")).collect();
+    stubs(&[
+        ("osv-scanner", "exit 0"),
+        ("uv", &format!("printf '%s\\n' {}", quoted.join(" "))),
+        (
+            "guarddog",
+            &recording(&format!(
+                "grep -q ' @ ' \"$5\" && {{ echo '[{{\"dependency\":\"example-kit\",\
+                 \"result\":{{\"errors\":{{\"download-package\":\"Received status code: 404 \
+                 from PyPI\"}},\"issues\":0}}}}]'; exit 0; }}\n{GUARDDOG_CLEAN}"
+            )),
+        ),
+    ])
+}
+
+/// The environment that points git at the stand-in forge.
+fn forge_environment(config: &Path) -> [(&'static str, String); 2] {
+    [
+        ("GIT_CONFIG_GLOBAL", config.display().to_string()),
+        ("GIT_CONFIG_NOSYSTEM", String::from("1")),
+    ]
+}
+
+fn supply_with(root: &Path, tools: &Path, environment: &[(&str, String)]) -> Output {
+    let mut path = tools.as_os_str().to_owned();
+    path.push(":/usr/bin:/bin");
+    let borrowed: Vec<(&str, &str)> = environment
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
+    invoke(root, &path, &["--all"], &borrowed)
+}
+
+/// The defect this section had: a first-party package depended on through a
+/// uv git source was handed to guarddog, which looked it up on `PyPI`, got a
+/// 404, and made every push exit 2. Now the git source is asked of its own
+/// remote -- the tag the lock names is there and points at the locked commit
+/// -- and guarddog is handed the `PyPI` requirements alone, and still runs.
+#[test]
+fn a_first_party_git_source_whose_tag_resolves_is_not_sent_to_guarddog_and_passes() {
+    let root = owned_by_example_org();
+    let (config, tagged, _) = example_kit_remote();
+    lock_naming(&root, "v0.1.0", &tagged);
+    let tools = exporting(
+        &root,
+        &[
+            "-e .",
+            "requests==2.32.0",
+            &format!("example-kit @ git+https://github.com/example-org/example-kit@{tagged}"),
+        ],
+    );
+    let output = supply_with(&root, &tools, &forge_environment(&config));
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(
+        said.contains(&format!(
+            "first party: example-kit: tag v0.1.0 on https://github.com/example-org/example-kit \
+             is {tagged}"
+        )),
+        "{said}"
+    );
+    assert!(journal(&root).contains("guarddog"), "{}", journal(&root));
+    assert!(said.contains("all checks passed"), "{said}");
+}
+
+/// With no tag in the lock, the locked commit must be what some ref points at;
+/// `main`'s tip is.
+#[test]
+fn a_first_party_git_source_at_a_branch_tip_passes() {
+    let root = owned_by_example_org();
+    let (config, _, tip) = example_kit_remote();
+    let tools = exporting(
+        &root,
+        &[
+            "requests==2.32.0",
+            &format!("example-kit @ git+https://github.com/example-org/example-kit@{tip}"),
+        ],
+    );
+    let output = supply_with(&root, &tools, &forge_environment(&config));
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains(&format!("{tip} is refs/heads/main")),
+        "{}",
+        text(&output)
+    );
+}
+
+/// A commit no branch or tag points at is refused by name: nothing on the
+/// remote holds it in place.
+#[test]
+fn a_first_party_git_source_whose_commit_no_ref_points_at_is_refused_by_name() {
+    let root = owned_by_example_org();
+    let (config, _, _) = example_kit_remote();
+    let orphan = "0123456789abcdef0123456789abcdef01234567";
+    let tools = exporting(
+        &root,
+        &[
+            "requests==2.32.0",
+            &format!("example-kit @ git+https://github.com/example-org/example-kit@{orphan}"),
+        ],
+    );
+    let output = supply_with(&root, &tools, &forge_environment(&config));
+    let said = text(&output);
+    assert_eq!(code(&output), 1, "{said}");
+    assert!(
+        said.contains(&format!(
+            "example-kit is locked to {orphan}, and no branch or tag on \
+             https://github.com/example-org/example-kit points at it"
+        )),
+        "{said}"
+    );
+}
+
+/// A tag the lock names that points somewhere other than the locked commit is
+/// refused: the tag moved, or the lock came from elsewhere.
+#[test]
+fn a_first_party_tag_that_points_elsewhere_is_refused() {
+    let root = owned_by_example_org();
+    let (config, _, tip) = example_kit_remote();
+    lock_naming(&root, "v0.1.0", &tip);
+    let tools = exporting(
+        &root,
+        &[
+            "requests==2.32.0",
+            &format!("example-kit @ git+https://github.com/example-org/example-kit@{tip}"),
+        ],
+    );
+    let output = supply_with(&root, &tools, &forge_environment(&config));
+    assert_eq!(code(&output), 1, "{}", text(&output));
+    assert!(text(&output).contains("the tag moved"), "{}", text(&output));
+}
+
+/// A remote `git ls-remote` cannot reach is could-not-look with git's own
+/// reason, exit 2, and never a pass.
+#[test]
+fn a_first_party_remote_that_cannot_be_asked_is_could_not_look() {
+    let root = owned_by_example_org();
+    let base = support::scratch("supply-chain-no-forge");
+    std::fs::create_dir_all(&base).unwrap();
+    let config = base.join("gitconfig");
+    std::fs::write(
+        &config,
+        format!(
+            "[url \"file://{}/\"]\n\tinsteadOf = https://github.com/\n",
+            base.join("nothing-here").display()
+        ),
+    )
+    .unwrap();
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let tools = exporting(
+        &root,
+        &[
+            "requests==2.32.0",
+            &format!("example-kit @ git+https://github.com/example-org/example-kit@{commit}"),
+        ],
+    );
+    let output = supply_with(&root, &tools, &forge_environment(&config));
+    let said = text(&output);
+    assert_eq!(code(&output), 2, "{said}");
+    assert!(
+        said.contains("NOT CHECKED: git ls-remote could not answer for example-kit"),
+        "{said}"
+    );
+    assert!(!said.contains("all checks passed"), "{said}");
+}
+
+/// A git source under an owner other than the declared one is refused by
+/// name, and never reaches guarddog or the remote.
+#[test]
+fn a_git_source_under_another_owner_is_refused_by_name() {
+    let root = owned_by_example_org();
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let tools = exporting(
+        &root,
+        &[
+            "requests==2.32.0",
+            &format!("other-kit @ git+https://github.com/another-org/other-kit@{commit}"),
+        ],
+    );
+    let output = supply_with(&root, &tools, &[]);
+    let said = text(&output);
+    assert_eq!(code(&output), 1, "{said}");
+    assert!(
+        said.contains(
+            "other-kit is a git source under github.com/another-org, not under \
+             github.com/example-org"
+        ),
+        "{said}"
+    );
+}
+
+/// Where the policy declares no owner, no git source is first party.
+#[test]
+fn a_git_source_in_a_policy_with_no_owner_is_refused() {
+    let root = repository();
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let tools = exporting(
+        &root,
+        &[
+            "requests==2.32.0",
+            &format!("example-kit @ git+https://github.com/example-org/example-kit@{commit}"),
+        ],
+    );
+    let output = supply_with(&root, &tools, &[]);
+    assert_eq!(code(&output), 1, "{}", text(&output));
+    assert!(
+        text(&output).contains("this policy declares no `owner`"),
+        "{}",
+        text(&output)
+    );
+}
+
+/// A direct URL, and a path outside the repository, are refused by name.
+#[test]
+fn a_direct_url_and_a_path_outside_the_tree_are_refused_by_name() {
+    let root = owned_by_example_org();
+    let tools = exporting(
+        &root,
+        &[
+            "requests==2.32.0",
+            "wheel-dep @ https://example.test/wheel-dep-1.0-py3-none-any.whl",
+            "-e ../outside-the-tree",
+        ],
+    );
+    let output = supply_with(&root, &tools, &[]);
+    let said = text(&output);
+    assert_eq!(code(&output), 1, "{said}");
+    assert!(said.contains("wheel-dep is a direct URL"), "{said}");
+    assert!(
+        said.contains("../outside-the-tree is a path dependency outside this repository"),
+        "{said}"
+    );
+    // The `PyPI` half was still scanned.
+    assert!(journal(&root).contains("guarddog"), "{}", journal(&root));
+}
+
+/// A repository whose only dependencies are its own members and a first-party
+/// git source has nothing on `PyPI` to look up, and says so rather than handing
+/// guarddog an empty list it would answer with `[]`.
+#[test]
+fn an_export_with_nothing_from_an_index_does_not_ask_guarddog() {
+    let root = owned_by_example_org();
+    let (config, _, tip) = example_kit_remote();
+    let tools = exporting(
+        &root,
+        &[
+            "-e .",
+            "-e ./packages/member",
+            &format!("example-kit @ git+https://github.com/example-org/example-kit@{tip}"),
+        ],
+    );
+    let output = supply_with(&root, &tools, &forge_environment(&config));
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(said.contains("guarddog was not asked"), "{said}");
+    assert!(!journal(&root).contains("guarddog"), "{}", journal(&root));
+}

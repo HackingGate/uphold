@@ -452,8 +452,10 @@ fn run() -> Result<Exit> {
             // workflows, and a superproject that only tracks submodules is
             // still where its own workflows live.
             let (root, policy) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
-            // Loaded for two facts: whether it inherits the set that asks for
-            // gitleaks, and the guarddog findings it has waived. A policy that will not load is exit 2 here as it is
+            // Loaded for three facts: whether it inherits the set that asks for
+            // gitleaks, the guarddog findings it has waived, and who owns this
+            // repository, which decides the first-party git dependencies. A
+            // policy that will not load is exit 2 here as it is
             // everywhere else: which sections apply cannot be known without it.
             let loaded = config::load(&root, &policy)?;
             let secrets = loaded
@@ -487,7 +489,7 @@ fn run() -> Result<Exit> {
                 }
                 supply::scope_for_push(&root, &push.refs)?
             };
-            supply::run(&root, &scope, secrets, &loaded.supply_chain.waive)
+            supply::run(&root, &scope, secrets, &loaded)
         }
         "probe" => {
             let usage = || {
