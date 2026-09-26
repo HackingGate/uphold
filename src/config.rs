@@ -1934,8 +1934,19 @@ fn validate_no_self_match(root: &Path, policy_path: &Path, rules: &[Rule]) -> Re
         if !crate::selection::selects(root, rule, relative)? {
             continue;
         }
+        // A rule this file defines has a declaration in this file, so not
+        // finding one is this check failing, not the rule passing it. Skipping
+        // here is how a quoted `[rule."id"]` once loaded unchecked.
         let Some(section) = declaration_of(&text, &rule.id) else {
-            continue;
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "rule {:?} is defined in this file, but its declaration could not be \
+                     located in the file's text, so whether its pattern matches its own \
+                     declaration cannot be checked",
+                    rule.id
+                ),
+            ));
         };
         let query = crate::engine::Query::from_files(subject.pattern(), rule.files());
         let hits = crate::engine::search_text(&section, &query, &rule.id)?;
@@ -1988,29 +1999,146 @@ impl SelfMatch<'_> {
     }
 }
 
-/// The lines of one rule's own `[rule.<id>]` table.
+/// The lines of one rule's own declaration, as the TOML parser located it.
 ///
 /// Its sub-tables belong to it -- `[rule.<id>.files]` is where `exclude` is
 /// written, and an author dodging a self-match often puts the pattern's own
-/// text there -- so the section runs to the next table that is not one of them.
+/// text there -- so they are part of the section wherever they are written.
+///
+/// Located by parsing rather than by matching the header's spelling, because
+/// `[rule."id"]`, `[ rule.id ]`, `id.regexp = ...` under `[rule]` and an
+/// inline table are all the same rule, and a search for `[rule.id]` finds only
+/// the first spelling. The parser gives a header-defined table the span of its
+/// header alone, a dotted-key table the span of its key alone, and an inline
+/// table its whole text, so the section is assembled from what each form does
+/// cover: a header's body runs to the next header in the document, and every
+/// value inside is covered by its own span. Each span is widened to whole
+/// lines, so the text searched is `regexp = '...'` as written -- an anchored
+/// `^Status:` still cannot match the key it is written under.
+///
+/// `None` only when the text does not parse or does not define `id`, which for
+/// a rule this file was just loaded from means the check cannot run.
 fn declaration_of(text: &str, id: &str) -> Option<String> {
-    let header = format!("[rule.{id}]");
-    let sub = format!("[rule.{id}.");
-    let lines: Vec<&str> = text.lines().collect();
-    let start = lines.iter().position(|line| line.trim() == header)?;
-    let end = lines
-        .iter()
-        .enumerate()
-        .skip(start + 1)
-        .find(|(_, line)| {
-            let trimmed = line.trim_start();
-            trimmed.starts_with('[') && !trimmed.starts_with(&sub)
+    use toml::de::{DeTable, DeValue};
+
+    let document = DeTable::parse(text).ok()?;
+    let DeValue::Table(rules) = document.get_ref().get("rule")?.get_ref() else {
+        return None;
+    };
+    let declared = rules.get(id)?;
+
+    let mut headers = Vec::new();
+    for value in document.get_ref().values() {
+        header_starts(text, value, &mut headers);
+    }
+    headers.sort_unstable();
+
+    let mut spans = Vec::new();
+    declared_spans(text, declared, &headers, &mut spans);
+
+    // Widened to whole lines, then merged where they touch, in source order.
+    let mut lines: Vec<std::ops::Range<usize>> = spans
+        .into_iter()
+        .map(|span| {
+            let start = text
+                .get(..span.start)
+                .and_then(|before| before.rfind('\n'))
+                .map_or(0, |newline| newline + 1);
+            let end = text
+                .get(span.end..)
+                .and_then(|after| after.find('\n'))
+                .map_or(text.len(), |newline| span.end + newline);
+            start..end
         })
-        .map_or(lines.len(), |(index, _)| index);
-    // `get` rather than an index: `end` comes from a search that starts past
-    // `start`, so the range holds -- but a slice that can panic is a slice that
+        .collect();
+    lines.sort_unstable_by_key(|range| range.start);
+    let mut merged: Vec<std::ops::Range<usize>> = Vec::new();
+    for range in lines {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end + 1 => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    // `get` rather than an index: every range came from the parser over this
+    // same text, so it holds -- but a slice that can panic is a slice that
     // will, and this one runs over author-written text.
-    Some(lines.get(start..end)?.join("\n"))
+    let pieces: Vec<&str> = merged
+        .into_iter()
+        .map(|range| text.get(range))
+        .collect::<Option<_>>()?;
+    Some(pieces.join("\n"))
+}
+
+/// Where every `[table]` and `[[array]]` header in the document begins: the
+/// points at which a header-defined table's body ends.
+///
+/// A header is the one form whose span begins with `[`: a dotted-key table's
+/// span begins with its key, and an inline table's with `{`.
+fn header_starts(text: &str, value: &toml::Spanned<toml::de::DeValue<'_>>, out: &mut Vec<usize>) {
+    use toml::de::DeValue;
+
+    match value.get_ref() {
+        DeValue::Table(table) => {
+            if is_header(text, value) {
+                out.push(value.span().start);
+            }
+            for child in table.values() {
+                header_starts(text, child, out);
+            }
+        }
+        DeValue::Array(items) => {
+            for item in items {
+                header_starts(text, item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The byte ranges that together cover one declared value and all it holds.
+fn declared_spans(
+    text: &str,
+    value: &toml::Spanned<toml::de::DeValue<'_>>,
+    headers: &[usize],
+    out: &mut Vec<std::ops::Range<usize>>,
+) {
+    use toml::de::DeValue;
+
+    let span = value.span();
+    if is_header(text, value) {
+        // A header's own span is the header line: its body runs to the next
+        // header, or to the end of the file.
+        let end = headers
+            .iter()
+            .copied()
+            .find(|&start| start > span.start)
+            .unwrap_or(text.len());
+        out.push(span.start..end);
+    } else {
+        // A value covers itself; a dotted key covers only the key, and the
+        // children below cover the rest.
+        out.push(span);
+    }
+    match value.get_ref() {
+        DeValue::Table(table) => {
+            for child in table.values() {
+                declared_spans(text, child, headers, out);
+            }
+        }
+        DeValue::Array(items) => {
+            for item in items {
+                declared_spans(text, item, headers, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_header(text: &str, value: &toml::Spanned<toml::de::DeValue<'_>>) -> bool {
+    value.get_ref().is_table()
+        && text
+            .get(value.span())
+            .is_some_and(|written| written.starts_with('['))
 }
 
 fn validate_unique(policy_path: &Path, rules: &[Rule]) -> Result<()> {
@@ -3746,6 +3874,58 @@ mod tests {
         assert!(text.contains("files.exclude"), "{text}");
         assert!(text.contains("files.include"), "{text}");
         assert!(text.contains("anchor"), "{text}");
+    }
+
+    #[test]
+    fn a_quoted_rule_id_does_not_skip_the_self_match_check() {
+        // `[rule."quoted"]` is the same table as `[rule.quoted]` to every TOML
+        // reader. A check that found the declaration by its spelling rather
+        // than by what it parses to let this one through.
+        let error = policy_from(
+            "[rule.\"quoted\"]\nregexp = 'YubiKey'\nmessage = \"m\"\n[rule.\"quoted\".files]\ninclude = [\".\"]\n",
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("quoted"), "{text}");
+        assert!(text.contains("matches its own declaration"), "{text}");
+    }
+
+    #[test]
+    fn every_spelling_of_a_rule_table_reaches_the_self_match_check() {
+        // The same rule written each way TOML allows. Each must be refused
+        // exactly as `[rule.spelled]` is, and each must name the rule.
+        for written in [
+            "[rule.'spelled']\nregexp = 'YubiKey'\nmessage = \"m\"\n[rule.'spelled'.files]\ninclude = [\".\"]\n",
+            "[ rule . spelled ]\nregexp = 'YubiKey'\nmessage = \"m\"\n[ rule.spelled.files ]\ninclude = [\".\"]\n",
+            "[rule]\nspelled.regexp = 'YubiKey'\nspelled.message = \"m\"\nspelled.files.include = [\".\"]\n",
+            "rule.spelled = { regexp = 'YubiKey', message = \"m\", files = { include = [\".\"] } }\n",
+            // The sub-table first and the rule after a sibling: the section is
+            // what belongs to the rule, not what sits next to its header.
+            "[rule.spelled.files]\ninclude = [\".\"]\n[rule.other]\nregexp = '^x'\nmessage = \"m\"\nfiles.include = [\"src\"]\n[rule.spelled]\nregexp = 'YubiKey'\nmessage = \"m\"\n",
+        ] {
+            let error = policy_from(written).expect_err(written);
+            let text = error.to_string();
+            assert!(text.contains("spelled"), "{written}\n{text}");
+            assert!(
+                text.contains("matches its own declaration"),
+                "{written}\n{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_declaration_covers_its_sub_tables_and_not_its_siblings_in_every_spelling() {
+        for written in [
+            "[rule.\"x\"]\nregexp = 'a'\n[rule.\"x\".files]\ninclude = [\"inc\"]\n[rule.y]\nregexp = 'b'\n",
+            "[rule]\nx.regexp = 'a'\ny.regexp = 'b'\nx.files.include = [\"inc\"]\n",
+            "rule.y = { regexp = 'b' }\nrule.x = { regexp = 'a', files = { include = [\"inc\"] } }\n",
+            "[rule.x.files]\ninclude = [\"inc\"]\n[rule.y]\nregexp = 'b'\n[rule.x]\nregexp = 'a'\n",
+        ] {
+            let section = declaration_of(written, "x").unwrap();
+            assert!(section.contains("regexp = 'a'"), "{written}\n{section}");
+            assert!(section.contains("inc"), "{written}\n{section}");
+            assert!(!section.contains("regexp = 'b'"), "{written}\n{section}");
+        }
     }
 
     #[test]
