@@ -1895,11 +1895,14 @@ fn the_effective_rules_are_what_inheritance_resolved_to() {
     // And the hooks travel with the rule, because "which rules run" cannot be
     // answered without saying WHEN -- a claim on a guard is supplied only where
     // the seam it fires at is installed.
-    assert!(
-        text.contains(
-            "{\"id\": \"no-local-merge\", \"git_hooks\": [\"pre-merge-commit\", \"manual\"], \
-             \"seams\": [\"guard\"]}"
-        ),
+    let rules = effective_rules(&text);
+    assert_eq!(
+        effective_rule(&rules, "no-local-merge"),
+        &serde_json::json!({
+            "id": "no-local-merge",
+            "git_hooks": ["pre-merge-commit", "manual"],
+            "seams": ["guard"],
+        }),
         "{text}"
     );
     // A content rule fires at no git hook, and says so rather than being
@@ -1907,10 +1910,56 @@ fn the_effective_rules_are_what_inheritance_resolved_to() {
     // seam, because an empty hook list is true of a content rule and of a
     // checker standing in front of a command alike, and those are not the same
     // place. A reader that has to guess between them guesses the scan.
-    assert!(
-        text.contains("{\"id\": \"of-its-own\", \"git_hooks\": [], \"seams\": [\"scan\"]}"),
+    assert_eq!(
+        effective_rule(&rules, "of-its-own"),
+        &serde_json::json!({"id": "of-its-own", "git_hooks": [], "seams": ["scan"]}),
         "{text}"
     );
+    assert_key_order(&text);
+}
+
+/// Every entry carries its fields in the one order, because the order is part
+/// of what a reader diffs between two runs: `id`, `git_hooks`, `seams`, and
+/// `overridden` last where an override changed something. Read from the text,
+/// because a parsed `Value` sorts its keys and would pass whatever was printed.
+fn assert_key_order(text: &str) {
+    let keys: Vec<&str> = text
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix('"')?.split_once("\":"))
+        .map(|(key, _)| key)
+        .collect();
+    let mut entries: Vec<Vec<&str>> = Vec::new();
+    for key in keys {
+        if key == "id" {
+            entries.push(Vec::new());
+        }
+        assert!(!entries.is_empty(), "a field before any id: {text}");
+        if let Some(entry) = entries.last_mut() {
+            entry.push(key);
+        }
+    }
+    assert_eq!(entries.len(), effective_rules(text).len(), "{text}");
+    for fields in &entries {
+        assert!(
+            fields == &["id", "git_hooks", "seams"]
+                || fields == &["id", "git_hooks", "seams", "overridden"],
+            "{fields:?} in {text}"
+        );
+    }
+}
+
+/// The array `uphold rules --effective --json` printed, parsed.
+fn effective_rules(text: &str) -> Vec<serde_json::Value> {
+    let parsed = serde_json::from_str(text);
+    assert!(parsed.is_ok(), "not JSON ({parsed:?}): {text}");
+    parsed.unwrap()
+}
+
+/// The one entry for `id`, refused when it is missing.
+fn effective_rule<'a>(rules: &'a [serde_json::Value], id: &str) -> &'a serde_json::Value {
+    let found = rules.iter().find(|rule| rule["id"] == id);
+    assert!(found.is_some(), "no {id} in {rules:?}");
+    found.unwrap()
 }
 
 /// An `[override.<id>]` moves where an inherited rule reads and nothing else.
@@ -1980,11 +2029,24 @@ fn the_effective_rules_name_what_an_override_changed() {
         .current_dir(&root)
         .output()
         .unwrap();
-    assert!(
-        stdout(&json).contains("\"overridden\": [\"require_any_link\", \"message\"]"),
-        "{}",
-        stdout(&json)
+    assert_eq!(code(&json), 0, "{}", stderr(&json));
+    let text = stdout(&json);
+    let rules = effective_rules(&text);
+    assert_eq!(
+        effective_rule(&rules, "no-broken-doc-links")["overridden"],
+        serde_json::json!(["require_any_link", "message"]),
+        "{text}"
     );
+    // Only where an override changed something: every other entry carries no
+    // `overridden` at all rather than an empty list.
+    assert!(
+        rules
+            .iter()
+            .filter(|rule| rule["id"] != "no-broken-doc-links")
+            .all(|rule| rule.get("overridden").is_none()),
+        "{text}"
+    );
+    assert_key_order(&text);
 }
 
 /// The `broken-links` floor, turned off by an override for a repository whose
@@ -2150,12 +2212,15 @@ fn a_rule_that_only_stands_in_front_of_a_command_names_the_shim_seam() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let text = stdout(&output);
 
-    assert!(
-        text.contains("{\"id\": \"stands-in-front\", \"git_hooks\": [], \"seams\": [\"shim\"]}"),
+    let rules = effective_rules(&text);
+    assert_eq!(
+        effective_rule(&rules, "stands-in-front"),
+        &serde_json::json!({"id": "stands-in-front", "git_hooks": [], "seams": ["shim"]}),
         "{text}"
     );
-    assert!(
-        text.contains("{\"id\": \"searches-the-tree\", \"git_hooks\": [], \"seams\": [\"scan\"]}"),
+    assert_eq!(
+        effective_rule(&rules, "searches-the-tree"),
+        &serde_json::json!({"id": "searches-the-tree", "git_hooks": [], "seams": ["scan"]}),
         "{text}"
     );
 
