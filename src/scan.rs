@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use regex::Regex;
+use tree_sitter::Parser;
 use unicode_script::{Script, UnicodeScript};
 
 use crate::config::{Check, CheckKind, Files, Policy, Rule};
@@ -1676,42 +1677,66 @@ fn below_floor_failure(rule: &Rule, selected: usize) -> Option<Failure> {
 }
 
 /// 1-based line numbers inside any `#[cfg(test)]` item.
+///
+/// The item's extent comes from the Rust grammar, not from counting braces: a
+/// brace or a `//` inside a string, a char, a raw string or a block comment is
+/// not code, and a line-by-line count read it as code -- closing a test module
+/// early (reporting test hits) or never closing it (hiding every hit after it).
+///
+/// An attribute counts when its text matches the pattern the line reader used,
+/// `#[cfg(` with `test` as a word before the first `)`, so `cfg(test)` and
+/// `cfg(all(test, unix))` count exactly as they did before.
+///
+/// A file that does not parse excludes nothing. Error recovery can stretch or
+/// shrink an item around the broken region, and a wrong extent here hides a
+/// real hit; reporting a test-only hit in a broken file is the cheaper mistake
+/// for a scanner to make.
 fn cfg_test_lines(path: &Path) -> BTreeSet<u64> {
     static CFG_TEST: OnceLock<Regex> = OnceLock::new();
     let cfg_test = CFG_TEST.get_or_init(|| engine::literal_pattern(r"^#\[cfg\([^)]*\btest\b"));
 
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return BTreeSet::new();
-    };
-    let lines: Vec<&str> = text.lines().collect();
     let mut test_lines = BTreeSet::new();
-    let count = lines.len();
-    let mut index = 0;
-    while let Some(line_text) = lines.get(index) {
-        if !cfg_test.is_match(line_text.trim_start()) {
-            index += 1;
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return test_lines;
+    };
+    let Some((grammar, comment_kinds)) = crate::comments::Language::Rust.grammar() else {
+        return test_lines;
+    };
+    let mut parser = Parser::new();
+    if parser.set_language(&grammar).is_err() {
+        return test_lines;
+    }
+    let Some(tree) = parser.parse(&text, None) else {
+        return test_lines;
+    };
+    if tree.root_node().has_error() {
+        return test_lines;
+    }
+
+    let mut cursor = tree.walk();
+    let mut pending = vec![tree.root_node()];
+    while let Some(node) = pending.pop() {
+        let attribute = node.kind() == "attribute_item"
+            && text
+                .get(node.byte_range())
+                .is_some_and(|source| cfg_test.is_match(source));
+        if !attribute {
+            pending.extend(node.named_children(&mut cursor));
             continue;
         }
-        let mut depth: i64 = 0;
-        let mut opened = false;
-        let mut end = index;
-        while let Some(code_line) = lines.get(end) {
-            let code = code_line.split("//").next().unwrap_or("");
-            let opens = i64::try_from(code.matches('{').count()).unwrap_or(i64::MAX);
-            let closes = i64::try_from(code.matches('}').count()).unwrap_or(i64::MAX);
-            depth += opens - closes;
-            if code.contains('{') {
-                opened = true;
-            }
-            if opened && depth <= 0 {
-                break;
-            }
-            end += 1;
+        // The attributed item is the next named sibling that is neither a
+        // further attribute nor a comment. Its subtree is not walked: every
+        // line in it is already marked.
+        let mut item = node.next_named_sibling();
+        while let Some(sibling) = item
+            && (sibling.kind() == "attribute_item" || comment_kinds.contains(&sibling.kind()))
+        {
+            item = sibling.next_named_sibling();
         }
-        for line in index..=end.min(count.saturating_sub(1)) {
-            test_lines.insert(u64::try_from(line).unwrap_or(u64::MAX).saturating_add(1));
+        let end = item.unwrap_or(node).end_position().row;
+        for row in node.start_position().row..=end {
+            test_lines.insert(u64::try_from(row).unwrap_or(u64::MAX).saturating_add(1));
         }
-        index = end + 1;
     }
     test_lines
 }
