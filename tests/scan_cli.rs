@@ -1278,6 +1278,71 @@ fn a_cfg_test_block_is_skipped_when_the_rule_opts_in() {
     assert!(!text.contains("src/lib.rs"), "{text}");
 }
 
+const HOME_PATHS_OUTSIDE_TESTS: &str = r#"
+        [rule.no-home-paths]
+        message = "no home paths"
+        regexp = '/home/[a-z]+'
+
+        [rule.no-home-paths.files]
+        exclude_cfg_test = true
+"#;
+
+/// A brace inside a literal is not a brace. Counting it closed the test module
+/// on the line holding `"}"`, and the test-only hit below it was reported.
+#[test]
+fn a_brace_inside_a_test_literal_does_not_end_the_test_item() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", HOME_PATHS_OUTSIDE_TESTS);
+    write(
+        &root,
+        "src/lib.rs",
+        "fn main() {}\n#[cfg(test)]\nmod tests {\n    const CLOSE: &str = \"}\";\n    const H: &str = \"/home/someone\";\n}\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+/// The reverse: an opening brace in a char, a URL, a block comment and a raw
+/// string kept the test module open past its end, and the real hit after it
+/// was dropped.
+#[test]
+fn a_brace_inside_a_test_literal_does_not_hide_the_code_after_it() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", HOME_PATHS_OUTSIDE_TESTS);
+    write(
+        &root,
+        "src/lib.rs",
+        "#[cfg(test)]\nmod tests {\n    const OPEN: char = '{';\n    const URL: &str = \"http://x{\";\n    /* { */\n    const RAW: &str = r\"{\";\n}\n\nconst H: &str = \"/home/someone\";\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("src/lib.rs:9:"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A file the grammar cannot read reports its hits rather than hiding them: an
+/// item's extent is not trustworthy in a tree that has an error in it.
+#[test]
+fn a_file_that_does_not_parse_excludes_nothing() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", HOME_PATHS_OUTSIDE_TESTS);
+    write(
+        &root,
+        "src/lib.rs",
+        "#[cfg(test)]\nmod tests {\n    const H: &str = \"/home/someone\";\n}\nfn broken( {\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("src/lib.rs:3:"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 // --- redaction -------------------------------------------------------------
 
 #[test]
