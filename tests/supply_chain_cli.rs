@@ -2147,6 +2147,7 @@ fn a_git_source_in_a_policy_with_no_owner_is_refused() {
 #[test]
 fn a_direct_url_and_a_path_outside_the_tree_are_refused_by_name() {
     let root = owned_by_example_org();
+    std::fs::create_dir_all(root.parent().unwrap().join("outside-the-tree")).unwrap();
     let tools = exporting(
         &root,
         &[
@@ -2173,6 +2174,7 @@ fn a_direct_url_and_a_path_outside_the_tree_are_refused_by_name() {
 #[test]
 fn an_export_with_nothing_from_an_index_does_not_ask_guarddog() {
     let root = owned_by_example_org();
+    std::fs::create_dir_all(root.join("packages/member")).unwrap();
     let (config, _, tip) = example_kit_remote();
     let tools = exporting(
         &root,

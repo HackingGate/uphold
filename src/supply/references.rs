@@ -24,7 +24,7 @@
 //! remote is repointed by the same command that repoints the remote.
 
 use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
 
 /// The forge a first-party git source lives on where the policy names none.
@@ -130,33 +130,31 @@ fn by_reference(
 
 /// Whether a path requirement stays: inside the tree it does, as it always
 /// did; outside, it is refused by name.
+///
+/// Both sides are resolved through the filesystem, so a link inside the tree
+/// that points out of it is outside. A path that does not resolve is refused
+/// too: nothing can say where it lands.
 fn path_inside(path: &str, directory: &Path, root: &Path, sorted: &mut Sorted) -> bool {
-    let resolved = lexical(&directory.join(path));
-    if resolved.starts_with(lexical(root)) {
-        return true;
-    }
-    sorted.refused.push(format!(
-        "{path} is a path dependency outside this repository ({}): no index holds it and no \
-         scanner here reads it",
-        resolved.display()
-    ));
-    false
-}
-
-/// A path with `.` and `..` taken out without asking the filesystem, which a
-/// dependency that is not there cannot answer.
-fn lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
+    let joined = directory.join(path);
+    match (joined.canonicalize(), root.canonicalize()) {
+        (Ok(target), Ok(tree)) if target.starts_with(&tree) => true,
+        (Ok(target), Ok(_)) => {
+            sorted.refused.push(format!(
+                "{path} is a path dependency outside this repository ({}): no index holds it \
+                 and no scanner here reads it",
+                target.display()
+            ));
+            false
+        }
+        (Err(error), _) | (_, Err(error)) => {
+            sorted.refused.push(format!(
+                "{path} is a path dependency that does not resolve from {} ({error}), so \
+                 whether it is inside this repository cannot be said",
+                directory.display()
+            ));
+            false
         }
     }
-    out
 }
 
 /// A requirement line spelled as a path, the way `uv export` writes a
@@ -405,26 +403,33 @@ fn ls_remote(remote: &str, directory: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{Checked, GitPin, against_refs, normalise, sort, split_git, tags_in_lock};
-    use std::path::Path;
 
     const COMMIT: &str = "53b5755d35af9bb71e6266a45c487682d1884130";
     const OTHER: &str = "0000000000000000000000000000000000000001";
 
     #[test]
     fn an_export_is_sorted_into_index_tree_git_and_refused() {
+        let base = crate::fixture::scratch("supply-references");
+        let root = base.join("repo");
+        let service = root.join("service");
+        for directory in [
+            service.join("packages/member"),
+            service.join("libs/inner"),
+            service.join("vendor-copy"),
+            base.join("elsewhere"),
+        ] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
         let export = format!(
             "# header\n-e .\n-e ./packages/member\n    # via proj\n./libs/inner\n\
-             -e ../../elsewhere\nrequests==2.32.0\ncolorama==0.4.6 ; sys_platform == 'win32'\n\
+             -e ../../elsewhere\n-e ./not-there\nrequests==2.32.0\n\
+             colorama==0.4.6 ; sys_platform == 'win32'\n\
              example-kit @ git+https://github.com/example-org/example-kit@{COMMIT}\n\
              wheel-dep @ https://example.test/wheel-dep-1.0-py3-none-any.whl\n\
-             local-dep @ file:///repo/service/vendor-copy\n"
+             local-dep @ file://{}\n",
+            service.join("vendor-copy").display()
         );
-        let sorted = sort(
-            &export,
-            Path::new("/repo/service"),
-            Path::new("/repo"),
-            None,
-        );
+        let sorted = sort(&export, &service, &root, None);
         assert_eq!(sorted.indexed, 2);
         assert!(sorted.kept.contains("-e ./packages/member"));
         assert!(sorted.kept.contains("./libs/inner"));
@@ -432,6 +437,7 @@ mod tests {
         assert!(!sorted.kept.contains("example-kit"));
         assert!(!sorted.kept.contains("wheel-dep"));
         assert!(!sorted.kept.contains("elsewhere"));
+        assert!(!sorted.kept.contains("not-there"));
         assert_eq!(
             sorted.git,
             vec![GitPin {
@@ -441,9 +447,33 @@ mod tests {
                 tag: None,
             }]
         );
-        assert_eq!(sorted.refused.len(), 2, "{:?}", sorted.refused);
+        assert_eq!(sorted.refused.len(), 3, "{:?}", sorted.refused);
         assert!(sorted.refused.iter().any(|said| said.contains("wheel-dep")));
-        assert!(sorted.refused.iter().any(|said| said.contains("elsewhere")));
+        assert!(
+            sorted
+                .refused
+                .iter()
+                .any(|said| said.contains("elsewhere is a path dependency outside"))
+        );
+        assert!(
+            sorted
+                .refused
+                .iter()
+                .any(|said| said.contains("not-there is a path dependency that does not resolve"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_inside_the_tree_that_points_out_of_it_is_outside() {
+        let base = crate::fixture::scratch("supply-references-link");
+        let root = base.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(base.join("outside")).unwrap();
+        std::os::unix::fs::symlink(base.join("outside"), root.join("looks-inside")).unwrap();
+        let sorted = sort("-e ./looks-inside\n", &root, &root, None);
+        assert!(sorted.kept.is_empty(), "{}", sorted.kept);
+        assert_eq!(sorted.refused.len(), 1, "{:?}", sorted.refused);
     }
 
     #[test]

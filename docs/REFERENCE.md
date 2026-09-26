@@ -2615,7 +2615,7 @@ guarddog reads it:
 | `name @ git+<url>@<commit>` on the first-party forge under the declared owner | asked of its remote with `git ls-remote`; not handed to guarddog |
 | a git source under any other host or owner | refused by name, exit `1` |
 | `name @ https://...` or any other direct URL | refused by name, exit `1` |
-| a path outside the repository | refused by name, exit `1` |
+| a path that resolves outside the repository, through a link or not, or does not resolve | refused by name, exit `1` |
 
 A git source is **first party** when its host is the `forge_host` in
 `[supply_chain]` (`github.com` where none is written) and the first segment of
