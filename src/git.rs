@@ -397,6 +397,33 @@ pub(crate) fn remote_url(root: &Path, remote: &str) -> Option<String> {
         .filter(|url| !url.is_empty())
 }
 
+/// The host a remote url names, lowercased, without user or port.
+///
+/// Every spelling git accepts for a remote: `scheme://[user@]host[:port]/path`
+/// for https, http, ssh, git and `git+ssh`, and the scp-like
+/// `[user@]host:path`, which git reads as scp-like only where the colon comes
+/// before any slash. A local path, or a `file://` url, names no host.
+pub(crate) fn host(url: &str) -> Option<String> {
+    let url = url.trim();
+    let authority = if let Some((_, rest)) = url.split_once("://") {
+        rest.split('/').next().unwrap_or(rest)
+    } else {
+        let (authority, _) = url.split_once(':')?;
+        if authority.contains('/') {
+            return None;
+        }
+        authority
+    };
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    // A bracketed IPv6 literal carries colons of its own, so its port is the
+    // one after the bracket.
+    let host = host_port.strip_prefix('[').map_or_else(
+        || host_port.split(':').next().unwrap_or(host_port),
+        |bracketed| bracketed.split(']').next().unwrap_or(bracketed),
+    );
+    (!host.is_empty()).then(|| host.to_lowercase())
+}
+
 /// `owner/repo` from any spelling of a forge url.
 pub(crate) fn owner_repo(url: &str) -> Option<(String, String)> {
     let trimmed = url.trim().trim_end_matches('/');
@@ -419,6 +446,43 @@ pub(crate) fn owner_repo(url: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_host_comes_out_of_every_url_spelling() {
+        for (url, want) in [
+            ("https://github.com/acme/widget.git", "github.com"),
+            ("http://GitHub.com/acme/widget", "github.com"),
+            (
+                "https://user:token@github.com/acme/widget.git",
+                "github.com",
+            ),
+            ("ssh://git@github.com/acme/widget.git", "github.com"),
+            (
+                "ssh://git@gitlab.example.com:2222/acme/widget.git",
+                "gitlab.example.com",
+            ),
+            ("git://github.com/acme/widget.git", "github.com"),
+            ("git+ssh://git@github.com/acme/widget.git", "github.com"),
+            ("git@github.com:acme/widget.git", "github.com"),
+            ("github.com:acme/widget.git", "github.com"),
+            ("ssh://git@[::1]:22/acme/widget.git", "::1"),
+        ] {
+            assert_eq!(host(url).as_deref(), Some(want), "{url}");
+        }
+    }
+
+    #[test]
+    fn a_local_path_names_no_host() {
+        for url in [
+            "/srv/git/github-mirror.git",
+            "../gitlab/widget",
+            "./dir:with/colon",
+            "file:///srv/git/widget.git",
+            "",
+        ] {
+            assert_eq!(host(url), None, "{url}");
+        }
+    }
 
     #[test]
     fn owner_and_repo_come_out_of_every_url_spelling() {

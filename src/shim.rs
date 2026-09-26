@@ -1704,11 +1704,16 @@ impl Forge {
     /// destination: whether there is a client that can be asked about it at
     /// all. One classifier rather than two, because two would be free to
     /// disagree about the same url and only one of them could be right.
+    ///
+    /// The host and only the host. The path is the owner's to name, so
+    /// `github.com/acme/gitlab-tools` is on GitHub and
+    /// `example.com:org/github-mirror` is on neither. A self-hosted forge still
+    /// counts by its name: `gitlab.example.com` is GitLab.
     pub(crate) fn of_url(url: &str) -> Option<Self> {
-        let url = url.to_lowercase();
-        if url.contains("gitlab") {
+        let host = git::host(url)?;
+        if host.contains("gitlab") {
             Some(Self::GitLab)
-        } else if url.contains("github") {
+        } else if host.contains("github") {
             Some(Self::GitHub)
         } else {
             // Not a guess. An unrecognised host means no client applies, and
@@ -3849,6 +3854,46 @@ mod tests {
         glab.command = String::from("glab");
         assert_eq!(glab.forge(Path::new(".")), Some(Forge::GitLab));
         assert_eq!(gh().forge(Path::new(".")), Some(Forge::GitHub));
+    }
+
+    #[test]
+    fn the_forge_is_read_from_the_host_and_never_from_the_path() {
+        // The path is the owner's to name: a GitHub repository named
+        // `gitlab-tools` is asked of GitHub, and a `github-mirror` on some
+        // other host is asked of nobody.
+        for (url, want) in [
+            (
+                "https://github.com/acme/gitlab-tools.git",
+                Some(Forge::GitHub),
+            ),
+            ("git@github.com:acme/gitlab-tools.git", Some(Forge::GitHub)),
+            (
+                "https://gitlab.com/acme/github-mirror.git",
+                Some(Forge::GitLab),
+            ),
+            ("git@example.com:org/github-mirror", None),
+            ("https://example.com/gitlab/widget.git", None),
+            ("/srv/git/github-mirror.git", None),
+            // A self-hosted forge is still known by its name.
+            (
+                "https://gitlab.example.com/acme/widget.git",
+                Some(Forge::GitLab),
+            ),
+            (
+                "ssh://git@gitlab.example.com:2222/acme/widget.git",
+                Some(Forge::GitLab),
+            ),
+            ("http://github.com/acme/widget", Some(Forge::GitHub)),
+            ("ssh://git@github.com/acme/widget.git", Some(Forge::GitHub)),
+            ("git://github.com/acme/widget.git", Some(Forge::GitHub)),
+            (
+                "git+ssh://git@github.com/acme/widget.git",
+                Some(Forge::GitHub),
+            ),
+            ("GIT@GitHub.COM:acme/widget.git", Some(Forge::GitHub)),
+        ] {
+            assert_eq!(Forge::of_url(url), want, "{url}");
+        }
     }
 
     #[test]
