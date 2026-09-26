@@ -84,6 +84,12 @@ tree-sitter-python = "0.25"
 # Go joined `comment_regexp`, `trivial_comments` and `prose_regexp` at the cost
 # of three lines, because the dependency was already here.
 tree-sitter-go = "0.25"
+# The word splitter for an alias's expansion. git splits `alias.cm = commit -m
+# "a b"` the way a shell would, quotes and backslashes included, so a reader
+# that splits on whitespace hands the push scan `"a` and `b"` and shifts every
+# positional word after them. Where this reader and git's `split_cmdline`
+# disagree, `expand_alias` says which case and how it is closed.
+shell-words = "1"
 
 # `strip` is deliberately absent: stripping is a packaging step, and a stripped
 # binary with no build-id cannot be symbolicated from a core. `debug = 1` keeps

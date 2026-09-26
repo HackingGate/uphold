@@ -988,10 +988,7 @@ impl Shim {
             )));
         }
         let mut words: Vec<String> = argv.get(..index).unwrap_or_default().to_vec();
-        let expanded: Vec<String> = expansion
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect::<Vec<String>>();
+        let expanded = self.split_alias(word, &expansion)?;
         if expanded.is_empty() {
             return Err(Fatal::new(format!(
                 "{}: {word:?} is an alias for nothing, so which invocation this is could not be \
@@ -1002,6 +999,54 @@ impl Shim {
         words.extend(expanded);
         words.extend(argv.get(index + 1..).unwrap_or_default().iter().cloned());
         Ok(Some(words))
+    }
+
+    /// An alias's expansion as the words the command will run.
+    ///
+    /// git's `split_cmdline` honours single quotes, double quotes and
+    /// backslashes, so `commit -m "a b"` is three words; split on whitespace it
+    /// was four, and every positional word after `"a` moved one place along --
+    /// half the quoted value read as the remote, and the remote as a refspec
+    /// standing where the pushed branch should have been read. A shell's
+    /// splitter agrees with git's everywhere but three places, and each is
+    /// closed here rather than left to whichever reading it happens to get:
+    ///
+    /// - A backslash. git escapes any character with one, inside double quotes
+    ///   too; a shell escapes only `$`, `` ` ``, `"` and `\` there, so
+    ///   `"ac\me"` is `acme` to git and `ac\me` here, a name no rule matches.
+    /// - A carriage return, which git reads as a word break and a shell as a
+    ///   letter.
+    /// - A `#` that opens a word, which a shell reads as a comment and git as a
+    ///   letter, so `push origin #acme` lost its refspec. It is stood in for
+    ///   by NUL, which the splitter treats as a letter and which neither argv
+    ///   nor a config value can carry, and put back after. gh and glab are
+    ///   read the same way: a word too many is read rather than one too few.
+    ///
+    /// The first two are refused with NUL, the stand-in, rather than
+    /// reimplemented. They are rare in an alias, and a second splitter written
+    /// here to cover them is a second thing to keep in step with git.
+    fn split_alias(&self, word: &str, expansion: &str) -> Result<Vec<String>> {
+        if expansion.contains(['\\', '\r', '\0']) {
+            return Err(Fatal::new(format!(
+                "{}: {word:?} is an alias whose expansion ({expansion:?}) carries a backslash \
+                 or a carriage return, which git and this shim split differently, so which \
+                 invocation this is could not be established. Nothing was published; run the \
+                 command the alias stands for, or take the alias off",
+                self.command
+            )));
+        }
+        let words = shell_words::split(&expansion.replace('#', "\0")).map_err(|_| {
+            Fatal::new(format!(
+                "{}: {word:?} is an alias with an unclosed quote ({expansion:?}), so which \
+                 invocation this is could not be established. Nothing was published; close the \
+                 quote, or take the alias off",
+                self.command
+            ))
+        })?;
+        Ok(words
+            .into_iter()
+            .map(|split| split.replace('\0', "#"))
+            .collect())
     }
 
     /// What this command says one word expands to, asked of the real command.
@@ -4764,5 +4809,53 @@ mod tests {
         );
         // And the user's own editor, which this variable no longer names.
         assert!(environment.contains_key(EDITOR_REAL));
+    }
+
+    /// `-c alias.cm=<value> cm <rest>`: the alias written on the command line,
+    /// which is read off argv and asks no process.
+    fn aliased(value: &str, rest: &[&str]) -> Vec<String> {
+        let mut line = vec![String::from("-c"), format!("alias.cm={value}"), "cm".into()];
+        line.extend(rest.iter().map(|word| (*word).to_owned()));
+        line
+    }
+
+    #[test]
+    fn an_alias_is_split_into_the_words_git_splits_it_into() {
+        // Split on whitespace, `commit -m "a b"` was four words, and every
+        // positional word after the quote moved one place along.
+        for (value, expected) in [
+            (r#"commit -m "a b""#, ["commit", "-m", "a b"]),
+            ("commit -m 'a b'", ["commit", "-m", "a b"]),
+            (r#"commit -m 'say "hi"'"#, ["commit", "-m", r#"say "hi""#]),
+            // A `#` that opens a word is a comment to a shell and a letter to
+            // git, and the branch it names is the one that goes out.
+            ("push origin #acme", ["push", "origin", "#acme"]),
+        ] {
+            let line = aliased(value, &["x"]);
+            let mut want = vec![String::from("-c"), format!("alias.cm={value}")];
+            want.extend(expected.map(str::to_owned));
+            want.push(String::from("x"));
+            let words = git_push().expand_alias(Path::new("."), &line).unwrap();
+            assert_eq!(words, Some(want), "{value}");
+        }
+    }
+
+    #[test]
+    fn an_alias_git_and_a_shell_would_split_differently_is_refused() {
+        // An unclosed quote is an alias git itself refuses to run, and a
+        // backslash is one git reads differently from a shell. Guessing either
+        // is reading a command line other than the one that runs.
+        for (value, says) in [
+            (r#"commit -m "a b"#, "unclosed quote"),
+            ("commit -m 'a b", "unclosed quote"),
+            (r#"push origin "ac\me""#, "backslash"),
+        ] {
+            let message = match git_push().expand_alias(Path::new("."), &aliased(value, &[])) {
+                Err(error) => error.to_string(),
+                Ok(words) => format!("expanded to {words:?}"),
+            };
+            assert!(message.contains(says), "{value}: {message}");
+            assert!(message.contains("Nothing was published"), "{message}");
+        }
     }
 }
