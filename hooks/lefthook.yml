@@ -10,7 +10,7 @@
 #   # lefthook.yml, in the consuming repository
 #   remotes:
 #     - git_url: https://github.com/HackingGate/uphold
-#       ref: v1.21.0
+#       ref: v1.22.0
 #       configs:
 #         - hooks/lefthook.yml
 #
