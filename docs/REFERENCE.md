@@ -2365,7 +2365,9 @@ scope. cargo-deny runs once per crate or workspace root against the root
 `deny.toml` (no `deny.toml`, and the section says so and stands down);
 cargo-vet runs only where a `supply-chain/` store exists, because a store
 created automatically is a store nobody owns; guarddog reads each `uv.lock`
-through `uv export` and each `package.json` directly, metadata rules only. A
+through `uv export`, less the direct references it cannot look up (see
+[below](#what-guarddog-is-not-handed-git-sources-urls-and-paths)), and each
+`package.json` directly, metadata rules only. A
 section with nothing to read says so — "no workflows here" and "checked and
 clean" must never look the same.
 
@@ -2597,6 +2599,51 @@ Its older admission, "Some rules failed to run while scanning \<package\>" at
 exit 0 — the two email-domain rules time out routinely — is still read, and
 still names the packages and how many rules. None of that is a finding: it is
 the record that the question was asked and nobody answered.
+
+### What guarddog is not handed: git sources, URLs and paths
+
+`guarddog pypi verify` looks every requirement up on PyPI by name. A PEP 508
+direct reference -- `name @ git+https://...@<commit>`, which is how `uv export`
+spells a uv git source, `name @ https://...`, or a path -- names nothing PyPI
+holds, and guarddog answers it with a 404. So the export is sorted before
+guarddog reads it:
+
+| In the export | What happens |
+|---|---|
+| `name==version` (an index) | handed to guarddog, as before |
+| `-e ./member`, `./libs/x`, `name @ file://...` inside the repository | handed to guarddog, as before |
+| `name @ git+<url>@<commit>` on the first-party forge under the declared owner | asked of its remote with `git ls-remote`; not handed to guarddog |
+| a git source under any other host or owner | refused by name, exit `1` |
+| `name @ https://...` or any other direct URL | refused by name, exit `1` |
+| a path that resolves outside the repository, through a link or not, or does not resolve | refused by name, exit `1` |
+
+A git source is **first party** when its host is the `forge_host` in
+`[supply_chain]` (`github.com` where none is written) and the first segment of
+its path is the owner the policy declares: the top-level `owner`, or what
+`owner_from` answers. That is the declaration `unowned-push` reads, and it is
+never read off `origin`. A policy that declares no owner has no first-party
+git source.
+
+```toml
+owner = "example-org"                  # top of policy/principles.toml
+
+[supply_chain]
+forge_host = "gitlab.example.com"      # only where the forge is not github.com
+```
+
+For a first-party source, the locked commit must be what some ref on the remote
+points at, peeled tags (`^{}`) included. Where the source's entry in `uv.lock`
+names a tag (`?tag=v0.1.0#<commit>`), that tag must exist and point at the
+locked commit. A commit no branch or tag points at is refused by name, and so
+is a tag that is missing or points elsewhere. `git ls-remote` runs read-only,
+with `GIT_TERMINAL_PROMPT=0` and the hooked repository's `GIT_DIR` and related
+variables removed; a remote it cannot answer for (no network, authentication
+refused, git not on PATH) is could-not-look, exit `2`, with git's own reason.
+An `owner_from` command that fails is could-not-look for the same reason.
+
+An export with nothing left that an index resolves is not handed to guarddog
+at all: guarddog handed an empty list answers `[]`, which this section reads as
+a network failure.
 
 ### Waiving a confirmed guarddog false positive
 

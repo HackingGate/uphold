@@ -586,6 +586,12 @@ pub(crate) struct SupplyChain {
     /// holds not to be a reason to refuse a push. See [`Waiver`].
     #[serde(default)]
     pub waive: Vec<Waiver>,
+    /// The forge host a first-party git dependency lives on, for the owner the
+    /// policy declares: `github.com` where this is not written. A git source
+    /// under that host and owner is checked against its remote rather than
+    /// handed to guarddog, which looks names up on `PyPI`.
+    #[serde(default)]
+    pub forge_host: Option<String>,
 }
 
 /// The scanners a waiver may name. guarddog alone: it is the one scanner whose

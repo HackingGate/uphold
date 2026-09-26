@@ -45,6 +45,13 @@
 //! count is reported, never recomputed; the choice is to parse it or to run it
 //! for nothing.
 //!
+//! guarddog is also not handed what it cannot look up. A `uv export` spells a
+//! git source, a direct URL and a path as a PEP 508 direct reference, and
+//! guarddog asks `PyPI` for each by name and gets a 404. `references` sorts the
+//! export first: a git source under the owner the policy declares is checked
+//! against its own remote, and every other direct reference outside the tree
+//! is refused by name rather than skipped.
+//!
 //! What IS read out of a scanner's output is the opposite of a finding: its
 //! own admission that it did not look. Four of the five need it, because four
 //! of the five cannot say so in their exit code. guarddog reports rules that
@@ -89,8 +96,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::config::Waiver;
+use crate::config::{Policy, Waiver};
 use crate::error::{Exit, Fatal, Result, verdict};
+
+mod references;
 
 /// The zizmor policy run where the repository has none of its own.
 const ZIZMOR_DEFAULT: &str = include_str!("../policy/zizmor.default.yml");
@@ -178,9 +187,10 @@ pub(crate) const SECRETS_SET: &str = "credentials";
 /// `uphold supply-chain`. `secrets` is whether the policy inherits
 /// [`SECRETS_SET`].
 ///
-/// `waivers` are the repository's `[[supply_chain.waive]]` entries, which only
-/// the guarddog section reads.
-pub(crate) fn run(root: &Path, scope: &Scope, secrets: bool, waivers: &[Waiver]) -> Result<Exit> {
+/// `policy` is read by the guarddog section alone: its `[[supply_chain.waive]]`
+/// entries, and the declared owner that decides which git dependencies are
+/// first party.
+pub(crate) fn run(root: &Path, scope: &Scope, secrets: bool, policy: &Policy) -> Result<Exit> {
     let manifests_moved = !matches!(scope, Scope::Changed(paths, _) if paths.is_empty());
     if !manifests_moved && !secrets {
         println!(
@@ -191,7 +201,7 @@ pub(crate) fn run(root: &Path, scope: &Scope, secrets: bool, waivers: &[Waiver])
     }
     let mut failed = 0_usize;
     let mut unread = 0_usize;
-    let guarded = |at: &Path, over: &Scope| guarddog(at, over, waivers);
+    let guarded = |at: &Path, over: &Scope| guarddog(at, over, policy);
     let mut sections: Vec<SectionRun<'_>> = Vec::new();
     if manifests_moved {
         let dependencies: [SectionRun<'_>; 5] = [
@@ -1451,7 +1461,8 @@ struct Ledger {
     read: BTreeSet<&'static str>,
 }
 
-fn guarddog(root: &Path, scope: &Scope, waivers: &[Waiver]) -> Result<Section> {
+fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
+    let waivers = policy.supply_chain.waive.as_slice();
     let (python, npm) = match scope {
         Scope::Whole => (
             find_named(root, "uv.lock")?,
@@ -1481,6 +1492,10 @@ fn guarddog(root: &Path, scope: &Scope, waivers: &[Waiver]) -> Result<Section> {
     let mut unrun: Option<String> = None;
     let mut checked = 0_usize;
     let mut ledger = Ledger::default();
+    // Asked only where a git source needs it: `owner_from` is a command, and a
+    // repository with no git dependency has no reason to run it.
+    let mut first_party: Option<references::FirstParty<'_>> = None;
+    let mut remotes = std::collections::BTreeMap::new();
     for lock in python {
         let directory = lock.parent().unwrap_or(root);
         checked += 1;
@@ -1508,8 +1523,46 @@ fn guarddog(root: &Path, scope: &Scope, waivers: &[Waiver]) -> Result<Section> {
             refused = true;
             continue;
         }
-        let requirements =
-            tempfile_guard::TempFile::containing(&String::from_utf8_lossy(&exported.stdout))?;
+        let at = directory.display().to_string();
+        let sorted = references::sort(
+            &String::from_utf8_lossy(&exported.stdout),
+            directory,
+            root,
+            std::fs::read_to_string(&lock).ok().as_deref(),
+        );
+        for said in &sorted.refused {
+            println!("   FAILED: guarddog pypi: {at}: {said}");
+            refused = true;
+        }
+        for pin in &sorted.git {
+            let deciding = first_party.get_or_insert_with(|| references::FirstParty {
+                owner: policy
+                    .declared_owner(root)
+                    .map_err(|error| error.to_string()),
+                host: policy
+                    .supply_chain
+                    .forge_host
+                    .as_deref()
+                    .unwrap_or(references::DEFAULT_FORGE_HOST),
+            });
+            match references::check(pin, deciding, directory, &mut remotes) {
+                references::Checked::Holds(said) => println!("   first party: {said}"),
+                references::Checked::Refused(said) => {
+                    println!("   FAILED: guarddog pypi: {at}: {said}");
+                    refused = true;
+                }
+                references::Checked::Unread(said) => unrun = unrun.or(Some(said)),
+            }
+        }
+        // Nothing an index resolves is nothing to look up, and guarddog handed
+        // an empty list answers `[]`, which reads as a network failure.
+        if sorted.indexed == 0 {
+            println!(
+                "   {at}: no dependency here resolves from an index, so guarddog was not asked"
+            );
+            continue;
+        }
+        let requirements = tempfile_guard::TempFile::containing(&sorted.kept)?;
         let status = Command::new("guarddog")
             .args(["pypi", "verify", "--output-format", "json"])
             .arg(&requirements.path)
@@ -1518,7 +1571,7 @@ fn guarddog(root: &Path, scope: &Scope, waivers: &[Waiver]) -> Result<Section> {
             .output()
             .map_err(|error| Fatal::new(format!("could not run guarddog: {error}")))?;
         match guarddog_read(
-            &directory.display().to_string(),
+            &at,
             "pypi",
             waivers,
             &mut ledger,
