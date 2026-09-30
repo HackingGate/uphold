@@ -886,36 +886,7 @@ fn a_whole_tree_sweep_declares_the_ci_configuration_it_did_not_scan() {
 
 /// A member repository, cloned into the fixture as a real submodule.
 fn with_a_submodule(root: &Path) {
-    let member = support::scratch("supply-chain-member");
-    std::fs::create_dir_all(&member).unwrap();
-    support::git(&member, &["init", "-q", "-b", "main"]);
-    support::git(&member, &["config", "user.name", "Test"]);
-    support::git(&member, &["config", "user.email", "test@example.test"]);
-    write(&member, "uv.lock", "version = 1\n");
-    commit(&member, "the member's own lock");
-    // `protocol.file.allow` because git refuses a local-path submodule by
-    // default since CVE-2022-39253, and the fixture is exactly a local path.
-    support::git(
-        root,
-        &[
-            "-c",
-            "protocol.file.allow=always",
-            "submodule",
-            "add",
-            "-q",
-            &member.display().to_string(),
-            "sub",
-        ],
-    );
-    // The submodule in the working tree is a CLONE, and a clone carries none of
-    // the source repository's local config. Every other repository this fixture
-    // builds is handed an identity at `init`; this one is handed one here,
-    // because the tests that commit into it commit into the clone and not into
-    // the source. Without it the fixture borrows whoever is configured globally,
-    // which is a machine that has somebody -- and CI is a machine that does not.
-    let checkout = root.join("sub");
-    support::git(&checkout, &["config", "user.name", "Test"]);
-    support::git(&checkout, &["config", "user.email", "test@example.test"]);
+    support::submodule(root, "sub", &[("uv.lock", "version = 1\n")]);
     commit(root, "track the member");
 }
 

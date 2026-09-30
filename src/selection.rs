@@ -33,7 +33,7 @@ use std::sync::Once;
 use ignore::WalkBuilder;
 use ignore::overrides::{Override, OverrideBuilder};
 
-use crate::config::Rule;
+use crate::config::{Reach, Rule};
 use crate::error::{Fatal, Result};
 
 /// Paths this repository declares are NOT TEXT in `.gitattributes`.
@@ -63,30 +63,47 @@ pub(crate) fn not_text_paths(root: &Path) -> (Vec<String>, Option<String>) {
     if listed.is_empty() {
         return (Vec::new(), None);
     }
-
-    let unmeasured = |reason: &str| {
-        (
+    match declared_not_text(root, &listed, false) {
+        Ok(found) => (found, None),
+        Err(reason) => (
             Vec::new(),
             Some(format!(
                 ".gitattributes: {reason}, so which paths this repository declares are not \
                  text is unknown. Every tracked path was treated as text, which means a \
                  declared binary file was searched by the content rules rather than skipped."
             )),
-        )
-    };
+        ),
+    }
+}
 
-    let Ok(mut child) = crate::shim::inner_tool("git")
+/// Which of `listed` (NUL-separated paths) git reads as `-text` in `directory`,
+/// or why it could not say.
+///
+/// `elsewhere` is a repository other than the hooked one -- a pinned member --
+/// which is asked with the hooked repository's environment taken away, for the
+/// reason [`crate::git::try_run_elsewhere`] gives. That function cannot be used
+/// itself because this question travels over stdin.
+fn declared_not_text(
+    directory: &Path,
+    listed: &[u8],
+    elsewhere: bool,
+) -> std::result::Result<Vec<String>, String> {
+    let mut command = crate::shim::inner_tool("git");
+    if elsewhere {
+        crate::git::elsewhere(&mut command);
+    }
+    let Ok(mut child) = command
         .args(["check-attr", "--stdin", "-z", "text"])
-        .current_dir(root)
+        .current_dir(directory)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
     else {
-        return unmeasured("git check-attr could not be started");
+        return Err(String::from("git check-attr could not be started"));
     };
     let (Some(mut sink), Some(mut source)) = (child.stdin.take(), child.stdout.take()) else {
-        return unmeasured("git check-attr gave no pipe to speak to");
+        return Err(String::from("git check-attr gave no pipe to speak to"));
     };
 
     // The two pipes move at the same time, on two threads, and that is not a
@@ -103,7 +120,7 @@ pub(crate) fn not_text_paths(root: &Path) -> (Vec<String>, Option<String>) {
             // Whatever git makes of the list, the handle is dropped when this
             // closure ends, and closing stdin is what tells `--stdin` the list
             // is finished.
-            sink.write_all(&listed).ok();
+            sink.write_all(listed).ok();
         });
         source.read_to_end(&mut answered)
     });
@@ -112,18 +129,18 @@ pub(crate) fn not_text_paths(root: &Path) -> (Vec<String>, Option<String>) {
     // complete answer from a truncated one.
     let finished = child.wait();
     if drained.is_err() {
-        return unmeasured("its answer could not be read to the end");
+        return Err(String::from("its answer could not be read to the end"));
     }
     match finished {
         Ok(status) if status.success() => {}
         Ok(status) => {
-            return unmeasured(&format!(
+            return Err(format!(
                 "git check-attr exited {}",
                 status.code().unwrap_or(-1)
             ));
         }
         Err(error) => {
-            return unmeasured(&format!("git check-attr could not be waited for: {error}"));
+            return Err(format!("git check-attr could not be waited for: {error}"));
         }
     }
 
@@ -138,7 +155,7 @@ pub(crate) fn not_text_paths(root: &Path) -> (Vec<String>, Option<String>) {
             found.push(String::from_utf8_lossy(path).into_owned());
         }
     }
-    (found, None)
+    Ok(found)
 }
 
 /// Every path in git's index, NUL separated, exactly as git wrote them.
@@ -170,6 +187,281 @@ fn index_paths(root: &Path) -> Option<Vec<String>> {
     )
 }
 
+/// Every file a `files.reach = "pinned"` rule may select, read once per run.
+///
+/// The pins are the gitlinks the index records -- mode `160000` in
+/// `git ls-files -s`, the same entries [`from_index`] passes over as another
+/// repository's content -- and each is asked for its own index by running
+/// `git ls-files` inside it, with the hooked repository's environment taken
+/// away. Not `git ls-files --recurse-submodules`: that follows git's
+/// active-submodule filter, so a mount marked `submodule.<name>.active = false`
+/// would be left out without a word, and a rule claiming the pinned content
+/// would pass over content it never read. The pin is the claim; git's
+/// activity setting is not.
+///
+/// A member that pins members of its own is followed the same way, because a
+/// pin is a claim at every depth: the superproject pins the member's commit,
+/// and that commit pins its own members.
+///
+/// Nothing a member declares about policy is read -- not its principles file,
+/// not its excludes. The member's index and its `.gitattributes` are read
+/// because they are git's answer to what the member tracks and what it
+/// declares not text, and the selection is judged by the superproject's rule.
+#[derive(Debug, Default)]
+pub(crate) struct Pinned {
+    /// The superproject's own tracked paths and every pinned member's, the
+    /// member's under its mount path.
+    tracked: Vec<String>,
+    /// Every mount, at every depth, as a superproject-relative path.
+    mounts: Vec<String>,
+    /// What the members declare not text, under their mount paths. The
+    /// superproject's own declarations are `not_text_paths`'.
+    not_text: Vec<String>,
+    /// A member whose `.gitattributes` could not be asked, with the reason --
+    /// carried to every selection a pinned rule builds, and so to exit 2.
+    unmeasured: Vec<String>,
+}
+
+impl Pinned {
+    /// Read the pins under `root`.
+    ///
+    /// `Ok(None)` where there is no index to read, which is the answer
+    /// [`index_bytes`] gives: a pinned rule there walks the tree like any
+    /// other. A pin whose mount cannot be read -- not checked out, marked
+    /// inactive, or an index git will not list -- is a `Fatal`, because a rule
+    /// that claims the pinned content and could not read part of it has not
+    /// looked.
+    pub(crate) fn read(root: &Path) -> Result<Option<Self>> {
+        let Some(listed) = staged_index(root, false) else {
+            return Ok(None);
+        };
+        let mut pinned = Self::default();
+        pinned.gather(root, "", &listed)?;
+        Ok(Some(pinned))
+    }
+
+    /// What the members declare not text, under their mount paths.
+    pub(crate) fn not_text(&self) -> &[String] {
+        &self.not_text
+    }
+
+    /// The mount that holds `relative`, the deepest one where mounts nest, and
+    /// the path relative to that member's own root. `None` for a path of the
+    /// superproject's own.
+    pub(crate) fn mount_of<'path>(&self, relative: &'path str) -> Option<(&str, &'path str)> {
+        self.mounts
+            .iter()
+            .filter_map(|mount| {
+                relative
+                    .strip_prefix(mount.as_str())
+                    .and_then(|rest| rest.strip_prefix('/'))
+                    .map(|rest| (mount.as_str(), rest))
+            })
+            .max_by_key(|(mount, _)| mount.len())
+    }
+
+    /// One repository's index: its files under `prefix`, and each pin followed.
+    fn gather(&mut self, root: &Path, prefix: &str, listed: &[u8]) -> Result<()> {
+        let (files, pins) = split_index(listed);
+        if !prefix.is_empty() {
+            self.ask_not_text(root, prefix, &files);
+        }
+        self.tracked
+            .extend(files.iter().map(|file| under_mount(prefix, file)));
+        let inactive = inactive_pins(&root.join(prefix), !prefix.is_empty(), &pins)?;
+        for pin in &pins {
+            let mount = under_mount(prefix, pin);
+            let member = open_mount(root, prefix, pin, &mount, inactive.contains(pin))?;
+            self.mounts.push(mount.clone());
+            self.gather(root, &mount, &member)?;
+        }
+        Ok(())
+    }
+
+    /// A member's own `-text` declarations, asked inside the member.
+    fn ask_not_text(&mut self, root: &Path, mount: &str, files: &[String]) {
+        if files.is_empty() {
+            return;
+        }
+        let mut listed: Vec<u8> = Vec::new();
+        for file in files {
+            listed.extend_from_slice(file.as_bytes());
+            listed.push(0);
+        }
+        match declared_not_text(&root.join(mount), &listed, true) {
+            Ok(found) => self
+                .not_text
+                .extend(found.iter().map(|path| under_mount(mount, path))),
+            Err(reason) => self.unmeasured.push(format!(
+                "{mount}/.gitattributes: {reason}, so which paths the repository pinned at \
+                 {mount} declares are not text is unknown. Every path it tracks was treated \
+                 as text, which means a declared binary file was searched by the content \
+                 rules rather than skipped."
+            )),
+        }
+    }
+}
+
+/// `path` under `prefix`, with git's separator whatever the platform's is.
+fn under_mount(prefix: &str, path: &str) -> String {
+    if prefix.is_empty() {
+        path.to_owned()
+    } else {
+        format!("{prefix}/{path}")
+    }
+}
+
+/// `git ls-files -z -s` in `directory`: the index with each entry's mode, which
+/// is where a gitlink is told apart from a file. `None` where git said no.
+fn staged_index(directory: &Path, elsewhere: bool) -> Option<Vec<u8>> {
+    let mut command = crate::shim::inner_tool("git");
+    if elsewhere {
+        crate::git::elsewhere(&mut command);
+    }
+    let listed = command
+        .args(["ls-files", "-z", "-s"])
+        .current_dir(directory)
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    listed.status.success().then_some(listed.stdout)
+}
+
+/// One `git ls-files -z -s` listing, split into the paths it tracks as files
+/// and the paths it pins, each sorted and once. A path in conflict is listed
+/// once per stage by git, and is one path here.
+fn split_index(listed: &[u8]) -> (Vec<String>, Vec<String>) {
+    let mut files: BTreeSet<String> = BTreeSet::new();
+    let mut pins: BTreeSet<String> = BTreeSet::new();
+    for entry in listed.split(|byte| *byte == 0) {
+        let entry = String::from_utf8_lossy(entry);
+        // `<mode> <object> <stage>\t<path>`: the tab is the one separator a
+        // path cannot be confused with, since git quotes nothing under `-z`.
+        let Some((meta, path)) = entry.split_once('\t') else {
+            continue;
+        };
+        if meta.split(' ').next() == Some("160000") {
+            pins.insert(path.to_owned());
+        } else {
+            files.insert(path.to_owned());
+        }
+    }
+    (files.into_iter().collect(), pins.into_iter().collect())
+}
+
+/// The index of the member pinned at `pin` in the repository at `parent`, or
+/// why it cannot be read.
+///
+/// Refused in the shape `uphold supply-chain` refuses a moved submodule that is
+/// not checked out: the mount by name and the command that fixes it. A mount
+/// git marks inactive is refused even where a checkout is present, because
+/// that is the mount `--recurse-submodules` would have skipped without a word,
+/// and `git submodule update --init <path>` is what marks it active again.
+fn open_mount(
+    root: &Path,
+    parent: &str,
+    pin: &str,
+    mount: &str,
+    inactive: bool,
+) -> Result<Vec<u8>> {
+    let remedy = if parent.is_empty() {
+        format!("git submodule update --init {pin}")
+    } else {
+        format!("git -C {parent} submodule update --init {pin}")
+    };
+    let member = root.join(mount);
+    if !crate::git::is_checked_out(&member) {
+        return Err(Fatal::new(format!(
+            "the repository pinned at {mount} is not checked out, so the files a \
+             `files.reach = \"pinned\"` rule claims cannot be read. Run `{remedy}`. A rule \
+             that claims the pinned content and cannot read part of it has not looked"
+        )));
+    }
+    if inactive {
+        return Err(Fatal::new(format!(
+            "the repository pinned at {mount} is checked out and git marks it inactive \
+             (`submodule.<name>.active`, or a `submodule.active` that does not match it), so \
+             the files a `files.reach = \"pinned\"` rule claims are not ones this checkout \
+             keeps current. Run `{remedy}`, which marks it active. A rule that claims the \
+             pinned content and cannot read part of it has not looked"
+        )));
+    }
+    staged_index(&member, true).ok_or_else(|| {
+        Fatal::new(format!(
+            "git ls-files failed inside the repository pinned at {mount}, so the files a \
+             `files.reach = \"pinned\"` rule claims cannot be listed. Run `{remedy}`. A rule \
+             that claims the pinned content and cannot read part of it has not looked"
+        ))
+    })
+}
+
+/// Which of `pins` git counts inactive in the repository at `container`.
+///
+/// `git submodule status` marks an inactive submodule `-`, which is git's own
+/// reading of `submodule.<name>.active`, `submodule.active` and the URL
+/// fallback together, rather than a second reading of the three here. Asked
+/// once for the repository, because each call costs a process that walks
+/// every submodule's state, and asked per pin only where the whole question
+/// was refused -- git refuses it outright when any one gitlink has no
+/// `.gitmodules` entry -- or a pin's line could not be found in the answer.
+fn inactive_pins(container: &Path, elsewhere: bool, pins: &[String]) -> Result<BTreeSet<String>> {
+    let mut inactive = BTreeSet::new();
+    if pins.is_empty() {
+        return Ok(inactive);
+    }
+    let listing = submodule_status(container, elsewhere, None)?;
+    for pin in pins {
+        let flag = match listing
+            .as_deref()
+            .and_then(|listing| status_flag(listing, pin))
+        {
+            Some(flag) => Some(flag),
+            None => submodule_status(container, elsewhere, Some(pin))?
+                .as_deref()
+                .and_then(|alone| status_flag(alone, pin)),
+        };
+        if flag == Some('-') {
+            inactive.insert(pin.clone());
+        }
+    }
+    Ok(inactive)
+}
+
+/// `git submodule status`, for the repository or for one pin in it. `None`
+/// where git refused, which for a gitlink with no `.gitmodules` entry is the
+/// answer: it has no activity setting to read, and is not inactive -- its
+/// checkout is read or refused on whether it is there.
+fn submodule_status(
+    container: &Path,
+    elsewhere: bool,
+    pin: Option<&str>,
+) -> Result<Option<String>> {
+    let mut args = vec!["submodule", "status"];
+    if let Some(pin) = pin {
+        args.extend(["--", pin]);
+    }
+    if elsewhere {
+        crate::git::try_run_elsewhere(container, &args)
+    } else {
+        crate::git::try_run(container, &args)
+    }
+}
+
+/// The flag `git submodule status` gave `pin`: ` `, `-`, `+` or `U`.
+///
+/// A line is `<flag><object> <path>`, followed by ` (<describe>)` for a
+/// checkout. The path is matched whole against the pin, so `sub` does not
+/// answer for `sub2`, nor `sub (x` for `sub`.
+fn status_flag(listing: &str, pin: &str) -> Option<char> {
+    let described = format!("{pin} (");
+    listing.lines().find_map(|line| {
+        let mut characters = line.chars();
+        let flag = characters.next()?;
+        let (_, path) = characters.as_str().split_once(' ')?;
+        (path == pin || path.starts_with(&described)).then_some(flag)
+    })
+}
+
 /// The files one rule searches, chosen once, at build time.
 ///
 /// Chosen at build time because every way choosing them can fail -- an
@@ -195,6 +487,10 @@ pub(crate) struct Selection {
 
 impl Selection {
     pub(crate) fn build(root: &Path, rule: &Rule, not_text: &[String]) -> Result<Self> {
+        if rule.reach() == Reach::Pinned {
+            let pinned = Pinned::read(root)?;
+            return Self::build_over(root, rule, not_text, pinned.as_ref());
+        }
         let overrides = overrides_for(root, rule, not_text)?;
         let roots = search_roots(root, rule)?;
         // An index if there is one, and a walk only where there is not.
@@ -202,6 +498,35 @@ impl Selection {
             || by_walking(root, &roots, &overrides),
             |tracked| from_index(root, &roots, &overrides, &tracked),
         );
+        Ok(Self { files, unreadable })
+    }
+
+    /// The selection of a `files.reach = "pinned"` rule, over pins the caller
+    /// read once for the whole run rather than once per rule.
+    ///
+    /// The globs are the superproject's and are applied to superproject-relative
+    /// paths, so gitignore's rooting holds across the mounts: a leading-slash
+    /// exclude is anchored at the superproject's root, and a bare name matches
+    /// at any depth, inside a mount as well. `None` is a tree with no index,
+    /// which is walked as a repository rule's is.
+    pub(crate) fn build_over(
+        root: &Path,
+        rule: &Rule,
+        not_text: &[String],
+        pinned: Option<&Pinned>,
+    ) -> Result<Self> {
+        let Some(pinned) = pinned else {
+            let overrides = overrides_for(root, rule, not_text)?;
+            let roots = search_roots(root, rule)?;
+            let (files, unreadable) = by_walking(root, &roots, &overrides);
+            return Ok(Self { files, unreadable });
+        };
+        let mut declared = not_text.to_vec();
+        declared.extend(pinned.not_text.iter().cloned());
+        let overrides = overrides_for(root, rule, &declared)?;
+        let roots = search_roots(root, rule)?;
+        let (files, mut unreadable) = from_index(root, &roots, &overrides, &pinned.tracked);
+        unreadable.extend(pinned.unmeasured.iter().cloned());
         Ok(Self { files, unreadable })
     }
 
@@ -805,5 +1130,307 @@ mod tests {
             !declared.iter().any(|path| path.starts_with("tracked/")),
             "{declared:?}"
         );
+    }
+
+    // -- files.reach = "pinned" ----------------------------------------------
+
+    /// A superproject pinning `sub`, whose own tracked files are `files`.
+    fn superproject(label: &str, files: &[(&str, &str)]) -> PathBuf {
+        let member = repository(&format!("{label}-member"));
+        for (relative, contents) in files {
+            write(&member, relative, contents);
+        }
+        crate::fixture::git(&member, &["add", "-f", "-A", "."]);
+        crate::fixture::git(&member, &["commit", "-q", "-m", "member"]);
+        let root = repository(label);
+        write(&root, "README.md", "root\n");
+        crate::fixture::git(
+            &root,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                &member.display().to_string(),
+                "sub",
+            ],
+        );
+        crate::fixture::git(&root, &["add", "-f", "-A", "."]);
+        root
+    }
+
+    fn pinned(files: Files) -> Rule {
+        rule(Files {
+            reach: Some(Reach::Pinned),
+            ..files
+        })
+    }
+
+    #[test]
+    fn the_index_splits_into_files_and_pins_and_a_conflict_is_one_path() {
+        let listed = b"100644 aaaa 0\ta file.txt\0\
+                       160000 bbbb 0\tsub\0\
+                       100644 cccc 1\tboth.txt\0\
+                       100644 dddd 2\tboth.txt\0\
+                       120000 eeee 0\tlink\0\
+                       no tab here\0";
+        let (files, pins) = split_index(listed);
+        assert_eq!(files, ["a file.txt", "both.txt", "link"]);
+        assert_eq!(pins, ["sub"]);
+    }
+
+    #[test]
+    fn a_path_under_an_include_root_is_selected_and_one_outside_it_is_not() {
+        let root = repository("selects");
+        let scoped = rule(Files {
+            include: Some(vec!["src".to_owned()]),
+            ..Files::default()
+        });
+        assert!(selects(&root, &scoped, Path::new("src/a.rs")).unwrap());
+        assert!(!selects(&root, &scoped, Path::new("docs/a.md")).unwrap());
+        assert!(selects(&root, &rule(Files::default()), Path::new("a.md")).unwrap());
+    }
+
+    #[test]
+    fn a_status_line_answers_for_its_own_pin_and_no_other() {
+        let listing =
+            "-1111 sub\n 2222 sub2 (heads/main)\n+3333 a b (v1.0-2-g3333)\nU4444 odd (x\n";
+        assert_eq!(status_flag(listing, "sub"), Some('-'));
+        assert_eq!(status_flag(listing, "sub2"), Some(' '));
+        assert_eq!(status_flag(listing, "a b"), Some('+'));
+        assert_eq!(status_flag(listing, "odd (x"), Some('U'));
+        assert_eq!(status_flag(listing, "su"), None);
+        assert_eq!(status_flag("", "sub"), None);
+    }
+
+    #[test]
+    fn a_path_under_a_mount_is_joined_with_gits_separator() {
+        assert_eq!(under_mount("", "a.txt"), "a.txt");
+        assert_eq!(under_mount("sub", "docs/a.txt"), "sub/docs/a.txt");
+    }
+
+    #[test]
+    fn the_mount_that_holds_a_path_is_the_deepest_and_not_a_name_prefix() {
+        let pinned = Pinned {
+            mounts: vec!["a".to_owned(), "a/b".to_owned(), "ab".to_owned()],
+            ..Pinned::default()
+        };
+        assert_eq!(pinned.mount_of("a/b/c.md"), Some(("a/b", "c.md")));
+        assert_eq!(pinned.mount_of("a/c.md"), Some(("a", "c.md")));
+        assert_eq!(pinned.mount_of("ab/c.md"), Some(("ab", "c.md")));
+        assert_eq!(pinned.mount_of("abc/c.md"), None);
+        assert_eq!(pinned.mount_of("a"), None);
+        assert_eq!(pinned.mount_of("README.md"), None);
+    }
+
+    #[test]
+    fn the_pins_are_read_from_the_index_and_each_member_asked_for_its_own() {
+        let root = superproject("pins", &[("a.txt", "a\n"), ("docs/b.md", "b\n")]);
+        let pinned = Pinned::read(&root).unwrap().unwrap();
+        assert_eq!(pinned.mounts, ["sub"]);
+        for path in ["README.md", ".gitmodules", "sub/a.txt", "sub/docs/b.md"] {
+            assert!(
+                pinned.tracked.iter().any(|tracked| tracked == path),
+                "{path} in {:?}",
+                pinned.tracked
+            );
+        }
+        // The gitlink itself is a pointer and not a file of anybody's.
+        assert!(!pinned.tracked.iter().any(|tracked| tracked == "sub"));
+        assert!(pinned.unmeasured.is_empty(), "{:?}", pinned.unmeasured);
+    }
+
+    #[test]
+    fn a_directory_with_no_index_has_no_pins_to_read() {
+        let root = workspace("pins-no-index");
+        assert!(Pinned::read(&root).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_pinned_rule_selects_the_members_files_and_a_repository_rule_does_not() {
+        let root = superproject("reach", &[("a.txt", "a\n")]);
+        let reaching = Selection::build(&root, &pinned(Files::default()), &[])
+            .unwrap()
+            .files();
+        assert!(reaching.contains(&"sub/a.txt".to_owned()), "{reaching:?}");
+        assert!(reaching.contains(&"README.md".to_owned()), "{reaching:?}");
+        let staying = selected(&root, Files::default());
+        assert!(
+            !staying.iter().any(|path| path.starts_with("sub/")),
+            "{staying:?}"
+        );
+        assert!(staying.contains(&"README.md".to_owned()), "{staying:?}");
+    }
+
+    #[test]
+    fn an_anchored_exclude_stays_at_the_superproject_root_and_a_bare_one_reaches_into_mounts() {
+        let root = superproject("reach-globs", &[("vendor.txt", "m\n"), ("keep.txt", "k\n")]);
+        write(&root, "vendor.txt", "r\n");
+        crate::fixture::git(&root, &["add", "-f", "vendor.txt"]);
+
+        let anchored = Selection::build(
+            &root,
+            &pinned(Files {
+                exclude: vec!["/vendor.txt".to_owned()],
+                ..Files::default()
+            }),
+            &[],
+        )
+        .unwrap()
+        .files();
+        assert!(!anchored.contains(&"vendor.txt".to_owned()), "{anchored:?}");
+        assert!(
+            anchored.contains(&"sub/vendor.txt".to_owned()),
+            "{anchored:?}"
+        );
+
+        let bare = Selection::build(
+            &root,
+            &pinned(Files {
+                exclude: vec!["vendor.txt".to_owned()],
+                ..Files::default()
+            }),
+            &[],
+        )
+        .unwrap()
+        .files();
+        assert!(
+            !bare.iter().any(|path| path.ends_with("vendor.txt")),
+            "{bare:?}"
+        );
+        assert!(bare.contains(&"sub/keep.txt".to_owned()), "{bare:?}");
+
+        // And a glob is the same: rooted where it has a slash, at any depth
+        // where it has none.
+        let globbed = Selection::build(
+            &root,
+            &pinned(Files {
+                glob: vec!["vendor.txt".to_owned()],
+                ..Files::default()
+            }),
+            &[],
+        )
+        .unwrap()
+        .files();
+        assert_eq!(globbed, ["sub/vendor.txt", "vendor.txt"]);
+    }
+
+    #[test]
+    fn an_include_inside_a_mount_selects_only_under_it() {
+        let root = superproject("reach-include", &[("docs/a.md", "a\n"), ("b.md", "b\n")]);
+        let files = Selection::build(
+            &root,
+            &pinned(Files {
+                include: Some(vec!["sub/docs".to_owned()]),
+                ..Files::default()
+            }),
+            &[],
+        )
+        .unwrap()
+        .files();
+        assert_eq!(files, ["sub/docs/a.md"]);
+    }
+
+    #[test]
+    fn a_members_not_text_declaration_is_asked_inside_the_member() {
+        let root = superproject(
+            "reach-attributes",
+            &[
+                (".gitattributes", "*.bin -text\n"),
+                ("capture.bin", "c\n"),
+                ("a.txt", "a\n"),
+            ],
+        );
+        let pinned_content = Pinned::read(&root).unwrap().unwrap();
+        assert_eq!(pinned_content.not_text(), ["sub/capture.bin"]);
+        // The superproject's own question does not see it.
+        let (own, unmeasured) = not_text_paths(&root);
+        assert!(own.is_empty(), "{own:?}");
+        assert!(unmeasured.is_none());
+
+        let files = Selection::build(&root, &pinned(Files::default()), &[])
+            .unwrap()
+            .files();
+        assert!(!files.contains(&"sub/capture.bin".to_owned()), "{files:?}");
+        assert!(files.contains(&"sub/a.txt".to_owned()), "{files:?}");
+    }
+
+    #[test]
+    fn a_member_that_cannot_be_asked_for_its_attributes_is_unmeasured_not_clean() {
+        let mut pinned_content = Pinned::default();
+        let root = workspace("reach-unmeasured");
+        // Not a repository, so `check-attr` exits non-zero inside it.
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        pinned_content.ask_not_text(&root, "sub", &["a.txt".to_owned()]);
+        assert!(pinned_content.not_text.is_empty());
+        assert_eq!(
+            pinned_content.unmeasured.len(),
+            1,
+            "{:?}",
+            pinned_content.unmeasured
+        );
+        assert!(
+            pinned_content.unmeasured[0].starts_with("sub/.gitattributes: "),
+            "{:?}",
+            pinned_content.unmeasured
+        );
+        // And carried to exit 2 through every pinned selection.
+        let selection =
+            Selection::build_over(&root, &pinned(Files::default()), &[], Some(&pinned_content))
+                .unwrap();
+        assert_eq!(selection.unreadable(), pinned_content.unmeasured.as_slice());
+    }
+
+    #[test]
+    fn an_uninitialised_mount_is_refused_naming_it_and_the_remedy() {
+        let root = superproject("reach-uninitialised", &[("a.txt", "a\n")]);
+        crate::fixture::git(&root, &["commit", "-q", "-m", "pin"]);
+        crate::fixture::git(&root, &["submodule", "deinit", "-q", "-f", "sub"]);
+        let error = Pinned::read(&root).unwrap_err().to_string();
+        assert!(
+            error.contains("pinned at sub is not checked out"),
+            "{error}"
+        );
+        assert!(
+            error.contains("`git submodule update --init sub`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_checked_out_mount_git_marks_inactive_is_refused() {
+        let root = superproject("reach-inactive", &[("a.txt", "a\n")]);
+        crate::fixture::git(&root, &["config", "submodule.sub.active", "false"]);
+        let error = Pinned::read(&root).unwrap_err().to_string();
+        assert!(error.contains("marks it inactive"), "{error}");
+        assert!(
+            error.contains("`git submodule update --init sub`"),
+            "{error}"
+        );
+        assert!(
+            inactive_pins(&root, false, &["absent".to_owned()])
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_gitlink_with_no_gitmodules_entry_is_read_where_it_is_checked_out() {
+        // `git add` of a nested repository records a gitlink with no URL, so
+        // git keeps no activity setting for it and refuses to be asked. The
+        // pin is still the claim, and its checkout is right there.
+        let root = repository("reach-embedded");
+        let embedded = root.join("embedded");
+        std::fs::create_dir_all(&embedded).unwrap();
+        crate::fixture::git(&embedded, &["init", "-q", "-b", "main"]);
+        crate::fixture::git(&embedded, &["config", "user.name", "Test"]);
+        crate::fixture::git(&embedded, &["config", "user.email", "test@example.test"]);
+        write(&embedded, "inside.txt", "i\n");
+        crate::fixture::git(&embedded, &["add", "inside.txt"]);
+        crate::fixture::git(&embedded, &["commit", "-q", "-m", "embedded"]);
+        crate::fixture::git(&root, &["add", "embedded"]);
+        let pinned_content = Pinned::read(&root).unwrap().unwrap();
+        assert_eq!(pinned_content.tracked, ["embedded/inside.txt"]);
     }
 }

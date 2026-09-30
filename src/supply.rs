@@ -749,7 +749,7 @@ fn expand_gitlink(
     out: &mut BTreeSet<PathBuf>,
 ) -> Result<()> {
     let directory = root.join(submodule);
-    if directory.join(".git").symlink_metadata().is_err() {
+    if !crate::git::is_checked_out(&directory) {
         return Err(Fatal::new(format!(
             "the submodule {} moved in this range and is not checked out, so its manifests \
              cannot be read. Run `git submodule update --init {}`, or scan the whole tree \

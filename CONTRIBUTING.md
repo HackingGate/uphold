@@ -92,7 +92,7 @@ The records under `docs/adr/` stay as history and are cited as they are. No new
 one is added: the `adr-freeze` rule in `policy/principles.toml` refuses any
 other file under that directory, and its message names the remedy.
 [ADR 0012](docs/adr/0012-a-rule-may-reach-the-content-its-repository-pins.md)
-stands at Proposed until the owner rules it.
+is Accepted and implemented as `files.reach`.
 
 ## Working on the engine
 

@@ -9,11 +9,11 @@ use regex::Regex;
 use tree_sitter::Parser;
 use unicode_script::{Script, UnicodeScript};
 
-use crate::config::{Check, CheckKind, Files, Policy, Rule};
+use crate::config::{Check, CheckKind, Files, Policy, Reach, Rule};
 use crate::engine::{self, Hit, Query};
 use crate::error::{Fatal, Result};
 use crate::report::{Failure, body_for};
-use crate::selection::{Selection, normalize_rel, not_text_paths};
+use crate::selection::{Pinned, Selection, normalize_rel, not_text_paths};
 
 /// The command name a `command_sources` pattern captures out of a path.
 ///
@@ -137,6 +137,10 @@ pub(crate) struct Scan<'a> {
     root: &'a Path,
     policy: &'a Policy,
     not_text: Vec<String>,
+    /// The pinned content, read once where a rule declares
+    /// `files.reach = "pinned"` and not at all otherwise, so a policy with no
+    /// such rule runs no git command it did not run before the field existed.
+    pinned: Option<Pinned>,
     /// Every path any rule's selection knew about and could not open.
     ///
     /// Interior mutability because `run` takes `&self` and every check arm
@@ -177,7 +181,7 @@ pub(crate) struct Scan<'a> {
 }
 
 impl<'a> Scan<'a> {
-    pub(crate) fn new(root: &'a Path, policy: &'a Policy) -> Self {
+    pub(crate) fn new(root: &'a Path, policy: &'a Policy) -> Result<Self> {
         // A `.gitattributes` question that could not be answered is seeded into
         // the unreadable list rather than dropped, because the scan continues
         // either way and the reader has to be told which of the two answers they
@@ -187,18 +191,64 @@ impl<'a> Scan<'a> {
         if let Some(reason) = unmeasured {
             unreadable.insert(reason);
         }
-        Self {
+        // Read before any rule runs, so a mount that cannot be read stops the
+        // run as a whole: the pinned rules would each have to report it, and
+        // the repository rules' findings would arrive beside a claim on the
+        // pinned content that nothing made.
+        let pinned = if policy
+            .rules
+            .iter()
+            .any(|rule| rule.reads_files() && rule.reach() == Reach::Pinned)
+        {
+            Pinned::read(root)?
+        } else {
+            None
+        };
+        Ok(Self {
             root,
             policy,
             not_text,
+            pinned,
             unreadable: RefCell::new(unreadable),
             below_floor: RefCell::new(BTreeMap::new()),
             declared_encodings: RefCell::new(None),
-        }
+        })
     }
 
-    pub(crate) fn not_text(&self) -> &[String] {
-        &self.not_text
+    /// Every path the scan skipped as declared not text: this repository's,
+    /// and the pinned members' under their mount paths where a pinned rule
+    /// read them.
+    pub(crate) fn not_text(&self) -> Vec<String> {
+        let mut skipped = self.not_text.clone();
+        if let Some(pinned) = &self.pinned {
+            skipped.extend(pinned.not_text().iter().cloned());
+        }
+        skipped
+    }
+
+    /// One rule's selection: over the pins read once for this run where the
+    /// rule reaches them, and over this repository's own index otherwise.
+    fn selection(&self, rule: &Rule) -> Result<Selection> {
+        if rule.reach() == Reach::Pinned {
+            return Selection::build_over(self.root, rule, &self.not_text, self.pinned.as_ref());
+        }
+        Selection::build(self.root, rule, &self.not_text)
+    }
+
+    /// The root of the repository that tracks `relative`, and the path
+    /// relative to that root: a pinned member's own root for a path inside a
+    /// mount, where a link written `/docs/a.md` means the member's `docs/` and
+    /// not the superproject's. This repository's root, and `relative` itself,
+    /// for every other path.
+    fn repository_of<'path>(&self, relative: &'path str) -> (PathBuf, &'path str) {
+        match self
+            .pinned
+            .as_ref()
+            .and_then(|pinned| pinned.mount_of(relative))
+        {
+            Some((mount, within)) => (self.root.join(mount), within),
+            None => (self.root.to_path_buf(), relative),
+        }
     }
 
     /// The paths this scan could not read, each with its reason.
@@ -313,7 +363,7 @@ impl<'a> Scan<'a> {
                 // declaration, so the file it selects stays undeclared rather
                 // than being decoded as something nobody wrote.
                 if let Some(encoding) = encoding_rs::Encoding::for_label(label.as_bytes()) {
-                    let selection = Selection::build(self.root, rule, &self.not_text)?;
+                    let selection = self.selection(rule)?;
                     self.unreadable
                         .borrow_mut()
                         .extend(selection.unreadable().iter().cloned());
@@ -407,7 +457,7 @@ impl<'a> Scan<'a> {
     }
 
     fn select(&self, rule: &Rule) -> Result<Vec<String>> {
-        let selection = Selection::build(self.root, rule, &self.not_text)?;
+        let selection = self.selection(rule)?;
         // Gathered here, at the one place every rule's selection passes
         // through, so no future check kind can acquire its own way of dropping
         // a path it could not open.
@@ -898,13 +948,22 @@ impl<'a> Scan<'a> {
                 Err(error) if error.kind() == std::io::ErrorKind::InvalidData => continue,
                 Err(error) => return Err(Fatal::at(&self.root.join(relative), error)),
             };
+            // A member's links are the member's: a leading `/` is its root, and
+            // leaving it is leaving the repository the document belongs to.
+            let (repository, within) = self.repository_of(relative);
+            let member_root = (repository != self.root).then(|| {
+                repository
+                    .canonicalize()
+                    .unwrap_or_else(|_| repository.clone())
+            });
+            let boundary = member_root.as_ref().unwrap_or(&canonical_root);
             for (line, target) in link_targets(&text) {
                 checked += 1;
-                let resolved = resolve_link(self.root, &target, relative);
+                let resolved = resolve_link(&repository, &target, within);
                 let canonical = resolved
                     .canonicalize()
                     .unwrap_or_else(|_| lexically_normalize(&resolved));
-                let inside = canonical.starts_with(&canonical_root);
+                let inside = canonical.starts_with(boundary);
                 if !inside {
                     if rule.allow_outside_repo() {
                         continue;
@@ -1146,7 +1205,8 @@ impl<'a> Scan<'a> {
             };
             for anchor in crate::anchors::parse(&text) {
                 checked += 1;
-                let Some(finding) = crate::anchors::resolve(&anchor, self.root) else {
+                let (repository, _) = self.repository_of(relative);
+                let Some(finding) = crate::anchors::resolve(&anchor, &repository) else {
                     continue;
                 };
                 hits.push(Hit {
