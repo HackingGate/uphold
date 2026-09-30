@@ -197,6 +197,16 @@ rule = "review-current"
 # would make this claim false is `--review --check` exiting 0 over a compiled
 # document that differs from what --emit would write now.
 
+[[enforce]]
+principle = "single-authoritative-source"
+rule = "adr-freeze"
+# A decision has one home, the Design record issue, where the ruling label and
+# the discussion live. The rule refuses a new file under docs/adr, which would
+# be a second home for the next decision. What would make this claim false is
+# the scan exiting 0 over a tracked docs/adr path that is not one of the
+# records the rule names; it does not see a decision written into some other
+# directory, and a renamed docs/adr selects nothing and reads clean.
+
 # What routes to a rule, and what routes to a reviewer.
 #
 # `enforcement.automatable = "yes"` says a machine CAN decide the principle. It

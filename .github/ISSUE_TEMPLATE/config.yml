@@ -1,0 +1,5 @@
+# A blank issue stays one click away. The design template carries the shape of
+# a Design record as prompts in the body rather than as required form fields,
+# because a form that refuses a filing it cannot satisfy moves the report
+# somewhere nobody tracks, and a thin issue is still an issue.
+blank_issues_enabled: true

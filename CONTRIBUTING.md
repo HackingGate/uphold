@@ -73,6 +73,27 @@ list, put it at that path, or point `private_owners_file` at it from the top of
 the policy file, and the two forms the note names are checked as well. See
 [REFERENCE.md](docs/REFERENCE.md#where-the-owner-list-lives).
 
+## Where a decision goes
+
+A change that needs a decision is a GitHub issue in the
+[Design record](.github/ISSUE_TEMPLATE/design.md) shape before a pull request
+exists: the decision in the body, and the research in a comment that carries
+the version, date and evidence of each claim. A Design record carries exactly
+one ruling label. The template files it with `ruling:pending`, and the ruling
+is recorded by replacing that label with `ruling:accepted`, `ruling:rejected`
+or `ruling:deferred`.
+
+The repository receives only what runs, plus
+[REFERENCE.md](docs/REFERENCE.md), which stays the normative statement of what
+uphold does now. Tracked files carry no issue numbers, dates or status lines;
+those stay in the Design record that rules the change.
+
+The records under `docs/adr/` stay as history and are cited as they are. No new
+one is added: the `adr-freeze` rule in `policy/principles.toml` refuses any
+other file under that directory, and its message names the remedy.
+[ADR 0012](docs/adr/0012-a-rule-may-reach-the-content-its-repository-pins.md)
+stands at Proposed until the owner rules it.
+
 ## Working on the engine
 
 The checks run at three stages, chosen by cost. The commit stage runs what can

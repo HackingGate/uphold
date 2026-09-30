@@ -1,5 +1,9 @@
 # Roadmap
 
+The direction of the work, by area. The live state -- what is scheduled, what
+is in progress, what is waiting on a ruling -- is the issue tracker's milestones
+and labels, and this page cites no issue by number.
+
 ## Catalog
 
 - Promote seed entries to reviewed status after source and field review; every
@@ -70,7 +74,7 @@ provenance in refusal output. The remaining work is per repository.
   `target/` and test corpora. Adopting it widens what is scanned, so it is done
   per repository rather than as a fleet sweep.
 
-## Evidence providers, and what issue 165 leaves open
+## Evidence providers, and what the evidence layer leaves open
 
 The evidence layer ([ADR 0008](docs/adr/0008-evidence-and-what-a-policy-may-consume.md))
 ships with three compiled-in providers (Git over the message, tree-sitter over
@@ -78,13 +82,13 @@ the staged trees, a pattern over the staged diff) and one policy,
 `removed-function-named`, that reads them. Not yet shipped:
 
 - **A compiler or LSP provider.** `symbol_defined`, `unresolved_reference` and
-  `type_changed` are kinds the issue names and nothing reports; a kind with no
-  provider would be dead configuration. ADR 0004 measured what the semantic tier
-  costs before a commit, so such a provider belongs at the manual stage or
-  nowhere.
+  `type_changed` are kinds the evidence-layer design names and nothing reports;
+  a kind with no provider would be dead configuration. ADR 0004 measured what
+  the semantic tier costs before a commit, so such a provider belongs at the
+  manual stage or nowhere.
 - **`dependency_edge` and layer kinds.** The architectural-boundary policy the
-  issue sketches needs a provider that resolves imports across modules, the
-  same tier as above.
+  evidence-layer design sketches needs a provider that resolves imports across
+  modules, the same tier as above.
 - **An `Inferred` provider.** The variant exists and is tested with a double;
   no provider produces it. Its seam is `uphold hook`, where an agent's own
   account of a change is already read. Whatever it reports is `Inferred` by

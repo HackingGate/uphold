@@ -8,6 +8,7 @@ Do NOT re-enforce the static rules. They run on every change and they run
 first; repeating their findings costs a reviewer's attention and buys a second
 opinion nobody asked for. The rules already active here are:
 
+- `adr-freeze`
 - `catalog-reference-current`
 - `catalog-tests`
 - `catalog-validate`
