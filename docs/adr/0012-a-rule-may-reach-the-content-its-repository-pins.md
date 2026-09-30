@@ -1,6 +1,6 @@
 # ADR 0012: a rule may reach the content its repository pins
 
-Status: Proposed
+Status: Accepted
 
 `uphold scan` reads what `git ls-files -z` lists (`index_bytes`,
 `src/selection.rs:150`) and drops every gitlink on purpose

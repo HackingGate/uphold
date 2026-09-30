@@ -60,7 +60,7 @@ does not run.**
 
 | keys | vocabulary | runs it |
 |---|---|---|
-| `files.*` | ripgrep scoping — `glob`, `multiline`, `fixed_strings` — and `min_selected`, the floor under what the scoping leaves | `uphold scan` |
+| `files.*` | ripgrep scoping — `glob`, `multiline`, `fixed_strings` — `min_selected`, the floor under what the scoping leaves, and `reach`, `"repository"` (the default) or `"pinned"` for the content the repository's submodules pin | `uphold scan` |
 | `git.hooks` | githooks(5) names — `pre-commit`, `commit-msg`, `pre-merge-commit`, `pre-push`, `manual` | `uphold guard --stage <hook>` |
 | `command.before` | the command line as typed — `"gh pr create"`, `"git push"` | `uphold shim <command>` |
 
@@ -346,6 +346,62 @@ counts links and `require_any_anchor` counts anchors. A `links-resolve` rule may
 hold both; they fail differently, and a glob typo is caught by the one that
 counts files.
 
+### A rule may reach the content its repository pins
+
+`files.reach` says whose tracked files a rule selects from. `"repository"` is
+this repository's own, and is what an absent key means. `"pinned"` adds the
+content of every submodule the index pins, selected under its mount path:
+
+```toml
+[rule.member-readmes-name-an-owner]
+require_regexp = '(?m)^Owner: '
+message = "every member says who owns it"
+files.glob = ["/*/README.md"]
+files.reach = "pinned"
+files.min_selected = 1
+```
+
+The pins are the gitlinks in the index (mode `160000` in `git ls-files -s`),
+and each member is asked for its own `git ls-files` inside it. A member that
+pins members of its own is followed the same way, at every depth. Not
+`git ls-files --recurse-submodules`: that follows git's active-submodule
+filter, and a rule that claims the pinned content must not pass over part of it
+without a word.
+
+- **A pinned mount that cannot be read is exit `2`**: not checked out, or
+  checked out and marked inactive by `submodule.<name>.active` or
+  `submodule.active`. The message names the mount and
+  `git submodule update --init <path>`, which checks it out and marks it active.
+  A CI checkout without `--recurse-submodules` goes red on a pinned rule, on
+  purpose. A repository that pins nothing reads the same as at
+  `"repository"`.
+- **Paths are mount-prefixed everywhere**: findings, path baselines and size
+  baselines key on `member/sub/file`, and `files.include` may name a directory
+  inside a mount. `files.min_selected` counts the prefixed files.
+- **The globs are the superproject's.** `include`, `exclude` and `glob` keep
+  their gitignore meaning, rooted at the superproject: `/vendor.txt` is the
+  superproject's own file, and `vendor.txt` matches at any depth, inside mounts
+  too.
+- **A member's `.gitattributes` is asked inside the member**, so a file it
+  declares `-text` is skipped and listed like the superproject's own. A member
+  whose attributes cannot be asked is exit `2`, as the superproject's is.
+- **A link in a member's Markdown is the member's.** A leading `/` resolves
+  against the member's root, and a link leaving the member is outside the
+  repository, for `links-resolve` and `anchors-resolve` alike.
+- **Nothing the member declares about policy is read**: not its policy file,
+  not its excludes. The rule is the superproject's, and so is the verdict.
+
+The direction is one-way. A member never borrows upward: run in a member with
+no policy of its own, uphold stops at the member's root rather than loading the
+superproject's. A repository may judge, downward, the content it pins, and
+reports it under the mount path.
+
+`files.reach` is refused on a guard built-in's `[rule.files]`, for the reason
+`min_selected` is: there it scopes the bytes a hook is about to record, and no
+path it is handed lies inside a mount. `uphold rules --effective --json` carries
+`"reach": "pinned"` on a rule that declares it, and nothing on one that does
+not.
+
 ### A rule may not be about its own declaration
 
 A policy file is a tracked file, so a rule's `regexp` and `require_regexp` are
@@ -406,6 +462,11 @@ everyone who clones it, and a walker that honored those patterns could not see
 it. In a directory git has no index for, the tree is walked instead with **no**
 ignore file consulted, which selects a superset of what would be tracked.
 Over-reporting is the direction a checker may fail in; hiding a file is not.
+
+**A submodule is its own repository**, so its content is not among a rule's
+files: the gitlink is a pointer, and the scan passes over it. A rule that
+declares `files.reach = "pinned"` claims that content too. See
+[A rule may reach the content its repository pins](#a-rule-may-reach-the-content-its-repository-pins).
 
 A path a rule selected and could not open — an unstaged deletion, a sparse
 checkout, a directory this process may not enter — is **named on stderr and is
