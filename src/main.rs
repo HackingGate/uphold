@@ -637,7 +637,7 @@ fn scan_command(arguments: &[OsString]) -> Result<Exit> {
     };
 
     let policy = config::load(&root, &policy_path)?;
-    let scanner = scan::Scan::new(&root, &policy);
+    let scanner = scan::Scan::new(&root, &policy)?;
     let failures = scanner.run()?;
     for failure in &failures {
         failure.print();
@@ -967,6 +967,12 @@ struct EffectiveRule<'rule> {
     /// whose only place is `command.before` reconciled green in a repository
     /// where nothing runs it. The loader knows; it says so here.
     seams: Vec<&'static str>,
+    /// `"pinned"` where the rule's selection reaches the content this
+    /// repository pins. Only there, for the reason `overridden` gives: the
+    /// entry of every rule that reads only its own repository is what it was
+    /// before the field existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reach: Option<config::Reach>,
     /// Which fields of an inherited rule an override changed. Only where one
     /// did, so the entry of every rule no override touches is what it was
     /// before the field existed.
@@ -1009,11 +1015,16 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
             // Which parts of an inherited rule this policy changed, so a
             // reworded message or a widened selection reads as local rather
             // than as the set's.
+            let reach = if rule.reach() == config::Reach::Pinned {
+                "  [reach: pinned]"
+            } else {
+                ""
+            };
             if rule.overridden.is_empty() {
-                println!("  {}  ({at})", rule.id);
+                println!("  {}  ({at}){reach}", rule.id);
             } else {
                 println!(
-                    "  {}  ({at})  [override: {}]",
+                    "  {}  ({at}){reach}  [override: {}]",
                     rule.id,
                     rule.overridden.join(", ")
                 );
@@ -1029,6 +1040,7 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
             id: &rule.id,
             git_hooks: rule.hooks(),
             seams: rule.seams(),
+            reach: (rule.reach() == config::Reach::Pinned).then_some(config::Reach::Pinned),
             overridden: &rule.overridden,
         })
         .collect();

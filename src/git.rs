@@ -60,10 +60,30 @@ pub(crate) fn try_run(root: &Path, args: &[&str]) -> Result<Option<String>> {
 pub(crate) fn try_run_elsewhere(directory: &Path, args: &[&str]) -> Result<Option<String>> {
     let mut command = crate::shim::inner_tool("git");
     command.current_dir(directory);
+    answer(elsewhere(&mut command), args)
+}
+
+/// A git command aimed at a repository other than the hooked one, with the
+/// hooked repository's environment taken away.
+///
+/// The one place that decides what "elsewhere" strips, so a caller that has to
+/// build its own `Command` -- one that speaks to git over stdin, which
+/// [`try_run_elsewhere`] does not -- strips the same list rather than a copy.
+pub(crate) fn elsewhere(command: &mut std::process::Command) -> &mut std::process::Command {
     for name in REPOSITORY_ENVIRONMENT {
         command.env_remove(name);
     }
-    answer(&mut command, args)
+    command
+}
+
+/// Whether a gitlink's mount holds a checkout: a `.git` file or directory is
+/// what `git submodule update --init` leaves there, and an uninitialised mount
+/// is an empty directory, or no directory at all.
+///
+/// Asked by every reader that follows a pin into the member, so "not checked
+/// out" means one thing across them.
+pub(crate) fn is_checked_out(mount: &Path) -> bool {
+    mount.join(".git").symlink_metadata().is_ok()
 }
 
 fn answer(command: &mut std::process::Command, args: &[&str]) -> Result<Option<String>> {

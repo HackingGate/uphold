@@ -239,6 +239,35 @@ pub(crate) struct Files {
     /// shape `trivial_comments = false` is refused for.
     #[serde(default)]
     pub min_selected: Option<u64>,
+    /// Whose tracked files the selection is drawn from: this repository's own
+    /// (`"repository"`, and what an absent key means), or those plus the
+    /// content of every repository its index pins (`"pinned"`).
+    ///
+    /// An `Option` rather than a defaulted value so that a rule written before
+    /// the field existed serializes exactly as it did, into the bundled-set
+    /// lock and everywhere else a rule is printed.
+    #[serde(default)]
+    pub reach: Option<Reach>,
+}
+
+/// How far down a rule's selection reaches.
+///
+/// `Repository` is what every rule did before the field existed: the files
+/// this repository's index lists, a gitlink skipped as another repository's
+/// content. `Pinned` is a claim about the content the repository pins as well:
+/// each gitlink in the index is asked for its own tracked files, which are
+/// selected under the mount path. The pin is what makes the content this
+/// repository's business -- a member never borrows upward, and a repository
+/// may judge, downward, what it pins.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Reach {
+    /// This repository's own tracked files.
+    #[default]
+    Repository,
+    /// This repository's own tracked files and those of every repository it
+    /// pins, at every depth, under their mount paths.
+    Pinned,
 }
 
 /// The five stage names a rule may run at: four of git's own, spelled as

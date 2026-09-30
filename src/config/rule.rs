@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-use super::{CommandWhere, Files, Git, Origin};
+use super::{CommandWhere, Files, Git, Origin, Reach};
 use crate::error::{Fatal, Result};
 use crate::text::{Judged, Seam};
 
@@ -1322,6 +1322,12 @@ impl Rule {
             .unwrap_or_else(|| DEFAULTS.get_or_init(Files::default))
     }
 
+    /// How far this rule's selection reaches, `Repository` where the rule
+    /// does not say.
+    pub(crate) fn reach(&self) -> Reach {
+        self.files().reach.unwrap_or_default()
+    }
+
     /// Whether this rule searches files at all. Absent `files.*` keys are the
     /// answer, not a default to fill in.
     pub(crate) const fn reads_files(&self) -> bool {
@@ -1537,6 +1543,7 @@ impl Rule {
 
         self.validate_prose(check)?;
         self.validate_selection_floor()?;
+        self.validate_reach()?;
 
         // The label is resolved at load, so a typo is a refusal here and not a
         // rule that fails every file it selects.
@@ -1857,6 +1864,30 @@ impl Rule {
              field exists to catch. Write `1` for \"this rule still selects something\", or \
              delete the line",
         )
+    }
+
+    /// The `files.reach` half of [`Rule::validate`]: a reach needs a selection
+    /// for it to widen.
+    ///
+    /// Refused where `min_selected` is refused and for the same reason: a
+    /// guard built-in's `[rule.files]` scopes the bytes git is about to record
+    /// one path at a time, and nothing it is handed lies inside a mount. A
+    /// `"pinned"` there would read as a claim on the pinned content that no
+    /// seam ever makes.
+    fn validate_reach(&self) -> Result<()> {
+        if self.reach() == Reach::Repository || self.selection_is_counted() {
+            return Ok(());
+        }
+        Err(Fatal::new(format!(
+            "rule {:?}: `files.reach = \"pinned\"` widens the selection `uphold scan` builds \
+             to the repositories this one pins, and built-in {:?} runs at a git hook over the \
+             bytes git is about to record -- its `files.*` keys scope that guard one path at a \
+             time, and no path it is handed lies inside a mount. On this rule the field would \
+             be read by nothing. The built-ins the scan selects for are {}",
+            self.id,
+            self.builtin().unwrap_or_default(),
+            crate::guard::SCAN_BUILTINS.join(", ")
+        )))
     }
 
     /// The `seams` half of [`Rule::validate`]: the list names seams this
