@@ -225,6 +225,42 @@ files.exclude = ["**/tests/**", "**/test/**"]
 # The same selection as the rule above, and the same floor for the same reason.
 files.min_selected = 1
 
+# A decision is a Design record issue, and docs/adr is the history of the
+# decisions made before that. The records already written stay, and are cited
+# as they are; a new file beside them would be a second home for the next
+# decision, with no ruling label and no issue for the discussion to happen on.
+#
+# A path rule rather than prose: `path_regexp` reads the paths git tracks, so a
+# file staged under docs/adr is a finding at the commit that stages it. The
+# records that exist are excluded one by one, by exact path, so a new name is
+# refused even when it copies the numbering. Editing one of them in place
+# stays allowed, since an amendment to a status line is still history.
+#
+# No `files.min_selected`: the state this rule exists to hold is a selection
+# of nothing, so a floor cannot tell a frozen tree from a moved one.
+[rule.adr-freeze]
+message = """
+file a Design record issue (label design) instead; docs/adr is frozen history.
+The records already under docs/adr stay and are cited as they are; a decision
+not yet ruled goes to the issue tracker, and the repository receives what runs.
+"""
+path_regexp = '^docs/adr/'
+files.include = ["docs/adr"]
+files.exclude = [
+    "/docs/adr/0001-a-config-surface-a-stranger-can-read-in-one-minute.md",
+    "/docs/adr/0002-the-reach-of-a-command-shim.md",
+    "/docs/adr/0003-the-structural-tier-and-what-a-clean-run-means.md",
+    "/docs/adr/0004-the-semantic-tier-and-what-it-costs-to-be-sure.md",
+    "/docs/adr/0005-what-a-provider-must-answer.md",
+    "/docs/adr/0006-what-a-bundled-set-may-attach-to-a-command.md",
+    "/docs/adr/0007-what-the-surveyed-orchestrators-collapse.md",
+    "/docs/adr/0008-evidence-and-what-a-policy-may-consume.md",
+    "/docs/adr/0009-a-consumers-structural-rules-are-ast-greps.md",
+    "/docs/adr/0010-who-asks-whether-a-hook-pin-is-current.md",
+    "/docs/adr/0011-what-an-entry-is-where-it-is-used-and-how-a-check-sees-it.md",
+    "/docs/adr/0012-a-rule-may-reach-the-content-its-repository-pins.md",
+]
+
 # A hook's display name is the one line it prints while it runs, and it is read
 # by somebody who is not reading the file it came from. `uphold guard
 # (pre-commit)` meant the stage, and under prek the terminal said
