@@ -1181,6 +1181,18 @@ mod tests {
     }
 
     #[test]
+    fn a_path_under_an_include_root_is_selected_and_one_outside_it_is_not() {
+        let root = repository("selects");
+        let scoped = rule(Files {
+            include: Some(vec!["src".to_owned()]),
+            ..Files::default()
+        });
+        assert!(selects(&root, &scoped, Path::new("src/a.rs")).unwrap());
+        assert!(!selects(&root, &scoped, Path::new("docs/a.md")).unwrap());
+        assert!(selects(&root, &rule(Files::default()), Path::new("a.md")).unwrap());
+    }
+
+    #[test]
     fn a_status_line_answers_for_its_own_pin_and_no_other() {
         let listing =
             "-1111 sub\n 2222 sub2 (heads/main)\n+3333 a b (v1.0-2-g3333)\nU4444 odd (x\n";

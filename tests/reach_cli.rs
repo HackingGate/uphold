@@ -396,17 +396,16 @@ fn a_leading_slash_link_in_a_member_resolves_against_the_members_root() {
     );
 }
 
-#[test]
-fn a_member_that_pins_a_member_is_followed_at_every_depth() {
-    // The ADR leaves the depth open. A pin is a claim at every depth: the
-    // superproject pins the outer member's commit, and that commit pins its
-    // own member, so a rule claiming the pinned content reads both.
-    let outer = repository("reach-outer-source");
+/// A superproject pinning `outer`, which pins `inner`, whose `deep.md` carries
+/// the canary. `inner` is not checked out: the clone `submodule add` made of
+/// the outer member carries the pin and not the content.
+fn nested(kind: &str) -> PathBuf {
+    let outer = repository(&format!("{kind}-outer-source"));
     write(&outer, "outer.md", "clean\n");
     support::submodule(&outer, "inner", &[("deep.md", "CANARY at depth\n")]);
     commit(&outer, "pin the inner member");
 
-    let root = repository("reach-nested");
+    let root = repository(kind);
     write(&root, "README.md", "clean\n");
     support::git(
         &root,
@@ -422,18 +421,11 @@ fn a_member_that_pins_a_member_is_followed_at_every_depth() {
     );
     commit(&root, "pin the outer member");
     policy(&root, Some("pinned"), "exclude = [\"/policy/**\"]");
+    root
+}
 
-    // The inner member is not checked out yet: the clone `submodule add` made
-    // of the outer member carries the pin and not the content.
-    let output = scan(&root);
-    assert_eq!(code(&output), 2, "{}", text(&output));
-    assert!(text(&output).contains("outer/inner"), "{}", text(&output));
-    assert!(
-        text(&output).contains("git -C outer submodule update --init inner"),
-        "{}",
-        text(&output)
-    );
-
+/// Check out the inner member of a [`nested`] fixture.
+fn initialise_inner(root: &Path) {
     support::git(
         &root.join("outer"),
         &[
@@ -445,12 +437,77 @@ fn a_member_that_pins_a_member_is_followed_at_every_depth() {
             "inner",
         ],
     );
+}
+
+#[test]
+fn a_member_that_pins_a_member_is_followed_at_every_depth() {
+    // The ADR leaves the depth open. A pin is a claim at every depth: the
+    // superproject pins the outer member's commit, and that commit pins its
+    // own member, so a rule claiming the pinned content reads both.
+    let root = nested("reach-nested");
+    let output = scan(&root);
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    assert!(text(&output).contains("outer/inner"), "{}", text(&output));
+    assert!(
+        text(&output).contains("git -C outer submodule update --init inner"),
+        "{}",
+        text(&output)
+    );
+
+    initialise_inner(&root);
     let initialised = scan(&root);
     assert_eq!(code(&initialised), 1, "{}", text(&initialised));
     assert!(
         text(&initialised).contains("outer/inner/deep.md:1:"),
         "{}",
         text(&initialised)
+    );
+}
+
+#[test]
+fn a_scan_run_from_a_hook_asks_each_member_about_itself() {
+    // A hook runner exports `GIT_DIR` and `GIT_INDEX_FILE` for the repository
+    // the hook fired in, and each outranks `current_dir`. A git asked about a
+    // member with them still set answers about the superproject: its
+    // submodules, its index. So the member is asked with them taken away, at
+    // every depth -- here the inner member, which only the outer member's own
+    // configuration marks inactive.
+    let root = nested("reach-hooked");
+    initialise_inner(&root);
+    support::git(
+        &root.join("outer"),
+        &["config", "submodule.inner.active", "false"],
+    );
+    let hooked = |superproject: &Path| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+        support::without_git_environment(&mut command);
+        command
+            .arg("scan")
+            .env("GIT_DIR", superproject.join(".git"))
+            .env("GIT_INDEX_FILE", superproject.join(".git/index"))
+            .current_dir(superproject)
+            .output()
+            .unwrap()
+    };
+
+    let output = hooked(&root);
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    assert!(
+        text(&output).contains("pinned at outer/inner is checked out and git marks it inactive"),
+        "{}",
+        text(&output)
+    );
+
+    support::git(
+        &root.join("outer"),
+        &["config", "submodule.inner.active", "true"],
+    );
+    let active = hooked(&root);
+    assert_eq!(code(&active), 1, "{}", text(&active));
+    assert!(
+        text(&active).contains("outer/inner/deep.md:1:"),
+        "{}",
+        text(&active)
     );
 }
 
