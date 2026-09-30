@@ -36,9 +36,18 @@ carry the path under the mount prefix, and a mount that is not checked out is
 
 - **A rule declares its reach: `files.reach`, `"repository"` or `"pinned"`.**
   Absent means `"repository"`, which is today's behavior, byte for byte.
-- **A `"pinned"` rule enumerates with `git ls-files -z --recurse-submodules`.**
-  Every tracked file of every checked-out mount is listed under its mount path.
-- **A pinned mount that is not checked out is exit 2**, naming the mount and
+- **A `"pinned"` rule enumerates the gitlinks itself, then asks each member.**
+  The root index lists every pin as a mode-160000 entry (`git ls-files -z -s`,
+  the same read `from_index` already makes before it skips the entry,
+  `src/selection.rs:434-442`). For each pin, uphold runs `git ls-files -z`
+  inside the member through `run_elsewhere` and prefixes the mount path. It
+  does not use `git ls-files --recurse-submodules`: that flag follows Git's
+  active-submodule filter, so a mount with `submodule.<name>.active = false`
+  is silently left out, and a rule that claims the pinned content would pass
+  over content it never read. The pin is the claim; Git's activity setting is
+  not.
+- **A pinned mount whose working tree is absent is exit 2**, whether it was
+  never initialised or is marked inactive, naming the mount and
   `git submodule update --init <path>`, as `expand_gitlink` does. A rule that
   claims the pinned content and cannot read part of it has not looked.
 - **`not_text_paths` asks each member.** A member's `.gitattributes` is
@@ -77,7 +86,9 @@ carry the path under the mount prefix, and a mount that is not checked out is
 - `docs/REFERENCE.md` gains the field in the rule-shape table and in the scan
   section's paragraph on what "the repository's own files" means.
 - Tests: a CLI case on a scratch superproject (`support::scratch`) with a
-  canary submodule, asserting the finding's mount-prefixed path and exit 2 on
-  an uninitialized mount; selection unit tests for the anchored and bare
+  canary submodule, asserting the finding's mount-prefixed path, exit 2 on an
+  uninitialized mount, and exit 2 on a checked-out mount whose
+  `submodule.<name>.active` is false (the case `--recurse-submodules` would
+  have skipped); selection unit tests for the anchored and bare
   globs; and a `cargo mutants` run over `src/selection.rs` per
   `CONTRIBUTING.md`.
