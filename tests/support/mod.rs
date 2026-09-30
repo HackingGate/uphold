@@ -217,3 +217,53 @@ pub fn git(root: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// A member repository holding `files`, committed, and added under `root` at
+/// `mount` as a real submodule. Returns the checkout inside `root`.
+///
+/// The superproject is not committed: a caller that wants the pin recorded
+/// commits it, and one building a member of a member adds more first.
+pub fn submodule(root: &Path, mount: &str, files: &[(&str, &str)]) -> PathBuf {
+    let member = scratch("member");
+    std::fs::create_dir_all(&member).expect("the member directory");
+    git(&member, &["init", "-q", "-b", "main"]);
+    git(&member, &["config", "user.name", "Test"]);
+    git(&member, &["config", "user.email", "test@example.test"]);
+    for (relative, contents) in files {
+        let path = member.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("a member subdirectory");
+        }
+        std::fs::write(path, contents).expect("a member file");
+    }
+    git(&member, &["add", "-A"]);
+    git(
+        &member,
+        &["commit", "-q", "--allow-empty", "-m", "the member's own"],
+    );
+    // `protocol.file.allow` because git refuses a local-path submodule by
+    // default since CVE-2022-39253, and the fixture is exactly a local path.
+    git(
+        root,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            &member.display().to_string(),
+            mount,
+        ],
+    );
+    // The submodule in the working tree is a CLONE, and a clone carries none of
+    // the source repository's local config. Every other repository a fixture
+    // builds is handed an identity at `init`; this one is handed one here,
+    // because a test that commits into it commits into the clone and not into
+    // the source. Without it the fixture borrows whoever is configured
+    // globally, which is a machine that has somebody -- and CI is a machine
+    // that does not.
+    let checkout = root.join(mount);
+    git(&checkout, &["config", "user.name", "Test"]);
+    git(&checkout, &["config", "user.email", "test@example.test"]);
+    checkout
+}
