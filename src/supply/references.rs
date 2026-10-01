@@ -423,6 +423,16 @@ pub(super) fn check(
     remotes: &mut BTreeMap<String, Result<String, String>>,
 ) -> Checked {
     let name = &pin.name;
+    // The remote is whatever a manifest wrote, and one spelled as an option
+    // (`--upload-pack=<command>;…://<forge>/<owner>/x`) still reads as the
+    // forge and the owner below. git would run it.
+    if pin.remote.starts_with('-') {
+        return Checked::Refused(format!(
+            "{name} is a git source whose remote starts with `-` ({}), which git would read \
+             as an option",
+            pin.remote
+        ));
+    }
     let owner = match &first_party.owner {
         Ok(Some(owner)) => owner,
         Ok(None) => {
@@ -542,7 +552,7 @@ fn ls_remote(remote: &str, directory: &Path) -> Result<String, String> {
     }
     let mut command = crate::shim::inner_tool("git");
     command
-        .args(["ls-remote", remote])
+        .args(["ls-remote", "--", remote])
         .current_dir(directory)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null());
@@ -563,7 +573,8 @@ fn ls_remote(remote: &str, directory: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Checked, GitPin, against_refs, normalise, npm_git, sort, sort_npm, split_git, tags_in_lock,
+        Checked, FirstParty, GitPin, against_refs, check, normalise, npm_git, sort, sort_npm,
+        split_git, tags_in_lock,
     };
 
     const COMMIT: &str = "53b5755d35af9bb71e6266a45c487682d1884130";
@@ -813,5 +824,36 @@ mod tests {
             against_refs(&tag, &refs),
             Checked::Refused(said) if said.contains("no such tag")
         ));
+    }
+
+    /// A remote spelled as an option is refused before git is run: it reads as
+    /// the forge and the declared owner, and `git ls-remote` would take it as
+    /// `--upload-pack` and run the command in it.
+    #[test]
+    fn a_remote_that_git_would_read_as_an_option_is_refused_before_git_runs() {
+        let base = crate::fixture::scratch("supply-references-option");
+        std::fs::create_dir_all(&base).unwrap();
+        let probe = base.join("ran");
+        let spec = format!(
+            "git+--upload-pack=touch {};git-upload-pack://github.com/example-org/kit#{COMMIT}",
+            probe.display()
+        );
+        let sorted = sort_npm(&format!("{{\"dependencies\":{{\"kit\":\"{spec}\"}}}}"), &[]);
+        assert_eq!(sorted.git.len(), 1, "{:?}", sorted.refused);
+        let first_party = FirstParty {
+            owner: Ok(Some(String::from("example-org"))),
+            host: "github.com",
+        };
+        let said = check(
+            &sorted.git[0],
+            &first_party,
+            &base,
+            &mut std::collections::BTreeMap::new(),
+        );
+        assert!(
+            matches!(&said, Checked::Refused(said) if said.contains("read as an option")),
+            "{said:?}"
+        );
+        assert!(!probe.exists());
     }
 }
