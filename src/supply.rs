@@ -1461,6 +1461,32 @@ struct Ledger {
     read: BTreeSet<&'static str>,
 }
 
+/// Who is first party here, as the policy declares it.
+fn first_party_of<'a>(policy: &'a Policy, root: &Path) -> references::FirstParty<'a> {
+    references::FirstParty {
+        owner: policy
+            .declared_owner(root)
+            .map_err(|error| error.to_string()),
+        host: policy
+            .supply_chain
+            .forge_host
+            .as_deref()
+            .unwrap_or(references::DEFAULT_FORGE_HOST),
+    }
+}
+
+/// The npm locks that may say what a manifest in `directory` resolved, nearest
+/// first: its own, then each directory up to `root`, where a workspace keeps
+/// the one lock for every member.
+fn npm_locks(directory: &Path, root: &Path) -> Vec<String> {
+    directory
+        .ancestors()
+        .take_while(|ancestor| ancestor.starts_with(root))
+        .flat_map(|ancestor| ["bun.lock", "package-lock.json"].map(|name| ancestor.join(name)))
+        .filter_map(|lock| std::fs::read_to_string(lock).ok())
+        .collect()
+}
+
 fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
     let waivers = policy.supply_chain.waive.as_slice();
     let (python, npm) = match scope {
@@ -1535,16 +1561,7 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
             refused = true;
         }
         for pin in &sorted.git {
-            let deciding = first_party.get_or_insert_with(|| references::FirstParty {
-                owner: policy
-                    .declared_owner(root)
-                    .map_err(|error| error.to_string()),
-                host: policy
-                    .supply_chain
-                    .forge_host
-                    .as_deref()
-                    .unwrap_or(references::DEFAULT_FORGE_HOST),
-            });
+            let deciding = first_party.get_or_insert_with(|| first_party_of(policy, root));
             match references::check(pin, deciding, directory, &mut remotes) {
                 references::Checked::Holds(said) => println!("   first party: {said}"),
                 references::Checked::Refused(said) => {
@@ -1593,14 +1610,50 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
     for manifest in npm {
         let directory = manifest.parent().unwrap_or(root);
         checked += 1;
+        let at = directory.display().to_string();
+        let sorted = std::fs::read_to_string(&manifest)
+            .map(|text| references::sort_npm(&text, &npm_locks(directory, root)))
+            .unwrap_or_default();
+        for said in &sorted.refused {
+            println!("   FAILED: guarddog npm: {at}: {said}");
+            refused = true;
+        }
+        for pin in &sorted.git {
+            let deciding = first_party.get_or_insert_with(|| first_party_of(policy, root));
+            match references::check(pin, deciding, directory, &mut remotes) {
+                references::Checked::Holds(said) => println!("   first party: {said}"),
+                references::Checked::Refused(said) => {
+                    println!("   FAILED: guarddog npm: {at}: {said}");
+                    refused = true;
+                }
+                references::Checked::Unread(said) => unrun = unrun.or(Some(said)),
+            }
+        }
+        // The manifest itself where nothing came out of it; otherwise what is
+        // left, unless nothing is, which guarddog would answer with `[]`.
+        let rewritten = match &sorted.kept {
+            None => None,
+            Some(_) if sorted.indexed == 0 => {
+                println!(
+                    "   {at}: no dependency here resolves from npm, so guarddog was not asked"
+                );
+                continue;
+            }
+            Some(kept) => Some(tempfile_guard::TempFile::containing(kept)?),
+        };
         let status = Command::new("guarddog")
-            .args(["npm", "verify", "--output-format", "json", "package.json"])
+            .args(["npm", "verify", "--output-format", "json"])
+            .arg(
+                rewritten
+                    .as_ref()
+                    .map_or_else(|| Path::new("package.json"), |file| file.path.as_path()),
+            )
             .args(GUARDDOG_RULES)
             .current_dir(directory)
             .output()
             .map_err(|error| Fatal::new(format!("could not run guarddog: {error}")))?;
         match guarddog_read(
-            &directory.display().to_string(),
+            &at,
             "npm",
             waivers,
             &mut ledger,
