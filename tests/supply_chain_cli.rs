@@ -2161,3 +2161,94 @@ fn an_export_with_nothing_from_an_index_does_not_ask_guarddog() {
     assert!(said.contains("guarddog was not asked"), "{said}");
     assert!(!journal(&root).contains("guarddog"), "{}", journal(&root));
 }
+
+// ── npm git dependencies ──
+
+/// A `package.json` whose `dependencies` hold `spec` for example-kit beside a
+/// registry range, a `bun.lock` recording `commit` for it, and stubs whose
+/// guarddog answers a manifest still naming example-kit the way the real tool
+/// does -- a 404 from npm -- and records every run.
+fn npm_depending_on(root: &Path, spec: &str, commit: &str) -> PathBuf {
+    std::fs::write(
+        root.join("package.json"),
+        format!(
+            "{{\"name\":\"app\",\"dependencies\":{{\"example-kit\":\"{spec}\",\
+             \"cookie\":\"^1.1.1\"}}}}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("bun.lock"),
+        format!(
+            "{{\n  \"packages\": {{\n    \"example-kit\": [\"example-kit@{spec}#{commit}\", \
+             {{}}, \"{commit}\"],\n  }}\n}}\n"
+        ),
+    )
+    .unwrap();
+    stubs(&[
+        ("osv-scanner", "exit 0"),
+        (
+            "guarddog",
+            &recording(&format!(
+                "grep -q example-kit \"$5\" && {{ echo '[{{\"dependency\":\"example-kit\",\
+                 \"result\":{{\"errors\":{{\"download-package\":\"Received status code: 404 \
+                 from npm\"}},\"issues\":0}}}}]'; exit 0; }}\n{GUARDDOG_CLEAN}"
+            )),
+        ),
+    ])
+}
+
+/// The npm half of the defect: a first-party package depended on by git was
+/// handed to guarddog, which asked npm for it, got a 404 and made every run
+/// exit 2. The tag the manifest names is now asked of the remote, against the
+/// commit `bun.lock` holds, and guarddog reads the registry dependencies alone.
+#[test]
+fn a_first_party_npm_git_dependency_whose_tag_resolves_is_not_sent_to_guarddog_and_passes() {
+    let root = owned_by_example_org();
+    let (config, tagged, _) = example_kit_remote();
+    let tools = npm_depending_on(
+        &root,
+        "git+https://github.com/example-org/example-kit#v0.1.0",
+        &tagged,
+    );
+    let output = supply_with(&root, &tools, &forge_environment(&config));
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(
+        said.contains(&format!(
+            "first party: example-kit: tag v0.1.0 on \
+             https://github.com/example-org/example-kit is {tagged}"
+        )),
+        "{said}"
+    );
+    assert!(journal(&root).contains("guarddog"), "{}", journal(&root));
+    assert!(said.contains("all checks passed"), "{said}");
+}
+
+/// A lock whose commit is not where the manifest's tag points is refused.
+#[test]
+fn a_first_party_npm_tag_that_points_elsewhere_is_refused() {
+    let root = owned_by_example_org();
+    let (config, _, tip) = example_kit_remote();
+    let tools = npm_depending_on(&root, "github:example-org/example-kit#v0.1.0", &tip);
+    let output = supply_with(&root, &tools, &forge_environment(&config));
+    assert_eq!(code(&output), 1, "{}", text(&output));
+    assert!(text(&output).contains("the tag moved"), "{}", text(&output));
+}
+
+/// A git dependency under another owner is refused by name, and is never
+/// handed to guarddog to 404 on.
+#[test]
+fn an_npm_git_dependency_under_another_owner_is_refused_by_name() {
+    let root = owned_by_example_org();
+    let (config, tagged, _) = example_kit_remote();
+    let tools = npm_depending_on(&root, "github:someone-else/example-kit#v0.1.0", &tagged);
+    let output = supply_with(&root, &tools, &forge_environment(&config));
+    let said = text(&output);
+    assert_eq!(code(&output), 1, "{said}");
+    assert!(
+        said.contains("example-kit is a git source under github.com/someone-else"),
+        "{said}"
+    );
+    assert!(!said.contains("404"), "{said}");
+}

@@ -42,6 +42,9 @@ pub(super) struct GitPin {
     pub commit: String,
     /// The tag the lock's source names, where it names one.
     pub tag: Option<String>,
+    /// Whether `tag` is an npm committish, which may name a branch as well as a
+    /// tag: a uv lock says `tag=` and means it, an npm `#<ref>` does not say.
+    pub committish: bool,
 }
 
 /// One `uv export`, sorted.
@@ -109,6 +112,7 @@ fn by_reference(
                     remote,
                     commit,
                     tag,
+                    committish: false,
                 });
             }
             None => sorted.refused.push(format!(
@@ -240,6 +244,152 @@ fn tags_in_lock(lock: &str) -> BTreeMap<(String, String), String> {
     tags
 }
 
+/// One `package.json`, sorted the same way.
+///
+/// `guarddog npm verify` reads a manifest's `dependencies` and asks npm for
+/// each by name, so a git dependency -- `git+https://…#v0.1.0`,
+/// `github:owner/repo`, `owner/repo` -- is a 404 there just as a uv git source
+/// is on `PyPI`. The git dependencies come out for the owner check and the
+/// remote; the rest of the manifest is handed to guarddog unchanged.
+#[derive(Debug, Default)]
+pub(super) struct NpmSorted {
+    /// The manifest without its git dependencies, where it had any: what
+    /// guarddog is handed instead of the file.
+    pub kept: Option<String>,
+    /// How many dependencies are left for npm to resolve.
+    pub indexed: usize,
+    /// Git dependencies, for the owner check and the remote.
+    pub git: Vec<GitPin>,
+    /// Git dependencies refused as they stand, each a line naming it.
+    pub refused: Vec<String>,
+}
+
+/// Sort a `package.json`'s `dependencies`. `locks` are the texts of the
+/// `bun.lock` and `package-lock.json` files that may record what each git
+/// dependency resolved to, nearest first. A manifest that does not parse is
+/// left whole, for guarddog to say so.
+pub(super) fn sort_npm(manifest: &str, locks: &[String]) -> NpmSorted {
+    let mut sorted = NpmSorted::default();
+    let Ok(serde_json::Value::Object(mut parsed)) = serde_json::from_str(manifest) else {
+        return sorted;
+    };
+    let Some(serde_json::Value::Object(dependencies)) = parsed.get_mut("dependencies") else {
+        return sorted;
+    };
+    let mut taken = false;
+    dependencies.retain(|name, spec| {
+        let Some((remote, fragment)) = spec.as_str().and_then(npm_git) else {
+            return true;
+        };
+        taken = true;
+        let fragment = fragment.filter(|fragment| !fragment.starts_with("semver:"));
+        let commit = locks
+            .iter()
+            .find_map(|lock| locked_commit(lock, name))
+            .or_else(|| {
+                fragment
+                    .filter(|fragment| is_commit(fragment))
+                    .map(str::to_owned)
+            });
+        match commit {
+            Some(commit) => sorted.git.push(GitPin {
+                name: name.clone(),
+                remote,
+                tag: fragment
+                    .filter(|fragment| !commit.starts_with(*fragment))
+                    .map(str::to_owned),
+                commit,
+                committish: true,
+            }),
+            None => sorted.refused.push(format!(
+                "{name} is a git dependency ({remote}), and no bun.lock or package-lock.json \
+                 records the commit it resolved to, so there is no pin to check"
+            )),
+        }
+        false
+    });
+    sorted.indexed = dependencies.len();
+    if taken {
+        sorted.kept = serde_json::to_string(&parsed).ok();
+    }
+    sorted
+}
+
+/// The remote and the `#` fragment of an npm git dependency, or `None` for
+/// anything npm resolves from its registry, a path or a tarball URL.
+fn npm_git(spec: &str) -> Option<(String, Option<&str>)> {
+    let (url, fragment) = match spec.split_once('#') {
+        Some((url, fragment)) => (url, Some(fragment).filter(|fragment| !fragment.is_empty())),
+        None => (spec, None),
+    };
+    let remote = if let Some(url) = url.strip_prefix("git+") {
+        url.to_owned()
+    } else if url.starts_with("git://") {
+        url.to_owned()
+    } else if let Some((forge, path)) = url
+        .split_once(':')
+        .filter(|(forge, _)| matches!(*forge, "github" | "gitlab" | "bitbucket"))
+    {
+        let host = match forge {
+            "gitlab" => "gitlab.com",
+            "bitbucket" => "bitbucket.org",
+            _ => DEFAULT_FORGE_HOST,
+        };
+        format!("https://{host}/{path}")
+    } else if is_shorthand(url) {
+        format!("https://{DEFAULT_FORGE_HOST}/{url}")
+    } else {
+        return None;
+    };
+    Some((remote, fragment))
+}
+
+/// npm's `owner/repo` shorthand for a GitHub repository: one slash, and none of
+/// what starts a scope, a path, a URL or a version range.
+fn is_shorthand(spec: &str) -> bool {
+    let Some((owner, repo)) = spec.split_once('/') else {
+        return false;
+    };
+    !owner.is_empty()
+        && !repo.is_empty()
+        && !repo.contains('/')
+        && !spec.contains(':')
+        && !spec.contains(' ')
+        && !owner.starts_with(['@', '.', '~', '^', '<', '>', '=', '*'])
+}
+
+/// A full or abbreviated commit id.
+fn is_commit(text: &str) -> bool {
+    (7..=40).contains(&text.len()) && text.chars().all(|character| character.is_ascii_hexdigit())
+}
+
+/// The commit a lock records for `name`'s git dependency: a `bun.lock` entry
+/// `"<name>": ["<name>@<url>#<commit>", …]`, or a `package-lock.json`
+/// `packages["node_modules/<name>"].resolved` ending `#<commit>`.
+fn locked_commit(lock: &str, name: &str) -> Option<String> {
+    let from_bun = || {
+        let start = format!("\"{name}\": [\"{name}@");
+        let rest = &lock[lock.find(&start)? + start.len()..];
+        let resolved = &rest[..rest.find('"')?];
+        resolved.rsplit_once('#').map(|(_, commit)| commit)
+    };
+    let from_npm = || -> Option<String> {
+        let parsed: serde_json::Value = serde_json::from_str(lock).ok()?;
+        let resolved = parsed
+            .get("packages")?
+            .get(format!("node_modules/{name}"))?
+            .get("resolved")?
+            .as_str()?;
+        resolved
+            .rsplit_once('#')
+            .map(|(_, commit)| commit.to_owned())
+    };
+    from_bun()
+        .map(str::to_owned)
+        .or_else(from_npm)
+        .filter(|commit| is_commit(commit))
+}
+
 /// Who counts as first party, as the policy declared it.
 #[derive(Debug)]
 pub(super) struct FirstParty<'a> {
@@ -273,6 +423,16 @@ pub(super) fn check(
     remotes: &mut BTreeMap<String, Result<String, String>>,
 ) -> Checked {
     let name = &pin.name;
+    // The remote is whatever a manifest wrote, and one spelled as an option
+    // (`--upload-pack=<command>;…://<forge>/<owner>/x`) still reads as the
+    // forge and the owner below. git would run it.
+    if pin.remote.starts_with('-') {
+        return Checked::Refused(format!(
+            "{name} is a git source whose remote starts with `-` ({}), which git would read \
+             as an option",
+            pin.remote
+        ));
+    }
     let owner = match &first_party.owner {
         Ok(Some(owner)) => owner,
         Ok(None) => {
@@ -298,7 +458,7 @@ pub(super) fn check(
     if !ours {
         return Checked::Refused(format!(
             "{name} is a git source under {}/{}, not under {}/{owner}, which is this \
-             repository's declared owner: PyPI does not hold it, so guarddog cannot look it \
+             repository's declared owner: no registry holds it, so guarddog cannot look it \
              up, and nothing here vouches for it",
             host.as_deref().unwrap_or("no host"),
             under.unwrap_or("no owner"),
@@ -341,7 +501,17 @@ fn against_refs(pin: &GitPin, refs: &str) -> Checked {
         let at = pointed
             .get(peeled.as_str())
             .or_else(|| pointed.get(full.as_str()));
+        let branch = pin.committish && pointed.contains_key(format!("refs/heads/{tag}").as_str());
         return match at {
+            // An npm `#<branch>`: the lock holds whichever commit the branch was
+            // at, so it is read as a bare commit below.
+            None if branch => against_refs(
+                &GitPin {
+                    tag: None,
+                    ..pin.clone()
+                },
+                refs,
+            ),
             None => Checked::Refused(format!(
                 "{name} is locked to tag {tag}, and {} has no such tag",
                 pin.remote
@@ -382,7 +552,7 @@ fn ls_remote(remote: &str, directory: &Path) -> Result<String, String> {
     }
     let mut command = crate::shim::inner_tool("git");
     command
-        .args(["ls-remote", remote])
+        .args(["ls-remote", "--", remote])
         .current_dir(directory)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null());
@@ -402,7 +572,10 @@ fn ls_remote(remote: &str, directory: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Checked, GitPin, against_refs, normalise, sort, split_git, tags_in_lock};
+    use super::{
+        Checked, FirstParty, GitPin, against_refs, check, normalise, npm_git, sort, sort_npm,
+        split_git, tags_in_lock,
+    };
 
     const COMMIT: &str = "53b5755d35af9bb71e6266a45c487682d1884130";
     const OTHER: &str = "0000000000000000000000000000000000000001";
@@ -445,6 +618,7 @@ mod tests {
                 remote: String::from("https://github.com/example-org/example-kit"),
                 commit: String::from(COMMIT),
                 tag: None,
+                committish: false,
             }]
         );
         assert_eq!(sorted.refused.len(), 3, "{:?}", sorted.refused);
@@ -513,6 +687,7 @@ mod tests {
             remote: String::from("https://github.com/example-org/example-kit"),
             commit: String::from(COMMIT),
             tag: tag.map(String::from),
+            committish: false,
         }
     }
 
@@ -544,5 +719,141 @@ mod tests {
             against_refs(&pin(None), &elsewhere),
             Checked::Refused(said) if said.contains("no branch or tag")
         ));
+    }
+
+    #[test]
+    fn npm_git_dependencies_are_told_from_registry_ranges_paths_and_tarballs() {
+        let git =
+            |spec| npm_git(spec).map(|(remote, fragment)| (remote, fragment.map(String::from)));
+        assert_eq!(
+            git("git+https://oauth2@github.com/example-org/example-kit.git#v0.1.0"),
+            Some((
+                String::from("https://oauth2@github.com/example-org/example-kit.git"),
+                Some(String::from("v0.1.0"))
+            ))
+        );
+        assert_eq!(
+            git("github:example-org/example-kit"),
+            Some((
+                String::from("https://github.com/example-org/example-kit"),
+                None
+            ))
+        );
+        assert_eq!(
+            git("example-org/example-kit#main"),
+            Some((
+                String::from("https://github.com/example-org/example-kit"),
+                Some(String::from("main"))
+            ))
+        );
+        for registry in [
+            "^1.1.1",
+            "1.2.3",
+            ">=1 <2",
+            "npm:other@1",
+            "workspace:*",
+            "file:../vendor",
+            "./vendor",
+            "https://example.test/kit-1.0.0.tgz",
+            "latest",
+        ] {
+            assert_eq!(git(registry), None, "{registry}");
+        }
+    }
+
+    #[test]
+    fn a_manifest_loses_its_git_dependencies_to_the_lock_and_keeps_the_rest() {
+        let manifest = "{\"name\":\"app\",\"dependencies\":{\
+            \"@example-org/kit\":\"git+https://github.com/example-org/kit.git#v0.1.0\",\
+            \"loose\":\"github:example-org/loose\",\
+            \"cookie\":\"^1.1.1\"},\
+            \"devDependencies\":{\"jose\":\"^6\"}}";
+        let bun = format!(
+            "{{\n  \"packages\": {{\n    \"@example-org/kit\": [\"@example-org/kit@git+https://github.com/example-org/kit.git#{COMMIT}\", {{}}, \"{COMMIT}\"],\n  }}\n}}\n"
+        );
+        let sorted = sort_npm(manifest, &[bun]);
+        assert_eq!(sorted.indexed, 1);
+        assert_eq!(
+            sorted.git,
+            vec![GitPin {
+                name: String::from("@example-org/kit"),
+                remote: String::from("https://github.com/example-org/kit.git"),
+                commit: String::from(COMMIT),
+                tag: Some(String::from("v0.1.0")),
+                committish: true,
+            }]
+        );
+        assert_eq!(sorted.refused.len(), 1, "{:?}", sorted.refused);
+        assert!(sorted.refused[0].contains("loose is a git dependency"));
+        let kept = sorted.kept.unwrap();
+        assert!(kept.contains("\"cookie\""), "{kept}");
+        assert!(kept.contains("\"jose\""), "{kept}");
+        assert!(!kept.contains("example-org"), "{kept}");
+    }
+
+    #[test]
+    fn a_package_lock_supplies_the_commit_and_a_registry_only_manifest_is_left_whole() {
+        let manifest = "{\"dependencies\":{\"kit\":\"example-org/kit#main\"}}";
+        let lock = format!(
+            "{{\"packages\":{{\"node_modules/kit\":{{\"resolved\":\"git+ssh://git@github.com/example-org/kit.git#{COMMIT}\"}}}}}}"
+        );
+        let sorted = sort_npm(manifest, &[lock]);
+        assert_eq!(sorted.indexed, 0);
+        assert_eq!(sorted.git.len(), 1);
+        assert_eq!(sorted.git[0].tag.as_deref(), Some("main"));
+        let whole = sort_npm("{\"dependencies\":{\"cookie\":\"^1.1.1\"}}", &[]);
+        assert!(whole.kept.is_none() && whole.git.is_empty() && whole.refused.is_empty());
+        assert!(sort_npm("not json", &[]).kept.is_none());
+    }
+
+    #[test]
+    fn an_npm_ref_that_is_a_branch_is_read_as_the_commit_a_ref_points_at() {
+        let branch = GitPin {
+            tag: Some(String::from("main")),
+            committish: true,
+            ..pin(None)
+        };
+        let refs = format!("{COMMIT}\trefs/heads/main\n");
+        assert!(matches!(against_refs(&branch, &refs), Checked::Holds(_)));
+        // A uv `tag=` is a tag, and a branch of the same name does not stand in.
+        let tag = GitPin {
+            committish: false,
+            ..branch
+        };
+        assert!(matches!(
+            against_refs(&tag, &refs),
+            Checked::Refused(said) if said.contains("no such tag")
+        ));
+    }
+
+    /// A remote spelled as an option is refused before git is run: it reads as
+    /// the forge and the declared owner, and `git ls-remote` would take it as
+    /// `--upload-pack` and run the command in it.
+    #[test]
+    fn a_remote_that_git_would_read_as_an_option_is_refused_before_git_runs() {
+        let base = crate::fixture::scratch("supply-references-option");
+        std::fs::create_dir_all(&base).unwrap();
+        let probe = base.join("ran");
+        let spec = format!(
+            "git+--upload-pack=touch {};git-upload-pack://github.com/example-org/kit#{COMMIT}",
+            probe.display()
+        );
+        let sorted = sort_npm(&format!("{{\"dependencies\":{{\"kit\":\"{spec}\"}}}}"), &[]);
+        assert_eq!(sorted.git.len(), 1, "{:?}", sorted.refused);
+        let first_party = FirstParty {
+            owner: Ok(Some(String::from("example-org"))),
+            host: "github.com",
+        };
+        let said = check(
+            &sorted.git[0],
+            &first_party,
+            &base,
+            &mut std::collections::BTreeMap::new(),
+        );
+        assert!(
+            matches!(&said, Checked::Refused(said) if said.contains("read as an option")),
+            "{said:?}"
+        );
+        assert!(!probe.exists());
     }
 }

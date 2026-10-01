@@ -2706,6 +2706,21 @@ An export with nothing left that an index resolves is not handed to guarddog
 at all: guarddog handed an empty list answers `[]`, which this section reads as
 a network failure.
 
+`guarddog npm verify` reads a `package.json`'s `dependencies` and asks npm for
+each by name, so an npm git dependency is the same 404. Its git dependencies
+(`git+<url>#<ref>`, `git://...`, `github:`, `gitlab:` and `bitbucket:`
+specifiers, and the `owner/repo` shorthand) are taken out and guarddog is
+handed the manifest without them; a manifest with none is handed over as it
+is. Each git dependency is held to the same first-party rule and the same
+remote check. Its commit is the one `bun.lock` or `package-lock.json` records,
+read from the manifest's directory and each one above it up to the
+repository root. Its `#<ref>`, where it names one, must point at that commit
+if it is a tag; if it is a branch, the commit must be what some ref points at,
+as for a commit the lock names alone. A git dependency no lock records a
+commit for, and whose `#` is not itself a commit, is refused by name: there is
+no pin to check. A manifest left with no dependencies is not handed to
+guarddog, for the same `[]`.
+
 ### Waiving a confirmed guarddog false positive
 
 Because the findings are read here, a finding somebody has looked at and judged
