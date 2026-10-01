@@ -424,12 +424,20 @@ mod tests {
 
     #[test]
     fn ordinary_text_and_real_emoji_pass() {
-        assert!(findings("hello\tworld\n日本語 ☕\n").is_empty());
+        assert!(
+            findings("hello\tworld\n日本語 ☕\n").is_empty(),
+            "{:?}",
+            findings("hello\tworld\n日本語 ☕\n")
+        );
     }
 
     #[test]
     fn a_variation_selector_after_an_emoji_is_earned() {
-        assert!(findings("\u{26A0}\u{FE0F}\n").is_empty());
+        assert!(
+            findings("\u{26A0}\u{FE0F}\n").is_empty(),
+            "{:?}",
+            findings("\u{26A0}\u{FE0F}\n")
+        );
     }
 
     #[test]
@@ -441,12 +449,20 @@ mod tests {
 
     #[test]
     fn a_keycap_sequence_is_the_one_ascii_exception() {
-        assert!(findings("1\u{FE0F}\u{20E3}\n").is_empty());
+        assert!(
+            findings("1\u{FE0F}\u{20E3}\n").is_empty(),
+            "{:?}",
+            findings("1\u{FE0F}\u{20E3}\n")
+        );
     }
 
     #[test]
     fn an_ideographic_selector_needs_an_ideograph() {
-        assert!(findings("\u{845B}\u{E0100}\n").is_empty());
+        assert!(
+            findings("\u{845B}\u{E0100}\n").is_empty(),
+            "{:?}",
+            findings("\u{845B}\u{E0100}\n")
+        );
         assert_eq!(findings("7\u{E0100}\n").len(), 1);
     }
 
@@ -463,7 +479,11 @@ mod tests {
     #[test]
     fn an_allowance_may_be_scoped_to_a_path() {
         let allowances = vec![parse_allowance("U+00A0:docs/**").unwrap()];
-        assert!(scan("a\u{00A0}b\n", "docs/page.md", &allowances).is_empty());
+        assert!(
+            scan("a\u{00A0}b\n", "docs/page.md", &allowances).is_empty(),
+            "{:?}",
+            scan("a\u{00A0}b\n", "docs/page.md", &allowances)
+        );
         assert_eq!(scan("a\u{00A0}b\n", "src/main.rs", &allowances).len(), 1);
     }
 
@@ -471,7 +491,11 @@ mod tests {
     fn an_allowance_grants_and_never_revokes() {
         // Adding an entry cannot tighten the guard on anybody else's file.
         let allowances = vec![parse_allowance("U+00A0").unwrap()];
-        assert!(scan("a\u{00A0}b\n", "any.txt", &allowances).is_empty());
+        assert!(
+            scan("a\u{00A0}b\n", "any.txt", &allowances).is_empty(),
+            "{:?}",
+            scan("a\u{00A0}b\n", "any.txt", &allowances)
+        );
         assert_eq!(scan("a\u{200B}b\n", "any.txt", &allowances).len(), 1);
     }
 
@@ -491,14 +515,18 @@ mod tests {
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].contains("U+200B"), "{found:?}");
         assert!(found[0].contains("FILE NAME"), "{found:?}");
-        assert!(scan_name("docs/readme.md", &[]).is_empty());
+        assert!(
+            scan_name("docs/readme.md", &[]).is_empty(),
+            "{:?}",
+            scan_name("docs/readme.md", &[])
+        );
     }
 
     #[test]
     fn a_tab_is_legal_in_a_file_and_never_in_a_path() {
         // The two characters the content rule exempts, which is why the path
         // cannot simply be handed to `scan`.
-        assert!(findings("a\tb\n").is_empty());
+        assert!(findings("a\tb\n").is_empty(), "{:?}", findings("a\tb\n"));
         assert_eq!(scan_name("a\tb", &[]).len(), 1);
         assert_eq!(scan_name("a\nb", &[]).len(), 1);
     }
@@ -506,7 +534,11 @@ mod tests {
     #[test]
     fn an_allowance_scoped_to_a_path_reaches_that_paths_name() {
         let allowances = vec![parse_allowance("U+00A0:docs/**").unwrap()];
-        assert!(scan_name("docs/a\u{00A0}b.md", &allowances).is_empty());
+        assert!(
+            scan_name("docs/a\u{00A0}b.md", &allowances).is_empty(),
+            "{:?}",
+            scan_name("docs/a\u{00A0}b.md", &allowances)
+        );
         assert_eq!(scan_name("src/a\u{00A0}b.rs", &allowances).len(), 1);
     }
 

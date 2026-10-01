@@ -455,8 +455,8 @@ mod tests {
             },
         );
         let collected = body(&[&unread]);
-        assert!(collected.found.is_empty());
-        assert!(collected.read.is_empty());
+        assert!(collected.found.is_empty(), "{:?}", collected.found);
+        assert!(collected.read.is_empty(), "{:?}", collected.read);
         assert_eq!(collected.unavailable.len(), 1);
         assert_eq!(collected.unavailable[0].reason, "a.rs:3 did not parse");
         assert_eq!(
@@ -503,7 +503,11 @@ mod tests {
             unavailable: Vec::new(),
             read: vec![PARSER, PATTERN],
         };
-        assert!(collected.contradictions().is_empty());
+        assert!(
+            collected.contradictions().is_empty(),
+            "{:?}",
+            collected.contradictions()
+        );
     }
 
     #[test]
@@ -565,7 +569,7 @@ mod tests {
         ]);
         let removed = collected.established(Kind::FunctionRemoved);
         assert!(!removed.clean());
-        assert!(removed.found().is_empty());
+        assert!(removed.found().is_empty(), "{:?}", removed.found());
         assert_eq!(removed.unread().len(), 1);
         assert!(matches!(removed, Established::HeuristicOnly { .. }));
     }
@@ -595,7 +599,7 @@ mod tests {
         let collected = body(&[&Scripted(PATTERN, Observation::Found(Vec::new()))]);
         let removed = collected.established(Kind::FunctionRemoved);
         assert!(removed.clean());
-        assert!(removed.unread().is_empty());
+        assert!(removed.unread().is_empty(), "{:?}", removed.unread());
     }
 
     #[test]
@@ -609,7 +613,7 @@ mod tests {
         )]);
         let removed = collected.established(Kind::FunctionRemoved);
         assert_eq!(removed, Established::Unavailable(Vec::new()));
-        assert!(removed.found().is_empty());
+        assert!(removed.found().is_empty(), "{:?}", removed.found());
         assert!(!removed.clean());
         // Still in the body for a reader; just in no verdict.
         assert_eq!(collected.found, vec![inferred]);
@@ -627,7 +631,11 @@ mod tests {
             collected.established(Kind::FunctionRemoved),
             Established::Proven(vec![&proven])
         );
-        assert!(collected.contradictions().is_empty());
+        assert!(
+            collected.contradictions().is_empty(),
+            "{:?}",
+            collected.contradictions()
+        );
 
         let assertion = fact(ORACLE, Kind::FunctionRemoved, "a.rs::stop");
         let clean = body(&[

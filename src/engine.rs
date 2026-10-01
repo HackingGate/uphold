@@ -234,7 +234,9 @@ mod tests {
         assert!(
             search_text("literally $HOME/secrets here\n", &plain, "t")
                 .unwrap()
-                .is_empty()
+                .is_empty(),
+            "{:?}",
+            search_text("literally $HOME/secrets here\n", &plain, "t").unwrap()
         );
     }
 
@@ -247,14 +249,22 @@ mod tests {
             ..Default::default()
         };
         let query = Query::from_files("LICENSE", &files);
-        assert!(search_text("LICENSEE\n", &query, "t").unwrap().is_empty());
+        assert!(
+            search_text("LICENSEE\n", &query, "t").unwrap().is_empty(),
+            "{:?}",
+            search_text("LICENSEE\n", &query, "t").unwrap()
+        );
         assert_eq!(search_text("LICENSE\n", &query, "t").unwrap().len(), 1);
     }
 
     #[test]
     fn word_matching_keeps_a_short_needle_out_of_a_longer_word() {
         let query = Query::literal("arc", true);
-        assert!(search_text("search\n", &query, "t").unwrap().is_empty());
+        assert!(
+            search_text("search\n", &query, "t").unwrap().is_empty(),
+            "{:?}",
+            search_text("search\n", &query, "t").unwrap()
+        );
         assert_eq!(search_text("arc\n", &query, "t").unwrap().len(), 1);
     }
 
@@ -280,7 +290,9 @@ mod tests {
         assert!(
             search_text(text, &Query::regex(pattern, false), "t")
                 .unwrap()
-                .is_empty()
+                .is_empty(),
+            "{:?}",
+            search_text(text, &Query::regex(pattern, false), "t").unwrap()
         );
     }
 

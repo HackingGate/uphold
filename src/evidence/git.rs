@@ -271,7 +271,11 @@ mod tests {
         assert_eq!(marked.len(), 2);
         assert_eq!(marked[0].line, "Co-Authored-By: A <noreply@x.test>");
         assert_eq!(marked[1].line, "Generated with Claude Code");
-        assert!(agent_markers_in("Plain\n").is_empty());
+        assert!(
+            agent_markers_in("Plain\n").is_empty(),
+            "{:?}",
+            agent_markers_in("Plain\n")
+        );
     }
 
     #[test]

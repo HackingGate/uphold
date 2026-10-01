@@ -259,7 +259,11 @@ mod tests {
         // `--- a/fn_x.rs` opens with the removal marker and is not a line
         // of the file; only a hunk's lines are.
         let diff = "diff --git a/lib.rs b/lib.rs\n--- a/lib.rs\n+++ b/lib.rs\n";
-        assert!(compare("lib.rs", rust(), diff).is_empty());
+        assert!(
+            compare("lib.rs", rust(), diff).is_empty(),
+            "{:?}",
+            compare("lib.rs", rust(), diff)
+        );
     }
 
     #[test]

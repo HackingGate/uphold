@@ -794,7 +794,7 @@ mod tests {
     /// came to have an unreachable clean arm.
     #[test]
     fn the_standing_caveats_are_not_surfaces_this_run_failed_to_read() {
-        assert!(!STANDING_CAVEATS.is_empty());
+        assert!(!STANDING_CAVEATS.is_empty(), "STANDING_CAVEATS is empty");
         for caveat in STANDING_CAVEATS {
             assert!(
                 caveat.contains("cannot"),

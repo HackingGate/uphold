@@ -592,7 +592,9 @@ mod tests {
         assert!(
             each_blob(&std::env::temp_dir(), &[], |_, _| ())
                 .unwrap()
-                .is_empty()
+                .is_empty(),
+            "{:?}",
+            each_blob(&std::env::temp_dir(), &[], |_, _| ()).unwrap()
         );
     }
 
