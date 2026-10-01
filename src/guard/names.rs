@@ -1625,7 +1625,9 @@ mod tests {
         assert!(
             declared_owners(&permitted_dir, &permitted, permitted_rule)
                 .unwrap()
-                .is_empty()
+                .is_empty(),
+            "{:?}",
+            declared_owners(&permitted_dir, &permitted, permitted_rule).unwrap()
         );
     }
 

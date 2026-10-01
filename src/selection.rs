@@ -1363,7 +1363,11 @@ mod tests {
         // Not a repository, so `check-attr` exits non-zero inside it.
         std::fs::create_dir_all(root.join("sub")).unwrap();
         pinned_content.ask_not_text(&root, "sub", &["a.txt".to_owned()]);
-        assert!(pinned_content.not_text.is_empty());
+        assert!(
+            pinned_content.not_text.is_empty(),
+            "{:?}",
+            pinned_content.not_text
+        );
         assert_eq!(
             pinned_content.unmeasured.len(),
             1,

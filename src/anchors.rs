@@ -428,7 +428,11 @@ mod tests {
 
     #[test]
     fn a_file_with_no_marker_parses_to_nothing() {
-        assert!(parse("ordinary prose about anchors and facts\n").is_empty());
+        assert!(
+            parse("ordinary prose about anchors and facts\n").is_empty(),
+            "{:?}",
+            parse("ordinary prose about anchors and facts\n")
+        );
     }
 
     #[test]

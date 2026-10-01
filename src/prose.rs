@@ -451,7 +451,11 @@ mod tests {
     #[test]
     fn a_file_of_no_kind_contributes_nothing_rather_than_a_finding() {
         assert!(!reads("capture.png"));
-        assert!(of("capture.png", "arguably\n").is_empty());
+        assert!(
+            of("capture.png", "arguably\n").is_empty(),
+            "{:?}",
+            of("capture.png", "arguably\n")
+        );
     }
 
     #[test]

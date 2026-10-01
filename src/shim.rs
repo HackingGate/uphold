@@ -3729,7 +3729,7 @@ mod tests {
         let collected = gh()
             .collect(Path::new("."), &argv("pr create --fill"))
             .unwrap();
-        assert!(collected.subjects.is_empty());
+        assert!(collected.subjects.is_empty(), "{:?}", collected.subjects);
         assert!(collected.body_given);
     }
 
@@ -4115,7 +4115,7 @@ mod tests {
         // A dry run publishes nothing, and refusing one would stop the very
         // command somebody runs to find out what they are about to publish.
         let dry = npm().collect(&dir, &argv("publish --dry-run")).unwrap();
-        assert!(dry.subjects.is_empty());
+        assert!(dry.subjects.is_empty(), "{:?}", dry.subjects);
     }
 
     #[test]

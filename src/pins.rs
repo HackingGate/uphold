@@ -1085,7 +1085,7 @@ mod tests {
             "repos:\n  - repo: local\n    hooks:\n      - id: x\n",
         );
         let read = read_pins(&dir).unwrap();
-        assert!(read.pins.is_empty());
+        assert!(read.pins.is_empty(), "{:?}", read.pins);
         assert_eq!(read.configs, 1);
         assert!(
             read.notes

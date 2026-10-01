@@ -160,5 +160,9 @@ fn the_reader_can_tell_a_policy_that_names_a_provider_from_one_that_does_not() {
         }
     ";
     assert_eq!(unparsed(silent), None, "the fixture is Rust");
-    assert!(offending_words(silent, &forbidden).is_empty());
+    assert!(
+        offending_words(silent, &forbidden).is_empty(),
+        "{:?}",
+        offending_words(silent, &forbidden)
+    );
 }

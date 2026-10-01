@@ -560,12 +560,20 @@ mod tests {
         // "pi" is two characters, which collides with far too much ordinary
         // text even under whole-word matching; "12" and "01" are digits.
         assert!(!hostname_segments("a-12-pi").contains(&"pi".to_owned()));
-        assert!(hostname_segments("node-01").is_empty());
+        assert!(
+            hostname_segments("node-01").is_empty(),
+            "{:?}",
+            hostname_segments("node-01")
+        );
     }
 
     #[test]
     fn the_whole_hostname_is_not_repeated_as_a_segment() {
-        assert!(hostname_segments("solo").is_empty());
+        assert!(
+            hostname_segments("solo").is_empty(),
+            "{:?}",
+            hostname_segments("solo")
+        );
     }
 
     #[test]

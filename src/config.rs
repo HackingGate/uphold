@@ -3742,10 +3742,22 @@ mod tests {
         // changes what a guard does in every repository that never wrote the
         // field, which is most of them.
         let rule = Rule::synthetic("x", Check::empty(CheckKind::Builtin));
-        assert!(rule.public_repos().is_empty());
-        assert!(rule.allowed_owners().is_empty());
-        assert!(rule.allowed_repos().is_empty());
-        assert!(rule.private_owners().is_empty());
+        assert!(rule.public_repos().is_empty(), "{:?}", rule.public_repos());
+        assert!(
+            rule.allowed_owners().is_empty(),
+            "{:?}",
+            rule.allowed_owners()
+        );
+        assert!(
+            rule.allowed_repos().is_empty(),
+            "{:?}",
+            rule.allowed_repos()
+        );
+        assert!(
+            rule.private_owners().is_empty(),
+            "{:?}",
+            rule.private_owners()
+        );
         assert!(
             !rule.refuse_unknown(),
             "an unknown name is not private by default"

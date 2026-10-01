@@ -467,7 +467,11 @@ mod tests {
     fn a_fullwidth_form_needs_an_east_asian_script_beside_it() {
         // `Script_Extensions=Common`, so the intersection cannot decide these
         // and the range decides them instead.
-        assert!(findings(&format!("{JAPANESE}\u{FF08}{KANA}\u{FF09}\u{FF01}\n")).is_empty());
+        assert!(
+            findings(&format!("{JAPANESE}\u{FF08}{KANA}\u{FF09}\u{FF01}\n")).is_empty(),
+            "{:?}",
+            findings(&format!("{JAPANESE}\u{FF08}{KANA}\u{FF09}\u{FF01}\n"))
+        );
         assert_eq!(findings("Fix the parser\u{FF01}\n").len(), 1);
         assert_eq!(findings("Fix the parser\u{FF08}1\u{FF09}\n").len(), 2);
     }
@@ -501,9 +505,21 @@ mod tests {
     #[test]
     fn punctuation_is_admitted_only_by_the_script_that_owns_it() {
         // Greek, Arabic and Hebrew marks beside their own letters.
-        assert!(findings(&format!("{GREEK}\u{0384}\n")).is_empty());
-        assert!(findings(&format!("{ARABIC}\u{060C} {ARABIC}\n")).is_empty());
-        assert!(findings(&format!("{HEBREW}\u{05C3}\n")).is_empty());
+        assert!(
+            findings(&format!("{GREEK}\u{0384}\n")).is_empty(),
+            "{:?}",
+            findings(&format!("{GREEK}\u{0384}\n"))
+        );
+        assert!(
+            findings(&format!("{ARABIC}\u{060C} {ARABIC}\n")).is_empty(),
+            "{:?}",
+            findings(&format!("{ARABIC}\u{060C} {ARABIC}\n"))
+        );
+        assert!(
+            findings(&format!("{HEBREW}\u{05C3}\n")).is_empty(),
+            "{:?}",
+            findings(&format!("{HEBREW}\u{05C3}\n"))
+        );
         // And the same marks with only Latin letters to vouch for them.
         assert_eq!(findings("Fix the parser\u{0384}\n").len(), 1);
         assert_eq!(findings("Fix the parser\u{060C}\n").len(), 1);
@@ -519,12 +535,20 @@ mod tests {
         // are, so a Cyrillic homoglyph inside a Latin word is not what this
         // guard refuses. What it refuses is the mark that arrives with no
         // letters of its own script, and a Cyrillic word vouches for none.
-        assert!(findings("Fix the c\u{0430}che\n").is_empty());
+        assert!(
+            findings("Fix the c\u{0430}che\n").is_empty(),
+            "{:?}",
+            findings("Fix the c\u{0430}che\n")
+        );
         assert_eq!(findings(&format!("{CYRILLIC}\u{3002}\n")).len(), 1);
     }
 
     #[test]
     fn ascii_prose_and_a_tab_are_untouched() {
-        assert!(findings("Fix the parser\n\nIt read a\ttab.\n").is_empty());
+        assert!(
+            findings("Fix the parser\n\nIt read a\ttab.\n").is_empty(),
+            "{:?}",
+            findings("Fix the parser\n\nIt read a\ttab.\n")
+        );
     }
 }

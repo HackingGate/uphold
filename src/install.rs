@@ -584,7 +584,11 @@ mod tests {
             Placed::Occupied(_)
         ));
         // And neither is listed as one of ours, so neither would be removed.
-        assert!(links(&dir).unwrap().is_empty());
+        assert!(
+            links(&dir).unwrap().is_empty(),
+            "{:?}",
+            links(&dir).unwrap()
+        );
         assert_eq!(std::fs::read(dir.join("git")).unwrap(), b"the real git");
     }
 
