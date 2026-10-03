@@ -697,7 +697,7 @@ dependencies = [
 
 [[package]]
 name = "uphold"
-version = "1.24.0"
+version = "1.25.0"
 dependencies = [
  "encoding_rs",
  "globset",
