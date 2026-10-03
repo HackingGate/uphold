@@ -1847,3 +1847,41 @@ fn an_at_sign_after_a_query_or_fragment_does_not_make_github_com_the_host() {
         assert!(!text.contains("The forge"), "{text}");
     }
 }
+
+/// A push to `url`, which git sends somewhere other than github.com, is
+/// refused although a stub `gh` says the pusher administers github.com's
+/// acme/widget.
+fn refused_though_github_com_says_yes(url: &str) {
+    let root = repository(PINNED_PUSH);
+    gh_says(
+        &root,
+        "case \"$*\" in\n\
+         'api user --jq .login') echo someone-else ;;\n\
+         'api repos/'*' --jq .permissions.admin') echo true ;;\n\
+         *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
+         esac\n",
+    );
+    let output = push_guard(&root, &["--remote-url", url]);
+    assert_eq!(code(&output), 1, "{url}: {}", stderr(&output));
+    let text = stderr(&output);
+    assert!(!text.contains("The forge"), "{text}");
+}
+
+#[test]
+fn a_percent_encoded_authority_does_not_make_github_com_the_host() {
+    // git url-decodes the authority before splitting it, so the user ends at
+    // the `/` and ssh connects to evil.com.
+    refused_though_github_com_says_yes("ssh://evil.com%2F@github.com/acme/widget.git");
+}
+
+#[test]
+fn a_bracketed_scp_like_host_does_not_make_github_com_the_host() {
+    // git strips the brackets and ssh connects to evil.com as user x.
+    refused_though_github_com_says_yes("[github.com:x@evil.com]:acme/widget.git");
+}
+
+#[test]
+fn a_file_url_does_not_make_github_com_the_host() {
+    // A file:// url names no host: git pushes to a local path.
+    refused_though_github_com_says_yes("file://github.com/acme/widget.git");
+}

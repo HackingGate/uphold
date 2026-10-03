@@ -3966,6 +3966,11 @@ mod tests {
             // to evil.com.
             ("https://evil.com#@github.com/acme/widget.git", None),
             ("https://evil.com?@github.com/acme/widget.git", None),
+            // git url-decodes the authority, strips scp-like brackets, and
+            // reads no host from file://, so none of these is github.com.
+            ("ssh://evil.com%2F@github.com/acme/widget.git", None),
+            ("[github.com:x@evil.com]:acme/widget.git", None),
+            ("file://github.com/acme/widget.git", None),
         ] {
             assert_eq!(Forge::of_url(url), want, "{url}");
         }

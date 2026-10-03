@@ -423,8 +423,14 @@ pub(crate) fn remote_url(root: &Path, remote: &str) -> Option<String> {
 /// for https, http, ssh, git and `git+ssh`, and the scp-like
 /// `[user@]host:path`, which git reads as scp-like only where the colon comes
 /// before any slash. A local path, or a `file://` url, names no host.
+///
+/// [`host`] and [`owner_repo`] agree about a url, or both yield None when
+/// [`ambiguous`] says this parser cannot be sure which host git contacts.
 pub(crate) fn host(url: &str) -> Option<String> {
     let url = url.trim();
+    if ambiguous(url) {
+        return None;
+    }
     let authority = if let Some((authority, _)) = url_parts(url) {
         authority
     } else {
@@ -442,6 +448,25 @@ pub(crate) fn host(url: &str) -> Option<String> {
         |bracketed| bracketed.split(']').next().unwrap_or(bracketed),
     );
     (!host.is_empty()).then(|| host.to_lowercase())
+}
+
+/// Whether a url is spelled so that git may contact a host other than the one
+/// read here, so that neither a host nor an owner/repo is read from it.
+///
+/// Fail-closed rather than a second copy of git's parser: git url-decodes a
+/// `scheme://` authority before splitting it, so a `%2F@` can put the real
+/// host in front of an `@` that seems to end the userinfo; git strips the
+/// brackets of a scp-like `[host]:path` and lets ssh read whatever is inside
+/// them; and a `file://` url names no host, whatever stands where one would.
+fn ambiguous(url: &str) -> bool {
+    if let Some((authority, _)) = url_parts(url) {
+        let file = url
+            .get(..7)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file://"));
+        return file || authority.contains('%');
+    }
+    url.split_once(':')
+        .is_some_and(|(authority, _)| !authority.contains('/') && authority.contains('['))
 }
 
 /// The authority and path of a `scheme://` url, the path without any query or
@@ -475,8 +500,13 @@ pub(crate) fn is_github_host(host: &str) -> bool {
 }
 
 /// `owner/repo` from any spelling of a forge url.
+///
+/// None for every url [`ambiguous`] refuses, as [`host`] is.
 pub(crate) fn owner_repo(url: &str) -> Option<(String, String)> {
     let url = url.trim();
+    if ambiguous(url) {
+        return None;
+    }
     // A `scheme://` url names its repository in its path and nowhere else.
     let trimmed = url_parts(url)
         .map_or(url, |(_, path)| path)
@@ -572,6 +602,40 @@ mod tests {
             "https://evil.com?@github.com/acme/widget.git",
         ] {
             assert_eq!(owner_repo(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn a_url_git_may_send_to_another_host_names_no_host_and_no_repository() {
+        for url in [
+            // git url-decodes the authority, so the user ends at the `/` and
+            // ssh connects to evil.com.
+            "ssh://evil.com%2F@github.com/acme/widget.git",
+            "git+ssh://evil.com%2F@github.com/acme/widget.git",
+            "git://evil.com%2F@github.com/acme/widget.git",
+            "https://evil.com%2F@github.com/acme/widget.git",
+            // git strips the brackets and ssh reads `x@evil.com` as the host.
+            "[github.com:x@evil.com]:acme/widget.git",
+            "git@[github.com]:acme/widget.git",
+            // file:// names no host, whatever stands where one would.
+            "file://github.com/acme/widget.git",
+            "FILE://github.com/acme/widget.git",
+        ] {
+            assert_eq!(host(url), None, "{url}");
+            assert_eq!(owner_repo(url), None, "{url}");
+        }
+        // The controls: the same repository spelled plainly still reads.
+        for url in [
+            "ssh://git@github.com/acme/widget.git",
+            "git@github.com:acme/widget.git",
+            "https://github.com/acme/widget.git",
+            "acme/widget",
+        ] {
+            assert_eq!(
+                owner_repo(url),
+                Some(("acme".to_owned(), "widget".to_owned())),
+                "{url}"
+            );
         }
     }
 
