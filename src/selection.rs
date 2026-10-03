@@ -673,28 +673,25 @@ fn search_roots(root: &Path, rule: &Rule) -> Result<Vec<PathBuf>> {
             )));
         }
 
-        // An `include` root that is not there searched nothing and said nothing.
-        // A rule whose directory had since been renamed selected no files and
-        // reported `policy checks passed` -- indistinguishable from a rule that
-        // looked everywhere and found nothing.
+        // An `include` root that is not there searches nothing, and a rule whose
+        // directory was renamed away selects no files and reports `policy
+        // checks passed` -- indistinguishable from a rule that looked everywhere
+        // and found nothing.
         //
-        // Reported rather than refused, and the difference is that this tool
-        // cannot tell the two cases apart: a root that was renamed away leaves a
-        // rule silently dead, and a root that is genuinely optional leaves a
-        // rule legitimately inactive. Both are `include` naming a path that is
-        // not there. Refusing would make the second one a config that will not
-        // load, so the tool says what it saw and lets the author decide which
-        // it is.
+        // Refused rather than reported: a line on stderr beside an exit of 0
+        // goes unread once the run is green. A root that is only sometimes there
+        // is configuration for a tree this repository does not have, and
+        // dropping it from `include` says so in the policy file.
         //
         // The default root is the repository itself, so this can only fire on an
         // `include` somebody wrote.
         if !search_root.exists() {
-            eprintln!(
+            return Err(Fatal::new(format!(
                 "rule {:?}: `files.include` names {spec:?}, which does not \
                  exist -- that root selected no files. If the directory moved, \
                  this rule is not running.",
                 rule.id
-            );
+            )));
         }
         roots.push(search_root);
     }
@@ -702,8 +699,8 @@ fn search_roots(root: &Path, rule: &Rule) -> Result<Vec<PathBuf>> {
 }
 
 /// Whether `candidate` is `root` itself or something under it, decided
-/// lexically -- the answer must not depend on what exists yet, because a
-/// missing `include` root is reported rather than refused.
+/// lexically -- the answer must not depend on what exists, so that a root
+/// outside the repository is refused for that reason whether or not it is there.
 fn under(root: &Path, candidate: &Path) -> bool {
     candidate
         .strip_prefix(root)

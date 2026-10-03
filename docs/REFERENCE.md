@@ -303,10 +303,10 @@ reports it the same way:
 | `prose_regexp` | nothing whose prose could be read | `policy checks passed` |
 
 `require_regexp` is the most exposed, because its purpose is to insist that
-something is there. Rename the directory its `include` names, or narrow its
-`glob` past the files it was written for, and the rule passes on every run. A
-missing `include` root is named on stderr without changing the exit code, and a
-`glob` that stops matching is not reported at all.
+something is there. Narrow its `glob` past the files it was written for and the
+rule passes on every run: a `glob` that stops matching is not reported at all.
+A missing `include` root is not this case: it refuses the run with exit 2,
+naming the rule and the root that does not exist.
 
 The floor is declared, and the count is measured against it:
 
