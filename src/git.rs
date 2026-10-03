@@ -423,10 +423,18 @@ pub(crate) fn remote_url(root: &Path, remote: &str) -> Option<String> {
 /// for https, http, ssh, git and `git+ssh`, and the scp-like
 /// `[user@]host:path`, which git reads as scp-like only where the colon comes
 /// before any slash. A local path, or a `file://` url, names no host.
+///
+/// [`host`] and [`owner_repo`] agree about a url, or both yield None when
+/// [`ambiguous`] says this parser cannot be sure which host git contacts.
 pub(crate) fn host(url: &str) -> Option<String> {
     let url = url.trim();
-    let authority = if let Some((_, rest)) = url.split_once("://") {
-        rest.split('/').next().unwrap_or(rest)
+    // A `file://` url names no host, whatever stands where one would: git
+    // pushes it to a local path.
+    if ambiguous(url) || is_file_url(url) {
+        return None;
+    }
+    let authority = if let Some((authority, _)) = url_parts(url) {
+        authority
     } else {
         let (authority, _) = url.split_once(':')?;
         if authority.contains('/') {
@@ -444,9 +452,70 @@ pub(crate) fn host(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_lowercase())
 }
 
+/// Whether a url is spelled so that git may contact a host other than the one
+/// read here, so that neither a host nor an owner/repo is read from it.
+///
+/// Fail-closed rather than a second copy of git's parser: git url-decodes a
+/// `scheme://` authority before splitting it, so a `%2F@` can put the real
+/// host in front of an `@` that seems to end the userinfo; git strips the
+/// brackets of a scp-like `[host]:path` and lets ssh read whatever is inside
+/// them.
+fn ambiguous(url: &str) -> bool {
+    if let Some((authority, _)) = url_parts(url) {
+        return authority.contains('%');
+    }
+    url.split_once(':')
+        .is_some_and(|(authority, _)| !authority.contains('/') && authority.contains('['))
+}
+
+/// Whether a url is spelled `file://`, in any case.
+fn is_file_url(url: &str) -> bool {
+    url.get(..7)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file://"))
+}
+
+/// The authority and path of a `scheme://` url, the path without any query or
+/// fragment.
+///
+/// The authority ends at the first `/`, `?` or `#`, as RFC 3986 and curl read
+/// it. Ending it at `/` alone took `https://evil.com#@github.com/acme/widget`
+/// to be github.com's `acme/widget`, while git sends the push to evil.com.
+fn url_parts(url: &str) -> Option<(&str, &str)> {
+    let (_, rest) = url.split_once("://")?;
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    let path = tail.split(['?', '#']).next().unwrap_or(tail);
+    Some((authority, path))
+}
+
+/// Whether `gh` can answer for a name written against this host -- the one
+/// definition of "GitHub" in this binary.
+///
+/// Only GitHub, and only exactly GitHub. A GitHub Enterprise host is a
+/// DIFFERENT forge that happens to share the software: asking github.com about
+/// `acme/widget` seen on `github.acme.com` answers about someone else's
+/// repository, and a public answer there passes a private repository here. The
+/// same holds for ownership: `gh api` without `--hostname` asks github.com, so
+/// an enterprise push judged by it would be judged by a stranger's repository.
+pub(crate) fn is_github_host(host: &str) -> bool {
+    matches!(
+        host.to_lowercase().as_str(),
+        "github.com" | "www.github.com" | "raw.githubusercontent.com"
+    )
+}
+
 /// `owner/repo` from any spelling of a forge url.
+///
+/// None for every url [`ambiguous`] refuses, as [`host`] is.
 pub(crate) fn owner_repo(url: &str) -> Option<(String, String)> {
-    let trimmed = url.trim().trim_end_matches('/');
+    let url = url.trim();
+    if ambiguous(url) {
+        return None;
+    }
+    // A `scheme://` url names its repository in its path and nowhere else.
+    let trimmed = url_parts(url)
+        .map_or(url, |(_, path)| path)
+        .trim_end_matches('/');
     let without_git = trimmed.strip_suffix(".git").unwrap_or(trimmed);
     // scp-like (`git@host:owner/repo`) and url forms both end in owner/repo.
     let tail = without_git
@@ -486,6 +555,14 @@ mod tests {
             ("git@github.com:acme/widget.git", "github.com"),
             ("github.com:acme/widget.git", "github.com"),
             ("ssh://git@[::1]:22/acme/widget.git", "::1"),
+            // The authority ends at a query or fragment, so an `@` after one
+            // is not userinfo and the host is the one git connects to.
+            ("https://evil.com#@github.com/acme/widget.git", "evil.com"),
+            ("https://evil.com?@github.com/acme/widget.git", "evil.com"),
+            (
+                "https://u@evil.com#x@github.com/acme/widget.git",
+                "evil.com",
+            ),
         ] {
             assert_eq!(host(url).as_deref(), Some(want), "{url}");
         }
@@ -505,6 +582,24 @@ mod tests {
     }
 
     #[test]
+    fn a_file_url_names_no_host_but_its_path_still_names_a_repository() {
+        // git pushes a file:// url to a local path, so no forge answers for
+        // it, but its path is read as a plain path is.
+        for (url, owner, repo) in [
+            ("file://github.com/acme/widget.git", "acme", "widget"),
+            ("FILE://github.com/acme/widget.git", "acme", "widget"),
+            ("file:///tmp/x/bare.git", "x", "bare"),
+        ] {
+            assert_eq!(host(url), None, "{url}");
+            assert_eq!(
+                owner_repo(url),
+                Some((owner.to_owned(), repo.to_owned())),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
     fn owner_and_repo_come_out_of_every_url_spelling() {
         for url in [
             "https://github.com/acme/widget.git",
@@ -512,6 +607,49 @@ mod tests {
             "git@github.com:acme/widget.git",
             "ssh://git@github.com/acme/widget.git",
             "https://github.com/acme/widget/",
+            "https://github.com/acme/widget.git#main",
+            "https://github.com/acme/widget?tab=readme",
+        ] {
+            assert_eq!(
+                owner_repo(url),
+                Some(("acme".to_owned(), "widget".to_owned())),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn owner_and_repo_are_never_read_past_a_query_or_fragment() {
+        for url in [
+            "https://evil.com#@github.com/acme/widget.git",
+            "https://evil.com?@github.com/acme/widget.git",
+        ] {
+            assert_eq!(owner_repo(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn a_url_git_may_send_to_another_host_names_no_host_and_no_repository() {
+        for url in [
+            // git url-decodes the authority, so the user ends at the `/` and
+            // ssh connects to evil.com.
+            "ssh://evil.com%2F@github.com/acme/widget.git",
+            "git+ssh://evil.com%2F@github.com/acme/widget.git",
+            "git://evil.com%2F@github.com/acme/widget.git",
+            "https://evil.com%2F@github.com/acme/widget.git",
+            // git strips the brackets and ssh reads `x@evil.com` as the host.
+            "[github.com:x@evil.com]:acme/widget.git",
+            "git@[github.com]:acme/widget.git",
+        ] {
+            assert_eq!(host(url), None, "{url}");
+            assert_eq!(owner_repo(url), None, "{url}");
+        }
+        // The controls: the same repository spelled plainly still reads.
+        for url in [
+            "ssh://git@github.com/acme/widget.git",
+            "git@github.com:acme/widget.git",
+            "https://github.com/acme/widget.git",
+            "acme/widget",
         ] {
             assert_eq!(
                 owner_repo(url),

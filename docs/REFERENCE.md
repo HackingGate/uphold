@@ -1450,8 +1450,8 @@ against acme -- DERIVED FROM ORIGIN, not pinned. […] Pin it with
 
 The pin is asked first and the forge second. A destination on the allow-list —
 the pinned owner, `allowed_owners`, `allowed_repos` — passes exactly as before,
-with no network call. Only a destination the list refused, and only on GitHub,
-is put to `gh`: whether `gh api user` is the destination's owner, and failing
+with no network call. Only a destination the list refused, and only on
+github.com, is put to `gh`: whether `gh api user` is the destination's owner, and failing
 that whether `gh api repos/<owner>/<repo>` reports `permissions.admin`. Either
 is ownership and the run exits `0` with nothing extra printed. This covers what
 a pin cannot, since a bundled rule takes no parameter, and it is not the
@@ -1463,7 +1463,10 @@ the forge was asked and disagreed too. A forge that **could not be asked** — n
 `gh`, not authenticated, no network, output that is neither a yes nor a no — is
 exit `2` with the same report and a line saying why: a question that could not
 be asked is not a pass. A destination on a host no client answers for keeps the
-allow-list's answer unchanged.
+allow-list's answer unchanged — a refusal, exit `1`. A GitHub Enterprise host
+such as `github.acme.com` is one of those: `gh api` without `--hostname` asks
+github.com, whose same-named repository is somebody else's, so it is never
+asked.
 
 ### Built-in parameters
 

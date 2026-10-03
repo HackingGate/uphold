@@ -1791,3 +1791,142 @@ fn a_destination_on_a_host_with_no_client_is_judged_by_the_allow_list_alone() {
     assert!(text.contains("someone-else/thing"), "{text}");
     assert!(!text.contains("The forge"), "{text}");
 }
+
+/// A GitHub Enterprise remote is not asked about on github.com.
+///
+/// `gh api` without `--hostname` answers about github.com, so a `gh` that
+/// administers `github.com/someone-else/thing` would have passed a push to
+/// `github.acme.com/someone-else/thing` -- a different forge's repository. The
+/// stub says yes to everything, so only a guard that never asks it refuses.
+#[test]
+fn an_enterprise_remote_is_not_answered_for_by_github_com() {
+    let root = repository(PINNED_PUSH);
+    gh_says(
+        &root,
+        "case \"$*\" in\n\
+         'api user --jq .login') echo someone-else ;;\n\
+         'api repos/'*' --jq .permissions.admin') echo true ;;\n\
+         *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
+         esac\n",
+    );
+
+    for url in [
+        "https://github.acme.com/someone-else/thing.git",
+        "git@github.acme.com:someone-else/thing.git",
+    ] {
+        let output = push_guard(&root, &["--remote-url", url]);
+        assert_eq!(code(&output), 1, "{url}: {}", stderr(&output));
+        let text = stderr(&output);
+        assert!(text.contains("someone-else/thing"), "{text}");
+        assert!(!text.contains("The forge"), "{text}");
+    }
+}
+
+#[test]
+fn an_at_sign_after_a_query_or_fragment_does_not_make_github_com_the_host() {
+    // git connects to evil.com: the `@` sits in the fragment or query, not in
+    // the userinfo. Reading github.com out of it let a github.com administrator
+    // of acme/widget push off the list to a stranger's host.
+    let root = repository(PINNED_PUSH);
+    gh_says(
+        &root,
+        "case \"$*\" in\n\
+         'api user --jq .login') echo someone-else ;;\n\
+         'api repos/'*' --jq .permissions.admin') echo true ;;\n\
+         *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
+         esac\n",
+    );
+
+    for url in [
+        "https://evil.com#@github.com/acme/widget.git",
+        "https://evil.com?@github.com/acme/widget.git",
+    ] {
+        let output = push_guard(&root, &["--remote-url", url]);
+        assert_eq!(code(&output), 1, "{url}: {}", stderr(&output));
+        let text = stderr(&output);
+        assert!(!text.contains("The forge"), "{text}");
+    }
+}
+
+/// A push to `url`, which git sends somewhere other than github.com, is
+/// refused although a stub `gh` says the pusher administers github.com's
+/// acme/widget.
+fn refused_though_github_com_says_yes(url: &str) {
+    let root = repository(PINNED_PUSH);
+    gh_says(
+        &root,
+        "case \"$*\" in\n\
+         'api user --jq .login') echo someone-else ;;\n\
+         'api repos/'*' --jq .permissions.admin') echo true ;;\n\
+         *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
+         esac\n",
+    );
+    let output = push_guard(&root, &["--remote-url", url]);
+    assert_eq!(code(&output), 1, "{url}: {}", stderr(&output));
+    let text = stderr(&output);
+    assert!(!text.contains("The forge"), "{text}");
+}
+
+#[test]
+fn a_percent_encoded_authority_does_not_make_github_com_the_host() {
+    // git url-decodes the authority before splitting it, so the user ends at
+    // the `/` and ssh connects to evil.com.
+    refused_though_github_com_says_yes("ssh://evil.com%2F@github.com/acme/widget.git");
+}
+
+#[test]
+fn a_bracketed_scp_like_host_does_not_make_github_com_the_host() {
+    // git strips the brackets and ssh connects to evil.com as user x.
+    refused_though_github_com_says_yes("[github.com:x@evil.com]:acme/widget.git");
+}
+
+/// A `file://` url names no host, so no forge is asked about it.
+///
+/// git pushes `file://github.com/...` to a local path, so github.com's answer
+/// about the repository its path names is an answer about somewhere else. The
+/// allow-list alone judges it: an owner not on it is refused, and the `gh`
+/// that would have said yes is never run.
+#[test]
+fn a_file_url_does_not_make_github_com_the_host() {
+    let root = repository(PINNED_PUSH);
+    let asked = root.join("gh-was-asked");
+    gh_says(
+        &root,
+        &format!(
+            "touch '{}'\n\
+             case \"$*\" in\n\
+             'api user --jq .login') echo someone-else ;;\n\
+             'api repos/'*' --jq .permissions.admin') echo true ;;\n\
+             *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
+             esac\n",
+            asked.display()
+        ),
+    );
+    let url = "file://github.com/someone-else/thing.git";
+    let output = push_guard(&root, &["--remote-url", url]);
+    assert_eq!(code(&output), 1, "{url}: {}", stderr(&output));
+    assert!(!asked.exists(), "gh was asked about {url}");
+}
+
+/// A `file://` url to a bare repository is read by its path, as the same path
+/// spelled plainly is, so the allow-list admits it.
+#[test]
+fn a_file_url_to_an_allowed_bare_repository_passes() {
+    let root = repository(
+        "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\n\
+         allowed_repos = [\"x/bare\"]\n\n\
+         [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
+    );
+    gh_says(&root, GH_SAYS_NO);
+    let bare = root.join("x/bare.git");
+    std::fs::create_dir_all(&bare).unwrap();
+    support::git(&bare, &["init", "-q", "--bare"]);
+
+    for url in [
+        format!("file://{}", bare.display()),
+        bare.display().to_string(),
+    ] {
+        let output = push_guard(&root, &["--remote-url", &url]);
+        assert_eq!(code(&output), 0, "{url}: {}", stderr(&output));
+    }
+}
