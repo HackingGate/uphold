@@ -425,8 +425,8 @@ pub(crate) fn remote_url(root: &Path, remote: &str) -> Option<String> {
 /// before any slash. A local path, or a `file://` url, names no host.
 pub(crate) fn host(url: &str) -> Option<String> {
     let url = url.trim();
-    let authority = if let Some((_, rest)) = url.split_once("://") {
-        rest.split('/').next().unwrap_or(rest)
+    let authority = if let Some((authority, _)) = url_parts(url) {
+        authority
     } else {
         let (authority, _) = url.split_once(':')?;
         if authority.contains('/') {
@@ -442,6 +442,20 @@ pub(crate) fn host(url: &str) -> Option<String> {
         |bracketed| bracketed.split(']').next().unwrap_or(bracketed),
     );
     (!host.is_empty()).then(|| host.to_lowercase())
+}
+
+/// The authority and path of a `scheme://` url, the path without any query or
+/// fragment.
+///
+/// The authority ends at the first `/`, `?` or `#`, as RFC 3986 and curl read
+/// it. Ending it at `/` alone took `https://evil.com#@github.com/acme/widget`
+/// to be github.com's `acme/widget`, while git sends the push to evil.com.
+fn url_parts(url: &str) -> Option<(&str, &str)> {
+    let (_, rest) = url.split_once("://")?;
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    let path = tail.split(['?', '#']).next().unwrap_or(tail);
+    Some((authority, path))
 }
 
 /// Whether `gh` can answer for a name written against this host -- the one
@@ -462,7 +476,11 @@ pub(crate) fn is_github_host(host: &str) -> bool {
 
 /// `owner/repo` from any spelling of a forge url.
 pub(crate) fn owner_repo(url: &str) -> Option<(String, String)> {
-    let trimmed = url.trim().trim_end_matches('/');
+    let url = url.trim();
+    // A `scheme://` url names its repository in its path and nowhere else.
+    let trimmed = url_parts(url)
+        .map_or(url, |(_, path)| path)
+        .trim_end_matches('/');
     let without_git = trimmed.strip_suffix(".git").unwrap_or(trimmed);
     // scp-like (`git@host:owner/repo`) and url forms both end in owner/repo.
     let tail = without_git
@@ -502,6 +520,14 @@ mod tests {
             ("git@github.com:acme/widget.git", "github.com"),
             ("github.com:acme/widget.git", "github.com"),
             ("ssh://git@[::1]:22/acme/widget.git", "::1"),
+            // The authority ends at a query or fragment, so an `@` after one
+            // is not userinfo and the host is the one git connects to.
+            ("https://evil.com#@github.com/acme/widget.git", "evil.com"),
+            ("https://evil.com?@github.com/acme/widget.git", "evil.com"),
+            (
+                "https://u@evil.com#x@github.com/acme/widget.git",
+                "evil.com",
+            ),
         ] {
             assert_eq!(host(url).as_deref(), Some(want), "{url}");
         }
@@ -528,12 +554,24 @@ mod tests {
             "git@github.com:acme/widget.git",
             "ssh://git@github.com/acme/widget.git",
             "https://github.com/acme/widget/",
+            "https://github.com/acme/widget.git#main",
+            "https://github.com/acme/widget?tab=readme",
         ] {
             assert_eq!(
                 owner_repo(url),
                 Some(("acme".to_owned(), "widget".to_owned())),
                 "{url}"
             );
+        }
+    }
+
+    #[test]
+    fn owner_and_repo_are_never_read_past_a_query_or_fragment() {
+        for url in [
+            "https://evil.com#@github.com/acme/widget.git",
+            "https://evil.com?@github.com/acme/widget.git",
+        ] {
+            assert_eq!(owner_repo(url), None, "{url}");
         }
     }
 

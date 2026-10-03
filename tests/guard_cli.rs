@@ -1821,3 +1821,29 @@ fn an_enterprise_remote_is_not_answered_for_by_github_com() {
         assert!(!text.contains("The forge"), "{text}");
     }
 }
+
+#[test]
+fn an_at_sign_after_a_query_or_fragment_does_not_make_github_com_the_host() {
+    // git connects to evil.com: the `@` sits in the fragment or query, not in
+    // the userinfo. Reading github.com out of it let a github.com administrator
+    // of acme/widget push off the list to a stranger's host.
+    let root = repository(PINNED_PUSH);
+    gh_says(
+        &root,
+        "case \"$*\" in\n\
+         'api user --jq .login') echo someone-else ;;\n\
+         'api repos/'*' --jq .permissions.admin') echo true ;;\n\
+         *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
+         esac\n",
+    );
+
+    for url in [
+        "https://evil.com#@github.com/acme/widget.git",
+        "https://evil.com?@github.com/acme/widget.git",
+    ] {
+        let output = push_guard(&root, &["--remote-url", url]);
+        assert_eq!(code(&output), 1, "{url}: {}", stderr(&output));
+        let text = stderr(&output);
+        assert!(!text.contains("The forge"), "{text}");
+    }
+}

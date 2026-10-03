@@ -3962,6 +3962,10 @@ mod tests {
             ("git@github.acme.com:acme/widget.git", None),
             ("ssh://git@github.acme.com:2222/acme/widget.git", None),
             ("https://notgithub.com/acme/widget.git", None),
+            // An `@` after a query or fragment is not userinfo: git connects
+            // to evil.com.
+            ("https://evil.com#@github.com/acme/widget.git", None),
+            ("https://evil.com?@github.com/acme/widget.git", None),
         ] {
             assert_eq!(Forge::of_url(url), want, "{url}");
         }
