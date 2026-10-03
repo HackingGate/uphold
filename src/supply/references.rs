@@ -268,52 +268,62 @@ pub(super) struct NpmSorted {
     pub refused: Vec<String>,
 }
 
-/// Sort a `package.json`'s `dependencies`. `locks` are the texts of the
+/// Sort a `package.json`'s `dependencies`, and its `devDependencies` too where
+/// `include_dev` says guarddog reads them
+/// (`GUARDDOG_NPM_INCLUDE_DEV_DEPENDENCIES=true`). `locks` are the texts of the
 /// `bun.lock` and `package-lock.json` files that may record what each git
 /// dependency resolved to, nearest first. A manifest that does not parse is
 /// left whole, for guarddog to say so.
-pub(super) fn sort_npm(manifest: &str, locks: &[String]) -> NpmSorted {
+pub(super) fn sort_npm(manifest: &str, locks: &[String], include_dev: bool) -> NpmSorted {
     let mut sorted = NpmSorted::default();
     let Ok(serde_json::Value::Object(mut parsed)) = serde_json::from_str(manifest) else {
         return sorted;
     };
     sorted.read = true;
-    let Some(serde_json::Value::Object(dependencies)) = parsed.get_mut("dependencies") else {
-        return sorted;
+    let groups: &[&str] = if include_dev {
+        &["dependencies", "devDependencies"]
+    } else {
+        &["dependencies"]
     };
     let mut taken = false;
-    dependencies.retain(|name, spec| {
-        let Some((remote, fragment)) = spec.as_str().and_then(npm_git) else {
-            return true;
+    for group in groups {
+        let Some(serde_json::Value::Object(dependencies)) = parsed.get_mut(*group) else {
+            continue;
         };
-        taken = true;
-        let fragment = fragment.filter(|fragment| !fragment.starts_with("semver:"));
-        let commit = locks
-            .iter()
-            .find_map(|lock| locked_commit(lock, name))
-            .or_else(|| {
-                fragment
-                    .filter(|fragment| is_commit(fragment))
-                    .map(str::to_owned)
-            });
-        match commit {
-            Some(commit) => sorted.git.push(GitPin {
-                name: name.clone(),
-                remote,
-                tag: fragment
-                    .filter(|fragment| !commit.starts_with(*fragment))
-                    .map(str::to_owned),
-                commit,
-                committish: true,
-            }),
-            None => sorted.refused.push(format!(
-                "{name} is a git dependency ({remote}), and no bun.lock or package-lock.json \
-                 records the commit it resolved to, so there is no pin to check"
-            )),
-        }
-        false
-    });
-    sorted.indexed = dependencies.len();
+        dependencies.retain(|name, spec| {
+            let Some((remote, fragment)) = spec.as_str().and_then(npm_git) else {
+                return true;
+            };
+            taken = true;
+            let fragment = fragment.filter(|fragment| !fragment.starts_with("semver:"));
+            let commit = locks
+                .iter()
+                .find_map(|lock| locked_commit(lock, name))
+                .or_else(|| {
+                    fragment
+                        .filter(|fragment| is_commit(fragment))
+                        .map(str::to_owned)
+                });
+            match commit {
+                Some(commit) => sorted.git.push(GitPin {
+                    name: name.clone(),
+                    remote,
+                    tag: fragment
+                        .filter(|fragment| !commit.starts_with(*fragment))
+                        .map(str::to_owned),
+                    commit,
+                    committish: true,
+                }),
+                None => sorted.refused.push(format!(
+                    "{name} is a git dependency ({remote}), and no bun.lock or \
+                     package-lock.json records the commit it resolved to, so there is no \
+                     pin to check"
+                )),
+            }
+            false
+        });
+        sorted.indexed += dependencies.len();
+    }
     if taken {
         sorted.kept = serde_json::to_string(&parsed).ok();
     }
@@ -776,7 +786,7 @@ mod tests {
         let bun = format!(
             "{{\n  \"packages\": {{\n    \"@example-org/kit\": [\"@example-org/kit@git+https://github.com/example-org/kit.git#{COMMIT}\", {{}}, \"{COMMIT}\"],\n  }}\n}}\n"
         );
-        let sorted = sort_npm(manifest, &[bun]);
+        let sorted = sort_npm(manifest, &[bun], false);
         assert_eq!(sorted.indexed, 1);
         assert_eq!(
             sorted.git,
@@ -802,14 +812,14 @@ mod tests {
         let lock = format!(
             "{{\"packages\":{{\"node_modules/kit\":{{\"resolved\":\"git+ssh://git@github.com/example-org/kit.git#{COMMIT}\"}}}}}}"
         );
-        let sorted = sort_npm(manifest, &[lock]);
+        let sorted = sort_npm(manifest, &[lock], false);
         assert_eq!(sorted.indexed, 0);
         assert_eq!(sorted.git.len(), 1);
         assert_eq!(sorted.git[0].tag.as_deref(), Some("main"));
-        let whole = sort_npm("{\"dependencies\":{\"cookie\":\"^1.1.1\"}}", &[]);
+        let whole = sort_npm("{\"dependencies\":{\"cookie\":\"^1.1.1\"}}", &[], false);
         assert!(whole.kept.is_none() && whole.git.is_empty() && whole.refused.is_empty());
         assert!(whole.read && whole.indexed == 1);
-        let unread = sort_npm("not json", &[]);
+        let unread = sort_npm("not json", &[], false);
         assert!(unread.kept.is_none() && !unread.read);
     }
 
@@ -817,7 +827,7 @@ mod tests {
     fn a_manifest_with_only_dev_dependencies_leaves_nothing_for_npm() {
         // guarddog reads `dependencies` alone and answers `[]` for a manifest
         // without them, which the reader takes for a network failure.
-        let dev = sort_npm("{\"devDependencies\":{\"jose\":\"^6\"}}", &[]);
+        let dev = sort_npm("{\"devDependencies\":{\"jose\":\"^6\"}}", &[], false);
         assert!(
             dev.read && dev.indexed == 0 && dev.kept.is_none(),
             "{dev:?}"
@@ -825,10 +835,25 @@ mod tests {
         let empty = sort_npm(
             "{\"dependencies\":{},\"devDependencies\":{\"jose\":\"^6\"}}",
             &[],
+            false,
         );
         assert!(
             empty.read && empty.indexed == 0 && empty.kept.is_none(),
             "{empty:?}"
+        );
+    }
+
+    #[test]
+    fn dev_dependencies_count_and_lose_their_git_sources_where_guarddog_reads_them() {
+        let manifest = "{\"devDependencies\":{\"jose\":\"^6\",\
+            \"loose\":\"github:example-org/loose\"}}";
+        let dev = sort_npm(manifest, &[], true);
+        assert_eq!(dev.indexed, 1, "{dev:?}");
+        assert_eq!(dev.refused.len(), 1, "{dev:?}");
+        let kept = dev.kept.unwrap();
+        assert!(
+            kept.contains("\"jose\"") && !kept.contains("loose"),
+            "{kept}"
         );
     }
 
@@ -864,7 +889,11 @@ mod tests {
             "git+--upload-pack=touch {};git-upload-pack://github.com/example-org/kit#{COMMIT}",
             probe.display()
         );
-        let sorted = sort_npm(&format!("{{\"dependencies\":{{\"kit\":\"{spec}\"}}}}"), &[]);
+        let sorted = sort_npm(
+            &format!("{{\"dependencies\":{{\"kit\":\"{spec}\"}}}}"),
+            &[],
+            false,
+        );
         assert_eq!(sorted.git.len(), 1, "{:?}", sorted.refused);
         let first_party = FirstParty {
             owner: Ok(Some(String::from("example-org"))),

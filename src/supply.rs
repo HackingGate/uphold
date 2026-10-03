@@ -1607,12 +1607,16 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
             Read::Unread(said) => unrun = unrun.or(Some(said)),
         }
     }
+    // guarddog reads `devDependencies` as well only under this setting, and
+    // compares it as Python's `.lower() == "true"`.
+    let include_dev = std::env::var("GUARDDOG_NPM_INCLUDE_DEV_DEPENDENCIES")
+        .is_ok_and(|value| value.eq_ignore_ascii_case("true"));
     for manifest in npm {
         let directory = manifest.parent().unwrap_or(root);
         checked += 1;
         let at = directory.display().to_string();
         let sorted = std::fs::read_to_string(&manifest)
-            .map(|text| references::sort_npm(&text, &npm_locks(directory, root)))
+            .map(|text| references::sort_npm(&text, &npm_locks(directory, root), include_dev))
             .unwrap_or_default();
         for said in &sorted.refused {
             println!("   FAILED: guarddog npm: {at}: {said}");
@@ -1629,8 +1633,9 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
                 references::Checked::Unread(said) => unrun = unrun.or(Some(said)),
             }
         }
-        // Nothing npm resolves -- no `dependencies`, only `devDependencies`, or
-        // only git dependencies -- is nothing to look up, and guarddog would
+        // Nothing npm resolves among what guarddog reads -- no `dependencies`,
+        // only `devDependencies` where it does not read them, or only git
+        // dependencies -- is nothing to look up, and guarddog would
         // answer `[]`, which reads as a network failure. A manifest that did not
         // parse still goes to guarddog, for it to say so.
         if sorted.read && sorted.indexed == 0 {

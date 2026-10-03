@@ -142,6 +142,9 @@ fn invoke(root: &Path, path: &std::ffi::OsStr, args: &[&str], push: &[(&str, &st
         "PRE_COMMIT_ORIGIN",
         "PRE_COMMIT_LOCAL_BRANCH",
         "PRE_COMMIT_REMOTE_BRANCH",
+        // Decides which npm dependencies guarddog reads, and so whether it is
+        // asked at all.
+        "GUARDDOG_NPM_INCLUDE_DEV_DEPENDENCIES",
     ] {
         command.env_remove(name);
     }
@@ -655,6 +658,67 @@ fn a_manifest_with_only_dev_dependencies_is_not_sent_to_guarddog_and_passes() {
     assert!(!said.contains("reported on no dependency"), "{said}");
     assert!(said.contains("all checks passed"), "{said}");
     assert!(!journal(&root).contains("guarddog"), "{}", journal(&root));
+}
+
+/// Where guarddog is told to read `devDependencies`, they are something to
+/// look up, and the same manifest is handed to it.
+#[test]
+fn dev_dependencies_are_sent_to_guarddog_where_it_is_told_to_read_them() {
+    let root = repository();
+    std::fs::write(
+        root.join("package.json"),
+        "{\"name\": \"tests\", \"devDependencies\": {\"jose\": \"^6.2.12\"}}\n",
+    )
+    .unwrap();
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        ("guarddog", &recording(GUARDDOG_CLEAN)),
+    ]);
+    let output = supply_with(
+        &root,
+        &tools,
+        &[(
+            "GUARDDOG_NPM_INCLUDE_DEV_DEPENDENCIES",
+            String::from("TRUE"),
+        )],
+    );
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(!said.contains("guarddog was not asked"), "{said}");
+    assert!(
+        journal(&root).contains("] npm verify"),
+        "{}",
+        journal(&root)
+    );
+}
+
+/// A manifest that does not parse is still handed to guarddog, and its failure
+/// to report is could-not-look, never the pass a manifest with nothing to
+/// scan earns.
+#[test]
+fn an_unparseable_manifest_is_still_sent_to_guarddog_and_is_not_checked() {
+    let root = repository();
+    std::fs::write(root.join("package.json"), "{\"name\": \"broken\",\n").unwrap();
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        (
+            "guarddog",
+            &recording("echo 'json.decoder.JSONDecodeError: Expecting value' >&2; exit 1"),
+        ),
+    ]);
+    let output = supply(&root, Some(&tools));
+    let said = text(&output);
+    assert_eq!(code(&output), 2, "{said}");
+    assert!(
+        said.contains("NOT CHECKED: guarddog gave no report"),
+        "{said}"
+    );
+    assert!(!said.contains("guarddog was not asked"), "{said}");
+    assert!(
+        journal(&root).contains("] npm verify"),
+        "{}",
+        journal(&root)
+    );
 }
 
 /// A section with work to do and no tool to do it names the tool.
