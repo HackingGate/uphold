@@ -1537,10 +1537,117 @@ fn require_any_link_fires_when_the_glob_selects_nothing() {
     );
 }
 
+/// A rule whose `include` root is not there searched nothing, and a
+/// line on stderr beside `policy checks passed` was the only sign of it. The
+/// run is refused instead, with the rule, the root and the reason, so a rule
+/// left behind by a move stops the gate rather than passing it.
+#[test]
+fn a_missing_include_root_is_refused() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TO[D]O'
+        files.include = ["src", "worker/src"]
+"#,
+    );
+    write(&root, "src/a.rs", "fine\n");
+    let output = scan(&root);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let said = stderr(&output);
+    assert!(
+        said.contains(
+            "rule \"no-todo\": `files.include` names \"worker/src\", which does not exist \
+             -- that root selected no files. If the directory moved, this rule is not running."
+        ),
+        "{said}"
+    );
+    assert!(
+        !stdout(&output).contains("policy checks passed"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+/// A root that cannot be looked at is not reported as one that is absent: the
+/// run is refused with exit 2, naming the root and the I/O error, and the
+/// missing-root message (whose advice is to look for a move) is not given.
+#[cfg(unix)]
+#[test]
+fn an_include_root_that_cannot_be_inspected_is_refused_as_such() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TO[D]O'
+        files.include = ["src", "locked/inner"]
+"#,
+    );
+    write(&root, "src/a.rs", "fine\n");
+    let locked = root.join("locked");
+    std::fs::create_dir_all(locked.join("inner")).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // A user the mode does not stop (root, or a capability that bypasses it)
+    // can inspect the directory, and there is no error branch to reach.
+    let privileged = std::fs::read_dir(&locked).is_ok();
+    let output = if privileged { None } else { Some(scan(&root)) };
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let Some(output) = output else {
+        return;
+    };
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let said = stderr(&output);
+    assert!(
+        said.contains(
+            "rule \"no-todo\": `files.include` names \"locked/inner\", which could not be \
+             inspected:"
+        ),
+        "{said}"
+    );
+    assert!(!said.contains("which does not exist"), "{said}");
+    assert!(
+        !stdout(&output).contains("policy checks passed"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+/// The other half: every root there, the same rule runs and passes.
+#[test]
+fn include_roots_that_all_exist_are_searched() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TO[D]O'
+        files.include = ["src", "worker/src"]
+"#,
+    );
+    write(&root, "src/a.rs", "fine\n");
+    write(&root, "worker/src/b.rs", "TODO\n");
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("worker/src/b.rs"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 /// The defect `files.min_selected` closes. A `require_regexp` over an empty
-/// selection returned no failures at all, so a rule whose `include` root had
-/// been renamed away reported `policy checks passed` forever -- the loudest
-/// version of the silence `require_any_link` was given for links.
+/// selection returns no failures at all, so a rule whose `glob` no longer
+/// matches the files it was written for reports `policy checks passed` forever
+/// -- the loudest version of the silence `require_any_link` was given for links.
 #[test]
 fn a_require_rule_over_an_empty_selection_fails_under_a_floor() {
     let root = workspace();
@@ -1551,12 +1658,12 @@ fn a_require_rule_over_an_empty_selection_fails_under_a_floor() {
         [rule.workflows-declare-permissions]
         message = "declare the token scopes the job needs"
         require_regexp = '^permissions:'
-        files.include = [".github/workflows-renamed-away"]
+        files.include = [".github/workflows"]
         files.glob = ["*.yml"]
         files.min_selected = 1
 "#,
     );
-    write(&root, ".github/workflows/ci.yml", "on: push\n");
+    write(&root, ".github/workflows/ci.yaml", "on: push\n");
     let output = scan(&root);
     assert_eq!(code(&output), 1);
     let said = stderr(&output);
@@ -1565,10 +1672,7 @@ fn a_require_rule_over_an_empty_selection_fails_under_a_floor() {
     assert!(said.contains("workflows-declare-permissions"), "{said}");
     assert!(said.contains("files.min_selected = 1"), "{said}");
     assert!(said.contains("selected 0 file(s)"), "{said}");
-    assert!(
-        said.contains("include = [\".github/workflows-renamed-away\"]"),
-        "{said}"
-    );
+    assert!(said.contains("include = [\".github/workflows\"]"), "{said}");
     assert!(said.contains("glob = [\"*.yml\"]"), "{said}");
 }
 
@@ -1639,7 +1743,8 @@ fn a_rule_selected_for_twice_reports_its_floor_once() {
         [rule.captures-are-shift-jis]
         message = "a capture keeps the venue's own encoding"
         encoding = "Shift_JIS"
-        files.include = ["captures-renamed-away"]
+        files.include = ["captures"]
+        files.glob = ["*.sjis"]
         files.min_selected = 1
 
         [rule.latin-only]
@@ -1648,6 +1753,7 @@ fn a_rule_selected_for_twice_reports_its_floor_once() {
 "#,
     );
     write(&root, "src/a.txt", "plain\n");
+    write(&root, "captures/a.txt", "plain\n");
     let output = scan(&root);
     assert_eq!(code(&output), 1);
     let said = stderr(&output);
