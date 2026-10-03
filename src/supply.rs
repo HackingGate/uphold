@@ -1629,18 +1629,21 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
                 references::Checked::Unread(said) => unrun = unrun.or(Some(said)),
             }
         }
+        // Nothing npm resolves -- no `dependencies`, only `devDependencies`, or
+        // only git dependencies -- is nothing to look up, and guarddog would
+        // answer `[]`, which reads as a network failure. A manifest that did not
+        // parse still goes to guarddog, for it to say so.
+        if sorted.read && sorted.indexed == 0 {
+            println!("   {at}: no dependency here resolves from npm, so guarddog was not asked");
+            continue;
+        }
         // The manifest itself where nothing came out of it; otherwise what is
-        // left, unless nothing is, which guarddog would answer with `[]`.
-        let rewritten = match &sorted.kept {
-            None => None,
-            Some(_) if sorted.indexed == 0 => {
-                println!(
-                    "   {at}: no dependency here resolves from npm, so guarddog was not asked"
-                );
-                continue;
-            }
-            Some(kept) => Some(tempfile_guard::TempFile::containing(kept)?),
-        };
+        // left.
+        let rewritten = sorted
+            .kept
+            .as_deref()
+            .map(tempfile_guard::TempFile::containing)
+            .transpose()?;
         let status = Command::new("guarddog")
             .args(["npm", "verify", "--output-format", "json"])
             .arg(

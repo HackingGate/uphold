@@ -258,6 +258,10 @@ pub(super) struct NpmSorted {
     pub kept: Option<String>,
     /// How many dependencies are left for npm to resolve.
     pub indexed: usize,
+    /// Whether the manifest parsed as a JSON object, so that `indexed` counts
+    /// its `dependencies` -- none at all, or only `devDependencies`, being
+    /// zero -- rather than a file nobody could read.
+    pub read: bool,
     /// Git dependencies, for the owner check and the remote.
     pub git: Vec<GitPin>,
     /// Git dependencies refused as they stand, each a line naming it.
@@ -273,6 +277,7 @@ pub(super) fn sort_npm(manifest: &str, locks: &[String]) -> NpmSorted {
     let Ok(serde_json::Value::Object(mut parsed)) = serde_json::from_str(manifest) else {
         return sorted;
     };
+    sorted.read = true;
     let Some(serde_json::Value::Object(dependencies)) = parsed.get_mut("dependencies") else {
         return sorted;
     };
@@ -803,7 +808,28 @@ mod tests {
         assert_eq!(sorted.git[0].tag.as_deref(), Some("main"));
         let whole = sort_npm("{\"dependencies\":{\"cookie\":\"^1.1.1\"}}", &[]);
         assert!(whole.kept.is_none() && whole.git.is_empty() && whole.refused.is_empty());
-        assert!(sort_npm("not json", &[]).kept.is_none());
+        assert!(whole.read && whole.indexed == 1);
+        let unread = sort_npm("not json", &[]);
+        assert!(unread.kept.is_none() && !unread.read);
+    }
+
+    #[test]
+    fn a_manifest_with_only_dev_dependencies_leaves_nothing_for_npm() {
+        // guarddog reads `dependencies` alone and answers `[]` for a manifest
+        // without them, which the reader takes for a network failure.
+        let dev = sort_npm("{\"devDependencies\":{\"jose\":\"^6\"}}", &[]);
+        assert!(
+            dev.read && dev.indexed == 0 && dev.kept.is_none(),
+            "{dev:?}"
+        );
+        let empty = sort_npm(
+            "{\"dependencies\":{},\"devDependencies\":{\"jose\":\"^6\"}}",
+            &[],
+        );
+        assert!(
+            empty.read && empty.indexed == 0 && empty.kept.is_none(),
+            "{empty:?}"
+        );
     }
 
     #[test]

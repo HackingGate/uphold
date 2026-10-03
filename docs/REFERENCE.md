@@ -2723,8 +2723,10 @@ repository root. Its `#<ref>`, where it names one, must point at that commit
 if it is a tag; if it is a branch, the commit must be what some ref points at,
 as for a commit the lock names alone. A git dependency no lock records a
 commit for, and whose `#` is not itself a commit, is refused by name: there is
-no pin to check. A manifest left with no dependencies is not handed to
-guarddog, for the same `[]`.
+no pin to check. A manifest with no `dependencies` npm resolves -- none at
+all, only `devDependencies`, or only git dependencies -- is not handed to
+guarddog, for the same `[]`; the section says so and passes. A manifest that
+does not parse is still handed over, for guarddog to say so.
 
 ### Waiving a confirmed guarddog false positive
 
