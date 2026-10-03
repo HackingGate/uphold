@@ -1803,9 +1803,10 @@ fn cfg_test_lines(path: &Path) -> BTreeSet<u64> {
 
 /// `(line_number, target)` for every resolvable link in a Markdown document.
 ///
-/// Skips fenced code blocks, external schemes, and pure fragments. A link inside
-/// a fence is an illustration rather than a reference, and resolving one would
-/// fail on every README that documents a link.
+/// Skips fenced code blocks, inline code spans, external schemes, and pure
+/// fragments. A link inside a fence or a code span is an illustration rather
+/// than a reference, and resolving one would fail on every README that
+/// documents a link.
 fn link_targets(text: &str) -> Vec<(u64, String)> {
     static INLINE: OnceLock<Regex> = OnceLock::new();
     static REFERENCE: OnceLock<Regex> = OnceLock::new();
@@ -1850,6 +1851,8 @@ fn link_targets(text: &str) -> Vec<(u64, String)> {
             continue;
         }
 
+        let line = without_code_spans(line);
+        let line = line.as_str();
         let mut targets: Vec<String> = Vec::new();
         if let Some(captures) = reference.captures(line) {
             targets.push(capture_target(&captures));
@@ -1868,6 +1871,39 @@ fn link_targets(text: &str) -> Vec<(u64, String)> {
         }
     }
     found
+}
+
+/// `line` with its inline code spans removed, as `CommonMark` delimits them: a
+/// run of N backticks opens a span that the next run of exactly N closes. A run
+/// with no matching closer is literal text and stays.
+fn without_code_spans(line: &str) -> String {
+    let run_at = |from: usize| line[from..].len() - line[from..].trim_start_matches('`').len();
+    let mut kept = String::with_capacity(line.len());
+    let mut rest = 0;
+    while let Some(offset) = line[rest..].find('`') {
+        let open = rest + offset;
+        let width = run_at(open);
+        let mut search = open + width;
+        let mut close = None;
+        while let Some(found) = line[search..].find('`') {
+            let start = search + found;
+            let run = run_at(start);
+            if run == width {
+                close = Some(start + run);
+                break;
+            }
+            search = start + run;
+        }
+        if let Some(end) = close {
+            kept.push_str(&line[rest..open]);
+            rest = end;
+        } else {
+            kept.push_str(&line[rest..open + width]);
+            rest = open + width;
+        }
+    }
+    kept.push_str(&line[rest..]);
+    kept
 }
 
 fn capture_target(captures: &regex::Captures<'_>) -> String {

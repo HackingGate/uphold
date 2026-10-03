@@ -506,7 +506,7 @@ it refuses** so the name predicts the rule list:
 | `credentials` | credential material a commit scanner does not own — populated environment files, browser profile and session stores. Secret shapes (private keys, service tokens, literal credential values) are gitleaks' job: inheriting it also turns on the gitleaks section of [`uphold supply-chain`](#gitleaks-which-owns-secret-shapes), the tool that owns secret shapes |
 | `unmanaged-pins` | a version pinned where no manifest holds it — a shell install line, a `releases/download/vX.Y.Z` URL, a versioned `curl` or `wget` |
 | `host-identity` | the machine the author is standing on — its username, home path, hostname and default route, read at scan time and searched for in content |
-| `broken-links` | a markdown link naming a path that does not exist or leaving the repository, and a selection that yields no links at all |
+| `broken-links` | a markdown link naming a path that does not exist or leaving the repository, and a selection that yields no links at all. Text inside fenced blocks and inline code spans (any backtick-run length) is literal and not read as a link |
 | `captured-fixtures` | a test fixture holding non-ASCII content, as the one signal that a capture from a live upstream survives redaction |
 | `doc-claims` | a document whose anchored fact disagrees with the record it names — a value the record does not hold, a key that is not there, a source or captured artifact that is absent |
 | `default-token-grant` | a GitHub Actions workflow with no top-level `permissions:` block, whose `GITHUB_TOKEN` is therefore scoped by a repository setting rather than by the workflow |

@@ -235,6 +235,37 @@ fn a_link_rule_separates_a_missing_target_from_one_outside_the_repository() {
 }
 
 #[test]
+fn a_link_rule_does_not_read_inside_an_inline_code_span() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.links-resolve]
+        builtin = "links-resolve"
+        message = "fix the link"
+        require_any_link = false
+
+        [rule.links-resolve.files]
+        glob = ["*.md"]
+"#,
+    );
+    write(
+        &root,
+        "README.md",
+        "pattern `[2-9](\\.\\d+)` and ``[a](`gone.md`)`` and ```x``[b](gone2.md)```\n",
+    );
+    let quoted = scan(&root);
+    assert_eq!(code(&quoted), 0, "{}", stderr(&quoted));
+
+    write(&root, "README.md", "pattern [2-9](\\.\\d+) unquoted\n");
+    let output = scan(&root);
+    assert_eq!(code(&output), 1);
+    let text = stderr(&output);
+    assert!(text.contains("\\.\\d+ -> no such file"), "{text}");
+}
+
+#[test]
 fn a_script_rule_admits_a_script_only_under_the_path_it_names() {
     let root = workspace();
     write(
