@@ -444,6 +444,22 @@ pub(crate) fn host(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_lowercase())
 }
 
+/// Whether `gh` can answer for a name written against this host -- the one
+/// definition of "GitHub" in this binary.
+///
+/// Only GitHub, and only exactly GitHub. A GitHub Enterprise host is a
+/// DIFFERENT forge that happens to share the software: asking github.com about
+/// `acme/widget` seen on `github.acme.com` answers about someone else's
+/// repository, and a public answer there passes a private repository here. The
+/// same holds for ownership: `gh api` without `--hostname` asks github.com, so
+/// an enterprise push judged by it would be judged by a stranger's repository.
+pub(crate) fn is_github_host(host: &str) -> bool {
+    matches!(
+        host.to_lowercase().as_str(),
+        "github.com" | "www.github.com" | "raw.githubusercontent.com"
+    )
+}
+
 /// `owner/repo` from any spelling of a forge url.
 pub(crate) fn owner_repo(url: &str) -> Option<(String, String)> {
     let trimmed = url.trim().trim_end_matches('/');

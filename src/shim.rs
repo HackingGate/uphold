@@ -1766,12 +1766,18 @@ impl Forge {
     /// `github.com/acme/gitlab-tools` is on GitHub and
     /// `example.com:org/github-mirror` is on neither. A self-hosted forge still
     /// counts by its name: `gitlab.example.com` is GitLab.
+    ///
+    /// GitHub is github.com and nothing else, by [`git::is_github_host`]. A
+    /// GitHub Enterprise host such as `github.acme.com` is a different forge,
+    /// and `gh api` asked without `--hostname` answers about github.com: the
+    /// visibility and ownership it reported would be a same-named stranger's.
+    /// So an enterprise host is a host no client is asked about.
     pub(crate) fn of_url(url: &str) -> Option<Self> {
         let host = git::host(url)?;
-        if host.contains("gitlab") {
-            Some(Self::GitLab)
-        } else if host.contains("github") {
+        if git::is_github_host(&host) {
             Some(Self::GitHub)
+        } else if host.contains("gitlab") {
+            Some(Self::GitLab)
         } else {
             // Not a guess. An unrecognised host means no client applies, and
             // the caller says so rather than reporting an answer nobody read.
@@ -3950,6 +3956,12 @@ mod tests {
                 Some(Forge::GitHub),
             ),
             ("GIT@GitHub.COM:acme/widget.git", Some(Forge::GitHub)),
+            // GitHub Enterprise is not GitHub: `gh api` without `--hostname`
+            // would answer about a same-named github.com repository.
+            ("https://github.acme.com/acme/widget.git", None),
+            ("git@github.acme.com:acme/widget.git", None),
+            ("ssh://git@github.acme.com:2222/acme/widget.git", None),
+            ("https://notgithub.com/acme/widget.git", None),
         ] {
             assert_eq!(Forge::of_url(url), want, "{url}");
         }

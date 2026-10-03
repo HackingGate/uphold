@@ -126,19 +126,6 @@ fn url_pattern() -> &'static Regex {
     })
 }
 
-/// Whether `gh` can answer for a name written against this host.
-///
-/// Only GitHub, and only exactly GitHub. A GitHub Enterprise host is a
-/// DIFFERENT forge that happens to share the software: asking github.com about
-/// `acme/widget` seen on `github.acme.com` answers about someone else's
-/// repository, and a public answer there passes a private repository here.
-fn is_github_host(host: &str) -> bool {
-    matches!(
-        host.to_lowercase().as_str(),
-        "github.com" | "www.github.com" | "raw.githubusercontent.com"
-    )
-}
-
 /// The hosts a policy has said carry no repository this guard must resolve.
 ///
 /// The field this replaces was a list of six forge hostnames written into the
@@ -212,7 +199,7 @@ fn unanswerable_names(text: &str, quiet: &ForeignHosts) -> BTreeSet<(String, Str
     let mut found = BTreeSet::new();
     for capture in url_pattern().captures_iter(text) {
         let host = capture[1].to_lowercase();
-        if is_github_host(&host) || quiet.quiets(&host) {
+        if git::is_github_host(&host) || quiet.quiets(&host) {
             continue;
         }
         let repo = clean_repo(&capture[3]);
@@ -241,7 +228,7 @@ fn unanswerable_names(text: &str, quiet: &ForeignHosts) -> BTreeSet<(String, Str
 fn candidates(text: &str, owners: &OwnerMatchers) -> BTreeSet<(String, String)> {
     let mut found: BTreeSet<(String, String)> = BTreeSet::new();
     for capture in url_pattern().captures_iter(text) {
-        if !is_github_host(&capture[1]) {
+        if !git::is_github_host(&capture[1]) {
             continue;
         }
         let owner = capture[2].to_string();

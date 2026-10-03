@@ -1791,3 +1791,33 @@ fn a_destination_on_a_host_with_no_client_is_judged_by_the_allow_list_alone() {
     assert!(text.contains("someone-else/thing"), "{text}");
     assert!(!text.contains("The forge"), "{text}");
 }
+
+/// A GitHub Enterprise remote is not asked about on github.com.
+///
+/// `gh api` without `--hostname` answers about github.com, so a `gh` that
+/// administers `github.com/someone-else/thing` would have passed a push to
+/// `github.acme.com/someone-else/thing` -- a different forge's repository. The
+/// stub says yes to everything, so only a guard that never asks it refuses.
+#[test]
+fn an_enterprise_remote_is_not_answered_for_by_github_com() {
+    let root = repository(PINNED_PUSH);
+    gh_says(
+        &root,
+        "case \"$*\" in\n\
+         'api user --jq .login') echo someone-else ;;\n\
+         'api repos/'*' --jq .permissions.admin') echo true ;;\n\
+         *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
+         esac\n",
+    );
+
+    for url in [
+        "https://github.acme.com/someone-else/thing.git",
+        "git@github.acme.com:someone-else/thing.git",
+    ] {
+        let output = push_guard(&root, &["--remote-url", url]);
+        assert_eq!(code(&output), 1, "{url}: {}", stderr(&output));
+        let text = stderr(&output);
+        assert!(text.contains("someone-else/thing"), "{text}");
+        assert!(!text.contains("The forge"), "{text}");
+    }
+}
