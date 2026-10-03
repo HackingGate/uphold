@@ -306,7 +306,9 @@ reports it the same way:
 something is there. Narrow its `glob` past the files it was written for and the
 rule passes on every run: a `glob` that stops matching is not reported at all.
 A missing `include` root is not this case: it refuses the run with exit 2,
-naming the rule and the root that does not exist.
+naming the rule and the root that does not exist. A root that cannot be
+inspected, such as one under a directory the user may not search, also exits 2,
+with the I/O error in place of the claim that the root is missing.
 
 The floor is declared, and the count is measured against it:
 

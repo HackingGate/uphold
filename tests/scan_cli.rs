@@ -1565,7 +1565,58 @@ fn a_missing_include_root_is_refused() {
         ),
         "{said}"
     );
-    assert!(!said.contains("policy checks passed"), "{said}");
+    assert!(
+        !stdout(&output).contains("policy checks passed"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+/// A root that cannot be looked at is not reported as one that is absent: the
+/// run is refused with exit 2, naming the root and the I/O error, and the
+/// missing-root message (whose advice is to look for a move) is not given.
+#[cfg(unix)]
+#[test]
+fn an_include_root_that_cannot_be_inspected_is_refused_as_such() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-todo]
+        message = "no TODO"
+        regexp = 'TO[D]O'
+        files.include = ["src", "locked/inner"]
+"#,
+    );
+    write(&root, "src/a.rs", "fine\n");
+    let locked = root.join("locked");
+    std::fs::create_dir_all(locked.join("inner")).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // A user the mode does not stop (root, or a capability that bypasses it)
+    // can inspect the directory, and there is no error branch to reach.
+    let privileged = std::fs::read_dir(&locked).is_ok();
+    let output = if privileged { None } else { Some(scan(&root)) };
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let Some(output) = output else {
+        return;
+    };
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let said = stderr(&output);
+    assert!(
+        said.contains(
+            "rule \"no-todo\": `files.include` names \"locked/inner\", which could not be \
+             inspected:"
+        ),
+        "{said}"
+    );
+    assert!(!said.contains("which does not exist"), "{said}");
+    assert!(
+        !stdout(&output).contains("policy checks passed"),
+        "{}",
+        stdout(&output)
+    );
 }
 
 /// The other half: every root there, the same rule runs and passes.

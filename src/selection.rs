@@ -685,13 +685,29 @@ fn search_roots(root: &Path, rule: &Rule) -> Result<Vec<PathBuf>> {
         //
         // The default root is the repository itself, so this can only fire on an
         // `include` somebody wrote.
-        if !search_root.exists() {
-            return Err(Fatal::new(format!(
-                "rule {:?}: `files.include` names {spec:?}, which does not \
-                 exist -- that root selected no files. If the directory moved, \
-                 this rule is not running.",
-                rule.id
-            )));
+        //
+        // `try_exists`, not `exists`: a root that could not be looked at, say
+        // under a directory this user may not search, is not a root that is
+        // absent, and reporting it as moved would send the reader to the wrong
+        // fix. Both refuse the run; only `Ok(false)` says the root is not there.
+        match search_root.try_exists() {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(Fatal::new(format!(
+                    "rule {:?}: `files.include` names {spec:?}, which does not \
+                     exist -- that root selected no files. If the directory moved, \
+                     this rule is not running.",
+                    rule.id
+                )));
+            }
+            Err(error) => {
+                return Err(Fatal::new(format!(
+                    "rule {:?}: `files.include` names {spec:?}, which could not be \
+                     inspected: {error}. Whether it exists is unknown, so the rule \
+                     cannot say what it selected.",
+                    rule.id
+                )));
+            }
         }
         roots.push(search_root);
     }
