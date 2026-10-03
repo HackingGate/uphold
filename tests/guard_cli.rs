@@ -1880,8 +1880,53 @@ fn a_bracketed_scp_like_host_does_not_make_github_com_the_host() {
     refused_though_github_com_says_yes("[github.com:x@evil.com]:acme/widget.git");
 }
 
+/// A `file://` url names no host, so no forge is asked about it.
+///
+/// git pushes `file://github.com/...` to a local path, so github.com's answer
+/// about the repository its path names is an answer about somewhere else. The
+/// allow-list alone judges it: an owner not on it is refused, and the `gh`
+/// that would have said yes is never run.
 #[test]
 fn a_file_url_does_not_make_github_com_the_host() {
-    // A file:// url names no host: git pushes to a local path.
-    refused_though_github_com_says_yes("file://github.com/acme/widget.git");
+    let root = repository(PINNED_PUSH);
+    let asked = root.join("gh-was-asked");
+    gh_says(
+        &root,
+        &format!(
+            "touch '{}'\n\
+             case \"$*\" in\n\
+             'api user --jq .login') echo someone-else ;;\n\
+             'api repos/'*' --jq .permissions.admin') echo true ;;\n\
+             *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
+             esac\n",
+            asked.display()
+        ),
+    );
+    let url = "file://github.com/someone-else/thing.git";
+    let output = push_guard(&root, &["--remote-url", url]);
+    assert_eq!(code(&output), 1, "{url}: {}", stderr(&output));
+    assert!(!asked.exists(), "gh was asked about {url}");
+}
+
+/// A `file://` url to a bare repository is read by its path, as the same path
+/// spelled plainly is, so the allow-list admits it.
+#[test]
+fn a_file_url_to_an_allowed_bare_repository_passes() {
+    let root = repository(
+        "[rule.prevent-public-push]\nbuiltin = \"prevent-public-push\"\n\
+         allowed_repos = [\"x/bare\"]\n\n\
+         [rule.prevent-public-push.git]\nhooks = [\"pre-push\"]\n",
+    );
+    gh_says(&root, GH_SAYS_NO);
+    let bare = root.join("x/bare.git");
+    std::fs::create_dir_all(&bare).unwrap();
+    support::git(&bare, &["init", "-q", "--bare"]);
+
+    for url in [
+        format!("file://{}", bare.display()),
+        bare.display().to_string(),
+    ] {
+        let output = push_guard(&root, &["--remote-url", &url]);
+        assert_eq!(code(&output), 0, "{url}: {}", stderr(&output));
+    }
 }

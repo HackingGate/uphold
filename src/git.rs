@@ -428,7 +428,9 @@ pub(crate) fn remote_url(root: &Path, remote: &str) -> Option<String> {
 /// [`ambiguous`] says this parser cannot be sure which host git contacts.
 pub(crate) fn host(url: &str) -> Option<String> {
     let url = url.trim();
-    if ambiguous(url) {
+    // A `file://` url names no host, whatever stands where one would: git
+    // pushes it to a local path.
+    if ambiguous(url) || is_file_url(url) {
         return None;
     }
     let authority = if let Some((authority, _)) = url_parts(url) {
@@ -457,16 +459,19 @@ pub(crate) fn host(url: &str) -> Option<String> {
 /// `scheme://` authority before splitting it, so a `%2F@` can put the real
 /// host in front of an `@` that seems to end the userinfo; git strips the
 /// brackets of a scp-like `[host]:path` and lets ssh read whatever is inside
-/// them; and a `file://` url names no host, whatever stands where one would.
+/// them.
 fn ambiguous(url: &str) -> bool {
     if let Some((authority, _)) = url_parts(url) {
-        let file = url
-            .get(..7)
-            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file://"));
-        return file || authority.contains('%');
+        return authority.contains('%');
     }
     url.split_once(':')
         .is_some_and(|(authority, _)| !authority.contains('/') && authority.contains('['))
+}
+
+/// Whether a url is spelled `file://`, in any case.
+fn is_file_url(url: &str) -> bool {
+    url.get(..7)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file://"))
 }
 
 /// The authority and path of a `scheme://` url, the path without any query or
@@ -577,6 +582,24 @@ mod tests {
     }
 
     #[test]
+    fn a_file_url_names_no_host_but_its_path_still_names_a_repository() {
+        // git pushes a file:// url to a local path, so no forge answers for
+        // it, but its path is read as a plain path is.
+        for (url, owner, repo) in [
+            ("file://github.com/acme/widget.git", "acme", "widget"),
+            ("FILE://github.com/acme/widget.git", "acme", "widget"),
+            ("file:///tmp/x/bare.git", "x", "bare"),
+        ] {
+            assert_eq!(host(url), None, "{url}");
+            assert_eq!(
+                owner_repo(url),
+                Some((owner.to_owned(), repo.to_owned())),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
     fn owner_and_repo_come_out_of_every_url_spelling() {
         for url in [
             "https://github.com/acme/widget.git",
@@ -617,9 +640,6 @@ mod tests {
             // git strips the brackets and ssh reads `x@evil.com` as the host.
             "[github.com:x@evil.com]:acme/widget.git",
             "git@[github.com]:acme/widget.git",
-            // file:// names no host, whatever stands where one would.
-            "file://github.com/acme/widget.git",
-            "FILE://github.com/acme/widget.git",
         ] {
             assert_eq!(host(url), None, "{url}");
             assert_eq!(owner_repo(url), None, "{url}");
