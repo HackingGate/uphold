@@ -667,7 +667,8 @@
         "builtin": "prevent-author-mismatch",
         "git": {
           "hooks": [
-            "pre-commit"
+            "pre-commit",
+            "pre-merge-commit"
           ]
         },
         "id": "prevent-author-mismatch"
@@ -675,7 +676,8 @@
     ],
     "set": "mismatched-author",
     "stages": [
-      "pre-commit"
+      "pre-commit",
+      "pre-merge-commit"
     ]
   },
   {
