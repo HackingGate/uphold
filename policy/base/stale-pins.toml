@@ -42,7 +42,7 @@
 # default, and the 79 transcriptions it forced are the drift `policy/base/`
 # exists to end.
 #
-# The six repositories that inherited it without shadowing -- VfioPlane/* --
+# The six repositories that inherited it without shadowing, all under one owner,
 # move from `pre-push` to `manual` with this change, and lose the refusal that
 # stood in front of a push. What replaces it is the sweep the other 79 have been
 # reading this verdict from all along: a `manual` run in CI, which reports a
