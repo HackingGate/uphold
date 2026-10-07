@@ -984,6 +984,158 @@ fn every_guard_set_declares_the_stages_its_rules_install() {
     }
 }
 
+/// A repository inheriting `mismatched-author`, with a `topic` branch that
+/// cannot fast-forward and a `pre-merge-commit` hook that runs the binary the
+/// way the `uphold-guard-merge` hook id does.
+///
+/// `core.hooksPath` is set in the fixture so the hook git runs is this one and
+/// not whatever a developer's own configuration points at.
+fn merge_fixture() -> PathBuf {
+    let root = repository("[inherit]\nsets = [\"mismatched-author\"]\n");
+    commit_one(&root);
+    support::git(&root, &["checkout", "-qb", "topic"]);
+    write(&root, "topic.txt", "topic\n");
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "topic", "--no-verify"]);
+    support::git(&root, &["checkout", "-q", "main"]);
+    write(&root, "main.txt", "main\n");
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "main", "--no-verify"]);
+
+    let hooks = root.with_extension("hooks");
+    let _ = std::fs::remove_dir_all(&hooks);
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-merge-commit");
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nexec '{}' guard --stage pre-merge-commit\n",
+            env!("CARGO_BIN_EXE_uphold")
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    support::git(
+        &root,
+        &["config", "core.hooksPath", hooks.to_str().unwrap()],
+    );
+    root
+}
+
+/// `git merge --no-ff topic` under a global identity the fixture owns, with
+/// `config` passed as `-c` and `identity` set in the environment.
+///
+/// The `GIT_AUTHOR_*` and `GIT_COMMITTER_*` pairs are cleared first, for the
+/// reason `guard_cli.rs` gives: a suite run from a commit hook inherits them,
+/// and the merge would be stamped with whoever was committing.
+fn merge(root: &Path, config: &[&str], identity: &[(&str, &str)]) -> Output {
+    let global = root.with_extension("gitconfig");
+    std::fs::write(
+        &global,
+        "[user]\n\tname = Test\n\temail = test@example.test\n",
+    )
+    .unwrap();
+    let mut command = support::git_command(root);
+    for pair in config {
+        command.args(["-c", pair]);
+    }
+    command
+        .args(["merge", "--no-ff", "-m", "merge topic", "topic"])
+        .env("GIT_CONFIG_GLOBAL", &global)
+        .env("XDG_CONFIG_HOME", xdg_home(root))
+        .env_remove("UPHOLD_ALLOW")
+        .stdin(Stdio::null());
+    for name in [
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_DATE",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_DATE",
+        "EMAIL",
+    ] {
+        command.env_remove(name);
+    }
+    for (name, value) in identity {
+        command.env(name, value);
+    }
+    command.output().unwrap()
+}
+
+fn head(root: &Path) -> String {
+    let output = support::git_command(root)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+const BOT_NAME: &str = "bot[bot]";
+const BOT_EMAIL: &str = "1+bot[bot]@users.noreply.github.com";
+
+#[test]
+fn a_merge_under_a_configured_bot_identity_is_refused_and_records_nothing() {
+    // The incident this stage was added for: a merge that needs no hand runs
+    // `pre-merge-commit` and never `pre-commit`, so with one stage the bot's
+    // identity reached the merge commit and nothing looked.
+    let root = merge_fixture();
+    let before = head(&root);
+    let name = format!("user.name={BOT_NAME}");
+    let email = format!("user.email={BOT_EMAIL}");
+    let output = merge(&root, &[&name, &email], &[]);
+    assert!(!output.status.success(), "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(
+        text.contains("prevent-author-mismatch [set: mismatched-author]"),
+        "{text}"
+    );
+    assert!(text.contains(BOT_EMAIL), "{text}");
+    assert_eq!(head(&root), before, "a refused merge recorded a commit");
+}
+
+#[test]
+fn a_merge_under_a_bot_identity_in_the_environment_is_refused_and_records_nothing() {
+    let root = merge_fixture();
+    let before = head(&root);
+    let output = merge(
+        &root,
+        &[],
+        &[
+            ("GIT_AUTHOR_NAME", BOT_NAME),
+            ("GIT_AUTHOR_EMAIL", BOT_EMAIL),
+            ("GIT_COMMITTER_NAME", BOT_NAME),
+            ("GIT_COMMITTER_EMAIL", BOT_EMAIL),
+        ],
+    );
+    assert!(!output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains(BOT_EMAIL), "{}", stderr(&output));
+    assert_eq!(head(&root), before, "a refused merge recorded a commit");
+}
+
+#[test]
+fn the_same_merge_under_the_global_identity_is_recorded() {
+    let root = merge_fixture();
+    let before = head(&root);
+    let output = merge(&root, &[], &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let recorded = support::git_command(&root)
+        .args(["log", "-1", "--format=%P|%an <%ae>|%cn <%ce>"])
+        .output()
+        .unwrap();
+    let line = String::from_utf8_lossy(&recorded.stdout).trim().to_owned();
+    let (parents, identities) = line.split_once('|').unwrap();
+    assert_eq!(parents.split(' ').count(), 2, "not a merge commit: {line}");
+    assert!(parents.contains(&before), "{line}");
+    assert_eq!(
+        identities,
+        "Test <test@example.test>|Test <test@example.test>"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A repository fact declared somewhere other than the policy file.
 //

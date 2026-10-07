@@ -754,6 +754,18 @@ hooks = ["pre-commit"]
 /// the fixture's. It failed under the hook and passed under `cargo test`, which
 /// is the shape of a test that does not own its inputs.
 fn guard_under_global(root: &Path, args: &[&str], global: &str) -> Output {
+    guard_under_global_as(root, args, global, &[])
+}
+
+/// The same, with an identity set in the environment after it is cleared --
+/// which is how git hands a hook the identity `GIT_AUTHOR_*` and
+/// `GIT_COMMITTER_*` asked for.
+fn guard_under_global_as(
+    root: &Path,
+    args: &[&str],
+    global: &str,
+    identity: &[(&str, &str)],
+) -> Output {
     let config = root.join("fixture.gitconfig");
     std::fs::write(&config, global).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
@@ -773,6 +785,9 @@ fn guard_under_global(root: &Path, args: &[&str], global: &str) -> Output {
         "EMAIL",
     ] {
         command.env_remove(name);
+    }
+    for (name, value) in identity {
+        command.env(name, value);
     }
     command.output().unwrap()
 }
@@ -819,6 +834,65 @@ fn the_identity_that_matches_the_global_one_passes() {
         "[user]\n\tname = Test\n\temail = test@example.test\n",
     );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+const AUTHOR_MISMATCH_AT_MERGE: &str = r#"
+[rule.prevent-author-mismatch]
+builtin = "prevent-author-mismatch"
+
+[rule.prevent-author-mismatch.git]
+hooks = ["pre-commit", "pre-merge-commit"]
+"#;
+
+/// The identity an App's bot commits under, which is what an agent holding
+/// that App's token reaches for.
+const BOT: [(&str, &str); 4] = [
+    ("GIT_AUTHOR_NAME", "bot[bot]"),
+    ("GIT_AUTHOR_EMAIL", "1+bot[bot]@users.noreply.github.com"),
+    ("GIT_COMMITTER_NAME", "bot[bot]"),
+    ("GIT_COMMITTER_EMAIL", "1+bot[bot]@users.noreply.github.com"),
+];
+
+#[test]
+fn a_merge_commit_identity_that_is_not_the_global_one_is_refused() {
+    // A merge that needs no hand records its own commit and runs
+    // `pre-merge-commit`, never `pre-commit`, so this is the only moment its
+    // identity can be read before it is stamped.
+    let root = repository(AUTHOR_MISMATCH_AT_MERGE);
+    let output = guard_under_global_as(
+        &root,
+        &["--stage", "pre-merge-commit"],
+        "[user]\n\tname = Test\n\temail = test@example.test\n",
+        &BOT,
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("does not match your global one"), "{text}");
+    assert!(
+        text.contains("author: bot[bot] <1+bot[bot]@users.noreply.github.com>"),
+        "{text}"
+    );
+    assert!(
+        text.contains("committer: bot[bot] <1+bot[bot]@users.noreply.github.com>"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_merge_commit_under_the_global_identity_passes() {
+    let root = repository(AUTHOR_MISMATCH_AT_MERGE);
+    let output = guard_under_global(
+        &root,
+        &["--stage", "pre-merge-commit"],
+        "[user]\n\tname = Test\n\temail = test@example.test\n",
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    // Ran and passed, not "nothing registered at this stage".
+    let said = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        said.contains("1 guard(s) passed at pre-merge-commit"),
+        "{said}"
+    );
 }
 
 #[test]

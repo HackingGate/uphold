@@ -515,7 +515,7 @@ it refuses** so the name predicts the rule list:
 | `commit-message-residue` | authorship markers and unusual characters in the message a commit records — **installs `commit-msg`** |
 | `unnamed-removal` | a function the change removes and the commit message does not name — **installs `commit-msg`**. The one set whose guard reads no artifact of its own: it judges what the parser, the diff and the message reported, and a file the parser could not read is exit `2` unless the diff saw the removal anyway |
 | `unreviewed-history` | a merge made locally rather than through a pull request — **installs `pre-commit` and `pre-merge-commit`** |
-| `mismatched-author` | a commit whose author or committer identity disagrees with the global one on the machine making it — **installs `pre-commit`**, and declines with a note where no global identity is configured |
+| `mismatched-author` | a commit whose author or committer identity disagrees with the global one on the machine making it — **installs `pre-commit` and `pre-merge-commit`**, and declines with a note where no global identity is configured |
 | `invisible-characters` | characters that draw nothing, in committed content and in the paths that carry it — **installs four stages**, and reads the whole tree at each |
 | `stale-pins` | a hook pinned at a revision its upstream has left, or at none — **installs `manual`** alone, and reaches the network |
 | `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |

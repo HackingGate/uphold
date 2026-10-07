@@ -39,11 +39,12 @@
 # every guard set here is named and argued separately. This one has its own
 # cost, below, and it should be possible to decline it while keeping the rest.
 #
-# WHAT INHERITING THIS COSTS. One `pre-commit` hook that runs two `git var`
-# calls, no network and no tree read. It refuses the deliberate `--author` as
-# readily as the accidental one, so a repository that commits on somebody's
-# behalf -- applying a mailed patch, importing a history -- gets a refusal it
-# has to waive with `UPHOLD_ALLOW=prevent-author-mismatch` for that commit.
+# WHAT INHERITING THIS COSTS. A `pre-commit` and a `pre-merge-commit` hook,
+# each running two `git var` calls, no network and no tree read. It refuses
+# the deliberate `--author` as readily as the accidental one, so a repository
+# that commits on somebody's behalf -- applying a mailed patch, importing a
+# history -- gets a refusal it has to waive with
+# `UPHOLD_ALLOW=prevent-author-mismatch` for that commit.
 #
 # AND WHAT IT CANNOT DO. A machine with no global `user.email` has no
 # expectation to compare against, and the guard says so on stderr and declines
@@ -67,11 +68,18 @@
 
 # WHAT THIS SET MAY INSTALL. `stages` is the ceiling the loader holds the rules
 # to: a rule reaching past it is refused at load, so the set cannot grow a
-# second stage without editing this line, which is a diff a reader sees. One
-# stage, because there is one moment the identity is still a decision.
+# third stage without editing this line, which is a diff a reader sees. Two
+# stages, because git records an identity at two moments and runs a different
+# hook before each. `pre-commit` runs before `git commit` records one, and that
+# covers a conflicted merge too, which `git commit` concludes. A merge that
+# needs no hand -- a non-fast-forward `git merge`, or a `git pull` that merges
+# -- records its own commit and never runs `pre-commit`; git runs
+# `pre-merge-commit` instead, and `git var` there resolves the identity the
+# merge commit is about to be stamped with. With one stage, that commit carried
+# whatever identity was to hand and nothing looked.
 [set]
-stages = ["pre-commit"]
+stages = ["pre-commit", "pre-merge-commit"]
 
 [rule.prevent-author-mismatch]
 builtin = "prevent-author-mismatch"
-git.hooks = ["pre-commit"]
+git.hooks = ["pre-commit", "pre-merge-commit"]
