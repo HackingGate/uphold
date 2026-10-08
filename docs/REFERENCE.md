@@ -1782,13 +1782,32 @@ commands publishing with nothing standing in front of them and nothing saying so
 
 That link is on PATH for the whole machine, while a `[[shim]]` is a line in one
 repository's policy — so **where nothing declares the command, the command
-simply runs**: no policy in this directory, or a policy that declares a shim for
-some other command. Neither is a could-not-look, so neither is exit `2`; the
+simply runs**: no policy in this directory (save the one `gh` case below), or a
+policy that declares a shim for some other command. Neither is a could-not-look, so neither is exit `2`; the
 policy was read and it said this command is not one it stands in front of. A
 policy that exists and cannot be *read* still exits `2`, because the
 declaration that could not be read might have been the one. Asked for by name —
 `uphold shim faux …` — an undeclared command is still an error, since nothing is
 standing in front of anything and the caller asked.
+
+**With no policy in reach, `gh` is judged by its destination.** A leak typed
+from a home directory or a scratch checkout is as permanent as one typed from a
+participating repository, so one invocation is not simply run: a `gh` verb that
+publishes text, read with the `gh` table `uphold init` writes. Its destination
+comes from `--repo`/`-R`, the `repos/<owner>/<repo>` path of `gh api`, or
+`origin`, and the forge is asked whether it is public. If it is, the text is
+checked by `no-private-repo-names` against the user-level owner list,
+`$XDG_CONFIG_HOME/principles/private-owners` (else
+`$HOME/.config/principles/private-owners`) — the file the `private-names` set
+reads by default — and a name it finds is refused with exit `1`. Where that file
+is missing the invocation exits `2`, naming it: with no policy in reach, the
+list is the only policy there is. Everything else runs exactly as before, with
+nothing printed — a `gh` call that publishes nothing (`gh issue view`, a
+bodyless `gh api` GET), a destination the forge calls private, and every
+command other than `gh`. A destination that cannot be resolved or asked about
+runs, with a line on stderr saying it is not a pass. An alias for a publishing
+verb is not expanded here, since expanding one costs a process on every `gh`
+call on the machine.
 
 ```toml
 [[shim]]

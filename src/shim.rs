@@ -2536,6 +2536,85 @@ pub(crate) fn exec_through(name: &str, argv: &[OsString]) -> Result<Exit> {
     hand_off(&mut command, name, None)
 }
 
+/// What the policy built for a command typed where none is in reach is called
+/// in every refusal it gives. Not a path: nothing reads it back.
+const UNPOLICED: &str = "<no policy in reach: judged by destination>";
+
+/// The policy a command is read under where no policy is in reach, or `None`
+/// where nothing is read at all.
+///
+/// `gh` alone, because it is the one command whose destination this binary can
+/// name off argv -- `--repo`, or the `repos/<owner>/<repo>` path of `gh api` --
+/// and ask a forge about. Its table is the one `uphold init` writes, so which
+/// verbs publish is not a second list here. One rule stands behind it: the
+/// set's `no-private-repo-names`, against the user-level owner list a
+/// participating repository's `private-names` set reads by default. The other
+/// published-text rules are not here, because each needs a fact only a policy
+/// states -- an owner, a literal list, a guard to consult.
+///
+/// Two answers differ from that table. A destination that could not be
+/// resolved runs, said out loud: refusing it is refusing `gh` wherever the
+/// forge is unreachable from a directory that never opted into anything. And
+/// an owner list that cannot be read is refused rather than reported, because
+/// here the list IS the policy -- with no file in reach to say the absence is
+/// expected, a public destination with nothing to check against publishes
+/// nothing.
+pub(crate) fn without_policy(root: &Path, name: &str) -> Result<Option<Policy>> {
+    if name != "gh" {
+        return Ok(None);
+    }
+    let text = format!(
+        "private_owners_file = \"xdg:principles/private-owners\"\n\n\
+         {}\n\
+         [rule.no-published-private-repo-names]\n\
+         builtin = \"no-private-repo-names\"\n\
+         visibility = \"public\"\n\
+         command.before = [\"gh\"]\n",
+        crate::init::GH_SHIM
+    );
+    let mut policy = crate::config::load_text(root, Path::new(UNPOLICED), &text)?;
+    for shim in &mut policy.shims {
+        shim.unresolved = Unresolved::Run;
+    }
+    policy.owners_unreadable = Some(format!(
+        "No policy is in reach of {}, so this invocation was judged by its destination, \
+         which is public, against the user-level owner list -- and that list is the only \
+         policy there is here. Nothing was published. Write the private owners there, one \
+         per line, or run this from a repository whose policy declares its own checks",
+        root.display()
+    ));
+    Ok(Some(policy))
+}
+
+/// Run a command typed where no policy is in reach.
+///
+/// An invocation the no-policy table does not name as publishing text runs
+/// exactly as [`exec_through`] runs it: no process spent, nothing printed. That
+/// includes an alias for a publishing verb -- expanding one is a process per
+/// `gh` call on the whole machine, and a lookup that failed would refuse a
+/// command in a directory that declared nothing, which is what the pass-through
+/// exists to avoid. What the table names goes through [`run`], scope and all, so a
+/// private destination stands down there exactly as it does in a repository
+/// that declared the same table.
+pub(crate) fn run_without_policy(root: &Path, name: &str, argv: &[OsString]) -> Result<Exit> {
+    let Some(policy) = without_policy(root, name)? else {
+        return exec_through(name, argv);
+    };
+    let words: Vec<String> = argv
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
+    let publishes = policy.shims.iter().any(|shim| {
+        shim.command == name
+            && matches!(shim.reading(&words), Reading::Named)
+            && shim.carries_a_body(&words)
+    });
+    if !publishes {
+        return exec_through(name, argv);
+    }
+    run(root, &policy, name, argv, Invoked::AsTheCommand)
+}
+
 /// The real command, found by walking PATH past ourselves.
 ///
 /// "Past ourselves" is a question about the FILE, not about the directory. A
@@ -4953,5 +5032,24 @@ mod tests {
             assert!(message.contains(says), "{value}: {message}");
             assert!(message.contains("Nothing was published"), "{message}");
         }
+    }
+
+    #[test]
+    fn the_no_policy_reading_stands_in_front_of_gh_and_nothing_else() {
+        // Compiled in and loaded on every `gh` call typed outside a policy, so
+        // a table or rule the loader refuses would be `gh` exiting 2 on the
+        // whole machine. Loading it here is what keeps that a test failure.
+        let policy = without_policy(Path::new("/"), "gh").unwrap().unwrap();
+        assert_eq!(policy.shims.len(), 1, "{:?}", policy.shims);
+        let shim = policy.shims.first().unwrap();
+        assert_eq!(shim.command, "gh");
+        assert_eq!(shim.unresolved, Unresolved::Run);
+        assert!(named(shim, "issue comment 1 --body x"));
+        assert!(!named(shim, "issue view 1"));
+        let ids: Vec<&str> = policy.rules.iter().map(|rule| rule.id.as_str()).collect();
+        assert_eq!(ids, ["no-published-private-repo-names"]);
+        assert!(policy.owners_unreadable.is_some());
+
+        assert!(without_policy(Path::new("/"), "git").unwrap().is_none());
     }
 }

@@ -498,6 +498,179 @@ fn a_directory_with_no_policy_at_all_does_not_break_the_command() {
     );
 }
 
+/// `gh` typed where no policy is in reach: a link in front of a stub that
+/// calls one repository public and every other private, and a directory
+/// outside the fixture to type it in. Returns that directory and the PATH.
+fn gh_without_policy(root: &Path) -> (PathBuf, String) {
+    stub(
+        root,
+        "gh",
+        "#!/bin/sh\n\
+         case \"$*\" in\n\
+         'api repos/example-user/public-widget --jq .visibility') echo public ;;\n\
+         'api repos/'*) echo private ;;\n\
+         *) echo \"gh ran: $*\" ;;\n\
+         esac\n",
+    );
+    let elsewhere = support::run_root().join(format!(
+        "gh-no-policy-{}",
+        root.file_name().unwrap().to_string_lossy()
+    ));
+    let _ = std::fs::remove_dir_all(&elsewhere);
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::create_dir_all(root.join("front")).unwrap();
+    let link = root.join("front/gh");
+    if std::fs::symlink_metadata(&link).is_err() {
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_uphold"), &link).unwrap();
+    }
+    let path = format!(
+        "{}:{}:{}",
+        root.join("front").display(),
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    (elsewhere, path)
+}
+
+/// The user-level configuration directory, with the owner list written into
+/// it or not.
+fn user_config(root: &Path, owners: Option<&str>) -> PathBuf {
+    let config = root.join("config");
+    std::fs::create_dir_all(config.join("principles")).unwrap();
+    if let Some(owners) = owners {
+        std::fs::write(config.join("principles/private-owners"), owners).unwrap();
+    }
+    config
+}
+
+fn run_gh(root: &Path, config: &Path, args: &[&str]) -> Output {
+    let (elsewhere, path) = gh_without_policy(root);
+    Command::new(root.join("front/gh"))
+        .args(args)
+        .current_dir(&elsewhere)
+        .env("PATH", path)
+        .env("XDG_CONFIG_HOME", config)
+        .env_remove("UPHOLD_ALLOW")
+        .env_remove("UPHOLD_SHIM_INNER")
+        .env_remove("GH_EDITOR")
+        .output()
+        .unwrap()
+}
+
+/// No policy in reach is not a reason to publish a private name to a public
+/// tracker unchecked. The destination is a fact about the invocation, so a
+/// `gh` verb that publishes text is judged by it wherever it was typed.
+#[test]
+fn with_no_policy_in_reach_a_private_name_bound_for_a_public_repository_is_refused() {
+    let root = workspace(POLICY);
+    let config = user_config(&root, Some("acme-private\n"));
+    let output = run_gh(
+        &root,
+        &config,
+        &[
+            "issue",
+            "comment",
+            "1",
+            "--repo",
+            "example-user/public-widget",
+            "--body",
+            "this fixes acme-private/thing",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("acme-private"),
+        "{}",
+        stderr(&output)
+    );
+
+    // The same text bound for a private repository is not a disclosure, and
+    // runs as the command with nothing from uphold.
+    let private = run_gh(
+        &root,
+        &config,
+        &[
+            "issue",
+            "comment",
+            "1",
+            "--repo",
+            "example-user/private-widget",
+            "--body",
+            "this fixes acme-private/thing",
+        ],
+    );
+    assert_eq!(code(&private), 0, "{}", stderr(&private));
+    assert!(stdout(&private).contains("gh ran:"), "{}", stdout(&private));
+    assert_eq!(stderr(&private), "", "{}", stderr(&private));
+}
+
+/// The other half of the contract: an invocation that publishes nothing runs
+/// as the command, with no word from uphold, exactly as it did before the
+/// destination was ever asked about.
+#[test]
+fn with_no_policy_in_reach_a_gh_call_that_publishes_nothing_passes_through_silently() {
+    let root = workspace(POLICY);
+    let config = user_config(&root, Some("acme-private\n"));
+    let output = run_gh(
+        &root,
+        &config,
+        &["issue", "view", "1", "--repo", "example-user/public-widget"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("gh ran: issue view 1 --repo example-user/public-widget"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(stderr(&output), "", "{}", stderr(&output));
+}
+
+/// Where no policy is in reach, the user-level owner list is the only policy
+/// there is. A public destination with no list to check against is exit 2,
+/// naming the file, and publishes nothing.
+#[test]
+fn with_no_policy_in_reach_a_missing_owner_list_refuses_a_public_destination() {
+    let root = workspace(POLICY);
+    let config = user_config(&root, None);
+    let output = run_gh(
+        &root,
+        &config,
+        &[
+            "issue",
+            "comment",
+            "1",
+            "--repo",
+            "example-user/public-widget",
+            "--body",
+            "an ordinary sentence",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    let text = stderr(&output);
+    assert!(text.contains("principles/private-owners"), "{text}");
+    assert!(text.contains("No policy is in reach"), "{text}");
+    assert!(!text.contains("private_owners_optional"), "{text}");
+
+    // And the missing list is no reason to stop a private destination.
+    let private = run_gh(
+        &root,
+        &config,
+        &[
+            "issue",
+            "comment",
+            "1",
+            "--repo",
+            "example-user/private-widget",
+            "--body",
+            "an ordinary sentence",
+        ],
+    );
+    assert_eq!(code(&private), 0, "{}", stderr(&private));
+    assert!(stdout(&private).contains("gh ran:"), "{}", stdout(&private));
+}
+
 #[test]
 fn a_checker_that_could_not_look_is_not_a_pass() {
     // Exit 2 is the third answer, and folding it into either of the others is

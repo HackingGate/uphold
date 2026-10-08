@@ -44,11 +44,15 @@ const SETS: &[(&str, &str)] = &[
     ),
 ];
 
-/// The shim tables `published-text` is refused without. The flag lists are the
+/// The `gh` table `published-text` is refused without. The flag lists are the
 /// ones a consumer workspace runs for `gh`, including the per-verb vocabulary
 /// for `-c`, which is a boolean on `pr review` and takes a value on
 /// `issue close`.
-const SHIMS: &str = r#"[[shim]]
+///
+/// Also the table a `gh` invocation is read with where no policy is in reach
+/// at all -- see `shim::without_policy` -- so which verbs publish, and through
+/// which flags, is written once for both.
+pub(crate) const GH_SHIM: &str = r#"[[shim]]
 command = "gh"
 match = [
   "pr:create", "pr:edit", "pr:comment", "pr:review", "pr:merge",
@@ -69,8 +73,11 @@ scope = "public-target"
   [[shim.verbs]]
   match = ["issue:close", "pr:close", "issue:reopen", "pr:reopen"]
   text_flags = ["-c", "--comment"]
+"#;
 
-[[shim]]
+/// The `git` table beside it. A first policy declares both; the no-policy
+/// reading stands in front of `gh` alone.
+const GIT_SHIM: &str = r#"[[shim]]
 command = "git"
 match = ["push:*"]
 collect = "git-refs"
@@ -111,7 +118,8 @@ fn policy(owner: &str, visibility: &str) -> String {
          \n\
          # The programs `published-text` stands behind. A bundled set never\n\
          # declares a shim, so a repository that inherits it declares these.\n\
-         {SHIMS}",
+         {GH_SHIM}\n\
+         {GIT_SHIM}",
         version = env!("CARGO_PKG_VERSION"),
         upstream = env!("CARGO_PKG_REPOSITORY"),
     )

@@ -1218,13 +1218,23 @@ fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result
     }
     let working = std::env::current_dir()?;
     // No policy where the command was typed means no repository here declares
-    // anything to stand in front of it. Run as the command, that is the command
-    // running: the link is on PATH for the whole machine -- `/tmp`, somebody
-    // else's checkout, a shell that never enters a participating repository --
-    // and refusing there protects nothing, breaks `git` everywhere, and gets
-    // the link removed, which is how the seam is lost in the repositories that
-    // DID declare it. Asked for by name, it is still an error, because the
-    // caller asked this repository for a shim it does not have.
+    // anything to stand in front of it. Run as the command, that is almost
+    // always the command running: the link is on PATH for the whole machine --
+    // `/tmp`, somebody else's checkout, a shell that never enters a
+    // participating repository -- and refusing there protects nothing, breaks
+    // `git` everywhere, and gets the link removed, which is how the seam is
+    // lost in the repositories that DID declare it. Asked for by name, it is
+    // still an error, because the caller asked this repository for a shim it
+    // does not have.
+    //
+    // The one exception is judged by where it publishes rather than by where it
+    // was typed: a `gh` verb that publishes text to a destination the forge
+    // calls public is checked for private names against the user-level owner
+    // list, and refused with exit 2 where that list is missing. A leak from a
+    // home directory is as permanent as one from a checkout. Every other `gh`
+    // invocation -- one that publishes nothing, or publishes to a private
+    // destination -- runs exactly as before, with nothing printed; see
+    // `shim::run_without_policy`.
     //
     // A policy that exists and cannot be read is a different answer and still
     // fatal both ways: `config::load` below says so, because a declaration that
@@ -1232,20 +1242,28 @@ fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result
     // command.
     let Some((root, policy_path)) = discover(&working) else {
         return match invoked {
-            shim::Invoked::AsTheCommand => shim::exec_through(name, argv),
+            shim::Invoked::AsTheCommand => shim::run_without_policy(&working, name, argv),
             shim::Invoked::ByName => Err(no_policy_here(&working)),
-            // Re-entered as an editor with no policy to read, which is a body
-            // written for publication and nothing to check it against. Not
+            // Re-entered as an editor with no policy to read. The no-policy
+            // reading of `gh` installs this editor itself, for a body bound for
+            // a public destination, so for that command the pass is answered by
+            // the same policy that opened it. Anything else is a body written
+            // for publication and nothing to check it against. Not
             // `exec_through`: the argv here is an editor's, so running the real
             // command with it would hand `gh` a file path where a subcommand
             // goes. The editor variable was installed by a pass that HAD a
             // policy, so arriving here means the two disagree about where the
             // repository is -- and the honest answer to that is exit 2.
-            shim::Invoked::AsEditor => Err(Fatal::new(format!(
-                "{name}: re-entered as this command's editor from {}, where no policy \
-                 was found. Nothing was checked, so nothing should be published",
-                working.display()
-            ))),
+            shim::Invoked::AsEditor => shim::without_policy(&working, name)?.map_or_else(
+                || {
+                    Err(Fatal::new(format!(
+                        "{name}: re-entered as this command's editor from {}, where no \
+                         policy was found. Nothing was checked, so nothing should be published",
+                        working.display()
+                    )))
+                },
+                |policy| shim::run(&working, &policy, name, argv, invoked),
+            ),
         };
     };
     // Asked BEFORE the policy is read, and only here. `UPHOLD_ALLOW=all` already

@@ -1243,6 +1243,11 @@ pub(crate) struct Policy {
     /// names; the policy-level source carries its own answer in
     /// [`OwnersDeclaration::optional`]. See [`PolicyFile::private_owners_optional`].
     pub private_owners_optional: bool,
+    /// What a refusal over an unreadable, non-optional private-owner source
+    /// says in place of the advice to write `private_owners_optional`. Set
+    /// only on the policy `shim::without_policy` builds, where there is no
+    /// policy file for that line to go in.
+    pub owners_unreadable: Option<String>,
     /// The hosts no name lookup is owed for, as this policy declared them.
     /// [`FOREIGN_HOSTS_DEFAULT`] is added where the list is compiled, so a
     /// rule's own list extends the default too. See
@@ -1740,7 +1745,13 @@ pub(crate) fn visibility_is_public(value: &str) -> Option<bool> {
 /// Load a policy file, resolving `[inherit]` and validating the result.
 pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     let text = read_to_string(policy_path)?;
-    let file = parse(policy_path, &text)?;
+    load_text(root, policy_path, &text)
+}
+
+/// [`load`] over text already in hand. `policy_path` names it in every
+/// refusal; a path outside `root` is never read back.
+pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<Policy> {
+    let file = parse(policy_path, text)?;
     refuse_set_header(policy_path, &file)?;
     refuse_two_statements_of_one_fact(policy_path, &file)?;
     // Both spellings of the owner source are held to one statement, and the
@@ -2035,6 +2046,7 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
         resolved_visibility: OnceLock::new(),
         private_owners,
         private_owners_optional: file.private_owners_optional,
+        owners_unreadable: None,
         foreign_hosts: file.foreign_hosts.clone(),
         redact_matches: file.redact_matches,
         baselines_signed: file.baselines_signed,
