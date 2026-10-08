@@ -515,22 +515,25 @@ fn a_name_under_a_declared_owner_is_reported_once() {
          esac\n",
     );
 
-    let output = guard_text(
-        &root,
-        b"Clone example-org/other-repo to build it.\n",
-        EXAMPLE_HOME,
-        None,
-    );
-    assert_eq!(code(&output), 1, "{}", stderr(&output));
-    let report = stderr(&output);
-    let findings: Vec<&str> = report
-        .lines()
-        .filter(|line| line.starts_with("-: "))
-        .collect();
+    let findings = |text: &[u8]| {
+        let output = guard_text(&root, text, EXAMPLE_HOME, None);
+        assert_eq!(code(&output), 1, "{}", stderr(&output));
+        stderr(&output)
+            .lines()
+            .filter(|line| line.starts_with("-: "))
+            .map(str::to_owned)
+            .collect::<Vec<String>>()
+    };
     assert_eq!(
-        findings,
-        ["-: example-org/other-repo is private"],
-        "{report}"
+        findings(b"Clone example-org/other-repo to build it.\n"),
+        ["-: example-org/other-repo is private"]
+    );
+
+    // Spelt in another case than the declaration, inside a URL: the URL and the
+    // declared owner's matcher both read it, and it is still one name.
+    assert_eq!(
+        findings(b"see https://github.com/Example-Org/other-repo\n"),
+        ["-: Example-Org/other-repo is private"]
     );
 }
 

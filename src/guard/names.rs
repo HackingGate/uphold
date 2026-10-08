@@ -236,6 +236,31 @@ fn bot_identity_pattern() -> &'static Regex {
         .get_or_init(|| crate::engine::literal_pattern(r"\b([A-Za-z0-9][A-Za-z0-9-]*)\[bot\]"))
 }
 
+/// The names [`candidates`] has found, one per name whatever its case.
+///
+/// A forge name is case-insensitive, and the forms that find one disagree on
+/// how to spell it: a URL and a cross-reference keep the text's spelling, a
+/// declared owner's matcher the declaration's. Kept as a plain set of pairs,
+/// `https://github.com/Example-Org/other-repo` was two candidates -- one from
+/// the URL and one from the matcher that fires inside it -- and one occurrence
+/// was refused twice. Keyed on the lowercased pair, holding the first spelling
+/// found, which is the one the text used wherever a URL or cross-reference
+/// carried it.
+#[derive(Default)]
+struct Spellings(BTreeMap<(String, String), (String, String)>);
+
+impl Spellings {
+    fn insert(&mut self, owner: String, repo: String) {
+        self.0
+            .entry((owner.to_lowercase(), repo.to_lowercase()))
+            .or_insert((owner, repo));
+    }
+
+    fn into_names(self) -> BTreeSet<(String, String)> {
+        self.0.into_values().collect()
+    }
+}
+
 /// Every `owner/repo` this text could be naming ON GITHUB.
 ///
 /// Four forms. A GitHub URL needs `github.com/owner/repo`, or its scp-like
@@ -262,7 +287,7 @@ fn bot_identity_pattern() -> &'static Regex {
 /// A declared owner on its own is searched for last, and the owner half of an
 /// `owner/repo` already yielded is not one -- see [`owner_half`].
 fn candidates(text: &str, owners: &OwnerMatchers) -> BTreeSet<(String, String)> {
-    let mut found: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut found = Spellings::default();
     for capture in url_pattern().captures_iter(text) {
         if !git::is_github_host(&capture[1]) {
             continue;
@@ -272,7 +297,7 @@ fn candidates(text: &str, owners: &OwnerMatchers) -> BTreeSet<(String, String)> 
         if repo.is_empty() {
             continue;
         }
-        found.insert((owner, repo));
+        found.insert(owner, repo);
     }
 
     // The preceding character is part of the match rather than a lookbehind,
@@ -285,17 +310,17 @@ fn candidates(text: &str, owners: &OwnerMatchers) -> BTreeSet<(String, String)> 
         if repo.is_empty() {
             continue;
         }
-        found.insert((capture[2].to_string(), repo));
+        found.insert(capture[2].to_string(), repo);
     }
 
     for capture in bot_identity_pattern().captures_iter(text) {
-        found.insert((format!("{}[bot]", &capture[1]), String::new()));
+        found.insert(format!("{}[bot]", &capture[1]), String::new());
     }
 
     let mut owner_halves: BTreeSet<(usize, usize)> = BTreeSet::new();
     for (owner, matcher) in &owners.named {
         for capture in matcher.captures_iter(text) {
-            found.insert((owner.clone(), clean_repo(&capture[1])));
+            found.insert(owner.clone(), clean_repo(&capture[1]));
             owner_halves.extend(owner_half(&capture));
         }
     }
@@ -307,10 +332,10 @@ fn candidates(text: &str, owners: &OwnerMatchers) -> BTreeSet<(String, String)> 
         if matcher.find_iter(text).any(|hit| {
             !opens_a_schema_id(text, hit.end()) && !owner_halves.contains(&(hit.start(), hit.end()))
         }) {
-            found.insert((owner.clone(), String::new()));
+            found.insert(owner.clone(), String::new());
         }
     }
-    found
+    found.into_names()
 }
 
 /// The tail of a versioned schema id, read from where the owner name ends.
@@ -971,7 +996,8 @@ fn judge(
             } else {
                 format!("{owner}/{repo}")
             };
-            if !seen.insert(format!("{where_found}\u{0}{name}")) {
+            // Lowercased for the reason [`Spellings`] is: one name, one line.
+            if !seen.insert(format!("{where_found}\u{0}{}", name.to_lowercase())) {
                 continue;
             }
             if public.contains(&name.to_lowercase())
@@ -2075,6 +2101,28 @@ mod tests {
                 "{text}: {found:?}"
             );
             assert!(found.contains(&bare), "{text}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_name_spelt_in_another_case_than_its_declaration_is_one_candidate() {
+        // A URL keeps the text's spelling and the declared owner's matcher,
+        // firing inside the same URL, the declaration's. One name, so one
+        // candidate, spelt as the text spelt it -- and its owner half, in the
+        // text's case, still yields to it.
+        let declared = vec!["example-org".to_owned()];
+        let cross_reference = format!("Fixed in {}#12.", "Example-Org/Other-Repo");
+        for text in [
+            "see https://github.com/Example-Org/Other-Repo",
+            "see https://github.com/Example-Org/Other-Repo and example-org/other-repo",
+            cross_reference.as_str(),
+        ] {
+            let found = named(text, &declared, None);
+            assert_eq!(
+                found,
+                [("Example-Org".to_owned(), "Other-Repo".to_owned())].into(),
+                "{text}"
+            );
         }
     }
 
