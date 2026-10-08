@@ -1626,13 +1626,26 @@ outliving the run is a stale answer with a longer life.
 **Why the owner list is worth declaring.** A forge lookup only *adjudicates* names something already extracted, and a bare
 `owner/repo` is extracted only for declared owners and for this repository's
 own — anything else is indistinguishable from a relative path, and treating
-every path in every document as a name would be one lookup per path:
+every path in every document as a name would be one lookup per path. A
+cross-reference `owner/repo#N` is the exception: the `#N` tells it from a path,
+so it goes to the forge whoever the owner is. An App's bot identity,
+`<slug>[bot]` or its `<id>+<slug>[bot]@users.noreply.github.com` address, is
+resolved to the account that owns the App (`gh api apps/<slug>`), user or
+organization alike, and that account is judged as an owner named on its own. An
+App the forge answers with a 404 or with no owner -- or, asked with an
+installation token such as CI's `GITHUB_TOKEN`, with the 403 `Resource not
+accessible by integration` that token gets for a private App -- is an
+unresolved name, as an
+unknown repository is: noted on stderr, and refused only under
+`refuse_unknown`. Any other `gh` failure is exit `2`, could-not-look:
 
 | form in the text | with a declared owner list | without |
 |---|---|---|
 | `https://github.com/owner/repo` | refused | refused |
 | `<your own owner>/repo` | refused | refused |
+| `otherowner/repo#N`, a cross-reference | refused | refused |
 | `otherowner/repo`, bare | refused | **not seen** |
+| `<slug>[bot]`, an App's bot identity | refused when the App's owner is declared | **passed** |
 | an organization named on its own | refused | **not seen** |
 | `<owner>.<document>.v<N>`, a schema id | **passed** | **not seen** |
 

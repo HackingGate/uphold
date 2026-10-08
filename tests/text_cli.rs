@@ -262,12 +262,24 @@ text_flags = ["-b", "--body"]
 scope = "always"
 "#;
 
+/// The fixture's own `stub-bin` goes in front of PATH, as `tests/guard_cli.rs`
+/// puts it, so a test that wrote a `gh` there is answered by it rather than by
+/// whoever is logged in on this machine. A fixture that wrote none is answered
+/// as before.
 fn guard_text(root: &Path, stdin: &[u8], home: &str, allow: Option<&str>) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
     command
         .args(["guard", "--text", "-"])
         .current_dir(root)
         .env("HOME", home)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                root.join("stub-bin").display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -441,6 +453,142 @@ fn a_schema_id_passes_the_text_seam_and_a_repository_name_does_not() {
         stderr(&alone).contains("named on its own"),
         "{}",
         stderr(&alone)
+    );
+}
+
+// ── the forms GitHub itself names a repository or an App in ──────────
+
+/// A `gh` that knows one private repository and five App slugs: one owned by
+/// the declared-private `acme`, one by an owner nothing declared, one the forge
+/// will not show, one it will not show to an installation token -- the 403 a
+/// CI runner's `GITHUB_TOKEN` gets for a private App -- and one it could not be
+/// asked about.
+///
+/// The first two are real Apps' slugs, answered here with owners of this
+/// test's choosing, so this repository's own guard -- which reads its tests
+/// against the real forge -- resolves them too rather than noting them.
+const GH_KNOWS_APPS: &str = "case \"$*\" in\n\
+                             'api repos/hidden/thing '*) printf 'private\\thidden/thing\\n' ;;\n\
+                             'api apps/renovate --jq .owner.login') echo acme ;;\n\
+                             'api apps/dependabot --jq .owner.login') echo octo ;;\n\
+                             'api apps/gone-ci '*) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;\n\
+                             'api apps/hidden-ci '*) echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;\n\
+                             'api apps/down-ci '*) echo 'gh: Bad Gateway (HTTP 502)' >&2; exit 1 ;;\n\
+                             *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
+                             esac\n";
+
+/// Put a `gh` this test wrote where [`guard_text`] will find it first.
+fn gh_says(root: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let bin = root.join("stub-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let gh = bin.join("gh");
+    std::fs::write(&gh, format!("#!/bin/sh\n{body}")).unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// `owner/repo#N` reaches the forge whoever the owner is. `hidden` is declared
+/// nowhere, so before the cross-reference was a form of its own this text named
+/// nothing the guard looked at.
+#[test]
+fn a_cross_reference_into_an_undeclared_private_repository_is_refused() {
+    let root = workspace(PRIVATE_NAMES_POLICY);
+    gh_says(&root, GH_KNOWS_APPS);
+
+    let output = guard_text(&root, b"Refs hidden/thing#4\n", EXAMPLE_HOME, None);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("hidden/thing is private"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A bot identity names the account that owns the App, and that account is
+/// judged as a bare owner: refused where declared private, passed otherwise.
+#[test]
+fn a_bot_identity_is_judged_by_the_owner_of_its_app() {
+    let root = workspace(PRIVATE_NAMES_POLICY);
+    gh_says(&root, GH_KNOWS_APPS);
+
+    let private = guard_text(
+        &root,
+        b"Committed as renovate[bot] <1+renovate[bot]@users.noreply.github.com>\n",
+        EXAMPLE_HOME,
+        None,
+    );
+    assert_eq!(code(&private), 1, "{}", stderr(&private));
+    assert!(
+        stderr(&private).contains("renovate[bot] is a GitHub App owned by acme"),
+        "{}",
+        stderr(&private)
+    );
+
+    let public = guard_text(&root, b"Committed as dependabot[bot]\n", EXAMPLE_HOME, None);
+    assert_eq!(code(&public), 0, "{}", stderr(&public));
+}
+
+/// An App the forge will not show is an unresolved name, as an unknown
+/// repository is: noted on the way past, and refused only where the rule sets
+/// `refuse_unknown`. Deleted, private and invented all look like this.
+#[test]
+fn a_bot_identity_whose_app_is_not_found_is_unresolved() {
+    let root = workspace(PRIVATE_NAMES_POLICY);
+    gh_says(&root, GH_KNOWS_APPS);
+
+    let output = guard_text(&root, b"Committed as gone-ci[bot]\n", EXAMPLE_HOME, None);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("gone-ci[bot] could not be resolved"),
+        "{}",
+        stderr(&output)
+    );
+
+    let strict = workspace(&PRIVATE_NAMES_POLICY.replace(
+        "private_owners = [\"acme\"]",
+        "private_owners = [\"acme\"]\nrefuse_unknown = true",
+    ));
+    gh_says(&strict, GH_KNOWS_APPS);
+    let refused = guard_text(&strict, b"Committed as gone-ci[bot]\n", EXAMPLE_HOME, None);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("gone-ci[bot] could not be resolved"),
+        "{}",
+        stderr(&refused)
+    );
+}
+
+/// The CI condition this repository's own gate first met: a runner's
+/// installation token is answered 403 for a private App where any other
+/// caller gets the 404. Same App, same answer, wherever it is asked.
+#[test]
+fn a_private_app_hidden_from_an_installation_token_is_unresolved() {
+    let root = workspace(PRIVATE_NAMES_POLICY);
+    gh_says(&root, GH_KNOWS_APPS);
+
+    let output = guard_text(&root, b"Committed as hidden-ci[bot]\n", EXAMPLE_HOME, None);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("hidden-ci[bot] could not be resolved"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A `gh` that failed for any reason other than a 404 did not answer at all,
+/// and that is could-not-look, exit 2, like an unreachable host.
+#[test]
+fn a_bot_identity_whose_app_cannot_be_read_is_could_not_look() {
+    let root = workspace(PRIVATE_NAMES_POLICY);
+    gh_says(&root, GH_KNOWS_APPS);
+
+    let output = guard_text(&root, b"Committed as down-ci[bot]\n", EXAMPLE_HOME, None);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("down-ci[bot] (a GitHub App whose owner could not be looked up)"),
+        "{}",
+        stderr(&output)
     );
 }
 
