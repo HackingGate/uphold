@@ -493,6 +493,47 @@ fn a_checkout_under_a_declared_owner_names_itself_and_not_its_owner() {
     );
 }
 
+/// One name under a declared owner is one finding. Its owner half used to be
+/// a second, "named on its own", which sent the writer looking for an
+/// occurrence of the owner that was not there.
+///
+/// The `gh` here calls the name public. A declared owner's names are refused
+/// without asking, which is what makes it safe for the owner half to yield to
+/// the name: a guard that started asking would pass this text with no finding.
+#[test]
+fn a_name_under_a_declared_owner_is_reported_once() {
+    let root = workspace(&PRIVATE_NAMES_POLICY.replace(
+        "private_owners = [\"acme\"]",
+        "private_owners = [\"example-org\"]",
+    ));
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    gh_says(
+        &root,
+        "case \"$*\" in\n\
+         'api repos/example-org/other-repo '*) printf 'public\\texample-org/other-repo\\n' ;;\n\
+         *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
+         esac\n",
+    );
+
+    let output = guard_text(
+        &root,
+        b"Clone example-org/other-repo to build it.\n",
+        EXAMPLE_HOME,
+        None,
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let report = stderr(&output);
+    let findings: Vec<&str> = report
+        .lines()
+        .filter(|line| line.starts_with("-: "))
+        .collect();
+    assert_eq!(
+        findings,
+        ["-: example-org/other-repo is private"],
+        "{report}"
+    );
+}
+
 // ── the forms GitHub itself names a repository or an App in ──────────
 
 /// A `gh` that knows one private repository and five App slugs: one owned by

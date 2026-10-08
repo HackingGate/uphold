@@ -1702,12 +1702,22 @@ being no id after the name is the whole difference.
 as its destination — is never a finding, and neither is a `public_repos`
 entry. Under a declared owner the bare-owner search used to read the owner half
 of that name as the organization named on its own, so a README saying where to
-clone the repository from was refused through its first segment. An occurrence
-of the owner that opens an exempt `<owner>/<repo>` is now skipped, read from
-that occurrence the way the `owner/repo` form is read and compared without
-regard to case: `<owner>/<repo>-two` is a different name and still refused.
-It is per occurrence, not per text, so the same owner written on its own in the
-next sentence is still the organization named on its own.
+clone the repository from was refused through its first segment.
+
+**One name is one finding.** The same search read the owner half of every
+`<owner>/<repo>` under a declared owner, so `example-org/other-repo` was refused
+twice: as `example-org/other-repo is private` and as `example-org` named on its
+own. An occurrence of the owner that is the owner half of an `<owner>/<repo>` —
+bare, in a URL, with `.git` or `#N` after it, in any case — now yields to that
+name, which is a finding of its own: refused as private, or skipped where it is
+the repository's own name or a `public_repos` entry. The name is read the way
+the `owner/repo` form reads it, so `<owner>/<repo>-two` is a different name from
+an exempt `<owner>/<repo>` and still refused. This is safe because a declared
+owner's `<owner>/<repo>` is never looked up — the forge cannot call it public or
+leave it unresolved — so the name the owner yields to is always refused unless
+it is exempt. It is per occurrence, not per text: "See example-org/other-repo.
+Built at example-org." is refused for the name and for the owner written on its
+own in the second sentence.
 
 An unreadable source is exit `2`, whichever spelling declared it — a command
 that exits non-zero, or a file that is not there — because a rule with no owners
