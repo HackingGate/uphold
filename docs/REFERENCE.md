@@ -1648,6 +1648,7 @@ unknown repository is: noted on stderr, and refused only under
 | `<slug>[bot]`, an App's bot identity | refused when the App's owner is declared | **passed** |
 | an organization named on its own | refused | **not seen** |
 | `<owner>.<document>.v<N>`, a schema id | **passed** | **not seen** |
+| `<owner>/<repo>` where that is the repository's own name, or a `public_repos` entry | **passed** | **passed** |
 
 **A schema id is not a repository name**, and the last row is where that is
 decided. An organization that publishes document formats writes its own name
@@ -1659,6 +1660,18 @@ and the `.schema.json` file that carries it. Nothing else moves. A schema id has
 no slash in it, so `<Owner>/<repo>` under a declared owner is refused exactly as
 before, and so is the organization written on its own in a sentence — there
 being no id after the name is the whole difference.
+
+**A repository may name itself under a declared owner.** Its own name — the
+`origin` it is published to, or at the shim the repository the command names
+as its destination — is never a finding, and neither is a `public_repos`
+entry. Under a declared owner the bare-owner search used to read the owner half
+of that name as the organization named on its own, so a README saying where to
+clone the repository from was refused through its first segment. An occurrence
+of the owner that opens an exempt `<owner>/<repo>` is now skipped, read from
+that occurrence the way the `owner/repo` form is read and compared without
+regard to case: `<owner>/<repo>-two` is a different name and still refused.
+It is per occurrence, not per text, so the same owner written on its own in the
+next sentence is still the organization named on its own.
 
 An unreadable source is exit `2`, whichever spelling declared it — a command
 that exits non-zero, or a file that is not there — because a rule with no owners

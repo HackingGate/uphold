@@ -1330,7 +1330,7 @@ fn a_rule_reached_through_a_consultation_keeps_its_own_scope() {
             "pr",
             "create",
             "-b",
-            "this fixes acme-private/thing",
+            "this fixes acme-private/other",
         ],
         envs: &[
             ("GH_CALLS", &calls.to_string_lossy()),
@@ -1360,7 +1360,7 @@ fn a_rule_reached_through_a_consultation_keeps_its_own_scope() {
             "pr",
             "create",
             "-b",
-            "this fixes acme-private/thing",
+            "this fixes acme-private/other",
         ],
         envs: &[
             ("GH_CALLS", &calls.to_string_lossy()),
@@ -1397,7 +1397,7 @@ fn a_consulted_scope_that_could_not_be_told_is_not_a_pass() {
             "pr",
             "create",
             "-b",
-            "this fixes acme-private/thing",
+            "this fixes acme-private/other",
         ],
         envs: &[("GH_CALLS", &calls.to_string_lossy()), ("FAKE_FAILS", "1")],
         ..Run::default()
