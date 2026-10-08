@@ -258,7 +258,16 @@ fn bot_identity_pattern() -> &'static Regex {
 /// A private repository on another forge is still reachable here: declare its
 /// owner in `private_owners`, which is matched in the bare form and needs no
 /// network.
-fn candidates(text: &str, owners: &OwnerMatchers) -> BTreeSet<(String, String)> {
+///
+/// `exempt` is the lowercased `owner/repo` names that are not a finding here --
+/// the repository's own name, as [`exempt_name`] reads it, and `public_repos`.
+/// Only the bare-owner search reads it: an exempt name is still yielded as a
+/// candidate, and `judge` skips it there.
+fn candidates(
+    text: &str,
+    owners: &OwnerMatchers,
+    exempt: &BTreeSet<String>,
+) -> BTreeSet<(String, String)> {
     let mut found: BTreeSet<(String, String)> = BTreeSet::new();
     for capture in url_pattern().captures_iter(text) {
         if !git::is_github_host(&capture[1]) {
@@ -297,11 +306,11 @@ fn candidates(text: &str, owners: &OwnerMatchers) -> BTreeSet<(String, String)> 
     for (owner, matcher) in &owners.bare {
         // Every occurrence, not `is_match`, because one of the shapes an owner
         // name occurs in is not a mention of the organisation at all. A text
-        // whose only occurrences are schema ids has nothing in it to refuse.
-        if matcher
-            .find_iter(text)
-            .any(|hit| !opens_a_schema_id(text, hit.end()))
-        {
+        // whose only occurrences are schema ids, or the owner half of a name
+        // that is exempt here, has nothing in it to refuse.
+        if matcher.find_iter(text).any(|hit| {
+            !opens_a_schema_id(text, hit.end()) && !opens_an_exempt_name(text, &hit, exempt)
+        }) {
             found.insert((owner.clone(), String::new()));
         }
     }
@@ -339,6 +348,32 @@ fn schema_id_tail() -> &'static Regex {
 fn opens_a_schema_id(text: &str, end: usize) -> bool {
     text.get(end..)
         .is_some_and(|tail| schema_id_tail().is_match(tail))
+}
+
+/// Whether the owner name at `hit` is the owner half of an exempt `owner/repo`.
+///
+/// A repository names itself -- in its README, its commit messages, the text a
+/// shim publishes to it -- and under a declared owner the bare search matched
+/// the owner half of that name, so the own-name exemption on the `owner/repo`
+/// candidate was undone by the bare candidate built from the same characters.
+/// The same for a `public_repos` entry under a declared owner.
+///
+/// Per occurrence, read from where this hit starts: the repository is read the
+/// way the `owner/repo` matcher reads it, so a longer name with the exempt one
+/// as its prefix is a different name, and the owner written on its own anywhere
+/// else in the same text is still the organisation named on its own.
+fn opens_an_exempt_name(text: &str, hit: &regex::Match<'_>, exempt: &BTreeSet<String>) -> bool {
+    let Some(rest) = text
+        .get(hit.end()..)
+        .and_then(|tail| tail.strip_prefix('/'))
+    else {
+        return false;
+    };
+    let length = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+        .unwrap_or(rest.len());
+    let repo = clean_repo(&rest[..length]);
+    !repo.is_empty() && exempt.contains(&format!("{}/{repo}", hit.as_str()).to_lowercase())
 }
 
 /// The patterns that depend only on the OWNER, compiled once per judgement.
@@ -902,6 +937,7 @@ fn judge(
         .collect();
     let private_owners: BTreeSet<String> =
         owners.iter().map(|owner| owner.to_lowercase()).collect();
+    let exempt: BTreeSet<String> = public.iter().cloned().chain(ours.clone()).collect();
 
     let mut cache: BTreeMap<String, Resolved> = BTreeMap::new();
     let mut refused = Vec::new();
@@ -911,7 +947,7 @@ fn judge(
     let matchers = OwnerMatchers::new(owners, our_owner.as_deref())?;
 
     for (where_found, text) in sources {
-        for (owner, repo) in candidates(text, &matchers) {
+        for (owner, repo) in candidates(text, &matchers, &exempt) {
             let bare_owner = repo.is_empty();
             let name = if bare_owner {
                 owner.clone()
@@ -1631,9 +1667,20 @@ mod tests {
         private_owners: &[String],
         own_owner: Option<&str>,
     ) -> BTreeSet<(String, String)> {
+        named_exempting(text, private_owners, own_owner, &[])
+    }
+
+    /// As [`named`], with the `owner/repo` names `judge` would hand in as exempt.
+    fn named_exempting(
+        text: &str,
+        private_owners: &[String],
+        own_owner: Option<&str>,
+        exempt: &[&str],
+    ) -> BTreeSet<(String, String)> {
         candidates(
             text,
             &OwnerMatchers::new(private_owners, own_owner).expect("an owner a pattern can hold"),
+            &exempt.iter().map(|name| (*name).to_owned()).collect(),
         )
     }
 
@@ -1988,6 +2035,65 @@ mod tests {
         let found = named("acme.internal runs the build", &declared, None);
         assert!(
             found.contains(&("acme".to_owned(), String::new())),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn the_owner_half_of_our_own_name_is_not_the_organisation_named_on_its_own() {
+        // A repository under a declared owner names itself, and the bare search
+        // read the owner half of that name as the organisation on its own.
+        let declared = vec!["example-org".to_owned()];
+        let ours = ["example-org/private-repo"];
+        let bare = ("example-org".to_owned(), String::new());
+        for text in [
+            "Clone example-org/private-repo.",
+            "Clone Example-Org/Private-Repo.git to build it.",
+            "see https://github.com/example-org/private-repo",
+        ] {
+            let found = named_exempting(text, &declared, None, &ours);
+            assert!(!found.contains(&bare), "{text}: {found:?}");
+        }
+
+        // Per occurrence, not per text: the owner written on its own in the
+        // next sentence is still the organisation named on its own.
+        let found = named_exempting(
+            "See example-org/private-repo. Built at example-org.",
+            &declared,
+            None,
+            &ours,
+        );
+        assert!(found.contains(&bare), "{found:?}");
+    }
+
+    #[test]
+    fn a_longer_name_that_starts_with_our_own_is_not_exempt() {
+        let declared = vec!["example-org".to_owned()];
+        let found = named_exempting(
+            "Clone example-org/private-repo-two.",
+            &declared,
+            None,
+            &["example-org/private-repo"],
+        );
+        assert!(
+            found.contains(&("example-org".to_owned(), String::new())),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn the_owner_half_of_a_listed_public_repository_is_not_a_finding() {
+        // `public_repos` is handed in the same way: a public repository under a
+        // declared owner is skipped as a name, and its owner half with it.
+        let declared = vec!["example-org".to_owned()];
+        let found = named_exempting(
+            "Fork example-org/public-repo.",
+            &declared,
+            None,
+            &["example-org/private-repo", "example-org/public-repo"],
+        );
+        assert!(
+            !found.contains(&("example-org".to_owned(), String::new())),
             "{found:?}"
         );
     }

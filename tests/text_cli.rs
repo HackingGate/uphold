@@ -456,6 +456,43 @@ fn a_schema_id_passes_the_text_seam_and_a_repository_name_does_not() {
     );
 }
 
+/// A repository under a declared owner names itself, and the owner half of that
+/// name is not the organisation named on its own. The owner in a sentence of
+/// its own, in the same repository, still is.
+#[test]
+fn a_checkout_under_a_declared_owner_names_itself_and_not_its_owner() {
+    let root = workspace(&PRIVATE_NAMES_POLICY.replace(
+        "private_owners = [\"acme\"]",
+        "private_owners = [\"example-org\"]",
+    ));
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    support::git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example-org/private-repo.git",
+        ],
+    );
+
+    let ours = guard_text(
+        &root,
+        b"Clone example-org/private-repo to build it.\n",
+        EXAMPLE_HOME,
+        None,
+    );
+    assert_eq!(code(&ours), 0, "{}", stderr(&ours));
+
+    let alone = guard_text(&root, b"Built at example-org.\n", EXAMPLE_HOME, None);
+    assert_eq!(code(&alone), 1, "{}", stderr(&alone));
+    assert!(
+        stderr(&alone).contains("example-org is a private organisation, named on its own"),
+        "{}",
+        stderr(&alone)
+    );
+}
+
 // ── the forms GitHub itself names a repository or an App in ──────────
 
 /// A `gh` that knows one private repository and five App slugs: one owned by

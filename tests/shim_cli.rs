@@ -879,10 +879,24 @@ before = ["faux", "gh"]
 /// A checkout of the private `example-org/private-repo`, with a `gh` that says
 /// so when the rule asks and reports every other call instead of making it.
 ///
-/// Its owner is not declared private: the case is the one the forge answers,
-/// and a declared owner is refused named on its own wherever it appears.
+/// Its owner is not declared private: the case is the one the forge answers.
+/// [`declared_checkout`] is the same checkout with the owner declared.
 fn private_checkout() -> PathBuf {
-    let root = workspace(DESTINATION_NAMES_POLICY);
+    checkout_under(DESTINATION_NAMES_POLICY)
+}
+
+/// [`private_checkout`] with `example-org` declared in `private_owners`, where
+/// the owner half of the destination's own name is not the organisation named
+/// on its own.
+fn declared_checkout() -> PathBuf {
+    checkout_under(&DESTINATION_NAMES_POLICY.replace(
+        "visibility = \"public\"\n",
+        "visibility = \"public\"\nprivate_owners = [\"example-org\"]\n",
+    ))
+}
+
+fn checkout_under(policy: &str) -> PathBuf {
+    let root = workspace(policy);
     stub(
         &root,
         "gh",
@@ -950,6 +964,53 @@ fn a_repositorys_name_published_to_itself_still_passes() {
     );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_declared_owners_repository_names_itself_and_nobody_else() {
+    // The owner is declared, so the bare search reads every `example-org` in
+    // the body. The one that opens the destination's own name is not the
+    // organisation named on its own; sent anywhere else it is still refused.
+    let root = declared_checkout();
+    let body = "Clone example-org/private-repo to build it.";
+    let ours = shim(
+        &root,
+        &[
+            "faux",
+            "issue",
+            "comment",
+            "--repo",
+            "example-org/private-repo",
+            "-b",
+            body,
+        ],
+    );
+    assert_eq!(code(&ours), 0, "{}", stderr(&ours));
+    assert!(stdout(&ours).contains("faux ran"), "{}", stdout(&ours));
+
+    let elsewhere = shim(
+        &root,
+        &[
+            "faux",
+            "issue",
+            "comment",
+            "--repo",
+            "example-org/public-repo",
+            "-b",
+            body,
+        ],
+    );
+    assert_eq!(code(&elsewhere), 1, "{}", stderr(&elsewhere));
+    assert!(
+        stderr(&elsewhere).contains("example-org/private-repo is private"),
+        "{}",
+        stderr(&elsewhere)
+    );
+    assert!(
+        !stdout(&elsewhere).contains("faux ran"),
+        "{}",
+        stdout(&elsewhere)
+    );
 }
 
 #[test]
