@@ -251,12 +251,15 @@ prek.
 Two scripts cut a release, and the steps between them are commands to copy.
 
 1. Pick the version, X.Y.Z, greater than the one in `Cargo.toml`.
-2. From a clean, current `main`, run `scripts/bump-version.sh X.Y.Z`. It writes
+2. From a clean `main`, run `scripts/bump-version.sh X.Y.Z`. It fetches and
+   refuses unless the checkout is on `main` at `origin/main`. It writes
    the version into `Cargo.toml`, the `uphold` entry of `Cargo.lock`, the three
    pins in `README.md` and the header pin in `hooks/lefthook.yml`, refuses if
    any of those changed by other than one line (three for the README), checks
    the lock with `cargo metadata --locked --offline`, and commits
-   `Prepare uphold X.Y.Z` on a new branch `prepare-X.Y.Z`. It pushes nothing.
+   `Prepare uphold X.Y.Z` on a new branch `prepare-X.Y.Z`. If the commit fails,
+   a hook refusing it for instance, it returns to `main`, deletes the branch
+   and restores the files. It pushes nothing.
 3. Push the branch and open the pull request. The body is only "Version bump.":
 
    ```sh
@@ -265,11 +268,15 @@ Two scripts cut a release, and the steps between them are commands to copy.
    ```
 
 4. Merge it.
-5. Run `scripts/tag-release.sh`, with `--dry-run` first to see what it will do.
-   It fetches, requires origin/main's subject to be `Prepare uphold X.Y.Z (#N)`
-   for the version origin/main's `Cargo.toml` carries, refuses a `vX.Y.Z` that
-   exists here or on origin, creates the annotated tag `vX.Y.Z` with the
-   message `uphold X.Y.Z` on that commit, and pushes that one tag.
+5. Run `scripts/tag-release.sh`. It fetches, requires origin/main's subject to
+   be `Prepare uphold X.Y.Z (#N)` for the version origin/main's `Cargo.toml`
+   carries, requires that commit's parent to carry a lower version and the
+   commit to change only the four version files, refuses a `vX.Y.Z` that exists
+   here or on origin, and prints the tag and push it would run. It creates and
+   pushes nothing. When the output is right, run
+   `scripts/tag-release.sh --push`: the same checks, then the annotated tag
+   `vX.Y.Z` with the message `uphold X.Y.Z` on that commit, and a push of that
+   one tag.
 6. The tag push runs cargo-dist, which builds the GitHub Release page.
 
 The release page is generated, so a prep pull request needs no release notes.

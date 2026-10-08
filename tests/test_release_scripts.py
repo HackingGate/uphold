@@ -119,29 +119,48 @@ class Sandbox:
             check=True,
         ).stdout.strip()
 
-    def build(self, subject: str = "Prepare uphold 1.2.3 (#7)") -> None:
+    def build(
+        self,
+        subject: str = "Prepare uphold 1.2.3 (#7)",
+        parent_version: str = "1.2.2",
+        touch: tuple[str, ...] = (),
+    ) -> None:
+        """Two commits on main: one at `parent_version`, then `subject` raising
+        the four version files to 1.2.3 and also editing each file in `touch`."""
         self.git("init", "-q", "--bare", str(self.origin), cwd=self.root)
         self.git("init", "-q", str(self.work), cwd=self.root)
-        for name, body in {
+        files = {
             "Cargo.toml": CARGO_TOML,
             "Cargo.lock": CARGO_LOCK,
             "README.md": README,
             "hooks/lefthook.yml": LEFTHOOK,
-            "src/main.rs": "fn main() {}\n",
-        }.items():
-            path = self.work / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(body, encoding="utf-8")
+        }
+        self._write({n: b.replace("1.2.3", parent_version) for n, b in files.items()})
+        self._write({"src/main.rs": "fn main() {}\n"})
         (self.work / "scripts").mkdir()
         for script in SCRIPTS:
             shutil.copy2(REPO / "scripts" / script, self.work / "scripts" / script)
         self.git("add", "-A")
-        self.git("commit", "-q", "-m", subject)
+        self.git("commit", "-q", "-m", f"Start at {parent_version}")
+        self._write(files)
+        for name in touch:
+            path = self.work / name
+            path.write_text(
+                path.read_text(encoding="utf-8") + "// edit\n", encoding="utf-8"
+            )
+        self.git("add", "-A")
+        self.git("commit", "-q", "--allow-empty", "-m", subject)
         self.git("remote", "add", "origin", str(self.origin))
         self.git("push", "-q", "origin", "main")
         # The fetch the scripts make; done here first so the remote-tracking
         # refs it creates are part of the state a refused run must preserve.
         self.git("fetch", "-q", "origin", "--tags")
+
+    def _write(self, files: dict[str, str]) -> None:
+        for name, body in files.items():
+            path = self.work / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
 
     def run(self, script: str, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -246,6 +265,8 @@ class BumpVersion(unittest.TestCase):
             readme.read_text(encoding="utf-8") + "\n    rev: v1.2.3\n", encoding="utf-8"
         )
         box.git("commit", "-q", "-am", "A fourth pin")
+        box.git("push", "-q", "origin", "main")
+        box.git("fetch", "-q", "origin")
         before = box.state()
 
         result = box.run("bump-version.sh", "1.3.0")
@@ -268,6 +289,64 @@ class BumpVersion(unittest.TestCase):
         self.assertEqual(box.state(), before)
         self.assertEqual(readme.read_text(encoding="utf-8"), edited)
 
+    def test_refuses_off_main(self) -> None:
+        box = _sandbox(self)
+        box.git("switch", "-q", "-c", "topic")
+        before = box.state()
+
+        result = box.run("bump-version.sh", "1.3.0")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("run this on main, not topic", result.stderr)
+        self.assertEqual(box.state(), before)
+
+    def test_refuses_a_main_that_is_not_origin_main(self) -> None:
+        box = _sandbox(self)
+        # Ahead: a local commit origin has not seen.
+        (box.work / "src/main.rs").write_text("fn main() { }\n", encoding="utf-8")
+        box.git("commit", "-q", "-am", "A local commit")
+        ahead = box.state()
+        result = box.run("bump-version.sh", "1.3.0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is not origin/main", result.stderr)
+        self.assertEqual(box.state(), ahead)
+
+        # Behind: origin moved on and this main was never pulled.
+        box.git("push", "-q", "origin", "main")
+        box.git("reset", "-q", "--hard", "HEAD~1")
+        result = box.run("bump-version.sh", "1.3.0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is not origin/main", result.stderr)
+        self.assertEqual(box.git("rev-parse", "--abbrev-ref", "HEAD"), "main")
+        self.assertEqual(box.git("status", "--porcelain"), "")
+        self.assertNotIn("prepare-1.3.0", box.git("for-each-ref"))
+
+    @unittest.skipUnless(shutil.which("cargo"), "the lock is checked by cargo")
+    def test_a_refused_commit_restores_the_branch_and_files(self) -> None:
+        box = _sandbox(self)
+        hook = box.work / ".git" / "hooks" / "pre-commit"
+        hook.write_text(
+            "#!/bin/sh\necho 'hook says no' >&2\nexit 1\n", encoding="utf-8"
+        )
+        hook.chmod(0o755)
+        before = box.state()
+        files_before = {
+            n: (box.work / n).read_text(encoding="utf-8") for n in VERSION_FILES
+        }
+
+        result = box.run("bump-version.sh", "1.3.0")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("git commit (a hook may have refused it) failed", result.stderr)
+        self.assertIn(
+            "prepare-1.3.0 deleted and the four files restored", result.stderr
+        )
+        self.assertEqual(box.state(), before)
+        self.assertEqual(
+            {n: (box.work / n).read_text(encoding="utf-8") for n in VERSION_FILES},
+            files_before,
+        )
+
 
 @unittest.skipUnless(shutil.which("git") and shutil.which("bash"), "needs git and bash")
 class TagRelease(unittest.TestCase):
@@ -281,17 +360,40 @@ class TagRelease(unittest.TestCase):
             with self.subTest(subject=subject):
                 box = _sandbox(self, subject=subject)
                 before = box.state()
-                result = box.run("tag-release.sh")
+                result = box.run("tag-release.sh", "--push")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("not 'Prepare uphold 1.2.3 (#N)'", result.stderr)
                 self.assertEqual(box.state(), before)
+
+    def test_refuses_a_prep_title_on_a_commit_that_does_not_raise_the_version(
+        self,
+    ) -> None:
+        # The subject is right, but the parent already carries 1.2.3.
+        box = _sandbox(self, parent_version="1.2.3", touch=("src/main.rs",))
+        before = box.state()
+
+        result = box.run("tag-release.sh", "--push")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not raise the version", result.stderr)
+        self.assertEqual(box.state(), before)
+
+    def test_refuses_a_prep_commit_that_changes_more_than_the_version(self) -> None:
+        box = _sandbox(self, touch=("src/main.rs",))
+        before = box.state()
+
+        result = box.run("tag-release.sh", "--push")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("changes src/main.rs", result.stderr)
+        self.assertEqual(box.state(), before)
 
     def test_refuses_a_tag_that_exists_locally(self) -> None:
         box = _sandbox(self)
         box.git("tag", "v1.2.3")
         before = box.state()
 
-        result = box.run("tag-release.sh")
+        result = box.run("tag-release.sh", "--push")
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("v1.2.3 already exists locally", result.stderr)
@@ -305,22 +407,39 @@ class TagRelease(unittest.TestCase):
         box.git("tag", "-d", "v1.2.3")
         remote_before = box.git("for-each-ref", cwd=box.origin)
 
-        result = box.run("tag-release.sh")
+        result = box.run("tag-release.sh", "--push")
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("v1.2.3 already exists", result.stderr)
         self.assertEqual(box.git("for-each-ref", cwd=box.origin), remote_before)
 
-    def test_dry_run_changes_nothing(self) -> None:
+    def test_without_push_it_tags_and_pushes_nothing(self) -> None:
+        for args in ((), ("--dry-run",)):
+            with self.subTest(args=args):
+                box = _sandbox(self)
+                sha = box.git("rev-parse", "HEAD")
+                before = box.state()
+
+                result = box.run("tag-release.sh", *args)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(
+                    f'git tag -a v1.2.3 -m "uphold 1.2.3" {sha}', result.stdout
+                )
+                self.assertIn("git push origin refs/tags/v1.2.3", result.stdout)
+                self.assertIn("--push", result.stdout)
+                self.assertEqual(box.state(), before)
+                self.assertEqual(box.git("tag", "--list"), "")
+                self.assertNotIn("refs/tags/", box.git("for-each-ref", cwd=box.origin))
+
+    def test_refuses_push_with_dry_run(self) -> None:
         box = _sandbox(self)
-        sha = box.git("rev-parse", "HEAD")
         before = box.state()
 
-        result = box.run("tag-release.sh", "--dry-run")
+        result = box.run("tag-release.sh", "--push", "--dry-run")
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f'git tag -a v1.2.3 -m "uphold 1.2.3" {sha}', result.stdout)
-        self.assertIn("git push origin refs/tags/v1.2.3", result.stdout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("contradict", result.stderr)
         self.assertEqual(box.state(), before)
 
     def test_tags_the_prep_commit_and_pushes_only_that_tag(self) -> None:
@@ -330,7 +449,7 @@ class TagRelease(unittest.TestCase):
         box.git("tag", "v0.0.1-scratch")
         box.git("branch", "unpushed")
 
-        result = box.run("tag-release.sh")
+        result = box.run("tag-release.sh", "--push")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(box.git("cat-file", "-t", "v1.2.3"), "tag")

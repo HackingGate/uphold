@@ -23,7 +23,14 @@ set -euo pipefail
 # the manifest, so the hand edit is proven by the tool that would otherwise
 # rewrite it.
 #
-# The result is a commit on a new branch `prepare-X.Y.Z`, subject only. Nothing
+# The bump is made from main as origin has it: the script fetches, and refuses
+# unless the checkout is on `main` at origin/main, so the prep pull request
+# carries nothing but the version.
+#
+# The result is a commit on a new branch `prepare-X.Y.Z`, subject only. If the
+# branch, the staging or the commit fails -- a commit hook refusing, say -- the
+# script goes back to main, deletes the branch and restores the files before it
+# fails, so a refused run leaves the checkout as it found it. Nothing
 # is pushed: the script prints the push and the `gh pr create` to run next, and
 # the tag is scripts/tag-release.sh's job once the pull request has merged.
 
@@ -42,7 +49,8 @@ Usage: scripts/bump-version.sh X.Y.Z
 Write version X.Y.Z into Cargo.toml, Cargo.lock, README.md and
 hooks/lefthook.yml, and commit it as "Prepare uphold X.Y.Z" on a new branch
 prepare-X.Y.Z. X.Y.Z must be plain MAJOR.MINOR.PATCH and greater than the
-version Cargo.toml carries now. Nothing is pushed.
+version Cargo.toml carries now. The checkout must be on main at origin/main,
+after a fetch. Nothing is pushed.
 
   -h, --help  show this help.
 USAGE
@@ -77,6 +85,19 @@ expect=(1 1 3 1)
 [ -z "$(git status --porcelain --untracked-files=no)" ] ||
     die "the working tree has uncommitted changes; commit or stash them first"
 
+# The prep commit is the one tag-release.sh will tag, so it must sit directly
+# on origin/main: from a stale main or a side branch, the pull request would
+# carry other changes under a subject that says it only bumps the version.
+git fetch -q origin || die "git fetch origin failed"
+current="$(git symbolic-ref -q --short HEAD || true)"
+[ "$current" = main ] ||
+    die "run this on main, not ${current:-a detached HEAD}; git switch main first"
+head_sha="$(git rev-parse HEAD)"
+origin_sha="$(git rev-parse -q --verify 'origin/main^{commit}')" ||
+    die "no origin/main after the fetch"
+[ "$head_sha" = "$origin_sha" ] ||
+    die "main ($head_sha) is not origin/main ($origin_sha); git pull --ff-only, or drop the local commits, first"
+
 branch="prepare-$new"
 if git rev-parse -q --verify "refs/heads/$branch" >/dev/null; then
     die "branch $branch already exists"
@@ -108,15 +129,24 @@ version_gt() {
 }
 version_gt "$new" "$old" || die "$new is not greater than the current version $old"
 
+# fail MESSAGE -> put the four files back as they were committed, then die.
+fail() {
+    git checkout -- "${files[@]}"
+    die "$* (the four files are restored)"
+}
+
 # rewrite FILE AWK-PROGRAM -> run the program over FILE with `old` and `new`
 # set, writing back in place. `cat >` keeps the file's mode. The programs are
 # awk, single-quoted so the shell leaves their `$0` alone, which is what
 # SC2016 is disabled for at each call.
 rewrite() {
     local file="$1" program="$2" tmp
-    tmp="$(mktemp)"
-    awk -v old="$old" -v new="$new" "$program" "$file" >"$tmp"
-    cat "$tmp" >"$file"
+    tmp="$(mktemp)" || fail "mktemp failed while rewriting $file"
+    if ! awk -v old="$old" -v new="$new" "$program" "$file" >"$tmp" ||
+        ! cat "$tmp" >"$file"; then
+        rm -f "$tmp"
+        fail "could not rewrite $file"
+    fi
     rm -f "$tmp"
 }
 
@@ -163,12 +193,6 @@ rewrite hooks/lefthook.yml '
     { print }
 '
 
-# fail MESSAGE -> put the four files back as they were committed, then die.
-fail() {
-    git checkout -- "${files[@]}"
-    die "$* (the four files are restored)"
-}
-
 for i in "${!files[@]}"; do
     file="${files[i]}"
     want="${expect[i]}"
@@ -191,9 +215,31 @@ command -v cargo >/dev/null 2>&1 || fail "cargo is needed to check Cargo.lock"
 cargo metadata --locked --offline --format-version 1 >/dev/null ||
     fail "cargo metadata --locked --offline refused the edited Cargo.lock"
 
-git checkout -q -b "$branch"
-git add -- "${files[@]}"
-git commit -q -m "Prepare uphold $new"
+# undo_commit STEP -> leave the prep branch, delete it, restore the four files,
+# then die naming the step that failed. Each undo step is allowed to fail on its
+# own (the branch may not exist yet), and the last check says whether the
+# checkout is back where it started.
+undo_commit() {
+    git reset -q -- "${files[@]}" || true
+    git checkout -q -- "${files[@]}" || true
+    if [ "$(git symbolic-ref -q --short HEAD || true)" != main ]; then
+        git checkout -q main || true
+    fi
+    if git rev-parse -q --verify "refs/heads/$branch" >/dev/null; then
+        git branch -q -D "$branch" || true
+    fi
+    local on dirty kept=0
+    on="$(git symbolic-ref -q --short HEAD || true)"
+    dirty="$(git status --porcelain --untracked-files=no)"
+    git rev-parse -q --verify "refs/heads/$branch" >/dev/null && kept=1
+    [ "$on" = main ] && [ -z "$dirty" ] && [ "$kept" -eq 0 ] &&
+        die "$1 failed; back on main, $branch deleted and the four files restored"
+    die "$1 failed, and the checkout could not be fully restored; check git status and git branch"
+}
+
+git checkout -q -b "$branch" || undo_commit "git checkout -b $branch"
+git add -- "${files[@]}" || undo_commit "git add"
+git commit -q -m "Prepare uphold $new" || undo_commit "git commit (a hook may have refused it)"
 
 printf 'Committed "Prepare uphold %s" on branch %s (%s -> %s).\n' \
     "$new" "$branch" "$old" "$new"
@@ -203,5 +249,5 @@ Next:
   git push -u origin $branch
   gh pr create --title "Prepare uphold $new" --body "Version bump."
 
-After it merges: scripts/tag-release.sh
+After it merges: scripts/tag-release.sh to check, then with --push to tag
 NEXT
