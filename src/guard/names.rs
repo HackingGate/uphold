@@ -663,6 +663,15 @@ pub(crate) fn declared_owners(root: &Path, policy: &Policy, rule: &Rule) -> Resu
         // first commit and losing the check silently. Neither is acceptable,
         // so the third answer is losing it OUT LOUD.
         if !optional {
+            // Where there is no policy file, the advice below names a line
+            // with nowhere to go; that policy says what to do instead.
+            if let Some(instead) = &policy.owners_unreadable {
+                return Err(Fatal::new(format!(
+                    "{}: {} {failure}\n\n{instead}",
+                    rule.id,
+                    source.field(),
+                )));
+            }
             return Err(Fatal::new(format!(
                 "{}: {} {failure}\n\nA source that could not be read produced no owners, \
                  and a rule with no owners refuses nothing. If this source is expected to \
