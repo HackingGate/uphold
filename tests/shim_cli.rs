@@ -673,6 +673,157 @@ fn a_clean_body_reaches_the_real_command_through_a_builtin_checker() {
     assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
 }
 
+/// `no-private-repo-names` in front of a command that names its destination.
+///
+/// The rule exempts a repository's own name, because publishing a repository
+/// publishes its name. At the shim the repository being published to is the
+/// destination, not the checkout the command was typed in -- and the two are
+/// different repositories exactly when the exemption matters.
+const DESTINATION_NAMES_POLICY: &str = r#"
+[[shim]]
+command = "faux"
+match = ["issue:comment"]
+text_flags = ["-b", "--body"]
+target_flags = ["-R", "--repo"]
+target = "forge-repo"
+scope = "always"
+
+[[shim]]
+command = "gh"
+match = ["api:*"]
+target_flags = ["-R", "--repo"]
+target = "forge-repo"
+scope = "always"
+
+[rule.no-private-repo-names]
+builtin = "no-private-repo-names"
+visibility = "public"
+
+[rule.no-private-repo-names.command]
+before = ["faux", "gh"]
+"#;
+
+/// A checkout of the private `example-org/private-repo`, with a `gh` that says
+/// so when the rule asks and reports every other call instead of making it.
+///
+/// Its owner is not declared private: the case is the one the forge answers,
+/// and a declared owner is refused named on its own wherever it appears.
+fn private_checkout() -> PathBuf {
+    let root = workspace(DESTINATION_NAMES_POLICY);
+    stub(
+        &root,
+        "gh",
+        "#!/bin/sh\n\
+         case \"$*\" in\n\
+         'api repos/example-org/private-repo --jq '*) \
+         printf 'private\\texample-org/private-repo\\n' ;;\n\
+         *) echo \"gh ran: $*\" ;;\n\
+         esac\n",
+    );
+    support::git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example-org/private-repo.git",
+        ],
+    );
+    root
+}
+
+#[test]
+fn a_private_repositorys_name_published_to_another_repository_is_refused() {
+    // The checkout is the private repository; the comment is going to a
+    // public one. `origin` naming itself is not a disclosure, and that same
+    // name typed onto somebody else's issue is the disclosure.
+    let root = private_checkout();
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "issue",
+            "comment",
+            "--repo",
+            "example-org/public-repo",
+            "-b",
+            "Refs example-org/private-repo#1",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("example-org/private-repo is private"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("faux ran"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_repositorys_name_published_to_itself_still_passes() {
+    // The exemption itself, kept: the destination IS the repository named.
+    let root = private_checkout();
+    let output = shim(
+        &root,
+        &[
+            "faux",
+            "issue",
+            "comment",
+            "-R",
+            "example-org/private-repo",
+            "-b",
+            "Refs example-org/private-repo#1",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
+}
+
+#[test]
+fn an_api_path_names_the_destination_whose_name_is_exempt() {
+    // `gh api` has no `--repo`; its path is where it says where the text goes,
+    // and that is the repository the exemption follows.
+    let root = private_checkout();
+    let refused = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/example-org/public-repo/issues/1/comments",
+            "-f",
+            "body=Refs example-org/private-repo#1",
+        ],
+    );
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("example-org/private-repo is private"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(
+        !stdout(&refused).contains("gh ran:"),
+        "{}",
+        stdout(&refused)
+    );
+
+    let ours = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/example-org/private-repo/issues/1/comments",
+            "-f",
+            "body=Refs example-org/private-repo#1",
+        ],
+    );
+    assert_eq!(code(&ours), 0, "{}", stderr(&ours));
+    assert!(stdout(&ours).contains("gh ran:"), "{}", stdout(&ours));
+}
+
 /// A `git` shim as the shipped policy declares it, with git's own global
 /// grammar written nowhere in it.
 const GIT_POLICY: &str = r#"
