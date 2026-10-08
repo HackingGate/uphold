@@ -458,9 +458,11 @@ fn a_schema_id_passes_the_text_seam_and_a_repository_name_does_not() {
 
 // ── the forms GitHub itself names a repository or an App in ──────────
 
-/// A `gh` that knows one private repository and four App slugs: one owned by
+/// A `gh` that knows one private repository and five App slugs: one owned by
 /// the declared-private `acme`, one by an owner nothing declared, one the forge
-/// will not show, and one it could not be asked about.
+/// will not show, one it will not show to an installation token -- the 403 a
+/// CI runner's `GITHUB_TOKEN` gets for a private App -- and one it could not be
+/// asked about.
 ///
 /// The first two are real Apps' slugs, answered here with owners of this
 /// test's choosing, so this repository's own guard -- which reads its tests
@@ -470,6 +472,7 @@ const GH_KNOWS_APPS: &str = "case \"$*\" in\n\
                              'api apps/renovate --jq .owner.login') echo acme ;;\n\
                              'api apps/dependabot --jq .owner.login') echo octo ;;\n\
                              'api apps/gone-ci '*) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;\n\
+                             'api apps/hidden-ci '*) echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;\n\
                              'api apps/down-ci '*) echo 'gh: Bad Gateway (HTTP 502)' >&2; exit 1 ;;\n\
                              *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
                              esac\n";
@@ -553,6 +556,23 @@ fn a_bot_identity_whose_app_is_not_found_is_unresolved() {
         stderr(&refused).contains("gone-ci[bot] could not be resolved"),
         "{}",
         stderr(&refused)
+    );
+}
+
+/// The CI condition this repository's own gate first met: a runner's
+/// installation token is answered 403 for a private App where any other
+/// caller gets the 404. Same App, same answer, wherever it is asked.
+#[test]
+fn a_private_app_hidden_from_an_installation_token_is_unresolved() {
+    let root = workspace(PRIVATE_NAMES_POLICY);
+    gh_says(&root, GH_KNOWS_APPS);
+
+    let output = guard_text(&root, b"Committed as hidden-ci[bot]\n", EXAMPLE_HOME, None);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("hidden-ci[bot] could not be resolved"),
+        "{}",
+        stderr(&output)
     );
 }
 

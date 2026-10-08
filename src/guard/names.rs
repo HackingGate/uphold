@@ -535,6 +535,16 @@ fn resolve(
 /// private, or invented -- and is `Unknown`, the inconclusive answer an unknown
 /// repository name gets. Anything else is the check not happening, and is
 /// could-not-look.
+///
+/// One answer is a 404 in a different status. Asked with an installation token
+/// -- which is what `GITHUB_TOKEN` is in CI -- the endpoint answers an App that
+/// exists but is private with `Resource not accessible by integration (HTTP
+/// 403)`, where a user's token and no token at all get the 404. A repository
+/// the same token cannot see is a 404 either way, so without this the same
+/// private App is unresolved on a laptop and could-not-look on a runner. It is
+/// the one 403 counted, and only here: a rate limit is a 403 too, with
+/// different words. Read from the whole of stderr rather than its first line,
+/// because a `gh` reached through a shim may say something of its own first.
 fn app_owner(
     cache: &mut BTreeMap<String, Resolved>,
     private_owners: &BTreeSet<String>,
@@ -572,6 +582,12 @@ fn app_owner(
                     silence: None,
                 }
             }
+        }
+        Ok(output)
+            if String::from_utf8_lossy(&output.stderr)
+                .contains("Resource not accessible by integration (HTTP 403)") =>
+        {
+            unanswered(Silence::NotFound)
         }
         Ok(output) => unanswered(Silence::of("gh", &output)),
         Err(error) => unanswered(Silence::unreachable("gh", &error)),

@@ -1632,7 +1632,10 @@ so it goes to the forge whoever the owner is. An App's bot identity,
 `<slug>[bot]` or its `<id>+<slug>[bot]@users.noreply.github.com` address, is
 resolved to the account that owns the App (`gh api apps/<slug>`), user or
 organization alike, and that account is judged as an owner named on its own. An
-App the forge answers with a 404 or with no owner is an unresolved name, as an
+App the forge answers with a 404 or with no owner -- or, asked with an
+installation token such as CI's `GITHUB_TOKEN`, with the 403 `Resource not
+accessible by integration` that token gets for a private App -- is an
+unresolved name, as an
 unknown repository is: noted on stderr, and refused only under
 `refuse_unknown`. Any other `gh` failure is exit `2`, could-not-look:
 
