@@ -236,6 +236,31 @@ fn bot_identity_pattern() -> &'static Regex {
         .get_or_init(|| crate::engine::literal_pattern(r"\b([A-Za-z0-9][A-Za-z0-9-]*)\[bot\]"))
 }
 
+/// The names [`candidates`] has found, one per name whatever its case.
+///
+/// A forge name is case-insensitive, and the forms that find one disagree on
+/// how to spell it: a URL and a cross-reference keep the text's spelling, a
+/// declared owner's matcher the declaration's. Kept as a plain set of pairs,
+/// `https://github.com/Example-Org/other-repo` was two candidates -- one from
+/// the URL and one from the matcher that fires inside it -- and one occurrence
+/// was refused twice. Keyed on the lowercased pair, holding the first spelling
+/// found, which is the one the text used wherever a URL or cross-reference
+/// carried it.
+#[derive(Default)]
+struct Spellings(BTreeMap<(String, String), (String, String)>);
+
+impl Spellings {
+    fn insert(&mut self, owner: String, repo: String) {
+        self.0
+            .entry((owner.to_lowercase(), repo.to_lowercase()))
+            .or_insert((owner, repo));
+    }
+
+    fn into_names(self) -> BTreeSet<(String, String)> {
+        self.0.into_values().collect()
+    }
+}
+
 /// Every `owner/repo` this text could be naming ON GITHUB.
 ///
 /// Four forms. A GitHub URL needs `github.com/owner/repo`, or its scp-like
@@ -259,16 +284,10 @@ fn bot_identity_pattern() -> &'static Regex {
 /// owner in `private_owners`, which is matched in the bare form and needs no
 /// network.
 ///
-/// `exempt` is the lowercased `owner/repo` names that are not a finding here --
-/// the repository's own name, as [`exempt_name`] reads it, and `public_repos`.
-/// Only the bare-owner search reads it: an exempt name is still yielded as a
-/// candidate, and `judge` skips it there.
-fn candidates(
-    text: &str,
-    owners: &OwnerMatchers,
-    exempt: &BTreeSet<String>,
-) -> BTreeSet<(String, String)> {
-    let mut found: BTreeSet<(String, String)> = BTreeSet::new();
+/// A declared owner on its own is searched for last, and the owner half of an
+/// `owner/repo` already yielded is not one -- see [`owner_half`].
+fn candidates(text: &str, owners: &OwnerMatchers) -> BTreeSet<(String, String)> {
+    let mut found = Spellings::default();
     for capture in url_pattern().captures_iter(text) {
         if !git::is_github_host(&capture[1]) {
             continue;
@@ -278,7 +297,7 @@ fn candidates(
         if repo.is_empty() {
             continue;
         }
-        found.insert((owner, repo));
+        found.insert(owner, repo);
     }
 
     // The preceding character is part of the match rather than a lookbehind,
@@ -291,30 +310,32 @@ fn candidates(
         if repo.is_empty() {
             continue;
         }
-        found.insert((capture[2].to_string(), repo));
+        found.insert(capture[2].to_string(), repo);
     }
 
     for capture in bot_identity_pattern().captures_iter(text) {
-        found.insert((format!("{}[bot]", &capture[1]), String::new()));
+        found.insert(format!("{}[bot]", &capture[1]), String::new());
     }
 
+    let mut owner_halves: BTreeSet<(usize, usize)> = BTreeSet::new();
     for (owner, matcher) in &owners.named {
         for capture in matcher.captures_iter(text) {
-            found.insert((owner.clone(), clean_repo(&capture[1])));
+            found.insert(owner.clone(), clean_repo(&capture[1]));
+            owner_halves.extend(owner_half(&capture));
         }
     }
     for (owner, matcher) in &owners.bare {
-        // Every occurrence, not `is_match`, because one of the shapes an owner
-        // name occurs in is not a mention of the organisation at all. A text
-        // whose only occurrences are schema ids, or the owner half of a name
-        // that is exempt here, has nothing in it to refuse.
+        // Every occurrence, not `is_match`, because two of the shapes an owner
+        // name occurs in are not a mention of the organisation on its own. A
+        // text whose only occurrences are schema ids, or the owner halves of
+        // names yielded above, has nothing in it to refuse as the owner.
         if matcher.find_iter(text).any(|hit| {
-            !opens_a_schema_id(text, hit.end()) && !opens_an_exempt_name(text, &hit, exempt)
+            !opens_a_schema_id(text, hit.end()) && !owner_halves.contains(&(hit.start(), hit.end()))
         }) {
-            found.insert((owner.clone(), String::new()));
+            found.insert(owner.clone(), String::new());
         }
     }
-    found
+    found.into_names()
 }
 
 /// The tail of a versioned schema id, read from where the owner name ends.
@@ -350,30 +371,26 @@ fn opens_a_schema_id(text: &str, end: usize) -> bool {
         .is_some_and(|tail| schema_id_tail().is_match(tail))
 }
 
-/// Whether the owner name at `hit` is the owner half of an exempt `owner/repo`.
+/// The span of the owner half of one `owner/repo` the named matcher yielded:
+/// from where the name starts to its slash, which is the span the bare search
+/// matches at the same place.
 ///
-/// A repository names itself -- in its README, its commit messages, the text a
-/// shim publishes to it -- and under a declared owner the bare search matched
-/// the owner half of that name, so the own-name exemption on the `owner/repo`
-/// candidate was undone by the bare candidate built from the same characters.
-/// The same for a `public_repos` entry under a declared owner.
+/// A bare hit with exactly this span is not the organisation named on its own.
+/// Under a declared owner the bare search matched the owner half of every
+/// `owner/repo`, so one name was refused twice -- as the repository and as its
+/// owner -- and where the name was exempt, as the repository's own or a
+/// `public_repos` entry, the exemption was undone by the bare candidate built
+/// from the same characters. The name is a candidate of its own, and `judge`
+/// refuses it as private or skips it as exempt; its owner half yields to that.
 ///
-/// Per occurrence, read from where this hit starts: the repository is read the
-/// way the `owner/repo` matcher reads it, so a longer name with the exempt one
-/// as its prefix is a different name, and the owner written on its own anywhere
-/// else in the same text is still the organisation named on its own.
-fn opens_an_exempt_name(text: &str, hit: &regex::Match<'_>, exempt: &BTreeSet<String>) -> bool {
-    let Some(rest) = text
-        .get(hit.end()..)
-        .and_then(|tail| tail.strip_prefix('/'))
-    else {
-        return false;
-    };
-    let length = rest
-        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
-        .unwrap_or(rest.len());
-    let repo = clean_repo(&rest[..length]);
-    !repo.is_empty() && exempt.contains(&format!("{}/{repo}", hit.as_str()).to_lowercase())
+/// Per occurrence, not per text: the owner written on its own anywhere else in
+/// the same text is still the organisation named on its own. And only for a
+/// name actually yielded, read the way that matcher reads it, so the two halves
+/// cannot disagree about which occurrences are names.
+fn owner_half(capture: &regex::Captures<'_>) -> Option<(usize, usize)> {
+    let name = capture.get(0)?;
+    let repo = capture.get(1)?;
+    Some((name.start(), repo.start().checked_sub(1)?))
 }
 
 /// The patterns that depend only on the OWNER, compiled once per judgement.
@@ -911,6 +928,32 @@ fn is_ourselves(resolved: &Resolved, ours: Option<&str>) -> bool {
     }
 }
 
+/// One candidate's visibility, as `judge` reads it.
+///
+/// A declared-private owner needs no network and cannot be contradicted by one:
+/// it is the operator saying so. Every name under it -- the owner alone and
+/// every `owner/repo` -- is private without a lookup, whatever the forge would
+/// have said or failed to say. [`candidates`] relies on that: the owner half of
+/// such a name yields to the name, which is only safe while the name is always
+/// refused. A name whose lookup could pass it, or leave it unresolved, would
+/// hide its owner behind it.
+fn answer(
+    cache: &mut BTreeMap<String, Resolved>,
+    private_owners: &BTreeSet<String>,
+    owner: &str,
+    repo: &str,
+) -> Resolved {
+    if private_owners.contains(&owner.to_lowercase()) {
+        Resolved {
+            visibility: Visibility::Private,
+            canonical: None,
+            silence: None,
+        }
+    } else {
+        resolve(cache, private_owners, owner, repo)
+    }
+}
+
 /// `watched` is the set of owners whose names on an unaskable host are
 /// could-not-look rather than merely unresolved: the private owners this policy
 /// declares, plus the owner it says this workspace is. Kept apart from `owners`
@@ -937,7 +980,6 @@ fn judge(
         .collect();
     let private_owners: BTreeSet<String> =
         owners.iter().map(|owner| owner.to_lowercase()).collect();
-    let exempt: BTreeSet<String> = public.iter().cloned().chain(ours.clone()).collect();
 
     let mut cache: BTreeMap<String, Resolved> = BTreeMap::new();
     let mut refused = Vec::new();
@@ -947,14 +989,15 @@ fn judge(
     let matchers = OwnerMatchers::new(owners, our_owner.as_deref())?;
 
     for (where_found, text) in sources {
-        for (owner, repo) in candidates(text, &matchers, &exempt) {
+        for (owner, repo) in candidates(text, &matchers) {
             let bare_owner = repo.is_empty();
             let name = if bare_owner {
                 owner.clone()
             } else {
                 format!("{owner}/{repo}")
             };
-            if !seen.insert(format!("{where_found}\u{0}{name}")) {
+            // Lowercased for the reason [`Spellings`] is: one name, one line.
+            if !seen.insert(format!("{where_found}\u{0}{}", name.to_lowercase())) {
                 continue;
             }
             if public.contains(&name.to_lowercase())
@@ -962,17 +1005,7 @@ fn judge(
             {
                 continue;
             }
-            // A declared-private owner needs no network and cannot be
-            // contradicted by one: it is the operator saying so.
-            let resolved = if private_owners.contains(&owner.to_lowercase()) {
-                Resolved {
-                    visibility: Visibility::Private,
-                    canonical: None,
-                    silence: None,
-                }
-            } else {
-                resolve(&mut cache, &private_owners, &owner, &repo)
-            };
+            let resolved = answer(&mut cache, &private_owners, &owner, &repo);
             if is_ourselves(&resolved, ours.as_deref()) {
                 continue;
             }
@@ -1667,20 +1700,9 @@ mod tests {
         private_owners: &[String],
         own_owner: Option<&str>,
     ) -> BTreeSet<(String, String)> {
-        named_exempting(text, private_owners, own_owner, &[])
-    }
-
-    /// As [`named`], with the `owner/repo` names `judge` would hand in as exempt.
-    fn named_exempting(
-        text: &str,
-        private_owners: &[String],
-        own_owner: Option<&str>,
-        exempt: &[&str],
-    ) -> BTreeSet<(String, String)> {
         candidates(
             text,
             &OwnerMatchers::new(private_owners, own_owner).expect("an owner a pattern can hold"),
-            &exempt.iter().map(|name| (*name).to_owned()).collect(),
         )
     }
 
@@ -2040,62 +2062,165 @@ mod tests {
     }
 
     #[test]
-    fn the_owner_half_of_our_own_name_is_not_the_organisation_named_on_its_own() {
-        // A repository under a declared owner names itself, and the bare search
-        // read the owner half of that name as the organisation on its own.
+    fn the_owner_half_of_a_name_yields_to_the_name() {
+        // One name under a declared owner was refused twice: as the repository
+        // and, through its owner half, as the organisation named on its own.
+        // The name is the finding; its owner half is not a second one.
         let declared = vec!["example-org".to_owned()];
-        let ours = ["example-org/private-repo"];
         let bare = ("example-org".to_owned(), String::new());
-        for text in [
-            "Clone example-org/private-repo.",
-            "Clone Example-Org/Private-Repo.git to build it.",
-            "see https://github.com/example-org/private-repo",
+        let cross_reference = format!("Fixed in {}#12.", "example-org/other-repo");
+        for (text, repo) in [
+            ("Clone example-org/other-repo.", "other-repo"),
+            (
+                "Clone Example-Org/Other-Repo.git to build it.",
+                "Other-Repo",
+            ),
+            (
+                "see https://github.com/example-org/other-repo",
+                "other-repo",
+            ),
+            (cross_reference.as_str(), "other-repo"),
         ] {
-            let found = named_exempting(text, &declared, None, &ours);
+            let found = named(text, &declared, None);
+            assert!(
+                found.contains(&("example-org".to_owned(), repo.to_owned())),
+                "{text}: {found:?}"
+            );
             assert!(!found.contains(&bare), "{text}: {found:?}");
         }
 
         // Per occurrence, not per text: the owner written on its own in the
         // next sentence is still the organisation named on its own.
-        let found = named_exempting(
+        for text in [
+            "See example-org/other-repo. Built at example-org.",
+            "See https://github.com/example-org/other-repo. Built at example-org.",
+        ] {
+            let found = named(text, &declared, None);
+            assert!(
+                found.contains(&("example-org".to_owned(), "other-repo".to_owned())),
+                "{text}: {found:?}"
+            );
+            assert!(found.contains(&bare), "{text}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_name_spelt_in_another_case_than_its_declaration_is_one_candidate() {
+        // A URL keeps the text's spelling and the declared owner's matcher,
+        // firing inside the same URL, the declaration's. One name, so one
+        // candidate, spelt as the text spelt it -- and its owner half, in the
+        // text's case, still yields to it.
+        let declared = vec!["example-org".to_owned()];
+        let cross_reference = format!("Fixed in {}#12.", "Example-Org/Other-Repo");
+        for text in [
+            "see https://github.com/Example-Org/Other-Repo",
+            "see https://github.com/Example-Org/Other-Repo and example-org/other-repo",
+            cross_reference.as_str(),
+        ] {
+            let found = named(text, &declared, None);
+            assert_eq!(
+                found,
+                [("Example-Org".to_owned(), "Other-Repo".to_owned())].into(),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_owner_half_of_our_own_name_is_not_the_organisation_named_on_its_own() {
+        // A repository under a declared owner names itself, and the bare search
+        // read the owner half of that name as the organisation on its own. The
+        // name is yielded, for `judge` to skip as ours; its owner half is not.
+        let declared = vec!["example-org".to_owned()];
+        let bare = ("example-org".to_owned(), String::new());
+        for (text, repo) in [
+            ("Clone example-org/private-repo.", "private-repo"),
+            (
+                "Clone Example-Org/Private-Repo.git to build it.",
+                "Private-Repo",
+            ),
+            (
+                "see https://github.com/example-org/private-repo",
+                "private-repo",
+            ),
+        ] {
+            let found = named(text, &declared, None);
+            assert!(
+                found.contains(&("example-org".to_owned(), repo.to_owned())),
+                "{text}: {found:?}"
+            );
+            assert!(!found.contains(&bare), "{text}: {found:?}");
+        }
+
+        // Per occurrence, not per text: the owner written on its own in the
+        // next sentence is still the organisation named on its own.
+        let found = named(
             "See example-org/private-repo. Built at example-org.",
             &declared,
             None,
-            &ours,
         );
         assert!(found.contains(&bare), "{found:?}");
     }
 
     #[test]
     fn a_longer_name_that_starts_with_our_own_is_not_exempt() {
+        // Read the way the `owner/repo` matcher reads it, so the candidate is
+        // the longer name, which `judge` does not skip as ours and refuses as
+        // private. Its owner half yields to that finding rather than repeating it.
         let declared = vec!["example-org".to_owned()];
-        let found = named_exempting(
-            "Clone example-org/private-repo-two.",
-            &declared,
-            None,
-            &["example-org/private-repo"],
+        let found = named("Clone example-org/private-repo-two.", &declared, None);
+        assert!(
+            found.contains(&("example-org".to_owned(), "private-repo-two".to_owned())),
+            "{found:?}"
         );
         assert!(
-            found.contains(&("example-org".to_owned(), String::new())),
+            !found.contains(&("example-org".to_owned(), "private-repo".to_owned())),
+            "{found:?}"
+        );
+        assert!(
+            !found.contains(&("example-org".to_owned(), String::new())),
             "{found:?}"
         );
     }
 
     #[test]
     fn the_owner_half_of_a_listed_public_repository_is_not_a_finding() {
-        // `public_repos` is handed in the same way: a public repository under a
-        // declared owner is skipped as a name, and its owner half with it.
+        // A public repository under a declared owner is yielded as a name, for
+        // `judge` to skip as a `public_repos` entry, and its owner half with it.
         let declared = vec!["example-org".to_owned()];
-        let found = named_exempting(
-            "Fork example-org/public-repo.",
-            &declared,
-            None,
-            &["example-org/private-repo", "example-org/public-repo"],
+        let found = named("Fork example-org/public-repo.", &declared, None);
+        assert!(
+            found.contains(&("example-org".to_owned(), "public-repo".to_owned())),
+            "{found:?}"
         );
         assert!(
             !found.contains(&("example-org".to_owned(), String::new())),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn a_name_under_a_declared_owner_is_private_whatever_the_forge_says() {
+        // The yield above is safe only because this holds: a declared owner's
+        // `owner/repo` is refused without a lookup, so the finding its owner
+        // half yields to is always there. The cache is where `lookup` reads a
+        // name's answer before it asks the forge, so each entry stands in for
+        // a forge that calls the name public or cannot resolve it. A change
+        // that looks such names up reads that answer and fails here, instead
+        // of hiding the owner behind a name that passes. `judge` reaching this
+        // through `answer` is pinned in `tests/text_cli.rs`, against a `gh`
+        // that calls the same name public.
+        let declared: BTreeSet<String> = ["example-org".to_owned()].into();
+        for forge in [
+            resolved(Visibility::Public, Some("example-org/other-repo")),
+            resolved(Visibility::Unknown, None),
+            resolved(Visibility::Unavailable, None),
+        ] {
+            let mut cache: BTreeMap<String, Resolved> =
+                [("example-org/other-repo".to_owned(), forge.clone())].into();
+            let answered = answer(&mut cache, &declared, "example-org", "other-repo");
+            assert_eq!(answered.visibility, Visibility::Private, "{forge:?}");
+        }
     }
 
     #[test]
