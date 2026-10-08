@@ -211,13 +211,46 @@ fn unanswerable_names(text: &str, quiet: &ForeignHosts) -> BTreeSet<(String, Str
     found
 }
 
+/// GitHub's cross-reference, `owner/repo#N`, with what precedes it captured so
+/// the caller can tell it from the tail of a longer path.
+///
+/// The owner is held to GitHub's login charset -- letters, digits and inner
+/// hyphens -- and the number to digits followed by a boundary. `#L12`, the
+/// spelling a line anchor on a path uses, is therefore not this form.
+static CROSS_REFERENCE: OnceLock<Regex> = OnceLock::new();
+
+fn cross_reference_pattern() -> &'static Regex {
+    CROSS_REFERENCE.get_or_init(|| {
+        crate::engine::literal_pattern(
+            r"(^|[^A-Za-z0-9._/-])([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)/([A-Za-z0-9._-]+)#[0-9]+\b",
+        )
+    })
+}
+
+/// A GitHub App's bot identity, `<slug>[bot]`, which is also the middle of its
+/// noreply address `<id>+<slug>[bot]@users.noreply.github.com`.
+static BOT_IDENTITY: OnceLock<Regex> = OnceLock::new();
+
+fn bot_identity_pattern() -> &'static Regex {
+    BOT_IDENTITY
+        .get_or_init(|| crate::engine::literal_pattern(r"\b([A-Za-z0-9][A-Za-z0-9-]*)\[bot\]"))
+}
+
 /// Every `owner/repo` this text could be naming ON GITHUB.
 ///
-/// Two forms. A GitHub URL needs `github.com/owner/repo`, or its scp-like
+/// Four forms. A GitHub URL needs `github.com/owner/repo`, or its scp-like
 /// spelling `github.com:owner/repo` -- two segments after the host, which cannot
-/// be confused with an ordinary relative path. A bare `owner/repo` is only a
-/// candidate when the owner is one the rule declared private -- otherwise every
-/// relative path in every document would be a name to look up.
+/// be confused with an ordinary relative path. A cross-reference `owner/repo#N`
+/// is a candidate whoever the owner is: the `#N` is what tells it from a path,
+/// because nobody follows a file's path with `#` and a bare number to mean the
+/// file, and it goes to the same lookup a URL does. A bare `owner/repo` with no
+/// `#N` is only a candidate when the owner is one the rule declared private --
+/// otherwise every relative path in every document would be a name to look up.
+///
+/// The fourth is an App's bot identity, `<slug>[bot]`, which names no
+/// repository but names the account that owns the App. It is yielded as the
+/// owner `<slug>[bot]` with no repository, and [`resolve`] turns it into that
+/// account, judged as a bare owner.
 ///
 /// The host has to match, not merely exist. Every URL in a citation list is
 /// `host.tld/two/segments`, and treating the shape alone as a name turned a
@@ -237,6 +270,23 @@ fn candidates(text: &str, owners: &OwnerMatchers) -> BTreeSet<(String, String)> 
             continue;
         }
         found.insert((owner, repo));
+    }
+
+    // The preceding character is part of the match rather than a lookbehind,
+    // which this regex engine does not have: three path segments and then
+    // `#1` is a path whose last two segments look like a cross-reference, and
+    // `host.tld/a` and then `#1` is a URL fragment. Neither owner starts where
+    // a name can.
+    for capture in cross_reference_pattern().captures_iter(text) {
+        let repo = clean_repo(&capture[3]);
+        if repo.is_empty() {
+            continue;
+        }
+        found.insert((capture[2].to_string(), repo));
+    }
+
+    for capture in bot_identity_pattern().captures_iter(text) {
+        found.insert((format!("{}[bot]", &capture[1]), String::new()));
     }
 
     for (owner, matcher) in &owners.named {
@@ -450,6 +500,81 @@ pub(crate) fn lookup(cache: &mut BTreeMap<String, Resolved>, owner: &str, repo: 
             canonical: None,
             silence: Some(Silence::unreachable("gh", &error)),
         },
+    };
+    cache.insert(key, resolved.clone());
+    resolved
+}
+
+/// One candidate from [`candidates`], answered: a repository by [`lookup`], and
+/// an App's bot identity by the account that owns the App.
+///
+/// That account is judged as a bare owner is: private where the policy
+/// declared it, and nothing to report otherwise -- an owner on its own is not a
+/// name this guard can ask the forge about. An App owned by a user and one
+/// owned by an organisation are judged alike, because the disclosure is the
+/// same. The owner's login travels back as `canonical`, so the refusal can say
+/// whose App it was.
+fn resolve(
+    cache: &mut BTreeMap<String, Resolved>,
+    private_owners: &BTreeSet<String>,
+    owner: &str,
+    repo: &str,
+) -> Resolved {
+    match owner.strip_suffix("[bot]") {
+        Some(slug) if repo.is_empty() => app_owner(cache, private_owners, slug),
+        _ => lookup(cache, owner, repo),
+    }
+}
+
+/// The account behind an App slug, through the same cache [`lookup`] fills.
+///
+/// Keyed `<slug>[bot]`, which no `owner/repo` key can collide with: neither
+/// half of a repository name holds a bracket. The failures divide where a
+/// repository's do, through the same [`Silence`]: a 404, or an answer that
+/// names no owner, is the forge saying it will show us no such App -- deleted,
+/// private, or invented -- and is `Unknown`, the inconclusive answer an unknown
+/// repository name gets. Anything else is the check not happening, and is
+/// could-not-look.
+fn app_owner(
+    cache: &mut BTreeMap<String, Resolved>,
+    private_owners: &BTreeSet<String>,
+    slug: &str,
+) -> Resolved {
+    let key = format!("{slug}[bot]");
+    if let Some(known) = cache.get(&key) {
+        return known.clone();
+    }
+    let unanswered = |silence: Silence| Resolved {
+        visibility: if silence == Silence::NotFound {
+            Visibility::Unknown
+        } else {
+            Visibility::Unavailable
+        },
+        canonical: None,
+        silence: Some(silence),
+    };
+    let resolved = match crate::shim::inner_tool("gh")
+        .args(["api", &format!("apps/{slug}"), "--jq", ".owner.login"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let login = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if login.is_empty() {
+                unanswered(Silence::NotFound)
+            } else {
+                Resolved {
+                    visibility: if private_owners.contains(&login.to_lowercase()) {
+                        Visibility::Private
+                    } else {
+                        Visibility::Public
+                    },
+                    canonical: Some(login),
+                    silence: None,
+                }
+            }
+        }
+        Ok(output) => unanswered(Silence::of("gh", &output)),
+        Err(error) => unanswered(Silence::unreachable("gh", &error)),
     };
     cache.insert(key, resolved.clone());
     resolved
@@ -785,12 +910,17 @@ fn judge(
                     silence: None,
                 }
             } else {
-                lookup(&mut cache, &owner, &repo)
+                resolve(&mut cache, &private_owners, &owner, &repo)
             };
             if is_ourselves(&resolved, ours.as_deref()) {
                 continue;
             }
+            let app = owner.ends_with("[bot]") && bare_owner;
             match resolved.visibility {
+                Visibility::Private if app => refused.push(format!(
+                    "{where_found}: {name} is a GitHub App owned by {}, a private owner",
+                    resolved.canonical.as_deref().unwrap_or("?")
+                )),
                 Visibility::Private if bare_owner => refused.push(format!(
                     "{where_found}: {name} is a private organisation, named on its own"
                 )),
@@ -798,6 +928,9 @@ fn judge(
                 Visibility::Unknown => {
                     unresolved.push(format!("{where_found}: {name} could not be resolved"));
                 }
+                Visibility::Unavailable if app => unavailable.push(format!(
+                    "{where_found}: {name} (a GitHub App whose owner could not be looked up)"
+                )),
                 Visibility::Unavailable => {
                     unavailable.push(format!("{where_found}: {name}"));
                 }
@@ -1485,6 +1618,41 @@ mod tests {
             canonical: canonical.map(str::to_owned),
             silence: None,
         }
+    }
+
+    #[test]
+    fn a_cross_reference_is_a_candidate_with_no_owner_declared() {
+        // Each fixture is assembled from the name and the number, because the
+        // form under test is the one `no-task-tracker-references-in-code`
+        // refuses written whole into source.
+        let at = |name: &str, number: &str| format!("{name}#{number}");
+        let pair = |owner: &str, repo: &str| (owner.to_owned(), repo.to_owned());
+        assert_eq!(
+            named(&format!("Refs {}", at("owner/repo", "12")), &[], None),
+            BTreeSet::from([pair("owner", "repo")])
+        );
+        // A path is still a path: no number, a line anchor, or a
+        // cross-reference shape that is the tail of a longer path or a URL
+        // fragment.
+        for text in [
+            String::from("see src/main.rs"),
+            format!("see {}", at("src/main.rs", "L12")),
+            format!("see {}", at("a/b/c", "1")),
+            format!("see {}", at("example.com/a", "1")),
+            format!("see {}", at("owner/repo", "12abc")),
+        ] {
+            assert!(named(&text, &[], None).is_empty(), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_bot_identity_is_a_candidate_in_both_spellings() {
+        let app = BTreeSet::from([(String::from("dependabot[bot]"), String::new())]);
+        assert_eq!(named("Signed by dependabot[bot]", &[], None), app);
+        assert_eq!(
+            named("<123+dependabot[bot]@users.noreply.github.com>", &[], None),
+            app
+        );
     }
 
     #[test]
