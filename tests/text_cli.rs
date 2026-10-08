@@ -471,9 +471,9 @@ const GH_KNOWS_APPS: &str = "case \"$*\" in\n\
                              'api repos/hidden/thing '*) printf 'private\\thidden/thing\\n' ;;\n\
                              'api apps/renovate --jq .owner.login') echo acme ;;\n\
                              'api apps/dependabot --jq .owner.login') echo octo ;;\n\
-                             'api apps/gone-ci '*) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;\n\
-                             'api apps/hidden-ci '*) echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;\n\
-                             'api apps/down-ci '*) echo 'gh: Bad Gateway (HTTP 502)' >&2; exit 1 ;;\n\
+                             'api apps/gone-app '*) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;\n\
+                             'api apps/hidden-app '*) echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;\n\
+                             'api apps/down-app '*) echo 'gh: Bad Gateway (HTTP 502)' >&2; exit 1 ;;\n\
                              *) echo \"gh: unexpected call: $*\" >&2; exit 1 ;;\n\
                              esac\n";
 
@@ -537,10 +537,10 @@ fn a_bot_identity_whose_app_is_not_found_is_unresolved() {
     let root = workspace(PRIVATE_NAMES_POLICY);
     gh_says(&root, GH_KNOWS_APPS);
 
-    let output = guard_text(&root, b"Committed as gone-ci[bot]\n", EXAMPLE_HOME, None);
+    let output = guard_text(&root, b"Committed as gone-app[bot]\n", EXAMPLE_HOME, None);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("gone-ci[bot] could not be resolved"),
+        stderr(&output).contains("gone-app[bot] could not be resolved"),
         "{}",
         stderr(&output)
     );
@@ -550,10 +550,10 @@ fn a_bot_identity_whose_app_is_not_found_is_unresolved() {
         "private_owners = [\"acme\"]\nrefuse_unknown = true",
     ));
     gh_says(&strict, GH_KNOWS_APPS);
-    let refused = guard_text(&strict, b"Committed as gone-ci[bot]\n", EXAMPLE_HOME, None);
+    let refused = guard_text(&strict, b"Committed as gone-app[bot]\n", EXAMPLE_HOME, None);
     assert_eq!(code(&refused), 1, "{}", stderr(&refused));
     assert!(
-        stderr(&refused).contains("gone-ci[bot] could not be resolved"),
+        stderr(&refused).contains("gone-app[bot] could not be resolved"),
         "{}",
         stderr(&refused)
     );
@@ -567,10 +567,10 @@ fn a_private_app_hidden_from_an_installation_token_is_unresolved() {
     let root = workspace(PRIVATE_NAMES_POLICY);
     gh_says(&root, GH_KNOWS_APPS);
 
-    let output = guard_text(&root, b"Committed as hidden-ci[bot]\n", EXAMPLE_HOME, None);
+    let output = guard_text(&root, b"Committed as hidden-app[bot]\n", EXAMPLE_HOME, None);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("hidden-ci[bot] could not be resolved"),
+        stderr(&output).contains("hidden-app[bot] could not be resolved"),
         "{}",
         stderr(&output)
     );
@@ -583,10 +583,10 @@ fn a_bot_identity_whose_app_cannot_be_read_is_could_not_look() {
     let root = workspace(PRIVATE_NAMES_POLICY);
     gh_says(&root, GH_KNOWS_APPS);
 
-    let output = guard_text(&root, b"Committed as down-ci[bot]\n", EXAMPLE_HOME, None);
+    let output = guard_text(&root, b"Committed as down-app[bot]\n", EXAMPLE_HOME, None);
     assert_eq!(code(&output), 2, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("down-ci[bot] (a GitHub App whose owner could not be looked up)"),
+        stderr(&output).contains("down-app[bot] (a GitHub App whose owner could not be looked up)"),
         "{}",
         stderr(&output)
     );
