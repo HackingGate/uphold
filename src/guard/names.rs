@@ -523,10 +523,35 @@ fn own_owner(root: &Path) -> Option<String> {
 /// have while the forge still reports the one it has -- so the lookup answers
 /// `private` for the very repository being published, and every mention of it
 /// in its own tree reads as a finding.
+///
+/// Its own name, and not every name it is published under: at a hook and in
+/// the tree audit the text is going INTO `origin`, so `origin` is where it
+/// lands. Text a shim publishes is going wherever its `--repo` or `gh api`
+/// path says, and a private repository's name on somebody else's public
+/// repository is the leak this rule exists for whichever checkout it was
+/// typed in -- see [`exempt_name`].
 fn own_name(root: &Path) -> Option<String> {
     let url = git::remote_url(root, "origin")?;
     let (owner, repo) = git::owner_repo(&url)?;
     Some(format!("{owner}/{repo}").to_lowercase())
+}
+
+/// The one repository whose name is not a finding here: the destination where
+/// the caller resolved one, and `origin` where it did not.
+///
+/// Read through `git::owner_repo`, the parser `target_refusal` reads the same
+/// destination with, so `--repo owner/name` and a forge url exempt the same
+/// pair. A destination it cannot split exempts nothing rather than falling
+/// back to `origin`: it is still not `origin`, and a name nobody could resolve
+/// is never quietly treated as our own.
+fn exempt_name(root: &Path, destination: Option<&str>) -> Option<String> {
+    match destination {
+        Some(destination) => {
+            let (owner, repo) = git::owner_repo(destination)?;
+            Some(format!("{owner}/{repo}").to_lowercase())
+        }
+        None => own_name(root),
+    }
 }
 
 /// What reading an owner source produced: the lines it gave, and how it
@@ -706,15 +731,19 @@ fn is_ourselves(resolved: &Resolved, ours: Option<&str>) -> bool {
 /// declares, plus the owner it says this workspace is. Kept apart from `owners`
 /// because that list also drives the bare-owner search, where the workspace's
 /// own name is deliberately not a finding.
+///
+/// `destination` is where the text is going, where the caller knows that
+/// better than `origin` does -- see [`exempt_name`].
 fn judge(
     root: &Path,
+    destination: Option<&str>,
     rule: &Rule,
     owners: &[String],
     watched: &BTreeSet<String>,
     quiet: &ForeignHosts,
     sources: &[(String, String)],
 ) -> Result<Verdict> {
-    let ours = own_name(root);
+    let ours = exempt_name(root, destination);
     let our_owner = own_owner(root);
     let public: BTreeSet<String> = rule
         .public_repos()
@@ -830,6 +859,7 @@ fn judge(
 /// which is the difference between "this file is clean" and "nobody read it".
 fn decide(
     request: &Request<'_>,
+    destination: Option<&str>,
     sources: &[(String, String)],
     unread: &[String],
 ) -> Result<Option<Refusal>> {
@@ -895,6 +925,7 @@ fn decide(
     }
     let verdict = judge(
         request.root,
+        destination,
         request.rule,
         &owners,
         &watched,
@@ -1009,7 +1040,12 @@ pub(crate) fn in_message(request: &Request<'_>) -> Result<Option<Refusal>> {
         None => git::dir(request.root)?.join("COMMIT_EDITMSG"),
     };
     let text = scope::read_message(&request.rule.id, &path)?;
-    decide(request, &[(String::from("commit message"), text)], &[])
+    decide(
+        request,
+        None,
+        &[(String::from("commit message"), text)],
+        &[],
+    )
 }
 
 /// Git's own answer to "was this path diffed as text", per `--numstat`.
@@ -1318,7 +1354,7 @@ pub(crate) fn in_staged(request: &Request<'_>) -> Result<Option<Refusal>> {
         }
     }
 
-    decide(request, &sources, &unread)
+    decide(request, None, &sources, &unread)
 }
 
 /// Every blob the operation is introducing, every path it arrives under, and --
@@ -1386,16 +1422,24 @@ pub(crate) fn in_tracked(request: &Request<'_>) -> Result<Option<Refusal>> {
         sources.push((format!("commit {short} (its MESSAGE)"), body));
     }
 
-    decide(request, &sources, &unread)
+    decide(request, None, &sources, &unread)
 }
 
 /// Text mode, for what never becomes a commit: a pull-request body typed into a
 /// CLI, an issue title, a release note. Each of those goes straight to a public
 /// API without passing a single hook, and the rule for all of them is this one.
+///
+/// `destination` is the repository the text is being published to, where the
+/// caller resolved one: the shim, from `--repo` or a `gh api` path. That
+/// repository's name is the one exempted as our own, not `origin`'s -- a
+/// checkout of a private repository commenting on a public one is publishing
+/// the private name somewhere it was never published. `None` keeps `origin`,
+/// which is right for every caller with no destination of its own.
 pub(crate) fn in_text(
     root: &Path,
     policy: &Policy,
     rule: &Rule,
+    destination: Option<&str>,
     label: &str,
     text: &str,
 ) -> Result<Option<Refusal>> {
@@ -1410,7 +1454,12 @@ pub(crate) fn in_text(
         remote_name: None,
         remote_url: None,
     };
-    decide(&request, &[(label.to_owned(), text.to_owned())], &[])
+    decide(
+        &request,
+        destination,
+        &[(label.to_owned(), text.to_owned())],
+        &[],
+    )
 }
 
 #[cfg(test)]

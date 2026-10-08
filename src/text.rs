@@ -314,7 +314,7 @@ pub(crate) fn judged(
             // `public-target` scope about. The shim, which does have one,
             // passes its own memo.
             Judged::Guards => {
-                crate::guard::over_text(root, policy, label, text, &mut |_| Ok(true))?
+                crate::guard::over_text(root, policy, None, label, text, &mut |_| Ok(true))?
                     .into_iter()
                     .map(Verdict::Guard)
                     .collect()

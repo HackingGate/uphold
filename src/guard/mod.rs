@@ -370,9 +370,13 @@ pub(crate) type ScopeAsk<'a> = &'a mut dyn FnMut(&Rule) -> Result<bool>;
 /// a `public-target` rule dragged along to a private destination leaves a
 /// workspace nothing to switch off but the consultation, and with it the
 /// checks it was there for.
+///
+/// `destination` is the repository the text is published to, where the caller
+/// resolved one -- passed through to [`text_refusal`].
 pub(crate) fn over_text(
     root: &Path,
     policy: &Policy,
+    destination: Option<&str>,
     label: &str,
     text: &str,
     in_scope: ScopeAsk<'_>,
@@ -388,7 +392,8 @@ pub(crate) fn over_text(
         if !in_scope(rule)? {
             continue;
         }
-        if let Some(refusal) = text_refusal(root, policy, rule, label, text, in_scope)? {
+        if let Some(refusal) = text_refusal(root, policy, rule, destination, label, text, in_scope)?
+        {
             refusals.push(refusal);
         }
     }
@@ -403,10 +408,15 @@ pub(crate) fn over_text(
 /// passed it. Extracted so the shim seam consults exactly the same dispatch
 /// `uphold guard --text` does: a text guard that judged a commit message one
 /// way and a PR body another would be two rules under one id.
+///
+/// `destination` is the repository the text is published to, where the caller
+/// resolved one. Only the shim has one; every other seam passes `None` and is
+/// judged against `origin`, which is where its text is going.
 pub(crate) fn text_refusal(
     root: &Path,
     policy: &Policy,
     rule: &Rule,
+    destination: Option<&str>,
     label: &str,
     text: &str,
     in_scope: ScopeAsk<'_>,
@@ -420,13 +430,13 @@ pub(crate) fn text_refusal(
     Ok(match builtin {
         "prevent-ai-author" => message::ai_author_in(rule, label, text),
         "prevent-unusual-unicode" => message::unusual_unicode_in(rule, label, text)?,
-        "no-private-repo-names" => names::in_text(root, policy, rule, label, text)?,
+        "no-private-repo-names" => names::in_text(root, policy, rule, destination, label, text)?,
         // The consultations. Each folds what it ran into one refusal under this
         // rule's id, naming each inner rule, so the reader is told which check
         // refused and not only that the consultation did. `over_text` skips the
         // meta guards, so the recursion is one level deep by construction.
         "text-guards" => {
-            let inner = over_text(root, policy, label, text, in_scope)?;
+            let inner = over_text(root, policy, destination, label, text, in_scope)?;
             fold(
                 rule,
                 inner

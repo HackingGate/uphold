@@ -2953,6 +2953,13 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
         // rule this command names from one a consultation merely reaches.
         None => named.clone(),
     };
+    // Where the body is going, read the way `run` reads it. No `[[shim]]` for
+    // this command means no destination either, and the text guards judge
+    // against `origin` as every seam without one does.
+    let destination = match &scoping {
+        Some((shim, collected, _)) => shim.resolve_target(root, collected)?,
+        None => None,
+    };
     let mut refusals: Vec<String> = Vec::new();
     for rule in checkers {
         if crate::guard::bypassed(&rule.id) {
@@ -3002,6 +3009,7 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
                     root,
                     policy,
                     rule,
+                    destination.as_deref(),
                     subject.kind,
                     &subject.value,
                     &mut in_scope,
@@ -3359,6 +3367,13 @@ pub(crate) fn run(
         }
 
         if any_applies {
+            // Where this text is going, for the text guards whose verdict
+            // depends on it: `no-private-repo-names` exempts the destination's
+            // own name, and the destination is what `--repo` or a `gh api`
+            // path says rather than whatever checkout the command was typed
+            // in. The resolver the `public-target` scope and the destination
+            // guard read, so the three cannot disagree about one invocation.
+            let destination = shim.resolve_target(root, &collected)?;
             for subject in &collected.subjects {
                 // An empty subject is not a subject a checker can read: a
                 // program handed "" on stdin, or a text guard asked whether ""
@@ -3459,6 +3474,7 @@ pub(crate) fn run(
                                 root,
                                 policy,
                                 rule,
+                                destination.as_deref(),
                                 subject.kind,
                                 &subject.value,
                                 &mut inner_in_scope,
