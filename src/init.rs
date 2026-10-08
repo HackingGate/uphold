@@ -73,6 +73,16 @@ scope = "public-target"
   [[shim.verbs]]
   match = ["issue:close", "pr:close", "issue:reopen", "pr:reopen"]
   text_flags = ["-c", "--comment"]
+  editor = "never"
+
+  [[shim.verbs]]
+  match = ["pr:merge"]
+  text_flags = ["-b", "--body"]
+  title_flags = ["-t", "--subject"]
+  file_flags = ["-F", "--body-file"]
+  editor = "interactive"
+  editor_unless = ["-m", "--merge", "-r", "--rebase", "-s", "--squash", "--auto"]
+  inert_flags = ["-h", "--help", "--disable-auto"]
 "#;
 
 /// The `git` table beside it. A first policy declares both; the no-policy
@@ -280,6 +290,37 @@ mod tests {
                     .iter()
                     .any(|(bundled, _)| bundled == name),
                 "{name} is not a bundled set"
+            );
+        }
+    }
+
+    #[test]
+    fn the_gh_table_reads_a_merge_subject_as_a_title() {
+        // `--subject` is `-t`'s long form on `gh pr merge`, and it went into
+        // the merge commit unread while `-t` was checked.
+        let root = Path::new(".");
+        let policy = crate::config::load_text(
+            root,
+            Path::new("GH_SHIM"),
+            &format!("{GH_SHIM}\n[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\ncommand.scope = \"always\"\n"),
+        )
+        .unwrap();
+        let shim = &policy.shims[0];
+        for form in [
+            vec!["pr", "merge", "1", "--subject", "a subject"],
+            vec!["pr", "merge", "1", "--subject=a subject"],
+            vec!["pr", "merge", "1", "-t", "a subject"],
+        ] {
+            let argv: Vec<String> = form.iter().map(|word| (*word).to_owned()).collect();
+            let collected = shim.collect(root, &argv).unwrap();
+            assert_eq!(
+                collected
+                    .subjects
+                    .iter()
+                    .map(|subject| (subject.kind, subject.value.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![("title", "a subject")],
+                "{form:?}"
             );
         }
     }

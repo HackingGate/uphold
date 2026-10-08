@@ -479,8 +479,8 @@ match = [
   "release:create", "release:edit",
   "gist:create",
   # Five that carry text and stood behind nothing until 1.8.0. `pr:merge`
-  # publishes the merge commit message through flags this table already names.
-  # The four close/reopen verbs publish through `--comment`, which it cannot
+  # publishes the merge commit message through `--body` and `--subject`, and
+  # the four close/reopen verbs through `--comment`, which this table cannot
   # name here -- see the `[[shim.verbs]]` below.
   "pr:merge",
   "issue:close", "pr:close", "issue:reopen", "pr:reopen",
@@ -525,6 +525,20 @@ scope = "public-target"
   [[shim.verbs]]
   match = ["issue:close", "pr:close", "issue:reopen", "pr:reopen"]
   text_flags = ["-c", "--comment"]
+
+  # `--subject` is `-t`'s long form here and on no other verb, and it was read
+  # by nothing: the merge commit's subject went into the base branch unread.
+  # The list replaces the table's, so `-d` is not read here: on this verb it
+  # is `--delete-branch`, a switch, and reading it as a body would take the
+  # next word for one. When it opens an editor -- `editor`, `editor_unless`
+  # and `inert_flags` -- waits for a release whose binary reads those fields:
+  # this file is loaded by the released binary, which refuses a field it does
+  # not know, and `git` is shimmed by it.
+  [[shim.verbs]]
+  match = ["pr:merge"]
+  text_flags = ["-b", "--body"]
+  title_flags = ["-t", "--subject"]
+  file_flags = ["-F", "--body-file"]
 
 [[shim]]
 command = "glab"
