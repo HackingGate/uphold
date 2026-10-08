@@ -34,7 +34,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{IsTerminal, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -115,6 +115,100 @@ pub(crate) enum Unresolved {
     Run,
 }
 
+/// When an invocation that supplied no body opens an editor for one.
+///
+/// A closed value rather than a flag list or an expression, because the
+/// question has three answers and the commands this tool stands in front of
+/// give exactly those three. The answer decides two things that used to be
+/// one: whether the shim stands in as the editor, and whether it SAYS the
+/// editor is the checkpoint -- which it said for `gh pr merge --squash`, where
+/// no editor ever opens and the forge composed the merge message unread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Editor {
+    /// An editor opens whenever no body flag was given -- `pr create`.
+    #[default]
+    WithoutBody,
+    /// No editor opens, and a body nobody gave is no body -- `pr close`.
+    Never,
+    /// An editor is offered only from an interactive prompt, and offered
+    /// whether or not a body flag was given -- `gh pr merge` asks "Edit commit
+    /// message" with `--body` on the line. With no terminal to prompt on, or
+    /// with a flag in `editor_unless`, none opens, and a body that was not
+    /// given is composed by the forge.
+    Interactive,
+}
+
+/// What the flags of one invocation take away from its editor path.
+///
+/// One value rather than a bool per list, because the lists are not
+/// independent: a flag in `inert_flags` withholds everything a flag in
+/// `editor_unless` withholds, and more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Withheld {
+    /// Nothing given closes it.
+    #[default]
+    Nothing,
+    /// A flag in `editor_unless` skips the prompt, so no editor is offered and
+    /// the forge composes a body nobody gave.
+    Prompt,
+    /// A flag in `inert_flags`: the command publishes nothing, so there is no
+    /// editor and no composed message to speak of.
+    Everything,
+}
+
+/// What becomes of the body of one invocation, decided before the hand-off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditorPath {
+    /// The command opens an editor: stand in as it, and say so.
+    Opens,
+    /// The command may open one if the person asks it to at a prompt: stand
+    /// in as it, and say that only that case is checked.
+    Offered,
+    /// No editor, and no body beyond what argv already handed the checkers.
+    Closed,
+    /// No editor, no body flag, and the forge composes the text itself: say
+    /// that what it composes was not checked.
+    Forge,
+}
+
+/// The body path for one invocation, given whether it can prompt.
+///
+/// Pure, so the interactive half -- which no test harness without a terminal
+/// can reach end to end -- is decided by the same code its unit test reads.
+const fn editor_path(editor: Editor, collected: &Collected, interactive: bool) -> EditorPath {
+    if collected.web || matches!(collected.withheld, Withheld::Everything) {
+        return EditorPath::Closed;
+    }
+    match editor {
+        Editor::WithoutBody if collected.body_given => EditorPath::Closed,
+        Editor::WithoutBody => EditorPath::Opens,
+        Editor::Never => EditorPath::Closed,
+        // `merge.go`: `MergeStrategyEmpty` and `CanPrompt()`, or no prompt and
+        // so no editor. `--body` does not close it -- the prompt still offers
+        // "Edit commit message", seeded with that body.
+        Editor::Interactive if interactive && matches!(collected.withheld, Withheld::Nothing) => {
+            EditorPath::Offered
+        }
+        Editor::Interactive if collected.body_given => EditorPath::Closed,
+        Editor::Interactive => EditorPath::Forge,
+    }
+}
+
+/// Whether the command this process hands off to can prompt.
+///
+/// `gh`'s own test: stdin and stdout both a terminal. A body read off stdin
+/// here is replayed from a file, so the command's stdin is not one then.
+fn can_prompt(collected: &Collected) -> bool {
+    collected.stdin.is_none() && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
+/// Whether a boolean flag as written turns its switch on: `--squash` and
+/// `--squash=true` do, `--squash=false` is the flag spelt off.
+fn switched_on(paired: bool, value: &str) -> bool {
+    !(paired && matches!(value, "false" | "0" | "f" | "F" | "FALSE" | "False"))
+}
+
 /// How this command's subjects are found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -174,6 +268,14 @@ pub(crate) struct VerbFlags {
     /// switch the command line on or off as a side effect.
     #[serde(default)]
     pub argv_subject: Option<bool>,
+    /// The table's `editor` for these verbs, where given; absent means the
+    /// table's, for the reason `argv_subject` gives.
+    #[serde(default)]
+    pub editor: Option<Editor>,
+    #[serde(default)]
+    pub editor_unless: Vec<String>,
+    #[serde(default)]
+    pub inert_flags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -222,6 +324,21 @@ pub(crate) struct Shim {
     /// back -- the checkpoint `commit-msg` is for a commit.
     #[serde(default)]
     pub editor_env: Option<String>,
+    /// When the command opens that editor. See [`Editor`].
+    #[serde(default)]
+    pub editor: Editor,
+    /// Flags that take the editor path away under `editor = "interactive"`
+    /// -- `--squash` on `gh pr merge` picks the method the prompt would have
+    /// asked for, and no prompt means no "Edit commit message".
+    #[serde(default)]
+    pub editor_unless: Vec<String>,
+    /// Flags under which the command publishes nothing -- `--help` prints
+    /// usage, `--disable-auto` on `gh pr merge` turns auto-merge off -- so no
+    /// editor opens and no forge composes a message, whatever `editor` says.
+    /// The editor path is closed, and nothing is said about a message that
+    /// does not exist.
+    #[serde(default)]
+    pub inert_flags: Vec<String>,
     #[serde(default)]
     pub target: Target,
     #[serde(default)]
@@ -1159,6 +1276,11 @@ impl Shim {
         if let Some(argv_subject) = entry.argv_subject {
             effective.argv_subject = argv_subject;
         }
+        if let Some(editor) = entry.editor {
+            effective.editor = editor;
+        }
+        effective.editor_unless.clone_from(&entry.editor_unless);
+        effective.inert_flags.clone_from(&entry.inert_flags);
         std::borrow::Cow::Owned(effective)
     }
 
@@ -1262,6 +1384,19 @@ impl Shim {
                 false
             } else if in_list(&self.web_flags, &flag) {
                 collected.web = true;
+                false
+            } else if in_list(&self.editor_unless, &flag) {
+                // `--squash=false` is the flag spelt off, and reading it as
+                // on would stand the shim down from an editor that opens.
+                if switched_on(paired, &value) && collected.withheld == Withheld::Nothing {
+                    collected.withheld = Withheld::Prompt;
+                }
+                false
+            } else if in_list(&self.inert_flags, &flag) {
+                // The same reading: `--disable-auto=false` disables nothing.
+                if switched_on(paired, &value) {
+                    collected.withheld = Withheld::Everything;
+                }
                 false
             } else {
                 index += 1;
@@ -1461,6 +1596,7 @@ impl Shim {
             target: call.target(),
             body_given: true,
             web: false,
+            withheld: Withheld::Nothing,
             stdin,
         })
     }
@@ -1739,6 +1875,8 @@ pub(crate) struct Collected {
     pub target: Option<String>,
     pub body_given: bool,
     pub web: bool,
+    /// What the flags given take away from the command's editor path.
+    pub withheld: Withheld,
     /// The bytes this shim read off its own stdin to make a subject of them.
     ///
     /// Kept whole rather than as the subject's `String`, because what the
@@ -2779,6 +2917,7 @@ fn install_editor(
     variable: &str,
     own: Option<&Path>,
     argv: &[String],
+    path: EditorPath,
 ) -> Result<()> {
     let Some(exe) = own else {
         // Refused, not warned. This printed the sentence below and then returned,
@@ -2817,10 +2956,19 @@ fn install_editor(
             shell_word(name)
         ),
     );
-    eprintln!(
-        "{name}: the body will be composed in an editor, so the editor is the checkpoint: what \
-         it leaves in the file is checked when it closes."
-    );
+    // Said only where it is true. An offered editor opens if the person picks
+    // it at the prompt and not otherwise, so the sentence says which.
+    if path == EditorPath::Offered {
+        eprintln!(
+            "{name}: if the prompt opens an editor, the editor is the checkpoint: what it leaves \
+             in the file is checked when it closes."
+        );
+    } else {
+        eprintln!(
+            "{name}: the body will be composed in an editor, so the editor is the checkpoint: \
+             what it leaves in the file is checked when it closes."
+        );
+    }
     Ok(())
 }
 
@@ -3607,12 +3755,34 @@ pub(crate) fn run(
     // the rules, and what decides whether anything will read it is whether any
     // rule's scope holds -- a rule that applies on every egress keeps the
     // checkpoint open where the table alone would have stood down.
-    let editor_env = shim
-        .editor_env
-        .as_deref()
-        .filter(|_| any_applies && !collected.body_given && !collected.web);
-    if let Some(variable) = editor_env {
-        install_editor(&mut command, name, variable, own.as_deref(), &words)?;
+    //
+    // Whether an editor opens at all is the verb's to say -- `pr close` opens
+    // none, `pr merge --squash` opens none, and a shim that announced a
+    // checkpoint over either was announcing a check that never ran.
+    if let (Some(variable), true) = (shim.editor_env.as_deref(), any_applies) {
+        let path = editor_path(
+            shim.for_verb(&words).editor,
+            &collected,
+            can_prompt(&collected),
+        );
+        match path {
+            EditorPath::Opens | EditorPath::Offered => {
+                install_editor(&mut command, name, variable, own.as_deref(), &words, path)?;
+            }
+            // Not fetched and checked: the forge builds it from text that is
+            // already published -- the title and body this shim read at
+            // `pr create` or `pr edit`, or commits `commit-msg` read. Said, so
+            // nobody takes the silence for a pass.
+            EditorPath::Forge => {
+                let verb = shim.words(&words, false);
+                eprintln!(
+                    "{name}: no body was given and `{} {}` opens no editor here, so the message \
+                     the forge composes for it was not checked.",
+                    verb.verb, verb.noun
+                );
+            }
+            EditorPath::Closed => {}
+        }
     }
     hand_off(&mut command, name, collected.stdin.as_deref())
 }
@@ -3635,6 +3805,9 @@ mod tests {
             web_flags: vec!["-w".into(), "--web".into()],
             argv_subject: false,
             editor_env: Some(String::from("GH_EDITOR")),
+            editor: Editor::WithoutBody,
+            editor_unless: Vec::new(),
+            inert_flags: Vec::new(),
             target: Target::ForgeRepo,
             scope: Scope::PublicTarget,
             // The default, which is what the shipped policy leaves it at.
@@ -3661,6 +3834,9 @@ mod tests {
             web_flags: Vec::new(),
             argv_subject: false,
             editor_env: None,
+            editor: Editor::WithoutBody,
+            editor_unless: Vec::new(),
+            inert_flags: Vec::new(),
             target: Target::GitRemote,
             scope: Scope::PublicTarget,
             // The default, which is what the shipped policy leaves it at.
@@ -4924,6 +5100,84 @@ mod tests {
     }
 
     #[test]
+    fn an_editor_is_announced_only_where_the_verb_can_open_one() {
+        use EditorPath::{Closed, Forge, Offered, Opens};
+        let collected = |line: &str| {
+            let mut table = gh();
+            table.verbs = vec![VerbFlags {
+                match_: vec!["pr:merge".into()],
+                text_flags: vec!["-b".into(), "--body".into()],
+                title_flags: vec!["-t".into(), "--subject".into()],
+                file_flags: Vec::new(),
+                path_flags: Vec::new(),
+                skip_flags: Vec::new(),
+                web_flags: Vec::new(),
+                argv_subject: None,
+                editor: Some(Editor::Interactive),
+                editor_unless: vec!["-s".into(), "--squash".into(), "--auto".into()],
+                inert_flags: vec!["-h".into(), "--help".into(), "--disable-auto".into()],
+            }];
+            table.collect(Path::new("."), &argv(line)).unwrap()
+        };
+        for (editor, line, interactive, expected) in [
+            // `pr create`, as it always was.
+            (Editor::WithoutBody, "pr create", false, Opens),
+            (Editor::WithoutBody, "pr create -b x", false, Closed),
+            // `pr close`: nothing to compose, nothing to say.
+            (Editor::Never, "pr merge 1", true, Closed),
+            // No terminal, so no prompt and no editor: the forge composes it.
+            (Editor::Interactive, "pr merge 1", false, Forge),
+            (Editor::Interactive, "pr merge 1 -t x", false, Forge),
+            (Editor::Interactive, "pr merge 1 -b x", false, Closed),
+            // A method flag skips the prompt, terminal or not.
+            (Editor::Interactive, "pr merge 1 --squash", true, Forge),
+            // `--auto` merges later, and GitHub composes the message then.
+            (Editor::Interactive, "pr merge 1 --auto", true, Forge),
+            (Editor::Interactive, "pr merge 1 -s -b x", true, Closed),
+            // Spelt off, it is no method at all, and the prompt runs.
+            (
+                Editor::Interactive,
+                "pr merge 1 --squash=false",
+                true,
+                Offered,
+            ),
+            // The prompt still offers "Edit commit message" with `-b` given.
+            (Editor::Interactive, "pr merge 1", true, Offered),
+            (Editor::Interactive, "pr merge 1 -b x", true, Offered),
+            // Nothing is merged, so there is no message to compose or to say
+            // was unchecked -- on a terminal or not.
+            (Editor::Interactive, "pr merge --help", false, Closed),
+            (Editor::Interactive, "pr merge -h", false, Closed),
+            (
+                Editor::Interactive,
+                "pr merge 1 --disable-auto",
+                false,
+                Closed,
+            ),
+            (
+                Editor::Interactive,
+                "pr merge 1 --disable-auto",
+                true,
+                Closed,
+            ),
+            (Editor::Interactive, "pr merge --help", true, Closed),
+            // Spelt off, it disables nothing, and the merge composes as before.
+            (
+                Editor::Interactive,
+                "pr merge 1 --disable-auto=false",
+                false,
+                Forge,
+            ),
+        ] {
+            assert_eq!(
+                editor_path(editor, &collected(line), interactive),
+                expected,
+                "{editor:?} {line} interactive={interactive}"
+            );
+        }
+    }
+
+    #[test]
     fn an_editor_this_shim_cannot_point_at_itself_is_refused_rather_than_warned_about() {
         // This printed a warning and returned, and the caller went on to exec
         // the command -- so the one path the editor re-entry exists to close
@@ -4936,6 +5190,7 @@ mod tests {
             "FAUX_EDITOR",
             None,
             &argv("pr create"),
+            EditorPath::Opens,
         )
         .unwrap_err()
         .to_string();
@@ -4960,6 +5215,7 @@ mod tests {
             "FAUX_EDITOR",
             Some(Path::new("/opt/my tools/uphold")),
             &argv("pr create"),
+            EditorPath::Opens,
         )
         .unwrap();
         let environment: BTreeMap<String, String> = command

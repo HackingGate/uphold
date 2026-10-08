@@ -361,6 +361,222 @@ fn a_body_composed_in_an_editor_makes_the_editor_the_checkpoint() {
     );
 }
 
+/// `gh`'s merge and close verbs as the shipped table declares them, with a
+/// title rule to refuse a merge subject by.
+const GH_MERGE_POLICY: &str = r#"
+[rule.no-wip-subject]
+message = "a merge subject marked unfinished is not ready to merge"
+regexp = '^WIP\b'
+subjects = ["title"]
+command.before = ["gh"]
+command.scope = "always"
+
+[[shim]]
+command = "gh"
+match = ["pr:create", "pr:merge", "pr:close", "issue:close"]
+text_flags = ["-b", "--body"]
+title_flags = ["-t", "--title"]
+file_flags = ["-F", "--body-file"]
+web_flags = ["-w", "--web"]
+editor_env = "GH_EDITOR"
+scope = "always"
+
+  [[shim.verbs]]
+  match = ["issue:close", "pr:close"]
+  text_flags = ["-c", "--comment"]
+  editor = "never"
+
+  [[shim.verbs]]
+  match = ["pr:merge"]
+  text_flags = ["-b", "--body"]
+  title_flags = ["-t", "--subject"]
+  file_flags = ["-F", "--body-file"]
+  editor = "interactive"
+  editor_unless = ["-m", "--merge", "-r", "--rebase", "-s", "--squash", "--auto"]
+  inert_flags = ["-h", "--help", "--disable-auto"]
+"#;
+
+/// A workspace for [`GH_MERGE_POLICY`], whose stub `gh` prints the editor it
+/// was handed.
+fn gh_workspace() -> PathBuf {
+    let root = workspace(GH_MERGE_POLICY);
+    let stub = root.join("bin/gh");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\necho \"gh ran: $*\"\necho \"editor: $GH_EDITOR\"\n",
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&stub).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&stub, permissions).unwrap();
+    root
+}
+
+#[test]
+fn a_merge_subject_is_read_like_the_short_flag_it_is_the_long_form_of() {
+    // `--subject` is `-t` on `gh pr merge`, and it went into the base branch's
+    // history with nothing reading it while `-t` was refused.
+    let root = gh_workspace();
+    for form in [
+        vec!["gh", "pr", "merge", "1", "--squash", "-t", "WIP merge"],
+        // `--auto` merges later, and what it is handed now is still read.
+        vec!["gh", "pr", "merge", "1", "--auto", "--subject", "WIP merge"],
+        vec![
+            "gh",
+            "pr",
+            "merge",
+            "1",
+            "--squash",
+            "--subject",
+            "WIP merge",
+        ],
+        vec!["gh", "pr", "merge", "1", "--squash", "--subject=WIP merge"],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("gh ran:"), "{form:?}");
+        assert!(stderr(&output).contains("no-wip-subject"), "{form:?}");
+    }
+}
+
+#[test]
+fn a_merge_that_opens_no_editor_says_the_forge_message_was_not_checked() {
+    // `--squash` skips the prompt, and so does having no terminal -- which is
+    // this harness: `output()` gives the shim no stdin and a pipe for stdout.
+    // So no editor opens, the checkpoint sentence would be a check that never
+    // runs, and the message GitHub composes is said to be unread instead.
+    let root = gh_workspace();
+    for form in [
+        vec!["gh", "pr", "merge", "1", "--squash"],
+        vec!["gh", "pr", "merge", "1"],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 0, "{form:?}: {}", stderr(&output));
+        assert!(stdout(&output).contains("gh ran:"), "{form:?}");
+        assert!(
+            !stderr(&output).contains("the editor is the checkpoint"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("the message the forge composes for it was not checked"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("--as-editor"), "{form:?}");
+    }
+
+    // A body given is a body read, and there is nothing unread to report.
+    let output = shim(&root, &["gh", "pr", "merge", "1", "--squash", "-b", "ok"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        !stderr(&output).contains("not checked"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn an_auto_merge_opens_no_editor_and_says_the_forge_message_was_not_checked() {
+    // `--auto` only enables auto-merge: GitHub merges later and composes the
+    // message then, so there is no editor to announce, on a terminal or off.
+    let root = gh_workspace();
+    let output = shim(&root, &["gh", "pr", "merge", "1", "--auto"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    assert!(
+        !stderr(&output).contains("the editor is the checkpoint"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("the message the forge composes for it was not checked"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stdout(&output).contains("--as-editor"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_merge_that_merges_nothing_says_nothing_about_a_forge_message() {
+    // `--help` prints usage and `--disable-auto` turns auto-merge off: neither
+    // merges, so there is no message for the forge to compose, and saying one
+    // went unchecked would be reporting on a merge that is not happening.
+    let root = gh_workspace();
+    for form in [
+        vec!["gh", "pr", "merge", "--help"],
+        vec!["gh", "pr", "merge", "-h"],
+        vec!["gh", "pr", "merge", "1", "--disable-auto"],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 0, "{form:?}: {}", stderr(&output));
+        assert!(stdout(&output).contains("gh ran:"), "{form:?}");
+        assert!(
+            !stderr(&output).contains("not checked"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            !stderr(&output).contains("the editor is the checkpoint"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("--as-editor"), "{form:?}");
+    }
+
+    // Spelt off, it disables nothing, and the merge it stands beside is
+    // reported as before.
+    let output = shim(&root, &["gh", "pr", "merge", "1", "--disable-auto=false"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("the message the forge composes for it was not checked"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_close_opens_no_editor_and_announces_none() {
+    let root = gh_workspace();
+    for form in [
+        vec!["gh", "pr", "close", "1"],
+        vec!["gh", "issue", "close", "1"],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 0, "{form:?}: {}", stderr(&output));
+        assert!(stdout(&output).contains("gh ran:"), "{form:?}");
+        assert!(
+            !stderr(&output).contains("the editor is the checkpoint"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            !stderr(&output).contains("not checked"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("--as-editor"), "{form:?}");
+    }
+
+    // And the verb that does open one keeps its checkpoint.
+    let output = shim(&root, &["gh", "pr", "create"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("shim --as-editor 'gh'"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("the editor is the checkpoint"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn the_bypass_names_the_checker_it_switched_off() {
     let root = workspace(POLICY);

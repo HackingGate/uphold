@@ -204,11 +204,47 @@ does not accept — and reading a flag a command will not take is the shim
 claiming to have checked a subject that was never published.
 
 `text_flags`, `title_flags`, `file_flags`, `path_flags`, `skip_flags`,
-`web_flags` and `argv_subject` may be overridden. `target_flags` may not: `-R`/`--repo` means the same thing on every
+`web_flags`, `argv_subject`, `editor`, `editor_unless` and `inert_flags` may be overridden. `target_flags` may not: `-R`/`--repo` means the same thing on every
 verb, and a per-verb answer to "which repository is this going to" would be a way
 to publish somewhere the table did not expect. An entry that leaves
-`argv_subject` out keeps the table's value; the flag lists are replaced whether
-given or not.
+`argv_subject` or `editor` out keeps the table's value; the lists are replaced
+whether given or not.
+
+`gh pr merge` is the verb whose grammar differs most. Its `-t` is `--subject`,
+the merge commit's subject, and `--subject` exists on no other verb. It opens an
+editor only from its interactive prompt ("Edit commit message"), and the prompt
+runs only when no merge method and no `--auto` is given and the terminal can
+prompt. `--auto` only enables auto-merge, and GitHub composes the message when it
+merges later. `--help` and `--disable-auto` merge nothing at all:
+
+```toml
+  [[shim.verbs]]
+  match = ["pr:merge"]
+  text_flags = ["-b", "--body"]
+  title_flags = ["-t", "--subject"]
+  file_flags = ["-F", "--body-file"]
+  editor = "interactive"
+  editor_unless = ["-m", "--merge", "-r", "--rebase", "-s", "--squash", "--auto"]
+  inert_flags = ["-h", "--help", "--disable-auto"]
+```
+
+`editor` says when the command opens the editor `editor_env` names, as one of
+three closed values:
+
+| `editor` | An editor opens | With no body flag and no editor |
+|---|---|---|
+| `without-body` (default) | whenever no body flag and no `--web` was given — `pr create` | — |
+| `never` | never — `pr close`, `issue reopen` | nothing is composed; nothing is said |
+| `interactive` | only from the command's prompt: stdin and stdout are terminals, no body was read off stdin, and no flag in `editor_unless` was given. A body flag does not close it, because the prompt still offers to edit the body | the forge composes the text, and the shim says on stderr that it was not checked |
+
+`editor_unless` lists the flags that skip the prompt. `--squash=false` is the
+flag spelt off and does not count. `inert_flags` lists the flags under which the
+command publishes nothing — it prints usage, or turns a setting off — so under
+any `editor` no editor opens and nothing is said about a message, because there
+is none; `--disable-auto=false` is spelt off the same way. Any of the three
+fields on a table with no `editor_env`, `editor_unless` beside any `editor` but
+`interactive`, or `inert_flags` beside `never`, is refused at load, because
+nothing would read it.
 
 ### Judging the command line itself: `argv_subject`
 
@@ -1973,7 +2009,8 @@ not answer is neither in scope nor out of it.
 `GH_EDITOR` for `gh`, `GLAB_EDITOR` for `glab`. The shim sets it to itself
 before exec'ing, which is what closes the editor path below; without it there
 is nothing to re-enter through, and the shim can only say it did not see the
-body.
+body. Whether a verb opens that editor at all is `editor`'s to say (see
+[`[[shim.verbs]]`](#one-command-more-than-one-flag-vocabulary)).
 
 The shim finds the subcommand by walking argv for the first two words that are
 neither an option nor an option's *value*, honoring `--`, `--flag=value`, and
@@ -2166,6 +2203,16 @@ the binary runs the real editor, reads the file back when it closes, and
 consults the same checkers over what was actually typed. A refusal exits 1,
 which is what makes `gh` or `glab` abandon the publication; an editor that
 itself fails is exit `2`, not a pass.
+
+The shim says the editor is the checkpoint only where the verb's `editor`
+says one opens. `gh pr close` opens none, so nothing is said. `gh pr merge` on a
+terminal with no method flag stands the shim in as the editor even with
+`--body` given, and says the checkpoint holds *if* the prompt opens an editor.
+`gh pr merge --squash`, `gh pr merge --auto`, or any `gh pr merge` without a
+terminal, opens none: with no `--body` or `--body-file`, the merge message is
+composed by GitHub from text already published, and the shim prints one line
+saying it was not checked instead of fetching it. `gh pr merge --help` and
+`gh pr merge --disable-auto` merge nothing, so neither is said.
 
 The re-entry is routed by a WORD on the command line. The editor variable is set
 to `<this binary> shim --as-editor <command>`, and `--as-editor` is what tells

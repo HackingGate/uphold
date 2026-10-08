@@ -2026,6 +2026,7 @@ pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<P
     }
     validate_shim_commands(policy_path, &file.shims)?;
     validate_shim_verbs(policy_path, &file.shims)?;
+    validate_shim_editor(policy_path, &file.shims)?;
     validate_shim_unresolved(policy_path, &rules, &file.shims)?;
     validate_shims(policy_path, &rules, &file.shims)?;
     // Last, and after `rule.validate`, because this one reads a rule as the
@@ -2616,6 +2617,66 @@ fn validate_shim_unresolved(
                     shim.command
                 ),
             ));
+        }
+    }
+    Ok(())
+}
+
+/// `editor`, `editor_unless` and `inert_flags` are read only where something
+/// can be read.
+///
+/// All three describe the editor `editor_env` names, so on a table without one
+/// they are a decision read by nothing. `editor_unless` is the list of flags
+/// that take an OFFERED editor away, so beside any other `editor` it is the
+/// same. `inert_flags` closes an editor or a forge message that would otherwise
+/// be there, so beside `editor = "never"` there is nothing for it to close.
+/// Checked per verb as well as per table, because an entry's `editor`
+/// replaces the table's and its list replaces the table's whether given or not.
+fn validate_shim_editor(policy_path: &Path, shims: &[crate::shim::Shim]) -> Result<()> {
+    use crate::shim::Editor;
+    for shim in shims {
+        let readings = std::iter::once((shim.editor, &shim.editor_unless, &shim.inert_flags, None))
+            .chain(shim.verbs.iter().map(|entry| {
+                (
+                    entry.editor.unwrap_or(shim.editor),
+                    &entry.editor_unless,
+                    &entry.inert_flags,
+                    entry.match_.first(),
+                )
+            }));
+        for (editor, unless, inert, verb) in readings {
+            let at = verb.map_or_else(String::new, |verb| format!(" for {verb:?}"));
+            if !inert.is_empty() && (shim.editor_env.is_none() || editor == Editor::Never) {
+                return Err(Fatal::at(
+                    policy_path,
+                    format!(
+                        "the `[[shim]]` for {:?} writes `inert_flags`{at} where no editor opens                          and no message is composed, so the list closes nothing and is read by                          nothing. Take it off, or name the `editor_env` it closes.",
+                        shim.command
+                    ),
+                ));
+            }
+            if editor != Editor::WithoutBody && shim.editor_env.is_none() {
+                return Err(Fatal::at(
+                    policy_path,
+                    format!(
+                        "the `[[shim]]` for {:?} writes `editor`{at} and no `editor_env`, so \
+                         there is no editor variable for it to describe and nothing reads it. \
+                         Name the variable, or take the field off.",
+                        shim.command
+                    ),
+                ));
+            }
+            if !unless.is_empty() && editor != Editor::Interactive {
+                return Err(Fatal::at(
+                    policy_path,
+                    format!(
+                        "the `[[shim]]` for {:?} writes `editor_unless`{at} where `editor` is not \
+                         \"interactive\". The list names flags that take an offered editor away, \
+                         and nothing here offers one, so it is read by nothing.",
+                        shim.command
+                    ),
+                ));
+            }
         }
     }
     Ok(())
@@ -4355,6 +4416,38 @@ mod tests {
         // what the table's own matcher already means by it.
         policy_from(
             "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"issue:*\"]\ntext_flags = [\"-b\"]\n\n             [[shim.verbs]]\nmatch = [\"issue:close\"]\ntext_flags = [\"-c\"]\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn an_editor_model_nothing_can_read_is_refused() {
+        // `editor` with no `editor_env` describes an editor there is no
+        // variable for the shim to stand in.
+        let bare = policy_from(
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\ntext_flags = [\"-b\"]\n\n             [[shim.verbs]]\nmatch = [\"pr:merge\"]\neditor = \"interactive\"\n",
+        )
+        .unwrap_err();
+        assert!(bare.to_string().contains("no `editor_env`"), "{bare}");
+
+        // `editor_unless` takes an OFFERED editor away; beside an editor that
+        // is never offered it is a list read by nothing.
+        let unless = policy_from(
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\ntext_flags = [\"-b\"]\neditor_env = \"GH_EDITOR\"\n\n             [[shim.verbs]]\nmatch = [\"pr:merge\"]\neditor_unless = [\"--squash\"]\n",
+        )
+        .unwrap_err();
+        assert!(unless.to_string().contains("`editor_unless`"), "{unless}");
+
+        // `inert_flags` closes an editor or a forge message; beside an editor
+        // that never opens there is neither.
+        let inert = policy_from(
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:close\"]\ntext_flags = [\"-c\"]\neditor_env = \"GH_EDITOR\"\n\n             [[shim.verbs]]\nmatch = [\"pr:close\"]\neditor = \"never\"\ninert_flags = [\"--help\"]\n",
+        )
+        .unwrap_err();
+        assert!(inert.to_string().contains("`inert_flags`"), "{inert}");
+
+        policy_from(
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\ntext_flags = [\"-b\"]\neditor_env = \"GH_EDITOR\"\n\n             [[shim.verbs]]\nmatch = [\"pr:merge\"]\neditor = \"interactive\"\neditor_unless = [\"--squash\"]\ninert_flags = [\"--help\"]\n",
         )
         .unwrap();
     }
