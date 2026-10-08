@@ -525,20 +525,21 @@ scope = "public-target"
   [[shim.verbs]]
   match = ["issue:close", "pr:close", "issue:reopen", "pr:reopen"]
   text_flags = ["-c", "--comment"]
+  editor = "never"
 
   # `--subject` is `-t`'s long form here and on no other verb, and it was read
   # by nothing: the merge commit's subject went into the base branch unread.
   # The list replaces the table's, so `-d` is not read here: on this verb it
   # is `--delete-branch`, a switch, and reading it as a body would take the
-  # next word for one. When it opens an editor -- `editor`, `editor_unless`
-  # and `inert_flags` -- waits for a release whose binary reads those fields:
-  # this file is loaded by the released binary, which refuses a field it does
-  # not know, and `git` is shimmed by it.
+  # next word for one.
   [[shim.verbs]]
   match = ["pr:merge"]
   text_flags = ["-b", "--body"]
   title_flags = ["-t", "--subject"]
   file_flags = ["-F", "--body-file"]
+  editor = "interactive"
+  editor_unless = ["-m", "--merge", "-r", "--rebase", "-s", "--squash", "--auto"]
+  inert_flags = ["-h", "--help", "--disable-auto"]
 
 [[shim]]
 command = "glab"
