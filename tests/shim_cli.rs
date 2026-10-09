@@ -2221,6 +2221,25 @@ fn an_edit_whose_stored_body_cannot_be_asked_for_is_exit_two_and_never_runs() {
 }
 
 #[test]
+fn a_finding_in_a_narrowed_edit_is_reported_by_its_line_in_the_body() {
+    let root = gh_stub_workspace(GH_EDIT_POLICY);
+    stores(&root, "Fix\u{200B} cache");
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "issue",
+            "edit",
+            "1",
+            "--body",
+            "Fix\u{200B} cache\nsecond\nab\u{200B}",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("text:3:3"), "{}", stderr(&output));
+}
+
+#[test]
 fn every_issue_an_edit_names_is_asked_about_whichever_switch_sits_between_them() {
     // `--remove-type` and `--remove-parent` take nothing. Read as taking a
     // value, either swallowed the `6` after it: the shim asked about issue 5
@@ -2471,26 +2490,6 @@ fn an_empty_attached_value_is_the_sign_and_never_the_next_word() {
         stderr(&output)
     );
     assert!(asked(&root).is_empty(), "{}", asked(&root));
-
-    // `-iF=body=@notes.md` is `-i` and a typed field, which reads the file.
-    let root = gh_stub_workspace(&GH_TITLE_POLICY.replace(
-        "match = [\"pr:create\", \"pr:merge\"]",
-        "match = [\"pr:create\", \"pr:merge\", \"api:*\"]",
-    ));
-    std::fs::write(root.join("notes.md"), "Ship\u{200B} it\n").unwrap();
-    let output = shim(
-        &root,
-        &[
-            "gh",
-            "api",
-            "-X",
-            "PATCH",
-            "repos/o/r/issues/1",
-            "-iF=body=@notes.md",
-        ],
-    );
-    assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(stderr(&output).contains("U+200B"), "{}", stderr(&output));
 }
 
 #[test]
@@ -2578,11 +2577,9 @@ fn an_option_the_table_does_not_name_takes_the_value_gh_gives_it() {
     assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
 }
 
-#[test]
-fn draft_is_a_switch_on_create_and_the_text_after_it_is_read() {
-    // `-d` is `--draft` on `gh pr create` and `gh release create`, a switch.
-    // This repository's own table read it as a body, so the flag after it
-    // was taken for its value and went unread.
+/// This repository's own `gh` table, scoped `always` because there is no
+/// forge to ask about visibility, under the unicode rule, with the stub forge.
+fn own_gh_workspace() -> PathBuf {
     let mut table = own_gh_table();
     table.insert("scope".into(), "always".into());
     table.remove("target");
@@ -2604,11 +2601,19 @@ hooks = ["commit-msg"]
     let root = workspace(&toml::to_string(&policy).unwrap());
     std::fs::remove_file(root.join("bin/uphold")).unwrap();
     forge_stub(&root);
+    root
+}
+
+#[test]
+fn draft_is_a_switch_on_create_and_the_text_after_it_is_read() {
+    // `-d` is `--draft` on `gh pr create` and `gh release create`, a switch.
+    // This repository's own table read it as a body, so the flag after it
+    // was taken for its value and went unread.
+    let root = own_gh_workspace();
     let zw = "x\u{200B}y";
     for form in [
         vec!["gh", "pr", "create", "-d", "-t", LOOKALIKE, "-b", "ok"],
         vec!["gh", "release", "create", "v1", "-d", "-n", zw],
-        vec!["gh", "release", "create", "v1", "-dn", zw],
         // `gist create`'s own description flag is still read.
         vec!["gh", "gist", "create", "f.txt", "-d", zw],
         vec!["gh", "gist", "create", "f.txt", "--desc", zw],
@@ -2839,18 +2844,22 @@ fn a_glab_merge_message_is_a_subject_line_and_a_body() {
 }
 
 #[test]
-fn a_short_cluster_or_an_attached_value_is_read_as_the_command_reads_it() {
-    // The collectors used to take `-st X` for an option named `-st` and
-    // `-bX` for one named `-bX`, while `gh` reads `-s`, `-t X` and `-b X`:
+fn a_short_cluster_on_a_forge_held_verb_is_read_as_the_command_reads_it() {
+    // On the three verbs whose whole option grammar the shim carries -- `gh
+    // issue edit`, `gh pr edit`, `gh pr merge` -- `-st X` is `-s` and `-t X`
+    // and `-bX` is `-b X`, as `gh` reads them. Read as one unknown word each,
     // the text went out unread, and a merge said it had read the subject the
     // forge composes when the subject was the one on the command line.
-    let root = gh_stub_workspace(GH_TITLE_POLICY);
+    let root = gh_stub_workspace(&GH_TITLE_POLICY.replace(
+        "match = [\"pr:create\", \"pr:merge\"]",
+        "match = [\"pr:create\", \"pr:merge\", \"pr:edit\"]",
+    ));
     let rlo = "Fix \u{202E}txt.exe";
     let bound = format!("-b{rlo}");
     for form in [
-        vec!["gh", "pr", "create", "-t", "Fix", &bound],
         vec!["gh", "pr", "merge", "1", "-st", rlo, "-b", "ok"],
         vec!["gh", "pr", "merge", "1", "-sb", rlo, "-t", "ok"],
+        vec!["gh", "pr", "edit", "1", &bound],
     ] {
         let output = shim(&root, &form);
         assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
@@ -2867,38 +2876,109 @@ fn a_short_cluster_or_an_attached_value_is_read_as_the_command_reads_it() {
         );
     }
 
-    let root = gh_stub_workspace(&GH_TITLE_POLICY.replace(
-        "match = [\"pr:create\", \"pr:merge\"]",
-        "match = [\"pr:create\", \"pr:merge\", \"api:*\"]",
-    ));
-    let attached = format!("-ftitle={LOOKALIKE}");
-    let output = shim(
-        &root,
-        &["gh", "api", "-XPATCH", "repos/o/r/pulls/1", &attached],
-    );
-    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    // A letter in neither the table nor that grammar is not read past.
+    let output = shim(&root, &["gh", "pr", "merge", "1", "-sxt", "WIP"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("CYRILLIC SMALL LETTER A"),
+        stderr(&output).contains("Spell each option as a word of its own"),
         "{}",
         stderr(&output)
     );
     assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
 
-    let root = own_glab_workspace();
-    let bound = format!("-m{rlo}");
+#[test]
+fn elsewhere_an_option_nothing_names_is_skipped_whole_and_the_text_after_it_is_read() {
+    // Split letter by letter without the verb's grammar, `-Bmain` read as `-B
+    // -m -a -i -n`, and the `-n` (a notes flag in the table) took the `-t`
+    // after it for its value: the title went out unread. `-lwip` read its `w`
+    // as `--web` and the shim stood down from the editor. Off the three
+    // forge-held verbs a word the table does not name whole is skipped whole,
+    // as it was before.
+    let root = gh_stub_workspace(&GH_TITLE_POLICY.replace(
+        "match = [\"pr:create\", \"pr:merge\"]",
+        "match = [\"pr:create\", \"pr:merge\", \"issue:create\"]",
+    ));
+    std::fs::write(root.join("body.md"), "ok\n").unwrap();
+    let zw = "x\u{200B}y";
     for form in [
-        vec!["glab", "mr", "merge", "1", &bound],
-        vec!["glab", "mr", "merge", "1", "-sm", rlo],
+        vec!["gh", "pr", "create", "-Bmain", "-t", zw, "-b", "ok"],
+        vec!["gh", "issue", "create", "-lalert", "-t", zw, "-b", "ok"],
+        vec!["gh", "issue", "create", "-ab", "-t", zw, "-b", "ok"],
+        vec!["gh", "issue", "create", "-Hfeat", "-t", zw, "-b", "ok"],
     ] {
         let output = shim(&root, &form);
         assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
         assert!(
-            stderr(&output).contains("U+202E"),
+            stderr(&output).contains("U+200B"),
             "{form:?}: {}",
             stderr(&output)
         );
-        assert!(!stdout(&output).contains("glab ran:"), "{form:?}");
+        assert!(!stdout(&output).contains("gh ran:"), "{form:?}");
     }
+    // Ordinary use runs, and is judged on the title it carries.
+    for form in [
+        vec!["gh", "pr", "create", "-Bmain", "-t", "Fix it", "-b", "ok"],
+        vec!["gh", "pr", "create", "-Hfeat", "-t", "Fix it", "-b", "ok"],
+        vec!["gh", "issue", "create", "-lbug", "-t", "Fix it", "-b", "ok"],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 0, "{form:?}: {}", stderr(&output));
+        assert!(stdout(&output).contains("gh ran:"), "{form:?}");
+    }
+
+    // `-lwip` is a label, not `--web`: with no body the shim still stands in
+    // as the editor.
+    let root = workspace(GH_MERGE_POLICY);
+    forge_stub(&root);
+    let output = shim(&root, &["gh", "pr", "create", "-lwip", "-t", "Fix it"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("--as-editor"),
+        "{}",
+        stdout(&output)
+    );
+    let output = shim(
+        &root,
+        &["gh", "pr", "create", "-Bmain", "-t", "WIP x", "-b", "ok"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no-wip-subject"),
+        "{}",
+        stderr(&output)
+    );
+
+    // The same under this repository's own table, whose `-n` is `--notes`.
+    let root = own_gh_workspace();
+    std::fs::write(root.join("body.md"), "ok\n").unwrap();
+    for form in [
+        vec!["gh", "pr", "create", "-Bmain", "-t", zw, "-b", "ok"],
+        vec!["gh", "issue", "create", "-lalert", "-t", zw, "-b", "ok"],
+        vec!["gh", "issue", "create", "-ab", "-t", zw, "-F", "body.md"],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+200B"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("gh ran:"), "{form:?}");
+    }
+
+    let root = own_glab_workspace();
+    let output = shim(
+        &root,
+        &["glab", "mr", "create", "-lbot", "-t", zw, "-d", "ok"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("U+200B"), "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("glab ran:"),
+        "{}",
+        stdout(&output)
+    );
 }
 
 #[test]

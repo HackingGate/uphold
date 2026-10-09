@@ -1982,16 +1982,27 @@ body, so the shim still installs itself as the editor and reads the body.
 it is the commit subject, the rest as a body, and the flag counts as the body
 given.
 
-Every flag list is read the way the command's own option parser reads it: a
-short option the table does not name whole is read letter by letter, so `-st X`
-is `-s` and then `-t X`. The value follows pflag, which `gh` and `glab` parse
-with, at whichever letter takes it: `=` plus at least one character gives
-what follows the `=` (`-b=Text` and `-st=Text` are `Text`), anything else
-after the letter is the value whole (`-bText`; `-b=` alone is the value `=`),
-and nothing after it takes the next word. On `gh issue edit`, `gh pr edit` and
-`gh pr merge`, an option the table does not name is read with the arity `gh`
-gives it, so `gh pr merge -A -b -t X` is an author email `-b` and the subject
-`X`.
+A flag is read where a word is the flag a list names, or `--flag=value` for
+one. On `gh issue edit`, `gh pr edit` and `gh pr merge`, whose whole option
+grammar (from `gh` 2.102) the shim carries, a short option the table does not
+name whole is also read letter by letter, as `gh` reads it: `-st X` is `-s` and
+then `-t X`. The value follows pflag, which `gh` parses with, at whichever
+letter takes it: `=` plus at least one character gives what follows the `=`
+(`-b=Text` and `-st=Text` are `Text`), anything else after the letter is the
+value whole (`-bText`; `-b=` alone is the value `=`), and nothing after it
+takes the next word. A letter in neither the table nor that grammar is exit
+`2`, and so is an unknown option wherever the shim must ask the forge about
+the issue or pull request. On those three verbs an option the table does not
+name is read with the arity `gh` gives it, so `gh pr merge -A -b -t X` is an
+author email `-b` and the subject `X`.
+
+On every other verb, `gh api` and `glab api` included, a word the table does
+not name whole is skipped whole, never split. That reads `-Bmain`, `-lbug` and
+`-Hfeat` as the single options they are, so the text after them is read. It
+also means a short-option cluster or an attached value is **not read** there:
+`-st X`, `-bText`, `-b=Text`, `-ftitle=X`, `-iF=k=@f` and their like are
+passed to the command unchecked. This is a known gap, tracked in a follow-up
+issue; spell each option as a word of its own.
 
 `target` is `forge-repo` or `git-remote`, both built-in resolvers. `scope` is
 `public-target | public-registry | always`, with

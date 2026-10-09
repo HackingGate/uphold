@@ -233,10 +233,12 @@ struct Cluster {
 
 /// Read `-b`, `-bText`, `-b=Text` and a cluster such as `-sd` or `-stX`.
 ///
-/// One reading for every collector, because two that disagree about one word
-/// is a body judged under one reading and published under the other: the text
-/// collectors took `-st X` for an option called `-st`, while `gh` reads `-s`
-/// and then `-t X`, so the subject went out unread. `arity` answers `Some(true)`
+/// Used only where the verb's whole option grammar is known -- the
+/// [`FORGE_HELD`] verbs, by both `collect_flags` and `Operands` -- so the two
+/// cannot disagree about one word: the text collector took `-st X` for an
+/// option called `-st`, while `gh` reads `-s` and then `-t X`, so the subject
+/// went out unread. Without that grammar a letter's arity is a guess, and a
+/// guess read `-Bmain`'s `n` as an option that took the next word. `arity` answers `Some(true)`
 /// for a letter that takes a value, `Some(false)` for a switch and `None` for
 /// a letter nothing here knows, which is read past as `unknown`.
 ///
@@ -636,25 +638,16 @@ impl ApiCall {
                 call.positional.push(argument.clone());
                 continue;
             }
-            let (flag, inline) = if is_short_word(argument) {
-                // `-ftitle=X` is `-f title=X`, and `-iXPATCH` is `-i -X
-                // PATCH`: read the way `gh` and `glab` read them, by the same
-                // parser the other collectors use. A letter nothing names is
-                // read past as a switch, as an unnamed long option is below.
-                let cluster = read_cluster(argument, |letter| {
-                    api_takes_value(letter).then_some(true).or(Some(false))
-                });
-                let Some(valued) = cluster.valued else {
-                    continue;
-                };
-                valued
-            } else {
-                match argument.split_once('=') {
-                    Some((flag, value)) if argument.starts_with("--") => {
-                        (flag.to_owned(), Some(value.to_owned()))
-                    }
-                    _ => (argument.clone(), None),
+            // A short word is read only as the option it names whole. A
+            // cluster or an attached value (`-ftitle=X`, `-iF=k=@f`) is not
+            // split: without the verb's whole option grammar, a letter this
+            // list does not know cannot be told from a value, and reading on
+            // past it read a value's letters as options.
+            let (flag, inline) = match argument.split_once('=') {
+                Some((flag, value)) if argument.starts_with("--") => {
+                    (flag.to_owned(), Some(value.to_owned()))
                 }
+                _ => (argument.clone(), None),
             };
             let name = flag.as_str();
             if !api_takes_value(name) {
@@ -1469,14 +1462,34 @@ impl Shim {
 
         let mut index = 0;
         while let Some(argument) = argv.get(index) {
-            // A short option the table does not name whole is read letter by
-            // letter, the way the command's option parser reads it: `-st X`
-            // is `-s` and `-t X`, and `-bText` is `-b Text`.
-            if is_short_word(argument) && !self.names_option(argument) {
+            // On a verb whose whole option grammar is written down, a short
+            // option the table does not name whole is read letter by letter,
+            // the way the command's option parser reads it: `-st X` is `-s`
+            // and `-t X`, and `-bText` is `-b Text`. A letter in neither the
+            // table nor the grammar is exit 2, never read past.
+            //
+            // On every other verb it is not split at all, and is skipped whole
+            // as any option nothing names is. Splitting there needs to know
+            // every letter's arity, and guessing it read `-Bmain` as `-B`,
+            // `-m`, `-a`, `-i` and `-n` -- whose `-n` then took the `-t` after
+            // it for its value, and the title went out unread.
+            if let Some(grammar) = held
+                && is_short_word(argument)
+                && !self.names_option(argument)
+            {
                 let cluster = read_cluster(argument, |flag| {
-                    self.short_arity(flag)
-                        .or_else(|| held.and_then(|held| held.arity(flag)))
+                    self.short_arity(flag).or_else(|| grammar.arity(flag))
                 });
+                if let Some(unknown) = cluster.unknown.first() {
+                    return Err(Fatal::new(format!(
+                        "{0}: `{argument}` carries {unknown:?}, an option this shim does not know \
+                         on `{0} {1}`, so where the options in that word end could not be read \
+                         and nothing was checked. Spell each option as a word of its \
+                         own, or report the {0} version this is. Nothing was published",
+                        self.command,
+                        grammar.verb.replace(':', " ")
+                    )));
+                }
                 for switch in &cluster.switches {
                     self.read_option(&mut collected, switch, String::new(), false)?;
                 }
@@ -2752,6 +2765,8 @@ const fn is_bidi_control(character: char) -> bool {
 
 /// The lines of `edited` that `stored` does not already hold, counted: a line
 /// the stored body carries once and the edit carries twice is added once.
+/// Every other line is left in place and empty, so a finding in what the edit
+/// adds is reported by its line in the body and not in an extract of it.
 ///
 /// The line is the unit because it is the unit a person edits a body in, and
 /// the comparison ignores a trailing carriage return because the forge stores
@@ -2766,22 +2781,22 @@ const fn is_bidi_control(character: char) -> bool {
 /// the new line would miss exactly that.
 fn added_lines(stored: &str, edited: &str) -> String {
     let mut held: BTreeMap<&str, usize> = BTreeMap::new();
-    for line in stored.lines() {
+    for line in stored.split('\n') {
         *held.entry(line.trim_end_matches('\r')).or_default() += 1;
     }
     edited
-        .lines()
-        .filter(|line| {
-            let line = line.trim_end_matches('\r');
-            if line.chars().any(is_bidi_control) {
-                return true;
+        .split('\n')
+        .map(|line| {
+            let bare = line.trim_end_matches('\r');
+            if bare.chars().any(is_bidi_control) {
+                return line;
             }
-            match held.get_mut(line) {
+            match held.get_mut(bare) {
                 Some(count) if *count > 0 => {
                     *count -= 1;
-                    false
+                    ""
                 }
-                _ => true,
+                _ => line,
             }
         })
         .collect::<Vec<&str>>()
@@ -6021,30 +6036,32 @@ mod tests {
 
     #[test]
     fn an_edit_adds_the_lines_the_stored_body_does_not_hold_counted() {
-        // CRLF from the forge's web editor is the same line as LF from a file.
+        // CRLF from the forge's web editor is the same line as LF from a file,
+        // and every line the edit kept stays in place, empty, so a finding is
+        // reported by its line in the body.
         let stored = "Intro\r\nOld\u{200B} line\r\n\r\n";
         assert_eq!(
             added_lines(stored, "Intro\nOld\u{200B} line\n\nNew\n"),
-            "New"
+            "\n\n\nNew\n"
         );
         // A line carried twice where the forge holds it once is added once.
         assert_eq!(
             added_lines(stored, "Intro\nOld\u{200B} line\nOld\u{200B} line\n"),
-            "Old\u{200B} line"
+            "\n\nOld\u{200B} line\n"
         );
         // A changed line is an added line, whole.
         assert_eq!(
             added_lines(stored, "Intro\nOld\u{200B} line, edited\n"),
-            "Old\u{200B} line, edited"
+            "\nOld\u{200B} line, edited\n"
         );
-        assert_eq!(added_lines(stored, "Intro\n"), "");
+        assert_eq!(added_lines(stored, "Intro\n"), "\n");
         assert_eq!(added_lines("", "a\nb"), "a\nb");
         // A line carrying a bidi control is judged though it is unchanged:
         // what it reorders is whatever the edit put after it.
         let reordering = "Name: \u{202E}abc\nTail";
         assert_eq!(
             added_lines(reordering, "Name: \u{202E}abc\nTail\nNew"),
-            "Name: \u{202E}abc\nNew"
+            "Name: \u{202E}abc\n\nNew"
         );
     }
 
