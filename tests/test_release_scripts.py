@@ -124,9 +124,12 @@ class Sandbox:
         subject: str = "Prepare uphold 1.2.3 (#7)",
         parent_version: str = "1.2.2",
         touch: tuple[str, ...] = (),
+        rename: tuple[str, str] | None = None,
     ) -> None:
         """Two commits on main: one at `parent_version`, then `subject` raising
-        the four version files to 1.2.3 and also editing each file in `touch`."""
+        the four version files to 1.2.3 and also editing each file in `touch`.
+        With `rename` as (source, version file), the parent carries that version
+        file's body at `source` instead, and the second commit moves it there."""
         self.git("init", "-q", "--bare", str(self.origin), cwd=self.root)
         self.git("init", "-q", str(self.work), cwd=self.root)
         files = {
@@ -135,13 +138,19 @@ class Sandbox:
             "README.md": README,
             "hooks/lefthook.yml": LEFTHOOK,
         }
-        self._write({n: b.replace("1.2.3", parent_version) for n, b in files.items()})
+        parent_files = {n: b.replace("1.2.3", parent_version) for n, b in files.items()}
         self._write({"src/main.rs": "fn main() {}\n"})
+        if rename is not None:
+            source, target = rename
+            parent_files[source] = parent_files.pop(target)
+        self._write(parent_files)
         (self.work / "scripts").mkdir()
         for script in SCRIPTS:
             shutil.copy2(REPO / "scripts" / script, self.work / "scripts" / script)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", f"Start at {parent_version}")
+        if rename is not None:
+            self.git("rm", "-q", rename[0])
         self._write(files)
         for name in touch:
             path = self.work / name
@@ -380,6 +389,26 @@ class TagRelease(unittest.TestCase):
 
     def test_refuses_a_prep_commit_that_changes_more_than_the_version(self) -> None:
         box = _sandbox(self, touch=("src/main.rs",))
+        before = box.state()
+
+        result = box.run("tag-release.sh", "--push")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("changes src/main.rs", result.stderr)
+        self.assertEqual(box.state(), before)
+
+    def test_refuses_a_prep_commit_that_renames_a_file_onto_a_version_file(
+        self,
+    ) -> None:
+        # src/main.rs becomes hooks/lefthook.yml, which the parent lacked. With
+        # rename detection the diff names only the destination, an allowed
+        # path, and the deleted source goes unchecked.
+        box = _sandbox(self, rename=("src/main.rs", "hooks/lefthook.yml"))
+        self.assertIn(
+            "R",
+            box.git("diff", "--name-status", "-M", "HEAD^", "HEAD"),
+            "the fixture must be a rename git can detect",
+        )
         before = box.state()
 
         result = box.run("tag-release.sh", "--push")

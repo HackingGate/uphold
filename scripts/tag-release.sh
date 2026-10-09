@@ -125,7 +125,10 @@ previous="$(package_version_at "$parent")"
 version_gt "$version" "$previous" ||
     die "origin/main ($sha) is titled 'Prepare uphold $version' but does not raise the version: its parent already carries $previous"
 version_files=(Cargo.toml Cargo.lock README.md hooks/lefthook.yml)
-changed_files="$(git diff --name-only "$parent" "$sha")" ||
+# --no-renames: a rename is listed by its destination alone, so a file moved
+# onto a version path would hide its source; diff.renames would also make the
+# answer depend on the caller's configuration.
+changed_files="$(git diff --no-renames --name-only "$parent" "$sha")" ||
     die "could not diff origin/main ($sha) against its parent"
 while IFS= read -r changed; do
     allowed=0
