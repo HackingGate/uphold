@@ -24,6 +24,12 @@
 //! * U+2800 BRAILLE PATTERN BLANK, named on its own because it is a graphic
 //!   character whose glyph is empty.
 //!
+//! In a PATH, and only there, one more thing: a letter from another script
+//! drawn like the letters of the word it sits in (UTS #39 mixed-script
+//! confusable detection, through `unicode-security`). A path is what somebody
+//! searches by substring; file content is prose and data in every script, and
+//! is not asked.
+//!
 //! A variation selector is allowed only where it is doing the job it exists
 //! for -- choosing how a REAL character is drawn, where the reader sees that
 //! choice.
@@ -31,6 +37,8 @@
 use std::collections::BTreeSet;
 
 use globset::{Glob, GlobMatcher};
+use unicode_script::{Script, UnicodeScript};
+use unicode_security::MixedScript;
 
 use super::scope;
 use super::{Refusal, Request};
@@ -156,9 +164,7 @@ fn selector_is_earned(selector: char, base: Option<char>) -> bool {
         // a digit, a letter -- they are a codepoint with no visible effect.
         0xE0100..=0xE01EF => is_unified_ideograph(base),
         // Mongolian's free variation selectors.
-        0x180B..=0x180D | 0x180F => {
-            unicode_script::UnicodeScript::script(&base) == unicode_script::Script::Mongolian
-        }
+        0x180B..=0x180D | 0x180F => base.script() == Script::Mongolian,
         _ => false,
     }
 }
@@ -195,20 +201,230 @@ fn is_keycap(base: Option<char>, selector: char, next: Option<char>) -> bool {
         && base.is_some_and(|base| base.is_ascii_digit() || base == '#' || base == '*')
 }
 
-fn refused(character: char, base: Option<char>, next: Option<char>) -> bool {
+/// Whether a character, where it stands, draws nothing.
+///
+/// A control other than tab and newline, everything [`is_invisible`] names,
+/// and a variation selector that is not choosing how the character before it
+/// is drawn. The whole of what the message guard refuses on every surface, and
+/// the part of [`refused`] that is about hiding rather than about a file's
+/// hygiene: private use and the non-space spaces are visible, and a message is
+/// not refused for them.
+pub(crate) fn draws_nothing(character: char, base: Option<char>, next: Option<char>) -> bool {
     if character == '\t' || character == '\n' {
-        return false;
-    }
-    if character == ' ' {
         return false;
     }
     if is_variation_selector(character) {
         return !(selector_is_earned(character, base) || is_keycap(base, character, next));
     }
-    if character.is_control() {
-        return true;
+    character.is_control() || is_invisible(character)
+}
+
+/// One letter inside a word that is drawn like a letter of the word's other
+/// script: the Cyrillic `a` in a Latin word, which is a different word to a
+/// substring search and the same word to a reader.
+pub(crate) struct Lookalike {
+    /// The character's position in the line, counted in characters from zero.
+    pub(crate) column: usize,
+    pub(crate) character: char,
+    /// The script the character was taken from.
+    pub(crate) from: Script,
+    /// The script the rest of the word is written in.
+    pub(crate) among: Script,
+}
+
+impl Lookalike {
+    /// `U+0430 CYRILLIC SMALL LETTER A, a Cyrillic letter in a Latin word`.
+    ///
+    /// The NAME, because the glyph is the one thing that does not tell a reader
+    /// anything: it looks exactly like the letter it replaced.
+    pub(crate) fn describe(&self) -> String {
+        format!(
+            "U+{:04X} {}, a {} letter in a {} word",
+            self.character as u32,
+            unicode_names2::name(self.character)
+                .map_or_else(|| String::from("UNKNOWN"), |name| name.to_string()),
+            self.from.full_name(),
+            self.among.full_name(),
+        )
     }
-    if is_invisible(character) || is_private_use(character) {
+}
+
+/// The mixed-script confusables in one line, word by word.
+///
+/// UTS #39, sections 4 and 5, through `unicode-security`, which carries the
+/// confusable table and the resolved script sets: a word is a maximal run of
+/// letters and the marks on them, and a word is a finding only when it is not
+/// single-script AND a letter from its minority script is drawn like a letter
+/// of its majority's.
+///
+/// The East Asian scripts are one writing system here, as UTS #39's augmented
+/// sets make them: kanji with kana is Japanese, kanji with Hangul is Korean,
+/// and kanji with Bopomofo is Chinese, so none of those is a mixed word. And
+/// because those languages are written without spaces, a run of East Asian
+/// letters and a run of anything else are two words where they meet: `API`
+/// run into a kanji compound is two single-script words, not one mixed one,
+/// and a script boundary between Latin and kanji is not a lookalike.
+pub(crate) fn lookalikes(line: &str) -> Vec<Lookalike> {
+    let mut found = Vec::new();
+    let mut word: Vec<char> = Vec::new();
+    let mut start = 0usize;
+    // Whether the word so far is written in an East Asian script, once a
+    // letter has said so. A mark carries no script and never decides it.
+    let mut east_asian: Option<bool> = None;
+    // A trailing space closes the last word, so the loop has one exit.
+    for (index, character) in line.chars().chain(std::iter::once(' ')).enumerate() {
+        let script = character.script();
+        let crosses = names_a_script(script)
+            && east_asian.is_some_and(|current| current != is_east_asian(script));
+        if !word.is_empty() && (!in_a_word(character) || crosses) {
+            found.extend(lookalikes_in_word(&word, start));
+            word.clear();
+            east_asian = None;
+        }
+        if in_a_word(character) {
+            if word.is_empty() {
+                start = index;
+            }
+            word.push(character);
+            if names_a_script(script) {
+                east_asian = Some(is_east_asian(script));
+            }
+        }
+    }
+    found
+}
+
+/// The scripts UTS #39's augmented sets join into one writing system: Han
+/// with kana (Jpan), with Hangul (Kore), with Bopomofo (Hanb).
+const fn is_east_asian(script: Script) -> bool {
+    matches!(
+        script,
+        Script::Han | Script::Hiragana | Script::Katakana | Script::Hangul | Script::Bopomofo
+    )
+}
+
+/// A letter, or a mark riding on one. A combining accent is `Inherited` and
+/// not alphabetic, and splitting a word at it would turn `e` + U+0301 into
+/// two words that are each single-script.
+fn in_a_word(character: char) -> bool {
+    character.is_alphabetic() || character.script() == Script::Inherited
+}
+
+/// Whether a script property names a script at all. `Common`, `Inherited` and
+/// `Unknown` are the property's answer for a character no script owns.
+const fn names_a_script(script: Script) -> bool {
+    !matches!(script, Script::Common | Script::Inherited | Script::Unknown)
+}
+
+/// The UTS #39 skeleton of one character.
+fn skeleton_of(character: char) -> Vec<char> {
+    let mut buffer = [0u8; 4];
+    unicode_security::skeleton(character.encode_utf8(&mut buffer)).collect()
+}
+
+/// Whether `character` is drawn as a letter of `script`: its skeleton is not
+/// itself, holds at least one letter OF that script, and nothing from a third.
+///
+/// The "at least one" is the whole difference between a lookalike and a
+/// shape. U+4E00 (the kanji for one) skeletons to U+30FC, a prolonged sound
+/// mark no script owns, and a skeleton made only of such characters is drawn
+/// like nothing in particular -- it would otherwise be "drawn as" every
+/// script there is.
+fn drawn_as(character: char, script: Script) -> bool {
+    let skeleton = skeleton_of(character);
+    skeleton != [character]
+        && skeleton.iter().any(|part| part.script() == script)
+        && skeleton
+            .iter()
+            .all(|&part| part.script() == script || !names_a_script(part.script()))
+}
+
+/// The script the word is written in, against which the rest is judged.
+///
+/// The majority by count. On a tie the side that is the PROTOTYPE wins: in
+/// `ok` spelt with a Cyrillic `o` (one letter each), the Cyrillic letter is
+/// the one drawn as a Latin letter, so Latin is the word's script and the
+/// Cyrillic `o` is the finding -- and a word whose two halves are equally long
+/// is not let through for being balanced. With no such side, the first seen.
+fn script_of_word(word: &[char]) -> Option<Script> {
+    let mut counts: Vec<(Script, usize)> = Vec::new();
+    for &character in word {
+        let script = character.script();
+        if !names_a_script(script) {
+            continue;
+        }
+        match counts.iter_mut().find(|(seen, _)| *seen == script) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((script, 1)),
+        }
+    }
+    let most = counts.iter().map(|&(_, count)| count).max()?;
+    let tied: Vec<Script> = counts
+        .iter()
+        .filter(|&&(_, count)| count == most)
+        .map(|&(script, _)| script)
+        .collect();
+    tied.iter()
+        .copied()
+        .find(|&candidate| {
+            word.iter().any(|&other| {
+                names_a_script(other.script())
+                    && other.script() != candidate
+                    && drawn_as(other, candidate)
+            })
+        })
+        .or_else(|| tied.first().copied())
+}
+
+fn lookalikes_in_word(word: &[char], offset: usize) -> Vec<Lookalike> {
+    let spelled: String = word.iter().collect();
+    if spelled.as_str().is_single_script() {
+        return Vec::new();
+    }
+    // A word of East Asian letters only is one writing system (see
+    // `lookalikes`), whichever of its scripts each letter carries.
+    if word
+        .iter()
+        .all(|character| !names_a_script(character.script()) || is_east_asian(character.script()))
+    {
+        return Vec::new();
+    }
+    let Some(among) = script_of_word(word) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for (index, &character) in word.iter().enumerate() {
+        let from = character.script();
+        if !names_a_script(from) || from == among {
+            continue;
+        }
+        // Either way round. The Cyrillic `a` in a Latin word is drawn as a
+        // Latin letter; the Latin `a` in a Cyrillic word is the prototype the
+        // Cyrillic letters around it are drawn as, which is the same disguise
+        // seen from the other side.
+        let disguised = drawn_as(character, among)
+            || (skeleton_of(character) == [character]
+                && unicode_security::is_potential_mixed_script_confusable_char(character)
+                && word
+                    .iter()
+                    .any(|&other| other.script() == among && drawn_as(other, from)));
+        if disguised {
+            found.push(Lookalike {
+                column: offset + index,
+                character,
+                from,
+                among,
+            });
+        }
+    }
+    found
+}
+
+fn refused(character: char, base: Option<char>, next: Option<char>) -> bool {
+    if character == '\t' || character == '\n' || character == ' ' {
+        return false;
+    }
+    if draws_nothing(character, base, next) || is_private_use(character) {
         return true;
     }
     // Zs other than U+0020, plus Zl and Zp.
@@ -321,9 +537,11 @@ pub(crate) fn in_files(request: &Request<'_>) -> Result<Option<Refusal>> {
     Ok(Some(Refusal {
         id: request.rule.id.clone(),
         report: format!(
-            "{}\n\n{looked} file(s) read. A character that draws nothing cannot be seen in \
-             review. Delete it, or admit it in the rule's `allow` list -- \
-             `\"U+00A0:docs/captured/**\"` admits one codepoint under one path.",
+            "{}\n\n{looked} file(s) read. A character that draws nothing, or a letter \
+             from another script inside a word of a path, cannot be seen in review. \
+             Delete it or retype the name in one script, or admit it in the rule's \
+             `allow` list -- `\"U+00A0:docs/captured/**\"` admits one codepoint under one \
+             path.",
             findings.join("\n")
         ),
     }))
@@ -345,9 +563,11 @@ fn granted_at(path: &str, allowances: &[Allowance]) -> BTreeSet<char> {
 
 /// The path itself, judged as the committed text it is.
 ///
-/// Stricter than the content rule by exactly two characters, and they are the
-/// two the content rule exempts: a tab and a newline are legal INSIDE a file
-/// and are never legitimate in a path. Everything else this guard refuses is
+/// Stricter than the content rule in two ways. A tab and a newline, the two
+/// characters the content rule exempts, are legal INSIDE a file and are never
+/// legitimate in a path. And a word of a path that mixes a lookalike letter
+/// from another script into it is refused, which the content is never asked
+/// about -- see [`lookalikes`]. Everything else this guard refuses is
 /// refused here for the same reasons, under the same `allow` list -- a
 /// codepoint admitted under a glob is admitted in the names that glob matches.
 fn scan_name(path: &str, allowances: &[Allowance]) -> Vec<String> {
@@ -372,6 +592,22 @@ fn scan_name(path: &str, allowances: &[Allowance]) -> Vec<String> {
             character as u32,
             unicode_names2::name(character)
                 .map_or_else(|| String::from("UNKNOWN"), |name| name.to_string()),
+        ));
+    }
+    // A path is searched by substring, which is the one use a lookalike
+    // defeats: `src/c\u{0430}che.rs` with a Cyrillic small a is a different file to
+    // every tool and the same file to every reader. Each segment's words are
+    // asked, and a `/` is never a letter, so no word spans two segments. The
+    // CONTENT is not asked this: a file holds prose and data in every script,
+    // and the content half of this rule stays the invisible ban it was.
+    for lookalike in lookalikes(path) {
+        if granted.contains(&lookalike.character) {
+            continue;
+        }
+        findings.push(format!(
+            "{path}:1:{}: {} in the FILE NAME",
+            lookalike.column + 1,
+            lookalike.describe(),
         ));
     }
     findings
@@ -540,6 +776,115 @@ mod tests {
             scan_name("docs/a\u{00A0}b.md", &allowances)
         );
         assert_eq!(scan_name("src/a\u{00A0}b.rs", &allowances).len(), 1);
+    }
+
+    #[test]
+    fn a_lookalike_letter_in_a_path_segment_is_refused_and_named() {
+        let found = scan_name("src/c\u{0430}che.rs", &[]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].starts_with("src/c\u{0430}che.rs:1:6: U+0430"),
+            "{found:?}"
+        );
+        assert!(found[0].contains("CYRILLIC SMALL LETTER A"), "{found:?}");
+        assert!(
+            found[0].contains("a Cyrillic letter in a Latin word"),
+            "{found:?}"
+        );
+        // The allowance reaches it like any other codepoint.
+        let allowances = vec![parse_allowance("U+0430").unwrap()];
+        assert!(
+            scan_name("src/c\u{0430}che.rs", &allowances).is_empty(),
+            "{:?}",
+            scan_name("src/c\u{0430}che.rs", &allowances)
+        );
+    }
+
+    #[test]
+    fn a_segment_in_each_script_is_not_a_lookalike() {
+        for path in [
+            "docs/\u{65E5}\u{672C}\u{8A9E}/readme.md",
+            "docs/\u{043A}\u{044D}\u{0448}/readme.md",
+            "docs/S\u{00E3}o-Paulo.md",
+        ] {
+            assert!(
+                scan_name(path, &[]).is_empty(),
+                "{path}: {:?}",
+                scan_name(path, &[])
+            );
+        }
+    }
+
+    #[test]
+    fn content_is_never_asked_about_lookalikes() {
+        // The content half stays the invisible ban: a file holds prose in
+        // every script, and a mixed word in it is data.
+        assert!(
+            findings("let c\u{0430}che = 1;\n").is_empty(),
+            "{:?}",
+            findings("let c\u{0430}che = 1;\n")
+        );
+    }
+
+    #[test]
+    fn a_lookalike_is_found_either_way_round_and_a_kanji_is_not_one() {
+        // A Cyrillic letter in a Latin word, a Latin letter in a Cyrillic word.
+        assert_eq!(lookalikes("c\u{0430}che").len(), 1);
+        let latin_in_cyrillic = lookalikes("\u{043A}\u{043E}\u{0442}a\u{0441}");
+        assert_eq!(latin_in_cyrillic.len(), 1, "{}", latin_in_cyrillic.len());
+        assert_eq!(latin_in_cyrillic[0].character, 'a');
+        // Latin run into a kanji compound is mixed, and nothing in it is drawn
+        // like anything else.
+        assert!(lookalikes("Rust\u{88FD}").is_empty());
+        assert!(lookalikes("Dockerfile\u{3092}\u{4FEE}\u{6B63}").is_empty());
+        // Kanji and kana together are single-script by UTS #39's augmented sets.
+        assert!(lookalikes("\u{65E5}\u{672C}\u{30C6}\u{30B9}\u{30C8}").is_empty());
+    }
+
+    #[test]
+    fn ordinary_east_asian_subjects_carry_no_lookalike() {
+        // U+4E00 skeletons to a character no script owns, which is drawn as
+        // no script; and a Latin run meeting kanji is two words, not one
+        // mixed word.
+        for line in [
+            "API\u{4E00}\u{89A7}\u{3092}\u{8FFD}\u{52A0}",
+            "CI\u{306E}\u{30CE}\u{30FC}\u{30C9}\u{6570}\u{3092}\u{5909}\u{66F4}",
+            "PR\u{4E00}\u{89A7}",
+            "\u{7D71}\u{4E00}API",
+            "\u{65B0}\u{589E}\u{4E00}\u{4E2A}API",
+            "JSON\u{4E00}\u{62EC}\u{51FA}\u{529B}",
+            "README\u{306B}\u{4E00}\u{884C}\u{8FFD}\u{52A0}",
+            "Webhook\u{4E00}\u{6642}\u{505C}\u{6B62}",
+            "Docker\u{30CE}\u{30FC}\u{30C9}",
+            "\u{D55C}\u{AD6D}\u{C5B4}API\u{6587}\u{66F8}",
+        ] {
+            let found: Vec<String> = lookalikes(line).iter().map(Lookalike::describe).collect();
+            assert!(found.is_empty(), "{line}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_tie_names_the_letter_drawn_as_the_other() {
+        // A Cyrillic o and a Latin k, one letter each: the Cyrillic letter is
+        // the disguise, whichever came first.
+        for (line, character) in [
+            ("\u{043E}k", '\u{043E}'),
+            ("\u{0441}d", '\u{0441}'),
+            ("\u{041E}K", '\u{041E}'),
+            ("k\u{043E}", '\u{043E}'),
+        ] {
+            let found = lookalikes(line);
+            assert_eq!(found.len(), 1, "{line}");
+            assert_eq!(found[0].character, character, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_greek_omicron_in_a_latin_word_is_a_lookalike() {
+        let found = lookalikes("hell\u{03BF}");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].character, '\u{03BF}');
+        assert!(found[0].describe().contains("GREEK SMALL LETTER OMICRON"));
     }
 
     #[test]

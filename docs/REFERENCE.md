@@ -1407,7 +1407,8 @@ stamped on it, the range about to be pushed.
 |---|---|
 | `prevent-ai-author` | AI-authorship markers in the message being written — and at a push, in **every commit message the push publishes** |
 | `prevent-author-mismatch` | an identity that is not your global one |
-| `prevent-unusual-unicode` | unusual characters in the same set of messages, judged against the scripts the message is written in |
+| `prevent-unusual-unicode` | in the same set of messages, a character that **draws nothing**, and in a commit's **subject line** a lookalike letter from another script inside a word (UTS #39 mixed-script confusables). A title a shim collects (`gh pr create --title`, `gh pr merge --subject`) is a subject too; a body, through the `text-guards` consultation or `--text`, is prose and gets only the first |
+| `ascii-only-commit-subject` | a commit subject line that is not printable ASCII — a house style, **opt in**: no bundled set declares it. Reads the subject line of the message being written and, where declared at `pre-push`, of every pushed commit |
 | `prevent-unusual-unicode-in-files` | characters that draw nothing, in committed content **and in the paths that carry it** |
 | `no-private-repo-names` | a private repository named in a public one's message |
 | `no-private-repo-names-staged` | the same, in the lines a commit adds |
@@ -1424,36 +1425,87 @@ stamped on it, the range about to be pushed.
 Declared like any other rule, in the same file and the same id namespace.
 **`git.hooks` is the whole registration.**
 
-`prevent-unusual-unicode` reads what is ordinary off the message rather than off
-a fixed list. ASCII passes, and so do the letters and digits of every script; a
-script's punctuation passes once that script's **letters are in the same
-message**, which is what makes a Japanese subject line, with the `。`, `、` and
-`「」` that Japanese prose cannot be written without, something somebody can
-actually type. The fullwidth forms (`！`, `（`) name no script in Unicode at all
-and are admitted on the presence of an East Asian one instead.
-The same `。` in an English sentence is still refused, because nothing in that
-message is written in a script that uses it, and that is the paste artifact the
-rule exists for. A character belonging to no script is refused whatever the
-message is written in: an em dash, a curly quote, and everything
-`prevent-unusual-unicode-in-files` bans for drawing nothing.
+`prevent-unusual-unicode` refuses what a reader cannot catch by reading, and
+nothing else. It is Unicode Technical Standard #39 (Unicode Security
+Mechanisms), done by the `unicode-security` crate, plus the invisible set the
+file guard bans:
 
-Where the message is right and the rule is wrong about one character, `allow`
-names it: `allow = ["U+FF01"]` admits a fullwidth exclamation mark in an English
-sentence, an em dash inside quoted text, an emoji. The codepoint alone — a
-message has no path for the file guard's glob half to select, and an entry
-carrying one is refused at load. Before writing one, check that the character
-is not already ordinary: **every Unicode whitespace passes** (`is_whitespace`,
-so U+3000 IDEOGRAPHIC SPACE needs no allowance), and since 1.17.0 so does the
-punctuation of any script whose letters are in the same message. What no
-allowance admits is a character that draws nothing: a zero-width joiner, a
-bidirectional override, a Hangul filler. Listing one is refused at load,
-naming the codepoint, and a list that somehow carried one would admit nothing
-by it — the file guard lets a fixture earn an invisible because a captured page
-is data; a message is prose, and the only thing an invisible can do in prose is
-hide. The field is read wherever the rule runs: at `commit-msg`, at the pushed
-range, and through the `text-guards` consultation for a pull-request body, so
-a repository that declares (or inherits) the allowance has it honored at the
-text seam without an `UPHOLD_ALLOW` on the rule's whole id.
+- **A character that draws nothing**, on every line and at every seam: the
+  controls other than tab and newline, the zero-width characters, the
+  bidirectional overrides and isolates (the "Trojan Source" set,
+  CVE-2021-42574), the fillers, a variation selector that selects nothing — the
+  same set `prevent-unusual-unicode-in-files` bans in content.
+- **A mixed-script confusable**, in a commit's **subject line** only: a word (a
+  run of letters and the marks on them) that is not single-script, where a
+  letter from its minority script is drawn like a letter of the majority's. A
+  Cyrillic small a (U+0430) in a Latin word is refused, and the report names
+  `CYRILLIC SMALL LETTER A`, its column and the script it came from, because the
+  glyph itself tells the reader nothing. On a tie (one letter of each script)
+  the letter drawn like the other script's is the one named. The East Asian
+  scripts count as one writing system, as UTS #39's augmented sets make them
+  (Han with kana, with Hangul, with Bopomofo), so kanji and kana in one word
+  pass. Because those languages are written without spaces, a run of East
+  Asian letters and a run of Latin letters are two words where they meet: an
+  `API` or `README` run straight into a Japanese or Chinese subject is not a
+  mixed word and passes. A skeleton made only of characters no script owns
+  (the kanji for "one" skeletons to the katakana prolonged sound mark) is not
+  "drawn like" any script.
+
+A punctuation mark or a symbol is never refused by this rule, in any script or
+in none: an accented name, a degree sign in a longitude, `≥` in a quota, an em
+dash, a `。` in an English sentence all pass. Lookalikes **within one script or
+from no script** are out of its scope too, because the test is mixed-script: a
+fullwidth `c` (U+FF43) and a mathematical bold `c` (U+1D41C) are Latin, and
+U+0251 LATIN SMALL LETTER ALPHA is Latin. Fullwidth forms in a subject are
+`ascii-only-commit-subject`'s business. Whoever wants the typographic
+house style the rule used to enforce declares `ascii-only-commit-subject` by
+name.
+
+**The surface decides which checks run.** The subject line of a commit is what
+somebody searches the log for, so at `commit-msg` and over a pushed range the
+subject gets both checks and the body the invisible check alone. The subject is
+the first line with anything on it. At `commit-msg` the file is read before
+git's cleanup, and whether a line opening with `core.commentChar` (default `#`)
+is stripped depends on the cleanup mode (`git commit -m "#42 Fix"` keeps it, the
+editor strips it), so where the first such line opens with the comment
+character, the first line that does not is judged as well. A pushed commit was
+already cleaned up, and its first line is its subject. A **title** a shim
+collects is a subject as well: `gh pr merge --subject` is one outright, and a
+pull-request title becomes one when the forge squash-merges it, on a branch no
+local hook sees. A pull-request, issue, release or gist body, a comment, and
+anything handed to `uphold guard --text` or the harness hook is prose a reader
+reads, and the rule asks it only for characters that draw nothing — so `gh issue edit --body-file` over a body that
+carries a degree sign someone typed months ago runs. The same split holds for
+paths: `prevent-unusual-unicode-in-files` asks each **path** for lookalike
+words as well as invisibles, and file **content** for invisibles only. A
+`.gitmodules` submodule *name* is file content there, not a path, and gets the
+invisible check.
+
+Where the text is right and the rule is wrong about one character, `allow`
+names it: `allow = ["U+0430"]` admits that codepoint past the lookalike test.
+The codepoint alone — a message has no path for the file guard's glob half to
+select, and an entry carrying one is refused at load. What no allowance admits
+is a character that draws nothing: a zero-width joiner, a bidirectional
+override, a Hangul filler. Listing one is refused at load, naming the
+codepoint, and a list that somehow carried one would admit nothing by it — the
+file guard lets a fixture earn an invisible because a captured page is data; a
+message is prose, and the only thing an invisible can do in prose is hide. The
+field is read wherever the rule runs: at `commit-msg`, at the pushed range, and
+through the `text-guards` consultation for a pull-request body.
+
+`ascii-only-commit-subject` holds the subject line to printable ASCII (and
+tab): an em dash, a curly quote and a fullwidth `！` are refused there, and the
+body is not its business. Its `allow` is the same field with the same reading —
+`allow = ["U+2014"]` admits the em dash — and the same load-time refusal of an
+invisible. It runs at a git hook and not through `text-guards`, because its
+subject is a commit's subject line, which a pull-request body does not have.
+
+```toml
+[rule.ascii-only-commit-subject]
+builtin = "ascii-only-commit-subject"
+allow = ["U+2014"]
+git.hooks = ["commit-msg"]
+```
 
 ```toml
 [rule.prevent-public-push]
@@ -1526,7 +1578,7 @@ enforced and is not.
 | `refuse_unknown` | the `no-private-repo-names` family | treat a name whose visibility could not be determined as private |
 | `foreign_hosts` | the `no-private-repo-names` family | host globs carrying no repository this rule needs resolved — replaces the top-level list for this rule, on top of the built-in one |
 | `allow` | `prevent-unusual-unicode-in-files` | codepoints admitted, optionally under one glob — `"U+00A0:docs/captured/**"` |
-| `allow` | `prevent-unusual-unicode` | codepoints admitted in a message, the codepoint alone — `"U+FF01"`; never one that draws nothing, which is refused at load |
+| `allow` | `prevent-unusual-unicode`, `ascii-only-commit-subject` | codepoints admitted in a message, the codepoint alone — `"U+0430"`, `"U+2014"`; never one that draws nothing, which is refused at load |
 
 The "family" is `no-private-repo-names`, `-staged` and `-in-files`. No other
 built-in reads any parameter. The first four rows are **one row twice**:

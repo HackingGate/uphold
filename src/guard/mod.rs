@@ -45,6 +45,12 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     "prevent-author-mismatch",
     "prevent-unusual-unicode",
     "prevent-unusual-unicode-in-files",
+    // The typographic half `prevent-unusual-unicode` used to carry, under its
+    // own name and in no bundled set: a house style for subject lines, opt in.
+    // Not a text guard -- its subject is a commit's subject line, which only a
+    // git hook has, and run over a pull-request body by `text-guards` it would
+    // be holding the first line of prose to a rule written about commits.
+    "ascii-only-commit-subject",
     "no-private-repo-names",
     "no-private-repo-names-staged",
     "no-private-repo-names-in-files",
@@ -361,6 +367,20 @@ pub(crate) fn target_refusal(
 /// down a guard nobody scoped.
 pub(crate) type ScopeAsk<'a> = &'a mut dyn FnMut(&Rule) -> Result<bool>;
 
+/// One piece of published text, as a text guard is handed it.
+///
+/// `label` is what the report calls it -- the shim's subject kind, the tool
+/// name at the hook, the source at `--text`. `headline` says the text is a
+/// SUBJECT rather than prose: a title the shim collected, which a forge-side
+/// squash merge makes a commit subject on the default branch with no local
+/// hook in the way. It is set from the shim's subject kind and never read off
+/// the label.
+pub(crate) struct Published<'a> {
+    pub label: &'a str,
+    pub text: &'a str,
+    pub headline: bool,
+}
+
 /// Run every text-capable guard over one piece of text.
 ///
 /// `in_scope` is asked about each inner rule, because a rule reached through a
@@ -377,8 +397,7 @@ pub(crate) fn over_text(
     root: &Path,
     policy: &Policy,
     destination: Option<&str>,
-    label: &str,
-    text: &str,
+    published: &Published<'_>,
     in_scope: ScopeAsk<'_>,
 ) -> Result<Vec<Refusal>> {
     let mut refusals = Vec::new();
@@ -392,8 +411,7 @@ pub(crate) fn over_text(
         if !in_scope(rule)? {
             continue;
         }
-        if let Some(refusal) = text_refusal(root, policy, rule, destination, label, text, in_scope)?
-        {
+        if let Some(refusal) = text_refusal(root, policy, rule, destination, published, in_scope)? {
             refusals.push(refusal);
         }
     }
@@ -417,10 +435,14 @@ pub(crate) fn text_refusal(
     policy: &Policy,
     rule: &Rule,
     destination: Option<&str>,
-    label: &str,
-    text: &str,
+    published: &Published<'_>,
     in_scope: ScopeAsk<'_>,
 ) -> Result<Option<Refusal>> {
+    let &Published {
+        label,
+        text,
+        headline,
+    } = published;
     let Some(builtin) = rule.builtin() else {
         return Ok(None);
     };
@@ -429,14 +451,14 @@ pub(crate) fn text_refusal(
     }
     Ok(match builtin {
         "prevent-ai-author" => message::ai_author_in(rule, label, text),
-        "prevent-unusual-unicode" => message::unusual_unicode_in(rule, label, text)?,
+        "prevent-unusual-unicode" => message::unusual_unicode_in(rule, label, text, headline)?,
         "no-private-repo-names" => names::in_text(root, policy, rule, destination, label, text)?,
         // The consultations. Each folds what it ran into one refusal under this
         // rule's id, naming each inner rule, so the reader is told which check
         // refused and not only that the consultation did. `over_text` skips the
         // meta guards, so the recursion is one level deep by construction.
         "text-guards" => {
-            let inner = over_text(root, policy, destination, label, text, in_scope)?;
+            let inner = over_text(root, policy, destination, published, in_scope)?;
             fold(
                 rule,
                 inner
@@ -523,6 +545,7 @@ pub(crate) fn evaluate(request: &Request<'_>) -> Result<Option<Refusal>> {
     match builtin {
         "prevent-ai-author" => message::prevent_ai_author(request),
         "prevent-unusual-unicode" => message::prevent_unusual_unicode(request),
+        "ascii-only-commit-subject" => message::ascii_only_commit_subject(request),
         "prevent-author-mismatch" => identity::prevent_author_mismatch(request),
         "no-merge-commit" => merge::no_merge_commit(request),
         "no-local-merge" => merge::no_local_merge(request),
@@ -588,11 +611,13 @@ pub(crate) fn parameters(builtin: &str) -> &'static [&'static str] {
         // about judging names in text, which this one never does.
         "no-stale-visibility" => &["visibility"],
         // One field, two readings. The file guard takes a path glob after the
-        // codepoint and lets a fixture earn an invisible; the message guard
-        // takes the codepoint alone and admits no invisible whatever is
+        // codepoint and lets a fixture earn an invisible; the two message
+        // guards take the codepoint alone and admit no invisible whatever is
         // listed -- see `message::allowances` for why the second reading is
         // the narrower one.
-        "prevent-unusual-unicode" | "prevent-unusual-unicode-in-files" => &["allow"],
+        "prevent-unusual-unicode"
+        | "prevent-unusual-unicode-in-files"
+        | "ascii-only-commit-subject" => &["allow"],
         _ => &[],
     }
 }
@@ -701,7 +726,7 @@ mod tests {
                 "{id} is in EVERY_BUILTIN with no dispatch arm"
             );
         }
-        assert_eq!(EVERY_BUILTIN.len(), 20);
+        assert_eq!(EVERY_BUILTIN.len(), 21);
     }
 
     #[test]

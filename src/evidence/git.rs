@@ -78,7 +78,7 @@ const REVISION: &str = "index";
 /// under either name. Both fall back to `#` here, and a message under either
 /// setting is read with git's default and not with git's choice. Unset is
 /// `#`, which is git's default too.
-fn comment_char(root: &Path) -> Result<char, String> {
+pub(crate) fn comment_char(root: &Path) -> Result<char, String> {
     let configured = crate::git::try_run(root, &["config", "--get", "core.commentChar"])
         .map_err(|error| error.to_string())?;
     let Some(value) = configured else {

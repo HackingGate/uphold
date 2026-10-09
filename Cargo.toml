@@ -28,13 +28,24 @@ path = "src/main.rs"
 # out to `rg` is that a pattern written for the old hook has to keep meaning what
 # it meant: same regex engine, same multiline handling, same glob semantics.
 grep-matcher = "0.1"
+# The stack's regex matcher, the engine a rule's `regexp` is compiled by.
 grep-regex = "0.1"
+# The stack's searcher: multiline matching and binary detection over a file.
 grep-searcher = "0.1"
+# The stack's glob matcher, for `files.include`, `exclude` and an allowance's
+# path half.
 globset = "0.4"
+# The stack's directory walker and its override globs, which build the set of
+# files a rule searches.
 ignore = "0.4"
 
+# The engine under `grep-regex`, used directly where a pattern is matched
+# against a string already in memory rather than searched through a file.
 regex = "1"
+# The policy file is read into typed structs, so an unknown or misspelled field
+# is refused by the deserializer rather than ignored.
 serde = { version = "1", features = ["derive"] }
+# The policy file's format.
 toml = "1"
 # Already in the tree under tree-sitter, so this is a name for something the
 # build already compiles rather than a new dependency. It is here because
@@ -48,6 +59,14 @@ serde_json = "1"
 # The Unicode Script property, which the Python engine could not read and
 # approximated by matching tokens in character names.
 unicode-script = "0.5"
+# UTS #39, Unicode Security Mechanisms: the confusable skeleton and the
+# resolved script sets mixed-script detection is defined over -- the library
+# rustc's `confusable_idents` and `mixed_script_confusables` lints are built
+# on. The lookalike test in a commit subject and a path is that standard's,
+# and a confusable table maintained by hand here would be one more list to
+# fall behind Unicode. It brings unicode-script, already here, and
+# unicode-normalization for the skeleton's NFD.
+unicode-security = "0.1"
 # The character NAME, which is the only part of this report a reader can act on.
 # A homoglyph finding shows a letter that looks exactly like the Latin one it
 # replaced, so printing the character is no help at all and "CYRILLIC SMALL
@@ -74,7 +93,10 @@ serde-saphyr = "1.3"
 # `///` a different kind from `//`, which is the distinction a line-prefix test
 # gets wrong by construction: `///` starts with `//`.
 tree-sitter = "0.27"
+# The Rust grammar, for comments in this language and the removed-function
+# evidence over `fn`.
 tree-sitter-rust = "0.24"
+# The Python grammar, for the same two questions over `def`.
 tree-sitter-python = "0.25"
 # The grammar the doc-command resolver needs, and the one language whose
 # dispatch this was measured against. Its star count reads marginal and

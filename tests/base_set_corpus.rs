@@ -837,3 +837,39 @@ fn every_content_rule_in_every_bundled_set_is_in_the_corpus() {
         described.len()
     );
 }
+
+/// `ascii-only-commit-subject` is a house style, opt in, and no bundled set
+/// declares it. A set that did would hand every inheriting repository the
+/// typographic refusals `prevent-unusual-unicode` dropped, under a name
+/// nobody in that repository wrote. And `prevent-unusual-unicode` is still
+/// carried, so the check this one split from is not lost with it.
+#[test]
+fn no_bundled_set_declares_the_ascii_subject_rule() {
+    let listed = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["rules", "--sets", "--json"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        listed.status.code().unwrap(),
+        0,
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    let builtins: Vec<&str> = document
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|set| set["rules"].as_array().unwrap())
+        .filter_map(|rule| rule.get("builtin").and_then(serde_json::Value::as_str))
+        .collect();
+    assert!(
+        builtins.contains(&"prevent-unusual-unicode"),
+        "no bundled set carries prevent-unusual-unicode, so this read nothing: {builtins:?}"
+    );
+    assert!(
+        !builtins.contains(&"ascii-only-commit-subject"),
+        "a bundled set declares ascii-only-commit-subject, which is opt in: {builtins:?}"
+    );
+}
