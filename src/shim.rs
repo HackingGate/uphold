@@ -372,7 +372,14 @@ pub(crate) struct Shim {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Subject {
     pub kind: &'static str,
+    /// The text the checkers are asked about.
     pub value: String,
+    /// The whole text the command publishes, where `value` is only part of
+    /// it: an edit that resubmits a stored body is judged on the lines it
+    /// adds, and `value` holds those. A rule about what must be PRESENT --
+    /// `require_regexp` -- is about the whole, and reads this. `None` where
+    /// `value` is the whole.
+    pub whole: Option<String>,
 }
 
 impl Subject {
@@ -380,7 +387,7 @@ impl Subject {
     /// is the commit subject a squash merge writes on the forge, and
     /// `gh pr merge --subject` is that subject outright, so a text guard
     /// judges it as a subject and not as prose.
-    const HEADLINE: &'static str = "title";
+    pub(crate) const HEADLINE: &'static str = "title";
 
     /// This subject as a text guard is handed it.
     pub(crate) fn published(&self) -> crate::guard::Published<'_> {
@@ -431,6 +438,12 @@ const API_METHOD_FLAGS: &[&str] = &["-X", "--method"];
 /// way costs a subject nobody minds being asked about, while telling them apart
 /// wrongly costs a body nobody read.
 const API_FIELD_FLAGS: &[&str] = &["-f", "--field", "-F", "--raw-field"];
+
+/// The `api` field keys whose value is a headline rather than prose: a pull
+/// request's or an issue's `title`, and the `commit_title` a merge writes as
+/// the commit subject. The same subject kind `--title` and `--subject` collect,
+/// so the same text gets the same check whichever door it came through.
+const API_TITLE_KEYS: &[&str] = &["title", "commit_title"];
 
 /// The `api` option that names a file holding the whole body.
 const API_INPUT_FLAGS: &[&str] = &["--input"];
@@ -1332,6 +1345,7 @@ impl Shim {
                 collected.subjects.push(Subject {
                     kind: "text",
                     value,
+                    whole: None,
                 });
                 collected.body_given = true;
                 true
@@ -1343,12 +1357,14 @@ impl Shim {
                 collected.subjects.push(Subject {
                     kind: "title",
                     value,
+                    whole: None,
                 });
                 true
             } else if in_list(&self.path_flags, &flag) {
                 collected.subjects.push(Subject {
                     kind: "path",
                     value,
+                    whole: None,
                 });
                 true
             } else if in_list(&self.file_flags, &flag) {
@@ -1377,6 +1393,7 @@ impl Shim {
                     collected.subjects.push(Subject {
                         kind: "text",
                         value: text,
+                        whole: None,
                     });
                     collected.stdin = Some(buffer);
                 } else if Path::new(&value).is_file() {
@@ -1384,6 +1401,7 @@ impl Shim {
                         kind: "text",
                         value: std::fs::read_to_string(&value)
                             .map_err(|error| Fatal::at(Path::new(&value), error))?,
+                        whole: None,
                     });
                 } else {
                     // `body_given` was already set above, so a file that is not
@@ -1501,7 +1519,11 @@ impl Shim {
         }
         Ok(names
             .into_iter()
-            .map(|value| Subject { kind: "ref", value })
+            .map(|value| Subject {
+                kind: "ref",
+                value,
+                whole: None,
+            })
             .collect())
     }
 
@@ -1521,6 +1543,7 @@ impl Shim {
                     subjects.push(Subject {
                         kind: "text",
                         value,
+                        whole: None,
                     });
                 }
             }
@@ -1529,11 +1552,13 @@ impl Shim {
             subjects.push(Subject {
                 kind: "text",
                 value: readme,
+                whole: None,
             });
         }
         subjects.push(Subject {
             kind: "path",
             value: root.to_string_lossy().into_owned(),
+            whole: None,
         });
         Ok(subjects)
     }
@@ -1587,12 +1612,25 @@ impl Shim {
             // reaches the forge. A field spelt without one is passed whole,
             // because guessing which half of it was meant is not this shim's to
             // guess.
-            let value = field
+            let (key, value) = field
                 .split_once('=')
-                .map_or(field.as_str(), |(_, rest)| rest);
+                .map_or(("", field.as_str()), |(key, rest)| (key, rest));
+            // A title set through the API is the title `gh pr edit --title`
+            // sets, and a merge subject set through it is `gh pr merge
+            // --subject`: both were judged as prose here, so a lookalike that
+            // `--title` refuses walked through `-f title=`. Read off the key,
+            // a closed list, and never off the path -- which endpoint takes a
+            // `title` is the forge's to say, and a key named `title` is a
+            // headline on every one of them.
+            let kind = if API_TITLE_KEYS.contains(&key) {
+                Subject::HEADLINE
+            } else {
+                "text"
+            };
             subjects.push(Subject {
-                kind: "text",
+                kind,
                 value: self.api_value(flag, value, &mut stdin)?,
+                whole: None,
             });
         }
         if let Some(file) = &call.input {
@@ -1601,10 +1639,12 @@ impl Shim {
                 Some(values) => subjects.extend(values.into_iter().map(|value| Subject {
                     kind: "text",
                     value,
+                    whole: None,
                 })),
                 None => subjects.push(Subject {
                     kind: "text",
                     value: text,
+                    whole: None,
                 }),
             }
         }
@@ -1707,6 +1747,7 @@ impl Shim {
             collected.subjects.push(Subject {
                 kind: "argv",
                 value: argv.join(" "),
+                whole: None,
             });
         }
         Ok(collected)
@@ -2171,6 +2212,478 @@ fn forge_field(
     Ok(value)
 }
 
+/// What the forge already holds of the text one verb publishes.
+///
+/// Two verbs publish text that is not all on the command line, and in opposite
+/// directions. `gh issue edit --body` RESUBMITS a body the forge stores, so
+/// argv carries more than the edit adds: an old body that already held an
+/// invisible character could not be edited at all without `UPHOLD_ALLOW`,
+/// because the line somebody typed months ago was judged as if it were being
+/// typed now. `gh pr merge --squash` with no `--subject` or `--body` carries
+/// LESS than it publishes: the forge composes the rest, and that commit message
+/// reached the base branch with nothing reading it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Held {
+    /// The edit replaces a stored body; judge the lines it adds.
+    StoredBody,
+    /// The forge composes whatever part of the merge message was not given;
+    /// ask it for that part and judge it.
+    ComposedMerge,
+}
+
+/// The verbs whose text is partly the forge's, with the options each takes
+/// that consume no value.
+///
+/// Grammar rather than policy, beside [`FORGE_API_COMMANDS`] and for the same
+/// reason: that `gh issue edit --body` replaces a stored body, and that `gh pr
+/// merge --squash` publishes a message GitHub composes, are facts about `gh`,
+/// and no repository should have to write them into its table to be guarded.
+/// The bare list is what lets the operands be found: every other option of
+/// these verbs takes a value, so an option not named here is read as taking
+/// the word after it. A switch a later `gh` adds and this list lacks then
+/// swallows the next word, and what is asked about is a selector `gh` cannot
+/// resolve -- an exit 2, not a pass.
+const FORGE_HELD: &[(&str, &str, Held, &[&str])] = &[
+    (
+        "gh",
+        "issue:edit",
+        Held::StoredBody,
+        &["--remove-milestone", "-h", "--help"],
+    ),
+    (
+        "gh",
+        "pr:edit",
+        Held::StoredBody,
+        &["--remove-milestone", "-h", "--help"],
+    ),
+    (
+        "gh",
+        "pr:merge",
+        Held::ComposedMerge,
+        &[
+            "--admin",
+            "--auto",
+            "-d",
+            "--delete-branch",
+            "--disable-auto",
+            "-m",
+            "--merge",
+            "-r",
+            "--rebase",
+            "-s",
+            "--squash",
+            "-h",
+            "--help",
+        ],
+    ),
+];
+
+/// The GraphQL fields GitHub answers "what would this merge write" with. They
+/// are what `gh pr merge` itself reads to seed "Edit commit message", so the
+/// message judged here is the message the forge would write, composed by the
+/// forge under the repository's own squash and merge settings -- not a guess
+/// at its composition rule.
+const MERGE_TEXT_QUERY: &str = "query($id: ID!, $method: PullRequestMergeMethod!) { node(id: $id) \
+     { ... on PullRequest { viewerMergeHeadlineText(mergeType: $method) \
+     viewerMergeBodyText(mergeType: $method) } } }";
+
+/// One verb's argv, read for what [`Held`] needs: the operands after the verb
+/// and noun, the switches given, and the repository it names.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Operands {
+    /// The words that are neither an option nor an option's value, after the
+    /// command's own two (`pr merge`).
+    selectors: Vec<String>,
+    /// Every switch spelt on, in its own spelling: `-s`, `--squash`. A short
+    /// cluster `-sd` is read the way the command reads it, as `-s` and `-d`.
+    switches: Vec<String>,
+    /// What `-R`/`--repo` named. Read here, off `gh`'s own grammar, rather
+    /// than off the table's `target_flags`: the forge has to be asked about
+    /// the repository the command will act on, and a table that does not
+    /// declare the flag does not stop `gh` reading it.
+    repo: Option<String>,
+}
+
+/// `gh`'s spellings of the repository option, on every verb.
+const GH_REPO_FLAGS: &[&str] = &["-R", "--repo"];
+
+impl Operands {
+    fn of(argv: &[String], bare: &[&str]) -> Self {
+        let mut positional = Vec::new();
+        let mut operands = Self::default();
+        let mut index = 0;
+        while let Some(argument) = argv.get(index) {
+            index += 1;
+            if argument == "--" {
+                positional.extend(argv.get(index..).unwrap_or_default().iter().cloned());
+                break;
+            }
+            if !argument.starts_with('-') || argument == "-" {
+                positional.push(argument.clone());
+                continue;
+            }
+            // The option, and its value where the same word carries it:
+            // `--repo=o/r`, or the rest of a short cluster.
+            let (flag, inline) = if argument.starts_with("--") {
+                match argument.split_once('=') {
+                    Some((flag, value)) => (flag.to_owned(), Some(value.to_owned())),
+                    None => (argument.clone(), None),
+                }
+            } else {
+                // A short option, or a cluster of them: each letter a switch
+                // until one that takes a value, which takes the rest of the
+                // word or, at the end of it, the next word.
+                let mut found = None;
+                for (offset, letter) in argument.char_indices().skip(1) {
+                    let flag = format!("-{letter}");
+                    if bare.contains(&flag.as_str()) {
+                        operands.switches.push(flag);
+                        continue;
+                    }
+                    let rest = argument
+                        .get(offset + letter.len_utf8()..)
+                        .unwrap_or_default();
+                    found = Some((flag, (!rest.is_empty()).then(|| rest.to_owned())));
+                    break;
+                }
+                let Some(found) = found else {
+                    continue;
+                };
+                found
+            };
+            if bare.contains(&flag.as_str()) {
+                if switched_on(inline.is_some(), inline.as_deref().unwrap_or_default()) {
+                    operands.switches.push(flag);
+                }
+                continue;
+            }
+            let value = inline.or_else(|| {
+                let next = argv.get(index).cloned();
+                index += usize::from(next.is_some());
+                next
+            });
+            if GH_REPO_FLAGS.contains(&flag.as_str()) {
+                operands.repo = value.filter(|repo| !repo.is_empty());
+            }
+        }
+        operands.selectors = positional.into_iter().skip(2).collect();
+        operands
+    }
+
+    fn switched(&self, spellings: &[&str]) -> bool {
+        self.switches
+            .iter()
+            .any(|switch| spellings.contains(&switch.as_str()))
+    }
+}
+
+/// The text the forge holds of this invocation: the stored body an edit
+/// resubmits, and the merge message the forge composes where none was given.
+/// After the scope questions and before any checker, because both change WHAT
+/// is judged -- and only where a rule that is not switched off will read it.
+fn held_text(
+    shim: &Shim,
+    name: &str,
+    words: &[String],
+    checkers: &[&Rule],
+    any_applies: bool,
+    collected: &mut Collected,
+) -> Result<bool> {
+    if !any_applies || checkers.iter().all(|rule| crate::guard::bypassed(&rule.id)) {
+        return Ok(false);
+    }
+    let path = if shim.editor_env.is_some() {
+        editor_path(
+            shim.for_verb(words).editor,
+            collected,
+            can_prompt(collected),
+        )
+    } else {
+        EditorPath::Forge
+    };
+    shim.read_held(name, words, collected, path)
+}
+
+/// The lines of `edited` that `stored` does not already hold, counted: a line
+/// the stored body carries once and the edit carries twice is added once.
+///
+/// The line is the unit because it is the unit a person edits a body in, and
+/// the comparison ignores a trailing carriage return because the forge stores
+/// a body typed in its web editor with CRLF and hands one written by a CLI
+/// back with LF. A line an edit changed is a line it added, whole -- so an
+/// invisible character on the line being edited is still read.
+fn added_lines(stored: &str, edited: &str) -> String {
+    let mut held: BTreeMap<&str, usize> = BTreeMap::new();
+    for line in stored.lines() {
+        *held.entry(line.trim_end_matches('\r')).or_default() += 1;
+    }
+    edited
+        .lines()
+        .filter(|line| {
+            let line = line.trim_end_matches('\r');
+            match held.get_mut(line) {
+                Some(count) if *count > 0 => {
+                    *count -= 1;
+                    false
+                }
+                _ => true,
+            }
+        })
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
+/// Run `gh` and read what it printed as JSON.
+fn gh_json(args: &[&str]) -> std::result::Result<serde_json::Value, Silence> {
+    let output = match inner_tool("gh").args(args).output() {
+        Ok(output) => output,
+        Err(error) => return Err(Silence::unreachable("gh", &error)),
+    };
+    if !output.status.success() {
+        return Err(Silence::of("gh", &output));
+    }
+    json_value(&String::from_utf8_lossy(&output.stdout))
+        .ok_or_else(|| Silence::Refused(String::from("`gh` exited 0 and printed no JSON")))
+}
+
+impl Shim {
+    /// What the forge holds of this invocation's text, folded into what it
+    /// collected. True where the message the forge composes was read, so the
+    /// notice that it was not is not printed over it.
+    ///
+    /// Asked only where some rule will read the answer: a forge round trip
+    /// for a subject no checker looks at is a network call made for nothing,
+    /// and a forge that is down would then refuse a command nothing checks.
+    /// Where it IS asked and cannot answer, the answer is exit 2 -- the text
+    /// the command would publish could not be established, which is not a
+    /// pass.
+    fn read_held(
+        &self,
+        name: &str,
+        argv: &[String],
+        collected: &mut Collected,
+        path: EditorPath,
+    ) -> Result<bool> {
+        let words = self.words(argv, false);
+        let verb = format!("{}:{}", words.verb, words.noun);
+        let Some((_, _, held, bare)) = FORGE_HELD
+            .iter()
+            .find(|(command, named, _, _)| *command == self.command && *named == verb)
+        else {
+            return Ok(false);
+        };
+        let operands = Operands::of(argv, bare);
+        let repo = operands.repo.clone();
+        match held {
+            Held::StoredBody => {
+                Self::narrow_to_added(name, &words, &operands, repo.as_deref(), collected)?;
+                Ok(false)
+            }
+            Held::ComposedMerge => {
+                Self::read_composed(name, &operands, repo.as_deref(), collected, path)
+            }
+        }
+    }
+
+    /// Replace every body subject with the lines it adds to the body stored
+    /// under each issue or pull request the edit names.
+    fn narrow_to_added(
+        name: &str,
+        words: &Words,
+        operands: &Operands,
+        repo: Option<&str>,
+        collected: &mut Collected,
+    ) -> Result<()> {
+        if !collected
+            .subjects
+            .iter()
+            .any(|subject| subject.kind == "text")
+        {
+            return Ok(());
+        }
+        // `gh pr edit` with no selector edits the current branch's pull
+        // request, and `gh pr view` with none answers about the same one.
+        let selectors: Vec<Option<&str>> = if operands.selectors.is_empty() {
+            vec![None]
+        } else {
+            operands
+                .selectors
+                .iter()
+                .map(|s| Some(s.as_str()))
+                .collect()
+        };
+        let mut stored = Vec::new();
+        for selector in &selectors {
+            let mut args = vec![words.verb.as_str(), "view"];
+            args.extend(selector.iter());
+            if let Some(repo) = repo {
+                args.extend(["-R", repo]);
+            }
+            args.extend(["--json", "body"]);
+            let body = gh_json(&args).and_then(|answer| {
+                answer
+                    .get("body")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        Silence::Refused(String::from("`gh` answered without a body field"))
+                    })
+            });
+            stored.push(body.map_err(|silence| {
+                Fatal::new(format!(
+                    "{name}: `{name} {}` could not be asked for the body this edit replaces, so \
+                     which lines it adds could not be established and nothing was checked. {} \
+                     Nothing was published",
+                    args.join(" "),
+                    silence.sentence()
+                ))
+            })?);
+        }
+        let mut narrowed = Vec::new();
+        for subject in std::mem::take(&mut collected.subjects) {
+            if subject.kind != "text" {
+                narrowed.push(subject);
+                continue;
+            }
+            for body in &stored {
+                narrowed.push(Subject {
+                    kind: subject.kind,
+                    value: added_lines(body, &subject.value),
+                    whole: Some(subject.value.clone()),
+                });
+            }
+        }
+        collected.subjects = narrowed;
+        Ok(())
+    }
+
+    /// Ask the forge for the parts of a squash or merge commit message nobody
+    /// gave, and add them as the subjects they are.
+    fn read_composed(
+        name: &str,
+        operands: &Operands,
+        repo: Option<&str>,
+        collected: &mut Collected,
+        path: EditorPath,
+    ) -> Result<bool> {
+        // An editor the shim stands in as reads the message the command
+        // seeds it with; `--web` and an inert flag merge nothing here.
+        if matches!(path, EditorPath::Opens | EditorPath::Offered)
+            || collected.web
+            || collected.withheld == Withheld::Everything
+        {
+            return Ok(false);
+        }
+        // A rebase writes no message of the forge's, and with no method at
+        // all there is no merge here to compose one for: `gh` refuses the
+        // invocation itself off a terminal.
+        let method = if operands.switched(&["-s", "--squash"]) {
+            "SQUASH"
+        } else if operands.switched(&["-m", "--merge"]) {
+            "MERGE"
+        } else {
+            return Ok(false);
+        };
+        let headline = !collected
+            .subjects
+            .iter()
+            .any(|subject| subject.kind == Subject::HEADLINE);
+        let body = !collected.body_given;
+        if !headline && !body {
+            return Ok(false);
+        }
+        let mut view = vec!["pr", "view"];
+        view.extend(operands.selectors.first().map(String::as_str));
+        if let Some(repo) = repo {
+            view.extend(["-R", repo]);
+        }
+        view.extend(["--json", "id"]);
+        let unasked = |what: &str, silence: &Silence| {
+            Fatal::new(format!(
+                "{name}: no {} was given, so the forge composes it, and `{name} {what}` could not \
+                 ask the forge what it would compose. {} Nothing was published",
+                match (headline, body) {
+                    (true, true) => "subject or body",
+                    (true, false) => "subject",
+                    _ => "body",
+                },
+                silence.sentence()
+            ))
+        };
+        let id = gh_json(&view)
+            .and_then(|answer| {
+                answer
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| Silence::Refused(String::from("`gh` answered without an id")))
+            })
+            .map_err(|silence| unasked(&view.join(" "), &silence))?;
+        let query = format!("query={MERGE_TEXT_QUERY}");
+        let id_field = format!("id={id}");
+        let method_field = format!("method={method}");
+        let ask = [
+            "api",
+            "graphql",
+            "-f",
+            &query,
+            "-f",
+            &id_field,
+            "-f",
+            &method_field,
+        ];
+        let node = gh_json(&ask)
+            .and_then(|answer| {
+                answer
+                    .pointer("/data/node")
+                    .cloned()
+                    .filter(serde_json::Value::is_object)
+                    .ok_or_else(|| {
+                        Silence::Refused(String::from(
+                            "the forge answered without the pull request's merge text",
+                        ))
+                    })
+            })
+            .map_err(|silence| unasked("api graphql", &silence))?;
+        let field = |key: &str| -> Result<String> {
+            node.get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    unasked(
+                        "api graphql",
+                        &Silence::Refused(format!("the forge answered without {key}")),
+                    )
+                })
+        };
+        if headline {
+            collected.subjects.push(Subject {
+                kind: Subject::HEADLINE,
+                value: field("viewerMergeHeadlineText")?,
+                whole: None,
+            });
+        }
+        if body {
+            collected.subjects.push(Subject {
+                kind: "text",
+                value: field("viewerMergeBodyText")?,
+                whole: None,
+            });
+        }
+        eprintln!(
+            "{name}: no {} was given, so the {} message the forge composes was read from it and \
+             checked.",
+            match (headline, body) {
+                (true, true) => "subject or body",
+                (true, false) => "subject",
+                _ => "body",
+            },
+            method.to_lowercase()
+        );
+        Ok(true)
+    }
+}
+
 /// Parse the document and read a TOP-LEVEL key, rather than scan for a needle.
 ///
 /// These two were `text.find("\"field\"")` and a walk forwards from there, which
@@ -2245,8 +2758,10 @@ pub(crate) fn pattern_finding(rule: &Rule, subject: &Subject) -> Result<Option<S
         )));
     }
     if let Some(pattern) = rule.require_regexp() {
+        // What must be there is a question about the whole text published,
+        // not about the lines an edit added to it.
         let hits = crate::engine::search_text(
-            &subject.value,
+            subject.whole.as_deref().unwrap_or(&subject.value),
             &crate::engine::Query::regex(pattern, multiline),
             &rule.id,
         )?;
@@ -3127,6 +3642,7 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
     let subject = Subject {
         kind: "text",
         value: text,
+        whole: None,
     };
     // The same kinds `run` consults, and for the reason the dispatch there
     // gives: a guard cannot judge a body typed into an editor one way and the
@@ -3463,6 +3979,9 @@ pub(crate) fn run(
 
     let mut collected = Collected::default();
     let mut any_applies = false;
+    // Whether the message the forge composes was asked for and judged, which
+    // makes the notice that it was not untrue.
+    let mut composed_read = false;
     let mut scopes = ScopeMemo::default();
     let reading = shim.reading(&words);
     if let Reading::Unclear(flag) = &reading {
@@ -3536,6 +4055,8 @@ pub(crate) fn run(
                 words.join(" ")
             )));
         }
+        // What the forge holds of this text, before anything judges it.
+        composed_read = held_text(shim, name, &words, &checkers, any_applies, &mut collected)?;
         // Where a checker judges the DESTINATION rather than the text.
         //
         // This is the seam's other question, and for a long time it had no
@@ -3784,10 +4305,10 @@ pub(crate) fn run(
             EditorPath::Opens | EditorPath::Offered => {
                 install_editor(&mut command, name, variable, own.as_deref(), &words, path)?;
             }
-            // Not fetched and checked: the forge builds it from text that is
-            // already published -- the title and body this shim read at
-            // `pr create` or `pr edit`, or commits `commit-msg` read. Said, so
-            // nobody takes the silence for a pass.
+            // Read above where the forge can say what it composes -- a squash
+            // or a merge on `gh pr merge`. Anywhere else it was not, and that
+            // is said, so nobody takes the silence for a pass.
+            EditorPath::Forge if composed_read => {}
             EditorPath::Forge => {
                 let verb = shim.words(&words, false);
                 eprintln!(
@@ -4938,6 +5459,7 @@ mod tests {
         let title = Subject {
             kind: "title",
             value: String::from("Generated with Claude Code"),
+            whole: None,
         };
         let refusal = pattern_refusal(&pattern_rule(CheckKind::Regexp, "Claude Code"), &title)
             .unwrap()
@@ -4964,6 +5486,7 @@ mod tests {
         let ordinary = Subject {
             kind: "title",
             value: String::from("v2.0.0"),
+            whole: None,
         };
         assert!(
             pattern_refusal(&pattern_rule(CheckKind::Regexp, "Claude Code"), &ordinary)
@@ -4999,6 +5522,7 @@ mod tests {
         let subject = Subject {
             kind: "text",
             value: String::from("anything at all"),
+            whole: None,
         };
         let blank = Rule::synthetic(
             "blank-exec",
@@ -5032,6 +5556,7 @@ mod tests {
         let subject = Subject {
             kind: "text",
             value: "ordinary text\n".repeat(80_000),
+            whole: None,
         };
         let report = consult(Path::new("."), &deaf, &subject)
             .unwrap_err()
@@ -5112,6 +5637,48 @@ mod tests {
             report.contains("nothing here stands in front of"),
             "{report}"
         );
+    }
+
+    #[test]
+    fn an_edit_adds_the_lines_the_stored_body_does_not_hold_counted() {
+        // CRLF from the forge's web editor is the same line as LF from a file.
+        let stored = "Intro\r\nOld\u{200B} line\r\n\r\n";
+        assert_eq!(
+            added_lines(stored, "Intro\nOld\u{200B} line\n\nNew\n"),
+            "New"
+        );
+        // A line carried twice where the forge holds it once is added once.
+        assert_eq!(
+            added_lines(stored, "Intro\nOld\u{200B} line\nOld\u{200B} line\n"),
+            "Old\u{200B} line"
+        );
+        // A changed line is an added line, whole.
+        assert_eq!(
+            added_lines(stored, "Intro\nOld\u{200B} line, edited\n"),
+            "Old\u{200B} line, edited"
+        );
+        assert_eq!(added_lines(stored, "Intro\n"), "");
+        assert_eq!(added_lines("", "a\nb"), "a\nb");
+    }
+
+    #[test]
+    fn the_operands_of_a_verb_are_read_with_its_own_switches() {
+        let bare = &["-s", "--squash", "-d", "--delete-branch", "--auto"];
+        let merged = Operands::of(&argv("-R o/r pr merge -sd 7 --auto"), bare);
+        assert_eq!(merged.selectors, vec![String::from("7")]);
+        assert_eq!(merged.repo.as_deref(), Some("o/r"));
+        assert!(merged.switched(&["-s"]) && merged.switched(&["-d"]));
+        // A value-taking option takes the next word, or the rest of its own.
+        let valued = Operands::of(&argv("pr merge --body x -bz --repo=a/b -Rc/d 9"), bare);
+        assert_eq!(valued.selectors, vec![String::from("9")]);
+        assert_eq!(valued.repo.as_deref(), Some("c/d"));
+        // Spelt off is not on.
+        let off = Operands::of(&argv("pr merge 1 --squash=false"), bare);
+        assert!(!off.switched(&["--squash"]));
+        // An option nothing names takes the word after it, so `bug` is a
+        // label and not an issue.
+        let edited = Operands::of(&argv("issue edit 1 2 --add-label bug"), &[]);
+        assert_eq!(edited.selectors, vec![String::from("1"), String::from("2")]);
     }
 
     #[test]

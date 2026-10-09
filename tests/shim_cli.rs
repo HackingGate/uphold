@@ -396,19 +396,64 @@ scope = "always"
   inert_flags = ["-h", "--help", "--disable-auto"]
 "#;
 
+/// A stub `gh` that is also the forge, with no network: it answers the two
+/// questions the shim asks one -- the stored body of an issue or a pull
+/// request (`view --json body`), and the merge message the forge would compose
+/// (`view --json id`, then `api graphql`) -- out of files beside `bin/`, logs
+/// each question to `asked.log`, and says it cannot be reached where a
+/// `forge-down` file exists. Everything else is the real command, which says
+/// it ran and names the editor it was handed.
+const GH_FORGE_STUB: &str = r#"#!/bin/sh
+here="$(dirname "$0")/.."
+case "$1 $2" in
+  "pr view"|"issue view"|"api graphql")
+    echo "$*" >> "$here/asked.log"
+    if [ -f "$here/forge-down" ]; then
+      echo "error connecting to api.github.com" >&2
+      exit 1
+    fi
+    case "$*" in
+      *"--json id"*) echo '{"id":"PR_stub"}' ;;
+      *"--json body"*) cat "$here/stored.json" 2>/dev/null || echo '{"body":""}' ;;
+      *) cat "$here/merge.json" 2>/dev/null ||
+           echo '{"data":{"node":{"viewerMergeHeadlineText":"Fix the cache (#1)","viewerMergeBodyText":"* Fix the cache"}}}' ;;
+    esac
+    exit 0 ;;
+esac
+echo "gh ran: $*"
+echo "editor: $GH_EDITOR"
+"#;
+
+/// Install [`GH_FORGE_STUB`] as the workspace's `gh`.
+fn forge_stub(root: &Path) {
+    stub(root, "gh", GH_FORGE_STUB);
+}
+
+/// The message [`GH_FORGE_STUB`] says the forge would compose for a merge.
+fn composes(root: &Path, headline: &str, body: &str) {
+    let answer = serde_json::json!({"data": {"node": {
+        "viewerMergeHeadlineText": headline,
+        "viewerMergeBodyText": body,
+    }}});
+    std::fs::write(root.join("merge.json"), answer.to_string()).unwrap();
+}
+
+/// The body [`GH_FORGE_STUB`] says the forge stores.
+fn stores(root: &Path, body: &str) {
+    let answer = serde_json::json!({ "body": body });
+    std::fs::write(root.join("stored.json"), answer.to_string()).unwrap();
+}
+
+/// What the shim asked the stub forge, one question per line.
+fn asked(root: &Path) -> String {
+    std::fs::read_to_string(root.join("asked.log")).unwrap_or_default()
+}
+
 /// A workspace for [`GH_MERGE_POLICY`], whose stub `gh` prints the editor it
 /// was handed.
 fn gh_workspace() -> PathBuf {
     let root = workspace(GH_MERGE_POLICY);
-    let stub = root.join("bin/gh");
-    std::fs::write(
-        &stub,
-        "#!/bin/sh\necho \"gh ran: $*\"\necho \"editor: $GH_EDITOR\"\n",
-    )
-    .unwrap();
-    let mut permissions = std::fs::metadata(&stub).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
-    std::fs::set_permissions(&stub, permissions).unwrap();
+    forge_stub(&root);
     root
 }
 
@@ -441,39 +486,154 @@ fn a_merge_subject_is_read_like_the_short_flag_it_is_the_long_form_of() {
 
 #[test]
 fn a_merge_that_opens_no_editor_says_the_forge_message_was_not_checked() {
-    // `--squash` skips the prompt, and so does having no terminal -- which is
-    // this harness: `output()` gives the shim no stdin and a pipe for stdout.
-    // So no editor opens, the checkpoint sentence would be a check that never
-    // runs, and the message GitHub composes is said to be unread instead.
+    // Having no terminal skips the prompt -- which is this harness: `output()`
+    // gives the shim no stdin and a pipe for stdout. With no method given
+    // there is no merge the forge could be asked about, so no editor opens,
+    // the checkpoint sentence would be a check that never runs, and the
+    // message is said to be unread instead.
     let root = gh_workspace();
-    for form in [
-        vec!["gh", "pr", "merge", "1", "--squash"],
-        vec!["gh", "pr", "merge", "1"],
-    ] {
-        let output = shim(&root, &form);
-        assert_eq!(code(&output), 0, "{form:?}: {}", stderr(&output));
-        assert!(stdout(&output).contains("gh ran:"), "{form:?}");
-        assert!(
-            !stderr(&output).contains("the editor is the checkpoint"),
-            "{form:?}: {}",
-            stderr(&output)
-        );
-        assert!(
-            stderr(&output).contains("the message the forge composes for it was not checked"),
-            "{form:?}: {}",
-            stderr(&output)
-        );
-        assert!(!stdout(&output).contains("--as-editor"), "{form:?}");
-    }
+    let output = shim(&root, &["gh", "pr", "merge", "1"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    assert!(
+        !stderr(&output).contains("the editor is the checkpoint"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("the message the forge composes for it was not checked"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stdout(&output).contains("--as-editor"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(asked(&root).is_empty(), "{}", asked(&root));
 
-    // A body given is a body read, and there is nothing unread to report.
-    let output = shim(&root, &["gh", "pr", "merge", "1", "--squash", "-b", "ok"]);
+    // A subject and a body given are a message read, and there is nothing
+    // unread to report and nothing to ask the forge.
+    let output = shim(
+        &root,
+        &["gh", "pr", "merge", "1", "--squash", "-t", "ok", "-b", "ok"],
+    );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(
         !stderr(&output).contains("not checked"),
         "{}",
         stderr(&output)
     );
+    assert!(asked(&root).is_empty(), "{}", asked(&root));
+}
+
+#[test]
+fn a_squash_merge_with_no_message_reads_the_one_the_forge_composes() {
+    // `gh pr merge 330 --squash` put a message on `main` that nothing read:
+    // GitHub composed it from the title and the commit list. The forge says
+    // what it would compose -- the same answer `gh` seeds its own editor with
+    // -- so the shim asks, and judges the subject as a title and the body as
+    // prose.
+    let root = gh_workspace();
+    composes(&root, "WIP: fix the cache (#1)", "* Fix the cache");
+    let refused = shim(&root, &["gh", "pr", "merge", "1", "--squash"]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("no-wip-subject"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(
+        !stdout(&refused).contains("gh ran:"),
+        "{}",
+        stdout(&refused)
+    );
+    assert!(
+        asked(&root).contains("pr view 1 --json id"),
+        "{}",
+        asked(&root)
+    );
+    assert!(asked(&root).contains("method=SQUASH"), "{}", asked(&root));
+
+    composes(&root, "Fix the cache (#1)", "* Fix the cache");
+    for form in [
+        vec!["gh", "pr", "merge", "1", "--squash"],
+        vec!["gh", "pr", "merge", "1", "-sd"],
+        vec!["gh", "pr", "merge", "1", "--merge", "--delete-branch"],
+        // A body given and no subject: the subject is still the forge's.
+        vec!["gh", "pr", "merge", "1", "--squash", "-b", "ok"],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 0, "{form:?}: {}", stderr(&output));
+        assert!(stdout(&output).contains("gh ran:"), "{form:?}");
+        assert!(
+            stderr(&output).contains("was read from it and checked"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            !stderr(&output).contains("not checked"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+    }
+    assert!(asked(&root).contains("method=MERGE"), "{}", asked(&root));
+}
+
+#[test]
+fn a_squash_merge_whose_composed_message_hides_a_bidi_override_is_refused() {
+    let root = gh_stub_workspace(GH_TITLE_POLICY);
+    composes(
+        &root,
+        "Fix the cache (#1)",
+        "* Fix the cache\n* Rename \u{202E}txt.exe\n",
+    );
+    let output = shim(&root, &["gh", "pr", "merge", "1", "--squash"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("U+202E"), "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+
+    // The subject the forge composes is a title, so a lookalike in it is
+    // refused the way `--subject` refuses one.
+    composes(&root, LOOKALIKE, "");
+    let output = shim(&root, &["gh", "pr", "merge", "1", "--squash"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("CYRILLIC SMALL LETTER A"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_squash_merge_whose_forge_cannot_be_asked_is_exit_two_and_never_runs() {
+    let root = gh_stub_workspace(GH_TITLE_POLICY);
+    std::fs::write(root.join("forge-down"), "").unwrap();
+    let output = shim(&root, &["gh", "pr", "merge", "1", "--squash"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("could not ask the forge what it would compose"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("error connecting to api.github.com"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+
+    // A message given whole asks nothing, so a forge that is down is not in
+    // the way of it.
+    let output = shim(
+        &root,
+        &[
+            "gh", "pr", "merge", "1", "--squash", "-t", "Fix", "-b", "ok",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
 }
 
 #[test]
@@ -579,6 +739,11 @@ fn a_close_opens_no_editor_and_announces_none() {
 
 /// The `gh` table out of a policy, as the shim would read it.
 fn gh_table(policy: &str) -> toml::Table {
+    shim_table(policy, "gh")
+}
+
+/// One command's table out of a policy, as the shim would read it.
+fn shim_table(policy: &str, command: &str) -> toml::Table {
     let policy: toml::Table = policy.parse().unwrap();
     policy
         .get("shim")
@@ -586,7 +751,7 @@ fn gh_table(policy: &str) -> toml::Table {
         .unwrap()
         .iter()
         .map(|shim| shim.as_table().unwrap())
-        .find(|shim| shim.get("command").and_then(toml::Value::as_str) == Some("gh"))
+        .find(|shim| shim.get("command").and_then(toml::Value::as_str) == Some(command))
         .unwrap()
         .clone()
 }
@@ -620,12 +785,13 @@ fn init_gh_table() -> toml::Table {
 }
 
 #[test]
-fn this_repositorys_own_merge_opens_no_editor_and_says_the_forge_message_was_not_checked() {
+fn this_repositorys_own_merge_opens_no_editor_and_reads_the_message_the_forge_composes() {
     // Every case above loads a table written for the test, so this
     // repository's own `pr:merge` entry went without `editor` while they
     // passed, and a squash merge here announced an editor checkpoint that
     // never opened (#320, #323). Its own table is driven here, with the scope
-    // made `always` because there is no forge to ask.
+    // made `always` because there is no forge to ask about visibility, and
+    // the stub standing in for the forge that composes the message (#331).
     let mut table = own_gh_table();
     table.insert("scope".into(), "always".into());
     table.remove("target");
@@ -641,16 +807,7 @@ command.scope = "always"
     .unwrap();
     policy.insert("shim".into(), toml::Value::Array(vec![table.into()]));
     let root = workspace(&toml::to_string(&policy).unwrap());
-    std::fs::write(
-        root.join("bin/gh"),
-        "#!/bin/sh\necho \"gh ran: $*\"\necho \"editor: $GH_EDITOR\"\n",
-    )
-    .unwrap();
-    let mut permissions = std::fs::metadata(root.join("bin/gh"))
-        .unwrap()
-        .permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
-    std::fs::set_permissions(root.join("bin/gh"), permissions).unwrap();
+    forge_stub(&root);
 
     let output = shim(
         &root,
@@ -664,7 +821,12 @@ command.scope = "always"
         stderr(&output)
     );
     assert!(
-        stderr(&output).contains("the message the forge composes for it was not checked"),
+        stderr(&output).contains("the squash message the forge composes was read from it"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("not checked"),
         "{}",
         stderr(&output)
     );
@@ -1935,16 +2097,284 @@ fn an_issue_edit_carrying_a_degree_sign_runs_and_one_carrying_a_bidi_override_do
     );
 }
 
+#[test]
+fn an_edit_is_judged_on_the_lines_it_adds_to_the_body_the_forge_stores() {
+    // The body somebody typed months ago already carries a zero-width space.
+    // Resubmitting it whole is not publishing it again, so an edit that adds
+    // plain text runs -- and one that adds a bidi override does not.
+    let root = gh_stub_workspace(GH_EDIT_POLICY);
+    let stored = "## Where\r\n\r\nThe office\u{200B} sits at 46\u{00B0}W.\r\n";
+    stores(&root, stored);
+
+    std::fs::write(
+        root.join("body.md"),
+        "## Where\n\nThe office\u{200B} sits at 46\u{00B0}W.\n\nIt moved in May.\n",
+    )
+    .unwrap();
+    let edited = shim(
+        &root,
+        &["gh", "issue", "edit", "1", "--body-file", "body.md"],
+    );
+    assert_eq!(code(&edited), 0, "{}", stderr(&edited));
+    assert!(stdout(&edited).contains("gh ran:"), "{}", stdout(&edited));
+    assert!(
+        asked(&root).contains("issue view 1 --json body"),
+        "{}",
+        asked(&root)
+    );
+
+    std::fs::write(
+        root.join("body.md"),
+        "## Where\n\nThe office\u{200B} sits at 46\u{00B0}W.\n\nIt moved \u{202E}txt.exe\n",
+    )
+    .unwrap();
+    let refused = shim(
+        &root,
+        &["gh", "issue", "edit", "1", "--body-file", "body.md"],
+    );
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("U+202E"), "{}", stderr(&refused));
+    assert!(!stderr(&refused).contains("U+200B"), "{}", stderr(&refused));
+    assert!(
+        !stdout(&refused).contains("gh ran:"),
+        "{}",
+        stdout(&refused)
+    );
+
+    // A line the edit changes is a line it adds, whole: the invisible on the
+    // line being edited is read.
+    let changed = shim(
+        &root,
+        &[
+            "gh",
+            "issue",
+            "edit",
+            "1",
+            "--body",
+            "## Where\n\nThe office\u{200B} sits at 46\u{00B0}W, upstairs.",
+        ],
+    );
+    assert_eq!(code(&changed), 1, "{}", stderr(&changed));
+    assert!(stderr(&changed).contains("U+200B"), "{}", stderr(&changed));
+}
+
+#[test]
+fn a_pull_request_edit_asks_about_the_repository_it_names() {
+    let root = gh_stub_workspace(&GH_EDIT_POLICY.replace("\"issue:edit\"", "\"pr:edit\""));
+    stores(&root, "Ships the cache\u{200B} fix.");
+    let edited = shim(
+        &root,
+        &[
+            "gh",
+            "pr",
+            "edit",
+            "--repo",
+            "o/r",
+            "--add-label",
+            "bug",
+            "7",
+            "--body",
+            "Ships the cache\u{200B} fix.\n\nAlso the docs.",
+        ],
+    );
+    assert_eq!(code(&edited), 0, "{}", stderr(&edited));
+    assert!(stdout(&edited).contains("gh ran:"), "{}", stdout(&edited));
+    assert!(
+        asked(&root).contains("pr view 7 -R o/r --json body"),
+        "{}",
+        asked(&root)
+    );
+}
+
+#[test]
+fn an_edit_whose_stored_body_cannot_be_asked_for_is_exit_two_and_never_runs() {
+    let root = gh_stub_workspace(GH_EDIT_POLICY);
+    std::fs::write(root.join("forge-down"), "").unwrap();
+    std::fs::write(root.join("body.md"), "Plain text.\n").unwrap();
+    let output = shim(
+        &root,
+        &["gh", "issue", "edit", "1", "--body-file", "body.md"],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("could not be asked for the body this edit replaces"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+
+    // An edit that resubmits no body asks nothing.
+    let output = shim(&root, &["gh", "issue", "edit", "1", "--title", "Plain"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_title_set_through_the_api_is_judged_as_the_title_it_is() {
+    // `gh api` is `gh pr edit --title` and `gh pr merge --subject` behind one
+    // word, and its fields were all judged as prose: a lookalike `--title`
+    // refuses walked through `-f title=`.
+    let root = gh_stub_workspace(&GH_TITLE_POLICY.replace(
+        "match = [\"pr:create\", \"pr:merge\"]",
+        "match = [\"pr:create\", \"pr:merge\", \"api:*\"]",
+    ));
+    let title = format!("title={LOOKALIKE}");
+    let commit_title = format!("commit_title={LOOKALIKE}");
+    for form in [
+        vec![
+            "gh",
+            "api",
+            "-X",
+            "PATCH",
+            "repos/o/r/pulls/1",
+            "-f",
+            &title,
+        ],
+        vec![
+            "gh",
+            "api",
+            "-X",
+            "PUT",
+            "repos/o/r/pulls/1/merge",
+            "-f",
+            &commit_title,
+        ],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("CYRILLIC SMALL LETTER A"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("gh ran:"), "{form:?}");
+    }
+
+    // The body beside it is prose, and prose is asked about invisibles alone.
+    let body = format!("body={LOOKALIKE}");
+    let output = shim(
+        &root,
+        &["gh", "api", "-X", "PATCH", "repos/o/r/pulls/1", "-f", &body],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+/// This repository's own `glab` table, scoped `always` because there is no
+/// forge to ask, under the unicode rule.
+fn own_glab_workspace() -> PathBuf {
+    let mut table = shim_table(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/policy/principles.toml"
+        ))
+        .unwrap(),
+        "glab",
+    );
+    table.insert("scope".into(), "always".into());
+    table.remove("target");
+    let mut policy: toml::Table = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+builtin = "text-guards"
+command.before = ["glab"]
+
+[rule.prevent-unusual-unicode]
+builtin = "prevent-unusual-unicode"
+
+[rule.prevent-unusual-unicode.git]
+hooks = ["commit-msg"]
+"#
+    .parse()
+    .unwrap();
+    policy.insert("shim".into(), toml::Value::Array(vec![table.into()]));
+    let root = workspace(&toml::to_string(&policy).unwrap());
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+    stub(&root, "glab", "#!/bin/sh\necho \"glab ran: $*\"\n");
+    root
+}
+
+#[test]
+fn this_repositorys_own_glab_table_reads_the_merge_message() {
+    // `glab mr merge` was matched by nothing, so its squash message went into
+    // the target branch with no text guard reading it, invisibles included.
+    let root = own_glab_workspace();
+    for flag in ["--squash-message", "-m", "--message"] {
+        let output = shim(
+            &root,
+            &["glab", "mr", "merge", "1", flag, "Fix \u{202E}txt.exe"],
+        );
+        assert_eq!(code(&output), 1, "{flag}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+202E"),
+            "{flag}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("glab ran:"), "{flag}");
+    }
+
+    // A squash message's first line is the commit subject, so it is a title.
+    let output = shim(
+        &root,
+        &["glab", "mr", "merge", "1", "--squash-message", LOOKALIKE],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("CYRILLIC SMALL LETTER A"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stdout(&output).contains("glab ran:"),
+        "{}",
+        stdout(&output)
+    );
+
+    // `-d` is `--remove-source-branch` here, a switch, and must not swallow
+    // the message after it; with no message at all the merge runs.
+    for form in [
+        vec!["glab", "mr", "merge", "1"],
+        vec![
+            "glab",
+            "mr",
+            "merge",
+            "1",
+            "-d",
+            "-s",
+            "--squash-message",
+            "Fix it",
+        ],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 0, "{form:?}: {}", stderr(&output));
+        assert!(stdout(&output).contains("glab ran:"), "{form:?}");
+        assert!(
+            !stdout(&output).contains("--as-editor"),
+            "{form:?}: {}",
+            stdout(&output)
+        );
+    }
+    let output = shim(
+        &root,
+        &[
+            "glab",
+            "mr",
+            "merge",
+            "1",
+            "-d",
+            "--squash-message",
+            "Fix \u{202E}it",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+}
+
 /// A workspace whose `gh` is a stub that says it ran, and with no `uphold` on
 /// PATH, so a `text-guards` consultation is the compiled-in one.
 fn gh_stub_workspace(policy: &str) -> PathBuf {
     let root = workspace(policy);
     std::fs::remove_file(root.join("bin/uphold")).unwrap();
-    let stub = root.join("bin/gh");
-    std::fs::write(&stub, "#!/bin/sh\necho \"gh ran: $*\"\n").unwrap();
-    let mut permissions = std::fs::metadata(&stub).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
-    std::fs::set_permissions(&stub, permissions).unwrap();
+    forge_stub(&root);
     root
 }
 

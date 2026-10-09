@@ -548,6 +548,7 @@ command = "glab"
 # with the separator escaped, and the destination predicate reads it as one.
 match = [
   "mr:create", "mr:update", "mr:note", "issue:create", "issue:update", "issue:note",
+  "mr:merge",
   "api:*",
 ]
 text_flags = ["-d", "--description", "-m", "--message"]
@@ -557,6 +558,17 @@ target_flags = ["-R", "--repo"]
 editor_env = "GLAB_EDITOR"
 target = "forge-repo"
 scope = "public-target"
+
+  # `glab mr merge` writes the merge commit into the target branch, and its
+  # message reached no text guard: the verb was not matched. Read as titles,
+  # the way `gh pr merge --subject` is, because a squash message's first line
+  # is the commit subject. The list replaces the table's, so `-d` is not read
+  # here: on this verb it is `--remove-source-branch`, a switch, and reading it
+  # as a body would take the next word for one. No editor opens on this verb.
+  [[shim.verbs]]
+  match = ["mr:merge"]
+  title_flags = ["-m", "--message", "--squash-message"]
+  editor = "never"
 
 # The case that proves a shim is not just a flag table. git publishes text no
 # git hook is in a position to read: a branch name goes onto a public forge in
