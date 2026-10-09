@@ -47,6 +47,7 @@ use std::path::Path;
 use crate::config::{CheckKind, Policy, Rule};
 use crate::error::{Exit, Fatal, Result, verdict};
 use crate::git;
+use crate::guard::scope::{self, Decoded};
 use crate::guard::{Refusal, names};
 
 /// True of every run of this subcommand, on every repository, forever.
@@ -67,6 +68,11 @@ const STANDING_CAVEATS: &[&str] = &[
 struct Surface {
     label: String,
     text: String,
+    /// Whether the text is what the surface says. False for a blob whose bytes
+    /// would not decode: it is still searched, for whatever its bytes spell in
+    /// ASCII, but it is listed as unread and not counted among the surfaces
+    /// read, because nobody read the rest of it.
+    read: bool,
 }
 
 /// The rule to judge with, forced to the visibility being flipped TO.
@@ -178,6 +184,7 @@ fn commit_surfaces(listed: &str, what: &str) -> Vec<Surface> {
         .map(|(sha, body)| Surface {
             label: format!("{what} {}", &sha[..sha.len().min(8)]),
             text: body.to_owned(),
+            read: true,
         })
         .collect()
 }
@@ -371,6 +378,7 @@ fn read_conversation(
         Ok(text) => surfaces.push(Surface {
             label: format!("{kind} #{number} title, body and comments"),
             text,
+            read: true,
         }),
         Err(reason) => unreadable.push(format!("{kind} #{number} could not be read: {reason}")),
     }
@@ -392,6 +400,7 @@ fn read_conversation(
         Ok(text) => surfaces.push(Surface {
             label: format!("pr #{number} review bodies"),
             text,
+            read: true,
         }),
         Err(reason) => unreadable.push(format!(
             "pr #{number} review bodies could not be read: {reason}"
@@ -406,6 +415,7 @@ fn read_conversation(
         Ok(text) => surfaces.push(Surface {
             label: format!("pr #{number} review-thread comments"),
             text,
+            read: true,
         }),
         Err(reason) => unreadable.push(format!(
             "pr #{number} review-thread comments could not be read: {reason}"
@@ -529,13 +539,42 @@ fn reachable_blobs(root: &Path) -> Result<(Vec<Surface>, Vec<String>)> {
     let absent = git::each_blob(root, &shas, |sha, bytes| {
         read += 1;
         progress(read, total);
+        let path = paths.get(sha).map_or("?", String::as_str);
+        // Through the one decoder the guards read the same blobs with. This was
+        // `String::from_utf8_lossy`, which turned a UTF-16 file into replacement
+        // characters with NULs between them: `github.com/acme/secret` inside one
+        // matched nothing, the blob was counted among the surfaces read, and a
+        // run with a reachable forge ended on "every one of them is clean", exit
+        // 0, over a name the same text in UTF-8 is refused for -- immediately
+        // before the flip that cannot be taken back.
+        let (text, decoded) = match scope::decode(bytes) {
+            Decoded::Text(text) => (text, true),
+            // Still read, and read the way this audit always read it. The
+            // guards skip a binary blob because it has no lines to point at;
+            // this audit has no lines to point at either, and a name written
+            // into a binary as plain bytes is served by the flip all the same.
+            // Narrowing to the guards' reading would turn a finding this made
+            // into silence.
+            Decoded::Binary => (String::from_utf8_lossy(bytes).into_owned(), true),
+            // Two facts, and both are reported. The blob is not a surface read
+            // clean, so it goes to the list of what this run failed to open and
+            // is not counted as read. And it is still searched as it always
+            // was, because a lossy reading keeps every ASCII byte: a Latin-1
+            // file with `github.com/acme/secret` in it was a finding before
+            // this decoder existed, and recording the file as unread alone
+            // would turn that finding into a line saying nothing about it.
+            Decoded::Unreadable(why) => {
+                unreadable.push(format!(
+                    "{path} (blob {sha}) is reachable and could not be read as text ({why}); \
+                     only what its bytes spell in ASCII was searched"
+                ));
+                (String::from_utf8_lossy(bytes).into_owned(), false)
+            }
+        };
         surfaces.push(Surface {
-            label: format!(
-                "{} (blob {})",
-                paths.get(sha).map_or("?", String::as_str),
-                &sha[..8.min(sha.len())]
-            ),
-            text: String::from_utf8_lossy(bytes).into_owned(),
+            label: format!("{path} (blob {})", &sha[..8.min(sha.len())]),
+            text,
+            read: decoded,
         });
     })?;
     // An object the audit could not open is not an object the audit found clean.
@@ -695,7 +734,18 @@ pub(crate) fn for_publication(root: &Path, policy: &Policy) -> Result<Exit> {
         }
     }
 
-    println!("{} surface(s) read", surfaces.len());
+    // Counted by what was read, not by what was searched: a blob that would not
+    // decode was searched for what it spells in ASCII and is listed as unread
+    // below, and a total that included it would claim a reading nobody did.
+    let read = surfaces.iter().filter(|surface| surface.read).count();
+    println!("{read} surface(s) read");
+    let partly = surfaces.len().saturating_sub(read);
+    if partly > 0 {
+        println!(
+            "{partly} more searched only for what their bytes spell in ASCII, and listed as \
+             unread below"
+        );
+    }
     for refusal in &refusals {
         eprintln!("would be republished: {}", refusal.report.trim_end());
         eprintln!();

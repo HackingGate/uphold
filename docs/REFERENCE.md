@@ -2634,6 +2634,17 @@ partial clone — is reported as a surface this run could not read, and so is ex
 `2`. It is not skipped: an object the audit could not open is not an object the
 audit found clean.
 
+Each blob is decoded the way the guards decode it: a byte-order mark is
+honoured, so a UTF-16 file is searched as the text it holds rather than as
+replacement characters. A blob that is neither text nor binary — Latin-1, or a
+UTF-16 mark over bytes that do not decode as UTF-16 — is reported as a surface
+this run could not read, is left out of the count of surfaces read, and so is
+exit `2`. It is still searched for what its bytes spell in ASCII, so a name
+written in it is reported too, and that finding makes the exit `1`: a violation
+outranks an unread surface, and both are printed. A binary blob is still
+searched, where the guards skip it, because a name written into one as plain
+bytes is published by the flip all the same.
+
 The edit history is a **standing caveat**, not an unreadable surface. It is true
 of every run, on every repository, and nothing about this run could change it —
 so it is stated in the body of every report and is *not* counted as something
