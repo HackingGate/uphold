@@ -3794,6 +3794,30 @@ fn nonempty_env(name: &str) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
+/// The command line an editor was opened for, as the words `install_editor`
+/// packed.
+///
+/// The inverse of the `shell_words::join` there, and refused rather than
+/// guessed at when it is not one: these words are collected again, a target
+/// flag among them picks the repository the forge is asked about, and a split
+/// that disagrees with the packing is a destination nobody gave. An empty list
+/// is no better a guess -- it is the checkers of no command line at all. An
+/// absent variable is a different case and keeps the reading it always had:
+/// nothing was packed, so there is nothing a split could have misread.
+fn unpacked_argv(name: &str, packed: Option<&str>) -> Result<Vec<String>> {
+    let Some(packed) = packed else {
+        return Ok(Vec::new());
+    };
+    shell_words::split(packed).map_err(|_| {
+        Fatal::new(format!(
+            "{name}: the command line this editor was opened for ({packed:?}, in \
+             {EDITOR_ARGV}) could not be split back into its words, so which checkers stand \
+             in front of it and where the body is going could not be established. Nothing was \
+             published"
+        ))
+    })
+}
+
 /// One word for a shell that is going to split what it is handed.
 ///
 /// The editor variable holds a command LINE rather than a path -- `code --wait`
@@ -3874,10 +3898,16 @@ fn install_editor(
         .or_else(|| nonempty_env("EDITOR"))
         .unwrap_or_else(|| String::from("vi"));
     command.env(EDITOR_REAL, editor);
-    // Only the words that decide WHICH checkers stand in front of this command
-    // line. They are matched as a subsequence and never re-executed, so joining
-    // them is enough and quoting them would be pretending otherwise.
-    command.env(EDITOR_ARGV, argv.join(" "));
+    // The command line the editor is being opened for, quoted so that it comes
+    // back as the words it went in as. The editor pass does more with them than
+    // pick checkers: it collects them again, and a target flag among them
+    // decides which repository the forge is asked about. Joined with bare
+    // spaces, a title of `ok -R acme/private` came back as four words naming a
+    // target the real command never had, the forge answered for that one, and
+    // a body bound somewhere public stood every `public-target` rule down. The
+    // words are never executed; the quoting is there so `unpacked_argv` is the
+    // exact inverse of this.
+    command.env(EDITOR_ARGV, shell_words::join(argv));
     // These two are data the editor pass reads, and neither one routes anything:
     // a `git` that inherits them is a `git` that does nothing with them. What
     // says "you are the editor" is the flag below, which only the process the
@@ -4005,6 +4035,10 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
             "{name}: re-entered as an editor with no file to edit"
         )));
     };
+    // Read before the editor opens rather than after it closes: a command line
+    // that cannot be read back is a checkpoint that already knows it cannot
+    // judge what is about to be typed into it.
+    let opened_for = unpacked_argv(name, nonempty_env(EDITOR_ARGV).as_deref())?;
     let editor = nonempty_env(EDITOR_REAL).unwrap_or_else(|| String::from("vi"));
     // Through a shell, exactly the way the command would have run it, and with
     // the marker removed: the child here is the user's own editor, and a second
@@ -4036,11 +4070,6 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
         return Ok(Exit::Clean);
     }
 
-    let opened_for: Vec<String> = nonempty_env(EDITOR_ARGV)
-        .unwrap_or_default()
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect();
     let subject = Subject {
         kind: "text",
         value: text,
@@ -6340,6 +6369,64 @@ mod tests {
         );
         // And the user's own editor, which this variable no longer names.
         assert!(environment.contains_key(EDITOR_REAL));
+    }
+
+    #[test]
+    fn the_command_line_an_editor_was_opened_for_comes_back_word_for_word() {
+        // Packed with bare spaces and split on whitespace, a title that spelled
+        // a flag came back as that flag, and the editor pass asked the forge
+        // about a repository the real command never named. Every word here
+        // carries something a whitespace split or a careless quote loses.
+        let words: Vec<String> = [
+            "pr",
+            "create",
+            "--title",
+            "ok -R acme/private",
+            "--body",
+            r#"it's "quoted" and \ back-slashed"#,
+            "",
+            "  padded  ",
+            "tab\there",
+            "line\nbreak",
+            "$HOME `id` *",
+            // An unquoted `#` opening a word starts a comment for the split,
+            // which would drop this word and every one after it.
+            "# a heading",
+            "trailing",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let mut command = Command::new("true");
+        install_editor(
+            &mut command,
+            "faux",
+            "FAUX_EDITOR",
+            Some(Path::new("/opt/uphold")),
+            &words,
+            EditorPath::Opens,
+        )
+        .unwrap();
+        let packed = command
+            .get_envs()
+            .find(|(name, _)| *name == EDITOR_ARGV)
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned());
+        assert_eq!(unpacked_argv("faux", packed.as_deref()).unwrap(), words);
+        // Nothing packed is nothing misread.
+        assert_eq!(unpacked_argv("faux", None).unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_command_line_that_cannot_be_split_back_is_refused_not_guessed() {
+        // An unclosed quote is not a command line `install_editor` packed, and
+        // the empty list the old split fell back to is the checkers of no
+        // command line at all.
+        let error = unpacked_argv("faux", Some("pr create --title 'unclosed"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("could not be split"), "{error}");
+        assert!(error.contains("Nothing was published"), "{error}");
     }
 
     /// `-c alias.cm=<value> cm <rest>`: the alias written on the command line,
