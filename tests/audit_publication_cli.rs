@@ -730,3 +730,139 @@ fn a_commit_only_on_a_retained_pull_ref_is_read() {
     assert!(report.contains("retained pull ref"), "{report}");
     let _ = std::fs::remove_dir_all(&origin);
 }
+
+/// UTF-16 bytes as a file on disk holds them, byte-order mark first.
+fn utf16le(text: &str) -> Vec<u8> {
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in text.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    bytes
+}
+
+/// A private name in a UTF-16 file is found.
+///
+/// The blobs were read with `String::from_utf8_lossy`, which makes a UTF-16
+/// file replacement characters with NULs between them. The name inside matched
+/// nothing and the blob was still counted as read, so with a forge that
+/// answered, this fixture ended on "every one of them is clean" and exit 0 --
+/// the report the flip is taken on.
+#[test]
+fn a_name_in_a_utf16_file_is_found() {
+    let root = repository();
+    let origin = origin_for(&root, "publication-utf16-origin");
+    std::fs::write(
+        root.join("NOTES.txt"),
+        utf16le("we hit this in PrivateOrg first\n"),
+    )
+    .unwrap();
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "notes", "--no-verify"]);
+    support::git(&root, &["push", "-q", "origin", "main"]);
+
+    // A stub `gh`, for the reason `audit_with_gh` gives, and so that the forge
+    // half reads clean: what is left to decide the exit is the blob.
+    let output = audit_with_gh(&root, "exit 0\n");
+    let report = text(&output);
+    assert_eq!(
+        code(&output),
+        1,
+        "the name is in the file, written in UTF-16:\n{report}"
+    );
+    assert!(report.contains("NOTES.txt (blob "), "{report}");
+    let _ = std::fs::remove_dir_all(&origin);
+}
+
+/// A blob that is neither text nor binary is a surface this run did not read.
+///
+/// Latin-1 is the ordinary case: one byte that is not UTF-8 and no NUL to call
+/// the file an image. Read lossily it was counted among the surfaces read and
+/// the run could exit 0, a coverage claim over text nobody decoded.
+#[test]
+fn a_blob_that_does_not_decode_is_reported_unread() {
+    let root = repository();
+    let origin = origin_for(&root, "publication-undecodable-origin");
+    std::fs::write(root.join("latin1.txt"), b"caf\xe9 au lait\n").unwrap();
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["push", "-q", "origin", "main"]);
+
+    let output = audit_with_gh(&root, "exit 0\n");
+    let report = text(&output);
+    assert_eq!(
+        code(&output),
+        2,
+        "a blob nobody could decode is not a blob found clean:\n{report}"
+    );
+    let (_, measured) = report.split_once("could NOT be read:").unwrap();
+    assert!(measured.contains("latin1.txt (blob "), "{report}");
+    assert!(
+        !report.contains("every surface a flip would republish"),
+        "{report}"
+    );
+    // Searched, but not counted as read: the total names only what was.
+    assert!(
+        report.contains("1 more searched only for what their bytes spell in ASCII"),
+        "{report}"
+    );
+    let _ = std::fs::remove_dir_all(&origin);
+}
+
+/// A name in ASCII inside a blob that does not decode is still found.
+///
+/// Recording the blob as unread is half the answer. A lossy reading keeps every
+/// ASCII byte, so the name in this Latin-1 file was a finding before the audit
+/// learned to decode blobs, and reporting only "could not be read" would turn
+/// that finding into a line that says nothing about it. Both are reported; the
+/// finding decides the exit, as a violation outranks an unread surface.
+#[test]
+fn a_name_in_a_blob_that_does_not_decode_is_still_found() {
+    let root = repository();
+    let origin = origin_for(&root, "publication-undecodable-name-origin");
+    std::fs::write(
+        root.join("latin1.txt"),
+        b"caf\xe9 au lait, as PrivateOrg serves it\n",
+    )
+    .unwrap();
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["push", "-q", "origin", "main"]);
+
+    let output = audit_with_gh(&root, "exit 0\n");
+    let report = text(&output);
+    assert_eq!(
+        code(&output),
+        1,
+        "the name is plain ASCII in a file that is not UTF-8:\n{report}"
+    );
+    // The finding, on stderr where every finding is printed.
+    let findings = String::from_utf8_lossy(&output.stderr);
+    assert!(findings.contains("would be republished"), "{report}");
+    assert!(findings.contains("latin1.txt (blob "), "{report}");
+    // And the same blob listed as unread, on stdout with the rest of the report.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (_, measured) = stdout.split_once("could NOT be read:").unwrap();
+    assert!(measured.contains("latin1.txt (blob "), "{report}");
+    let _ = std::fs::remove_dir_all(&origin);
+}
+
+/// A name written into a binary blob as plain bytes is still found.
+///
+/// The guards skip a binary blob, for want of lines to point at. This audit
+/// read every blob's bytes before it learned to decode them, and the decoder
+/// is not a reason to stop: the flip serves the binary with the name in it.
+#[test]
+fn a_name_in_a_binary_blob_is_still_found() {
+    let root = repository();
+    let origin = origin_for(&root, "publication-binary-origin");
+    std::fs::write(root.join("blob.bin"), b"\x00\x01\xffPrivateOrg\x00\n").unwrap();
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    support::git(&root, &["push", "-q", "origin", "main"]);
+
+    let output = audit_with_gh(&root, "exit 0\n");
+    let report = text(&output);
+    assert_eq!(code(&output), 1, "{report}");
+    assert!(report.contains("blob.bin (blob "), "{report}");
+    let _ = std::fs::remove_dir_all(&origin);
+}
