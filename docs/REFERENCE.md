@@ -2386,9 +2386,13 @@ to `<this binary> shim --as-editor <command>`, and `--as-editor` is what tells
 the re-entered process that it is the editor. Two environment variables carry
 the data it then needs, both set by the shim on the command it execs:
 `UPHOLD_SHIM_EDITOR_REAL` (the user's actual editor command line) and
-`UPHOLD_SHIM_EDITOR_ARGV` (the original argv words, read only to decide which
-`command.before` rules apply). Neither routes anything, so a process that
-inherits them does nothing with them.
+`UPHOLD_SHIM_EDITOR_ARGV` (the original argv words, quoted as a shell would
+quote them). The editor pass splits the words back exactly and reads them the
+way the argv pass did: they decide which `command.before` rules apply, and a
+target flag among them decides which repository the forge is asked about. A
+value that does not split back is refused with exit 2 before the editor opens,
+rather than read as no words at all. Neither variable routes anything, so a
+process that inherits them does nothing with them.
 
 Routing an editor re-entry through the environment would be a defect: an
 environment is inherited by every descendant, and the

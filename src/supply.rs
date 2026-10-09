@@ -1720,11 +1720,6 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
     Ok(Section::Clean)
 }
 
-/// A file that exists for one child process and is removed on the way out.
-///
-/// Hand-rolled rather than a crate, because this is the only place the binary
-/// needs one and the contract is four lines: named, filled, handed to one
-/// command, gone.
 /// The gitleaks release this binary is tested against.
 ///
 /// Pinned here, unlike the other five scanners, because gitleaks' verdict is
@@ -1876,26 +1871,93 @@ fn gitleaks_could_not_look(code: i32, _stdout: &str, stderr: &str) -> Option<Str
     ))
 }
 
+/// A file that exists for one child process and is removed on the way out.
+///
+/// Hand-rolled rather than a crate, because this is the only place the binary
+/// needs one and the contract is short: named, filled, handed to one command,
+/// gone. The part of it a crate would have done unasked is that the name lives
+/// in a temporary directory everyone on the machine can write to, so that part
+/// is spelled out in `TempFile::containing`.
 mod tempfile_guard {
-    use std::path::PathBuf;
+    use std::io::{ErrorKind, Write as _};
+    use std::path::{Path, PathBuf};
 
     use crate::error::{Fatal, Result};
+
+    /// How many names are drawn before a taken one stops reading as bad luck
+    /// and starts reading as somebody else writing into the directory.
+    const ATTEMPTS: usize = 16;
 
     pub(super) struct TempFile {
         pub path: PathBuf,
     }
 
     impl TempFile {
+        /// A new file in the temporary directory holding `text`.
+        ///
+        /// The name was the process id and a counter, which anyone on the
+        /// machine can work out, and the file was filled with `fs::write`,
+        /// which opens whatever already sits at the path: a link planted there
+        /// first was followed, and its target truncated and overwritten with a
+        /// scanner's configuration, at whatever mode the umask left -- usually
+        /// world-readable. Now the file is created with `create_new`, which
+        /// refuses any path that exists, a dangling link included, and on unix
+        /// it is created readable by its owner alone. That refusal is what
+        /// keeps a planted file from being adopted; the clock in the name only
+        /// makes a planted one rarer, and a name that is taken is a reason to
+        /// draw another, a bounded number of times, and never to open it.
         pub(super) fn containing(text: &str) -> Result<Self> {
             use std::sync::atomic::{AtomicUsize, Ordering};
             static NEXT: AtomicUsize = AtomicUsize::new(0);
-            let path = std::env::temp_dir().join(format!(
-                "uphold-supply-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            std::fs::write(&path, text).map_err(|error| Fatal::at(&path, error))?;
-            Ok(Self { path })
+            let directory = std::env::temp_dir();
+            let names = std::iter::repeat_with(|| {
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| since.as_nanos());
+                directory.join(format!(
+                    "uphold-supply-{}-{stamp}-{}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, Ordering::Relaxed)
+                ))
+            });
+            Self::first_free(&directory, names, text)
+        }
+
+        /// The first of `names` that did not exist, created and filled.
+        ///
+        /// Apart from `containing` so a test can choose the names, and so
+        /// plant something on them first.
+        pub(super) fn first_free(
+            directory: &Path,
+            names: impl IntoIterator<Item = PathBuf>,
+            text: &str,
+        ) -> Result<Self> {
+            for path in names.into_iter().take(ATTEMPTS) {
+                let mut options = std::fs::OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+                match options.open(&path) {
+                    Ok(mut file) => {
+                        // Owned before it is filled, so a write that fails
+                        // still removes the file on the way out.
+                        let made = Self { path };
+                        file.write_all(text.as_bytes())
+                            .map_err(|error| Fatal::at(&made.path, error))?;
+                        return Ok(made);
+                    }
+                    Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(Fatal::at(&path, error)),
+                }
+            }
+            Err(Fatal::at(
+                directory,
+                format!(
+                    "{ATTEMPTS} temporary file names in a row were already taken, so something \
+                     else is writing here and none of them was opened. Point TMPDIR at a \
+                     directory only you can write to"
+                ),
+            ))
         }
     }
 
@@ -2246,5 +2308,78 @@ mod tests {
             "{ci}"
         );
         assert!(ci.contains("must not miss one"), "{ci}");
+    }
+
+    /// What `fs::write` did to a path somebody reached first: followed the
+    /// link and overwrote its target, or truncated the file sitting there. A
+    /// taken name is now passed over and the next one is used.
+    #[cfg(unix)]
+    #[test]
+    fn a_temporary_file_never_opens_a_path_somebody_reached_first() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = crate::fixture::scratch("supply-tempfile");
+        std::fs::create_dir_all(&root).unwrap();
+        let planted = root.join("planted");
+        std::fs::write(&planted, "planted\n").unwrap();
+        let victim = root.join("victim");
+        std::fs::write(&victim, "victim\n").unwrap();
+        let linked = root.join("linked");
+        std::os::unix::fs::symlink(&victim, &linked).unwrap();
+        // A link to nothing is a path that exists as far as `create_new` is
+        // concerned, and following it would create the file it points at.
+        let dangling = root.join("dangling");
+        let nowhere = root.join("nowhere");
+        std::os::unix::fs::symlink(&nowhere, &dangling).unwrap();
+        let free = root.join("free");
+
+        let made = super::tempfile_guard::TempFile::first_free(
+            &root,
+            [planted.clone(), linked, dangling, free.clone()],
+            "scanner configuration\n",
+        )
+        .unwrap();
+        assert_eq!(made.path, free);
+        assert_eq!(std::fs::read_to_string(&planted).unwrap(), "planted\n");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "victim\n");
+        assert!(!nowhere.exists(), "a dangling link was followed");
+        assert_eq!(
+            std::fs::read_to_string(&free).unwrap(),
+            "scanner configuration\n"
+        );
+        let bits = std::fs::metadata(&free).unwrap().permissions().mode();
+        assert_eq!(bits & 0o777, 0o600, "mode {bits:o}");
+        drop(made);
+        assert!(!free.exists(), "the file outlived the guard");
+    }
+
+    /// Every name taken is somebody writing into the directory, and is said
+    /// so rather than drawn from forever or settled by opening one of them.
+    #[test]
+    fn a_temporary_directory_with_every_name_taken_is_refused() {
+        let root = crate::fixture::scratch("supply-tempfile-taken");
+        std::fs::create_dir_all(&root).unwrap();
+        let taken = root.join("taken");
+        std::fs::write(&taken, "taken\n").unwrap();
+        let error = super::tempfile_guard::TempFile::first_free(
+            &root,
+            std::iter::repeat(taken.clone()),
+            "scanner configuration\n",
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("already taken"), "{error}");
+        assert_eq!(std::fs::read_to_string(&taken).unwrap(), "taken\n");
+    }
+
+    /// The path the scanners are actually handed, made the way they get it.
+    #[test]
+    fn a_temporary_file_holds_what_it_was_given_and_goes_with_its_guard() {
+        let made = super::tempfile_guard::TempFile::containing("a config\n").unwrap();
+        let path = made.path.clone();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a config\n");
+        drop(made);
+        assert!(!path.exists(), "the file outlived the guard");
     }
 }

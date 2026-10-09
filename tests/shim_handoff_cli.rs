@@ -1163,6 +1163,115 @@ scope = "public-target"
     );
 }
 
+/// A forge that knows one private repository and calls everything else
+/// public, recording what it was asked.
+const ONE_PRIVATE_REPOSITORY: &str = "#!/bin/sh\nif [ \"$1\" = api ]; then\n  echo \"$*\" >> \"$GH_CALLS\"\n  case \"$*\" in\n    *acme/private*) echo private ;;\n    *) echo public ;;\n  esac\n  exit 0\nfi\necho \"gh ran: $*\"\n";
+
+#[test]
+fn a_title_that_spells_a_flag_does_not_redirect_the_editor_pass() {
+    // The command line the editor was opened for crosses into the editor pass
+    // through the environment, and it was packed with spaces and unpacked by
+    // splitting on them. A title of `ok -R acme/private` came back as four
+    // words, the `-R` among them named a target the real command never had,
+    // the forge called that one private, and the `public-target` rule stood
+    // down -- so a body bound for a PUBLIC repository was read by nobody and
+    // published with exit 0. The words come back as the words they were.
+    let policy = r#"
+[rule.marker-on-a-public-target]
+message = "remove the marker"
+regexp = "Claude Code"
+files.exclude = ["policy/**"]
+command.before = ["faux"]
+
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+title_flags = ["-t", "--title"]
+text_flags = ["-b", "--body"]
+target_flags = ["-R", "--repo"]
+target = "git-remote"
+editor_env = "FAUX_EDITOR"
+scope = "public-target"
+"#;
+    let root = workspace(
+        policy,
+        &[
+            ("faux", EDITING_COMMAND),
+            ("gh", ONE_PRIVATE_REPOSITORY),
+            (
+                "dirty-editor",
+                "#!/bin/sh\nprintf 'Generated with Claude Code\\n' > \"$1\"\n",
+            ),
+        ],
+    );
+    origin(&root, "https://github.com/acme/widget.git");
+    let calls = root.join("gh-calls.log");
+    let editor = root.join("bin/dirty-editor");
+    let output = Run {
+        args: &["faux", "pr", "create", "--title", "ok -R acme/private"],
+        envs: &[
+            ("GH_CALLS", &calls.to_string_lossy()),
+            ("EDITOR", &editor.to_string_lossy()),
+        ],
+        ..Run::default()
+    }
+    .go(&root);
+
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("faux published:"),
+        "a body bound for a public repository was published unchecked: {}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("marker-on-a-public-target"),
+        "{}",
+        stderr(&output)
+    );
+    let asked = std::fs::read_to_string(&calls).unwrap_or_default();
+    assert!(
+        !asked.contains("acme/private"),
+        "the forge was asked about a repository only the title named: {asked:?}"
+    );
+}
+
+#[test]
+fn an_editor_argv_that_cannot_be_split_is_refused() {
+    // Anything else would be a guess at which command line the body was
+    // written for, and an empty guess consults the checkers of no command
+    // line at all. Refused before the editor opens, so nobody types a body
+    // into a checkpoint that already knows it cannot judge it.
+    let root = workspace(
+        EDITOR_MARKER_POLICY,
+        &[
+            ("faux", EDITING_COMMAND),
+            (
+                "ordinary-editor",
+                "#!/bin/sh\n: > \"$PWD/editor-opened\"\nprintf 'An ordinary body\\n' > \"$1\"\n",
+            ),
+        ],
+    );
+    let editor = root.join("bin/ordinary-editor");
+    let output = as_editor(
+        &root,
+        &editor,
+        &[(
+            "UPHOLD_SHIM_EDITOR_ARGV",
+            "faux pr create --title 'unclosed",
+        )],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("could not be split"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !root.join("editor-opened").exists(),
+        "the editor opened for a command line that could not be read"
+    );
+}
+
 #[test]
 fn a_forge_that_could_not_answer_is_refused_before_the_command_runs() {
     // Unauthenticated, rate-limited, offline, or a host no resolver knows. The
