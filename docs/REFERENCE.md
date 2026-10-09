@@ -1447,7 +1447,11 @@ file guard bans:
   pass. Because those languages are written without spaces, a run of East
   Asian letters and a run of Latin letters are two words where they meet: an
   `API` or `README` run straight into a Japanese or Chinese subject is not a
-  mixed word and passes. A skeleton made only of characters no script owns
+  mixed word and passes. The exception is a letter at that boundary which is
+  itself drawn like the other side's script: U+3007 IDEOGRAPHIC NUMBER ZERO is
+  Han with a Latin `O` for its skeleton, so `g` + U+3007 + `od` stays one word
+  and is refused, while a kanji numeral carrying it with no Latin letter beside
+  it passes. A skeleton made only of characters no script owns
   (the kanji for "one" skeletons to the katakana prolonged sound mark) is not
   "drawn like" any script.
 
@@ -1468,7 +1472,10 @@ the first line with anything on it. At `commit-msg` the file is read before
 git's cleanup, and whether a line opening with `core.commentChar` (default `#`)
 is stripped depends on the cleanup mode (`git commit -m "#42 Fix"` keeps it, the
 editor strips it), so where the first such line opens with the comment
-character, the first line that does not is judged as well. A pushed commit was
+character, the first line that does not is judged as well. Both rules read it
+that way, so a `commit.template` whose first line is a non-ASCII comment is
+refused under `ascii-only-commit-subject` although the editor would strip it;
+the report says why, and a template opening with an ASCII line passes. A pushed commit was
 already cleaned up, and its first line is its subject. A **title** a shim
 collects is a subject as well: `gh pr merge --subject` is one outright, and a
 pull-request title becomes one when the forge squash-merges it, on a branch no
