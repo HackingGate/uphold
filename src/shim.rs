@@ -280,7 +280,7 @@ fn read_cluster(argument: &str, arity: impl Fn(&str) -> Option<bool>) -> Cluster
 
 /// A whole commit message as the subjects it is: its first line a title,
 /// because that line is the commit subject, and the rest a body.
-fn message_subjects(message: String) -> Vec<Subject> {
+pub(crate) fn message_subjects(message: String) -> Vec<Subject> {
     let Some((first, rest)) = message.split_once('\n') else {
         return vec![Subject {
             kind: Subject::HEADLINE,
@@ -555,17 +555,26 @@ const API_FIELD_FLAGS: &[&str] = &["-f", "--raw-field", "-F", "--field"];
 /// The typed field spellings, whose `@file` is read.
 const API_TYPED_FIELD_FLAGS: &[&str] = &["-F", "--field"];
 
-/// The `api` field keys whose value is a headline rather than prose: a pull
-/// request's, merge request's or issue's `title` on either forge, and the
-/// `commit_title` a GitHub merge writes as the commit subject. The same subject kind `--title` and `--subject` collect,
-/// so the same text gets the same check whichever door it came through.
-const API_TITLE_KEYS: &[&str] = &["title", "commit_title"];
+/// The field keys whose value is a headline rather than prose: a pull
+/// request's, merge request's or issue's `title` on either forge, the
+/// `commit_title` a GitHub merge writes as the commit subject, and the
+/// `subject` that `--subject` spells. The same subject kind `--title` and
+/// `--subject` collect, so the same text gets the same check whichever door it
+/// came through -- an `api` field here, and a tool call's argument at the
+/// harness hook, which reads this same list.
+///
+/// A closed list, and safe as one in a way a table of fields to READ is not: a
+/// key missing from it leaves its value judged as prose, which is what every
+/// string was judged as before the list existed. It can add a check and never
+/// remove one.
+pub(crate) const API_TITLE_KEYS: &[&str] = &["title", "commit_title", "subject"];
 
-/// The `api` field keys whose value is a whole commit message: GitLab's
+/// The field keys whose value is a whole commit message: GitLab's
 /// `squash_commit_message` and `merge_commit_message` on a merge request's
 /// merge. The first line is the subject and is judged as a title, the rest as
-/// a body, the way `glab mr merge --squash-message` is.
-const API_MESSAGE_KEYS: &[&str] = &["squash_commit_message", "merge_commit_message"];
+/// a body, the way `glab mr merge --squash-message` is. Read by the harness
+/// hook too, for the same reason as [`API_TITLE_KEYS`].
+pub(crate) const API_MESSAGE_KEYS: &[&str] = &["squash_commit_message", "merge_commit_message"];
 
 /// Whether an `api` option takes the word after it.
 fn api_takes_value(flag: &str) -> bool {

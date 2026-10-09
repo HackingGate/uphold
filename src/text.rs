@@ -290,21 +290,44 @@ pub(crate) fn over_kinds<V>(
     Ok(verdicts)
 }
 
+/// One headline a seam was handed beside its prose: a title, or a commit
+/// message's first line, and what the report calls it.
+pub(crate) struct Headline {
+    pub label: String,
+    pub text: String,
+}
+
 /// Everything a piece of published text is judged by, at one seam.
 ///
 /// The single assembly. `label` is what the subject is called in a report --
 /// the tool name at the hook, the source at `--text` -- and is reported rather
-/// than matched on.
+/// than matched on. `text` is the prose; `headlines` are the subjects the seam
+/// could tell apart from it, which only the harness hook can, by a tool call's
+/// argument names. Every checker but the guards reads the two joined, as it
+/// always has; the guards are handed each headline as one, so the lookalike
+/// pass a title gets at the shim is the pass it gets here.
 pub(crate) fn judged(
     seam: Seam,
     root: &std::path::Path,
     policy: &Policy,
     label: &str,
     text: &str,
+    headlines: &[Headline],
 ) -> Result<Vec<Verdict>> {
+    let joined;
+    let whole = if headlines.is_empty() {
+        text
+    } else {
+        joined = std::iter::once(text)
+            .chain(headlines.iter().map(|headline| headline.text.as_str()))
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        joined.as_str()
+    };
     over_kinds(seam, |kind| {
         Ok(match kind {
-            Judged::Literals => failures_in(root, policy, text)?
+            Judged::Literals => failures_in(root, policy, whole)?
                 .into_iter()
                 .map(Verdict::Rule)
                 .collect(),
@@ -314,27 +337,50 @@ pub(crate) fn judged(
             // `public-target` scope about. The shim, which does have one,
             // passes its own memo.
             Judged::Guards => {
-                // Not a headline: what these seams are handed is a body, or a
-                // tool call's strings joined, and neither says which part of
-                // it is a subject.
-                let published = crate::guard::Published {
-                    label,
-                    text,
-                    added: None,
-                    headline: false,
-                };
-                crate::guard::over_text(root, policy, None, &published, &mut |_| Ok(true))?
-                    .into_iter()
-                    .map(Verdict::Guard)
-                    .collect()
+                // The prose is not a headline: what these seams are handed is a
+                // body, or a tool call's strings joined, and neither says which
+                // part of it is a subject. The headlines are, each on its own,
+                // because a subject is judged line by line as one.
+                let mut verdicts = Vec::new();
+                if !text.is_empty() || headlines.is_empty() {
+                    let published = crate::guard::Published {
+                        label,
+                        text,
+                        added: None,
+                        headline: false,
+                    };
+                    verdicts.extend(crate::guard::over_text(
+                        root,
+                        policy,
+                        None,
+                        &published,
+                        &mut |_| Ok(true),
+                    )?);
+                }
+                for headline in headlines {
+                    let published = crate::guard::Published {
+                        label: &headline.label,
+                        text: &headline.text,
+                        added: None,
+                        headline: true,
+                    };
+                    verdicts.extend(crate::guard::over_text(
+                        root,
+                        policy,
+                        None,
+                        &published,
+                        &mut |_| Ok(true),
+                    )?);
+                }
+                verdicts.into_iter().map(Verdict::Guard).collect()
             }
-            Judged::Prose => crate::prose::over_text(policy, seam, text)?
+            Judged::Prose => crate::prose::over_text(policy, seam, whole)?
                 .into_iter()
                 .map(Verdict::Rule)
                 .collect(),
             // Only the hook consults these here, and only the rules whose
             // `seams` names it -- see `Seam::runs_by_default`.
-            Judged::Patterns => patterns_over(policy, seam, label, text)?
+            Judged::Patterns => patterns_over(policy, seam, label, whole)?
                 .into_iter()
                 .map(Verdict::Rule)
                 .collect(),
@@ -414,7 +460,7 @@ fn patterns_over(policy: &Policy, seam: Seam, label: &str, text: &str) -> Result
 pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<Exit> {
     let text = read(source)?;
     let (root, policy) = load_for(found)?;
-    let verdicts = judged(Seam::Scan, &root, &policy, source, &text)?;
+    let verdicts = judged(Seam::Scan, &root, &policy, source, &text, &[])?;
 
     for verdict in &verdicts {
         match verdict {
