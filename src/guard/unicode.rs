@@ -264,30 +264,49 @@ impl Lookalike {
 /// letters and a run of anything else are two words where they meet: `API`
 /// run into a kanji compound is two single-script words, not one mixed one,
 /// and a script boundary between Latin and kanji is not a lookalike.
+///
+/// Except where the letter at the boundary is itself drawn as the other
+/// side's script. U+3007 IDEOGRAPHIC NUMBER ZERO is Han, and its skeleton is
+/// a Latin `O`: in `g` + U+3007 + `od` it is the disguise the rule exists
+/// for, and splitting there would leave three single-script words and no
+/// finding. So a crossing letter stays in the word when it is drawn as the
+/// word's script, or when every letter so far is drawn as the crossing one's
+/// (U+3007 + `K`), and `lookalikes_in_word` judges the word whole. A kanji
+/// compound carrying U+3007 with no Latin letter beside it never crosses.
 pub(crate) fn lookalikes(line: &str) -> Vec<Lookalike> {
     let mut found = Vec::new();
     let mut word: Vec<char> = Vec::new();
     let mut start = 0usize;
-    // Whether the word so far is written in an East Asian script, once a
-    // letter has said so. A mark carries no script and never decides it.
-    let mut east_asian: Option<bool> = None;
+    // The script the word so far is written in, once a letter has said so. A
+    // mark carries no script and never decides it, and neither does a letter
+    // kept in the word as another script's disguise.
+    let mut current: Option<Script> = None;
     // A trailing space closes the last word, so the loop has one exit.
     for (index, character) in line.chars().chain(std::iter::once(' ')).enumerate() {
         let script = character.script();
-        let crosses = names_a_script(script)
-            && east_asian.is_some_and(|current| current != is_east_asian(script));
-        if !word.is_empty() && (!in_a_word(character) || crosses) {
+        let crossing = current.filter(|&decided| {
+            names_a_script(script) && is_east_asian(decided) != is_east_asian(script)
+        });
+        let disguised_here = crossing.is_some_and(|decided| drawn_as(character, decided));
+        let word_disguised = crossing.is_some()
+            && word
+                .iter()
+                .filter(|letter| names_a_script(letter.script()))
+                .all(|&letter| drawn_as(letter, script));
+        if !word.is_empty()
+            && (!in_a_word(character) || (crossing.is_some() && !disguised_here && !word_disguised))
+        {
             found.extend(lookalikes_in_word(&word, start));
             word.clear();
-            east_asian = None;
+            current = None;
         }
         if in_a_word(character) {
             if word.is_empty() {
                 start = index;
             }
             word.push(character);
-            if names_a_script(script) {
-                east_asian = Some(is_east_asian(script));
+            if names_a_script(script) && !disguised_here {
+                current = Some(script);
             }
         }
     }
@@ -857,6 +876,38 @@ mod tests {
             "Webhook\u{4E00}\u{6642}\u{505C}\u{6B62}",
             "Docker\u{30CE}\u{30FC}\u{30C9}",
             "\u{D55C}\u{AD6D}\u{C5B4}API\u{6587}\u{66F8}",
+            "API\u{BB38}\u{C11C} \u{CD94}\u{AC00}",
+        ] {
+            let found: Vec<String> = lookalikes(line).iter().map(Lookalike::describe).collect();
+            assert!(found.is_empty(), "{line}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn an_ideographic_zero_inside_a_latin_word_is_a_lookalike() {
+        // U+3007 is Han and its skeleton is a Latin O, so the East Asian
+        // boundary does not split the word at it, on either side.
+        for line in [
+            "g\u{3007}od",
+            "C\u{3007}DE",
+            "\u{3007}K",
+            "Fix the g\u{3007}od path",
+        ] {
+            let found = lookalikes(line);
+            assert_eq!(found.len(), 1, "{line}");
+            assert_eq!(found[0].character, '\u{3007}', "{line}");
+            assert!(
+                found[0].describe().contains("IDEOGRAPHIC NUMBER ZERO"),
+                "{}",
+                found[0].describe()
+            );
+        }
+        // A kanji numeral carrying it, with no Latin letter beside it, is
+        // one writing system; and `API` run into a compound still splits.
+        for line in [
+            "\u{4E8C}\u{3007}\u{4E8C}\u{516D}\u{5E74}",
+            "\u{4E8C}\u{3007}\u{4E8C}\u{516D}\u{5E74}API\u{4E00}\u{89A7}",
+            "API\u{4E00}\u{89A7}\u{3092}\u{8FFD}\u{52A0}",
         ] {
             let found: Vec<String> = lookalikes(line).iter().map(Lookalike::describe).collect();
             assert!(found.is_empty(), "{line}: {found:?}");

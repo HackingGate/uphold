@@ -357,12 +357,33 @@ pub(crate) fn ascii_only_commit_subject(request: &Request<'_>) -> Result<Option<
             id: request.rule.id.clone(),
             report: format!(
                 "{}\n\nThis repository keeps commit subject lines to printable ASCII. Retype \
-                 the character in ASCII, or admit its codepoint in the rule's `allow` list.",
-                findings.join("\n")
+                 the character in ASCII, or admit its codepoint in the rule's `allow` list.{}",
+                findings.join("\n"),
+                comment_line_note(&text, &allowed, &subjects),
             ),
         }));
     }
     Ok(None)
+}
+
+/// Why a line that opens with the comment character was judged, where one
+/// was and is among the findings -- empty otherwise.
+///
+/// The hook cannot tell `git commit -m "#42 ..."`, which records that line as
+/// the subject, from an editor session, which strips it (see
+/// [`subject_lines`]). So a `commit.template` whose first line is a non-ASCII
+/// comment is refused, and the report says so where it fires rather than
+/// leaving the author to reverse-engineer it.
+fn comment_line_note(text: &str, allowed: &[char], subjects: &[usize]) -> &'static str {
+    let [commented, _, ..] = subjects else {
+        return "";
+    };
+    if non_ascii_in_subject("", text, allowed, &[*commented]).is_empty() {
+        return "";
+    }
+    "\n\nThe first line opens with the comment character and was judged as a subject: \
+     `git commit -m` records such a line, and this hook cannot see whether the editor will \
+     strip it. If it is a `commit.template` comment, open the template with an ASCII line."
 }
 
 fn non_ascii_in_subject(
@@ -703,6 +724,39 @@ mod tests {
         assert_eq!(
             subject_findings("the \u{201C}parser\u{201D}\n", &[]).len(),
             2
+        );
+    }
+
+    #[test]
+    fn a_non_ascii_comment_opening_the_message_is_judged_as_a_subject() {
+        // Kept on purpose. A `commit.template` opening with a Japanese
+        // comment is refused, because the hook cannot tell it from
+        // `git commit -m "# ..."`, which records that line. The report says
+        // why, and how to write the template so it passes.
+        let text = format!("# {JAPANESE}{KANA}\nFix the parser\n");
+        let subjects = subject_lines(&text, Some('#'));
+        assert_eq!(subjects, vec![0, 1]);
+        let found = non_ascii_in_subject("m", &text, &[], &subjects);
+        assert_eq!(found.len(), 6, "{found:?}");
+        assert!(
+            found.iter().all(|finding| finding.starts_with("m:1:")),
+            "{found:?}"
+        );
+        assert!(comment_line_note(&text, &[], &subjects).contains("commit.template"));
+        // An ASCII comment first keeps the Japanese one out of the candidates.
+        let template = format!("# Summary\n# {JAPANESE}{KANA}\nFix the parser\n");
+        let kept = subject_findings(&template, &[]);
+        assert_eq!(kept, Vec::<String>::new());
+        // And the note stays out of a report on an ordinary subject.
+        let plain = "Fix \u{2014} the parser\n";
+        assert_eq!(
+            comment_line_note(plain, &[], &subject_lines(plain, Some('#'))),
+            ""
+        );
+        let under = "# Summary\nFix \u{2014} the parser\n";
+        assert_eq!(
+            comment_line_note(under, &[], &subject_lines(under, Some('#'))),
+            ""
         );
     }
 
