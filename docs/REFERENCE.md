@@ -1450,9 +1450,31 @@ file guard bans:
   `API` or `README` run straight into a Japanese or Chinese subject is not a
   mixed word and passes. The exception is a letter at that boundary which is
   itself drawn like the other side's script: U+3007 IDEOGRAPHIC NUMBER ZERO is
-  Han with a Latin `O` for its skeleton, so `g` + U+3007 + `od` stays one word
-  and is refused, while a kanji numeral carrying it with no Latin letter beside
-  it passes. A skeleton made only of characters no script owns
+  Han with a Latin `O` for its skeleton, and a run of it is read by two rules
+  in order, looking at the nearest letter after the run and before it in the
+  same word; marks and letters no script owns (such as the prolonged sound
+  mark U+30FC) are skipped in that search. (1) Before a Latin letter it joins
+  that Latin word whatever comes before it, so `g` + U+3007 + `od`, U+3007 +
+  `K`, and a kanji or kana run + U+3007 + `K` (a kanji numeral included) are
+  refused in a word where Latin wins or ties the script vote (see below).
+  (2) Otherwise it is read with the letter before it when it is drawn as
+  that letter's script: after a Latin letter it is part of the Latin
+  word, so `TOD` + U+3007 + U+4E00 U+89A7, `TOD` + U+3007 + kana, `HELL` +
+  U+3007 U+3007, and `g` + U+3007 + a Cyrillic `o` are refused; after a kanji,
+  a kana, a Hangul letter, a Cyrillic or Greek letter, a digit, or nothing it
+  stays Han, so kanji numerals,
+  `2026` + U+5E74 U+4E00 U+3007 U+6708, and the U+3007 U+3007 placeholder
+  before kana or kanji pass. A U+3007 read as Latin counts as a Latin letter
+  when the word's script is decided, so a Cyrillic or Greek letter beside it
+  is named when Latin wins or ties that vote. In a word where Cyrillic or
+  Greek letters are the majority (a Cyrillic-spelled `exec` + U+3007 + `t`)
+  U+3007 is not named: the same majority-vote limit lets an all-Cyrillic
+  lookalike of `execot` pass. The cost is U+3007 meant as a numeral or a
+  placeholder right next to Latin letters: U+3007 + `GB`, the U+3007 U+3007
+  placeholder before a Latin word, and a Latin word + U+3007 + a counter (`API` + U+3007 + U+4EF6,
+  "API, zero items") are refused. The report names U+3007, and
+  `allow = ["U+3007"]` admits it. A
+  skeleton made only of characters no script owns
   (the kanji for "one" skeletons to the katakana prolonged sound mark) is not
   "drawn like" any script.
 
@@ -1474,9 +1496,11 @@ git's cleanup, and whether a line opening with `core.commentChar` (default `#`)
 is stripped depends on the cleanup mode (`git commit -m "#42 Fix"` keeps it, the
 editor strips it), so where the first such line opens with the comment
 character, the first line that does not is judged as well. Both rules read it
-that way, so a `commit.template` whose first line is a non-ASCII comment is
-refused under `ascii-only-commit-subject` although the editor would strip it;
-the report says why, and a template opening with an ASCII line passes. A pushed commit was
+that way, so a `commit.template` whose first non-blank line is a non-ASCII
+comment is refused under `ascii-only-commit-subject`, and one whose first
+non-blank line carries a lookalike word under `prevent-unusual-unicode`,
+although the editor would strip it; either report says why, and a template
+opening with an ASCII line passes. A pushed commit was
 already cleaned up, and its first line is its subject. A **title** a shim
 collects is a subject as well: `gh pr merge --subject` is one outright, and a
 pull-request title becomes one when the forge squash-merges it, on a branch no
