@@ -1208,8 +1208,8 @@ The extractor is chosen by the file's kind:
 
 | file | what is prose |
 |---|---|
-| `.md` | the whole file, minus fenced blocks (` ``` `, `~~~`) and indented code (4+ spaces) |
-| `.rst`, `.txt`, `.adoc`, and a file with **no extension** | the whole file, minus fenced blocks |
+| `.md` | the whole file, minus fenced blocks (` ``` `, `~~~`) and indented code (4+ spaces), read by the CommonMark rules for both |
+| `.rst`, `.txt`, `.adoc`, and a file with **no extension** | the whole file, minus fenced blocks, at any indentation |
 | `.rs`, `.py`, `.pyi`, `.go` | the comments, read by the grammar — **doc comments included** |
 | `.toml`, `.yaml`, `.yml`, `.sh`, `.bash`, `.zsh`, `.ini`, `.cfg`, and a dotfile with no extension (`.gitignore`) | the lines whose first non-space character is `#`, with the `#` stripped |
 | anything else | nothing |
@@ -1223,6 +1223,15 @@ the normal thing to write, and a captured PNG under it is not a document
 somebody wrote badly. That silence is indistinguishable from prose with nothing
 wrong in it, so a prose rule is the one most worth giving a
 [`files.min_selected`](#a-rule-may-declare-a-floor-under-what-it-selects).
+
+**Code is found where a CommonMark renderer finds it.** A fence closes only on
+a run of its own character at least as long as the one that opened it, with no
+info string after it, so a ` ```bash ` line inside an open ` ```sh ` block is a
+line of that block, and a fence never closed runs to the end of the file.
+Four spaces open indented code only where they do not continue a paragraph,
+and inside a list item they are counted from where the item's text starts, so
+a nested bullet or a continuation line under an item is prose. Lists are
+approximated line by line rather than parsed; block quotes are not modelled.
 
 **Doc comments are included**, which is the one place this parts company with
 `comment_regexp`. That check excludes them because acting on its findings

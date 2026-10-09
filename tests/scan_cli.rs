@@ -1197,6 +1197,68 @@ fn a_prose_rule_says_nothing_about_a_fenced_example_or_a_file_it_reads_no_prose_
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
+#[test]
+fn a_prose_rule_reads_a_readme_by_the_lines_commonmark_calls_paragraphs() {
+    // A CommonMark renderer shows the `banana` on lines 2, 5, 8, 15 and 22 as
+    // paragraph text, and the ones on lines 12 and 19 inside fenced blocks.
+    // Four spaces under a list item or a paragraph are not code, a shorter
+    // fence does not close a longer one, and a fence with an info string does
+    // not close an open one -- which, read the other way, also left the fence
+    // opened after it running to the end of the file. A finding names the line
+    // its paragraph starts at, so the first three are reported at 1, 4 and 7.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-fruit]
+        message = "no fruit"
+        prose_regexp = 'banana'
+
+        [rule.no-fruit.files]
+        include = ["."]
+        exclude = ["policy/**"]
+"#,
+    );
+    write(
+        &root,
+        "README.md",
+        "- An item\n\
+         \x20   banana two.\n\
+         \n\
+         1. A step\n\
+         \x20   - banana five\n\
+         \n\
+         A paragraph\n\
+         \x20   banana eight.\n\
+         \n\
+         ````markdown\n\
+         ```\n\
+         banana twelve\n\
+         ````\n\
+         \n\
+         After, banana fifteen.\n\
+         \n\
+         ```sh\n\
+         ```bash\n\
+         banana nineteen\n\
+         ```\n\
+         \n\
+         After, banana twenty-two.\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    for line in [1, 4, 7, 15, 22] {
+        let at = format!("README.md:{line}:");
+        assert!(text.contains(&at), "{at} missing from {text}");
+    }
+    for line in [12, 19] {
+        let at = format!("README.md:{line}:");
+        assert!(!text.contains(&at), "{at} reported in {text}");
+    }
+}
+
 /// A selection with no prose in it reads exactly like prose with nothing wrong,
 /// and `files.min_selected` is the floor that tells them apart.
 #[test]
