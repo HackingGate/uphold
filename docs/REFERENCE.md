@@ -1490,7 +1490,10 @@ the rest, prose. An `--input` JSON document is prose in every value, `title`
 included. The harness hook reads a tool call's arguments by the same keys: a
 string under `title`, `commit_title` or `subject` is a subject, and one under
 `squash_commit_message` or `merge_commit_message` is a message, so an MCP
-merge's commit title gets the check `gh pr merge --subject` gets. A pull-request,
+merge's commit title gets the check `gh pr merge --subject` gets. The keys are read in
+every tool the hook's matcher sends it, not only the forge tools, so a matcher
+wider than the documented one puts a `title`, `subject` or `commit_title` of
+any other tool under the lookalike check as well, and a finding names the key. A pull-request,
 issue, release or gist body, a comment, anything handed to
 `uphold guard --text`, and every other string of a tool call is prose a reader
 reads, and the rule asks it only for characters that draw nothing — so `gh issue edit --body-file` over a body that

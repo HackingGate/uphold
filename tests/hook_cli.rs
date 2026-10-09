@@ -654,6 +654,30 @@ fn a_commit_title_argument_is_judged_as_a_subject() {
     refused_as_lookalike(&output);
 }
 
+/// A finding names the key the subject was found under, so the reader is
+/// pointed at `commit_title` or `squash_commit_message` and not at a "title"
+/// the call never carried.
+#[test]
+fn a_finding_names_the_key_it_was_found_under() {
+    for (name, key) in [
+        ("hook-key-commit-title", "commit_title"),
+        ("hook-key-subject", "subject"),
+        ("hook-key-squash-message", "squash_commit_message"),
+    ] {
+        let output = unicode_call(
+            name,
+            "mcp__forge__merge",
+            &serde_json::json!({ key: DISGUISED }),
+        );
+        refused_as_lookalike(&output);
+        let reason = reason(&output);
+        assert!(
+            reason.contains(&format!("mcp__forge__merge {key}")),
+            "{key}: {reason}"
+        );
+    }
+}
+
 /// A pull request's `title` is the subject a squash merge makes of it.
 #[test]
 fn a_title_argument_is_judged_as_a_subject() {

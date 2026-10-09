@@ -118,11 +118,13 @@ pub(crate) fn known() -> String {
 fn strings(value: &Value, key: Option<&str>, into: &mut Collected) {
     match value {
         Value::String(text) => match key {
-            Some(key) if API_TITLE_KEYS.contains(&key) => into.headlines.push(text.clone()),
+            Some(key) if API_TITLE_KEYS.contains(&key) => {
+                into.headlines.push((key.to_owned(), text.clone()));
+            }
             Some(key) if API_MESSAGE_KEYS.contains(&key) => {
                 for subject in message_subjects(text.clone()) {
                     if subject.kind == Subject::HEADLINE {
-                        into.headlines.push(subject.value);
+                        into.headlines.push((key.to_owned(), subject.value));
                     } else {
                         into.prose.push(subject.value);
                     }
@@ -144,11 +146,13 @@ fn strings(value: &Value, key: Option<&str>, into: &mut Collected) {
     }
 }
 
-/// A tool call's strings, sorted by the check each gets.
+/// A tool call's strings, sorted by the check each gets. A headline keeps the
+/// key it was found under, so a finding names `commit_title` or `subject`
+/// rather than a generic "title" the call never said.
 #[derive(Default)]
 struct Collected {
     prose: Vec<String>,
-    headlines: Vec<String>,
+    headlines: Vec<(String, String)>,
 }
 
 /// Put the report inside the harness's refusal document.
@@ -275,8 +279,8 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
     let headlines: Vec<text::Headline> = collected
         .headlines
         .into_iter()
-        .map(|headline| text::Headline {
-            label: format!("{label} title"),
+        .map(|(key, headline)| text::Headline {
+            label: format!("{label} {key}"),
             text: headline,
         })
         .collect();
@@ -347,7 +351,7 @@ mod tests {
         strings(&event, None, &mut found);
         found.prose.sort();
         assert_eq!(found.prose, vec!["b", "c"]);
-        assert_eq!(found.headlines, vec!["a"]);
+        assert_eq!(found.headlines, vec![("title".to_owned(), "a".to_owned())]);
     }
 
     /// A title key is read at any depth, and a message key splits its value
@@ -361,7 +365,14 @@ mod tests {
         let mut found = Collected::default();
         strings(&event, None, &mut found);
         found.headlines.sort();
-        assert_eq!(found.headlines, vec!["m", "s", "t"]);
+        assert_eq!(
+            found.headlines,
+            vec![
+                ("commit_title".to_owned(), "t".to_owned()),
+                ("squash_commit_message".to_owned(), "m".to_owned()),
+                ("subject".to_owned(), "s".to_owned()),
+            ]
+        );
         assert_eq!(found.prose, vec!["\n\nbody"]);
     }
 
