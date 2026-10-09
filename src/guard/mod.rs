@@ -378,6 +378,10 @@ pub(crate) type ScopeAsk<'a> = &'a mut dyn FnMut(&Rule) -> Result<bool>;
 pub(crate) struct Published<'a> {
     pub label: &'a str,
     pub text: &'a str,
+    /// The part of `text` an edit adds to a body the forge already stores,
+    /// where the shim knows it. `prevent-unusual-unicode` reads this instead
+    /// of `text`; every other guard reads the whole.
+    pub added: Option<&'a str>,
     pub headline: bool,
 }
 
@@ -441,6 +445,7 @@ pub(crate) fn text_refusal(
     let &Published {
         label,
         text,
+        added,
         headline,
     } = published;
     let Some(builtin) = rule.builtin() else {
@@ -451,7 +456,13 @@ pub(crate) fn text_refusal(
     }
     Ok(match builtin {
         "prevent-ai-author" => message::ai_author_in(rule, label, text),
-        "prevent-unusual-unicode" => message::unusual_unicode_in(rule, label, text, headline)?,
+        // The one guard whose question is what this invocation types: an
+        // edit that resubmits a stored body is judged on the lines it adds,
+        // so a character typed into the body long ago does not hold every
+        // later edit hostage.
+        "prevent-unusual-unicode" => {
+            message::unusual_unicode_in(rule, label, added.unwrap_or(text), headline)?
+        }
         "no-private-repo-names" => names::in_text(root, policy, rule, destination, label, text)?,
         // The consultations. Each folds what it ran into one refusal under this
         // rule's id, naming each inner rule, so the reader is told which check

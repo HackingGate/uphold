@@ -495,7 +495,10 @@ match = [
   # front of its own lookup is a loop.
   "api:*",
 ]
-text_flags = ["-b", "--body", "-n", "--notes", "-d", "--description"]
+# Not `-d`: it is `--draft`, a switch, on `pr create` and `release create`,
+# and reading it as a body took the flag after it for its value. `gist create`
+# spells its description `-d`/`--desc` and has an entry of its own below.
+text_flags = ["-b", "--body", "-n", "--notes"]
 # A title is a subject of its own kind, so a format rule about titles is never
 # asked about a body -- and a title given alone no longer reads as "the body
 # was supplied", which used to close the editor checkpoint over the body the
@@ -527,6 +530,14 @@ scope = "public-target"
   text_flags = ["-c", "--comment"]
   editor = "never"
 
+  # `gh gist create -d` is `--desc`, the gist's description, and on no other
+  # verb is `-d` text. No editor opens on this verb: its content is files.
+  [[shim.verbs]]
+  match = ["gist:create"]
+  text_flags = ["-d", "--desc"]
+  web_flags = ["-w", "--web"]
+  editor = "never"
+
   # `--subject` is `-t`'s long form here and on no other verb, and it was read
   # by nothing: the merge commit's subject went into the base branch unread.
   # The list replaces the table's, so `-d` is not read here: on this verb it
@@ -548,6 +559,7 @@ command = "glab"
 # with the separator escaped, and the destination predicate reads it as one.
 match = [
   "mr:create", "mr:update", "mr:note", "issue:create", "issue:update", "issue:note",
+  "mr:merge",
   "api:*",
 ]
 text_flags = ["-d", "--description", "-m", "--message"]
@@ -557,6 +569,19 @@ target_flags = ["-R", "--repo"]
 editor_env = "GLAB_EDITOR"
 target = "forge-repo"
 scope = "public-target"
+
+  # `glab mr merge` writes the merge commit into the target branch, and its
+  # message reached no text guard: the verb was not matched. Each flag carries
+  # a whole commit message, so its first line is judged as a title -- the
+  # commit subject -- and the rest as a body. The list replaces the table's,
+  # so `-d` is not read here: on this verb it is `--remove-source-branch`, a
+  # switch, and reading it as a body would take the next word for one. No
+  # editor opens; with no message GitLab composes one from its own template,
+  # and `editor = "forge"` says that it was not checked.
+  [[shim.verbs]]
+  match = ["mr:merge"]
+  message_flags = ["-m", "--message", "--squash-message"]
+  editor = "forge"
 
 # The case that proves a shim is not just a flag table. git publishes text no
 # git hook is in a position to read: a branch name goes onto a public forge in
