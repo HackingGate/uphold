@@ -3836,19 +3836,29 @@ fn shell_word(word: &str) -> String {
 /// already, seeks back to the start, and needs nobody alive. It is unlinked the
 /// moment it is open, so what the child inherits is the descriptor and the disk
 /// keeps nothing, however the process ends.
+///
+/// Between the open and the unlink the file has a name, and anyone on the
+/// machine can open a name in a shared temporary directory. On unix it is
+/// created readable by its owner alone, so that window hands the body to
+/// nobody else; elsewhere the platform's default applies.
 fn replayed(bytes: &[u8]) -> Result<std::fs::File> {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
     let path =
         std::env::temp_dir().join(format!("uphold-shim-stdin-{}-{stamp}", std::process::id()));
-    let mut file = std::fs::OpenOptions::new()
-        // Never adopt a file somebody else left on this path: a shared
-        // temporary directory is writable by everyone on the machine, and the
-        // body of a publishing command is exactly the thing not to hand over.
-        .create_new(true)
-        .read(true)
-        .write(true)
+    let mut options = std::fs::OpenOptions::new();
+    // Never adopt a file somebody else left on this path: a shared temporary
+    // directory is writable by everyone on the machine, and a file planted
+    // here first -- or a link pointing somewhere else -- would be where the
+    // body of a publishing command was written.
+    options.create_new(true).read(true).write(true);
+    // And never create one somebody else can read. The default is 0666 less
+    // the umask, which on most machines is world-readable, and the open above
+    // leaves a window before the unlink in which the name can be opened.
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options
         .open(&path)
         .map_err(|error| Fatal::at(&path, error))?;
     drop(std::fs::remove_file(&path));
@@ -5236,6 +5246,18 @@ mod tests {
         let mut read_back = Vec::new();
         std::io::copy(&mut file, &mut read_back).unwrap();
         assert_eq!(read_back, body);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_stdin_a_shim_ate_is_readable_by_its_owner_alone() {
+        // The file has a name in a shared temporary directory until the unlink,
+        // and created at the default mode it was world-readable for that long.
+        // Asked of the descriptor, which is what outlives the name.
+        use std::os::unix::fs::PermissionsExt as _;
+        let file = replayed(b"a body nobody else should read\n").unwrap();
+        let mode = file.metadata().unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "mode {mode:o}");
     }
 
     #[test]
