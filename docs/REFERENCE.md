@@ -1455,17 +1455,22 @@ file guard bans:
   mark U+30FC) are skipped in that search. (1) Before a Latin letter it joins
   that Latin word whatever comes before it, so `g` + U+3007 + `od`, U+3007 +
   `K`, and a kanji or kana run + U+3007 + `K` (a kanji numeral included) are
-  refused. (2) Otherwise it is read with the letter before it when it is
-  drawn as that letter's script: after a Latin letter it is part of the Latin
+  refused in a word where Latin wins or ties the script vote (see below).
+  (2) Otherwise it is read with the letter before it when it is drawn as
+  that letter's script: after a Latin letter it is part of the Latin
   word, so `TOD` + U+3007 + U+4E00 U+89A7, `TOD` + U+3007 + kana, `HELL` +
   U+3007 U+3007, and `g` + U+3007 + a Cyrillic `o` are refused; after a kanji,
-  a kana, a Hangul letter, a digit, or nothing it stays Han, so kanji numerals,
+  a kana, a Hangul letter, a Cyrillic or Greek letter, a digit, or nothing it
+  stays Han, so kanji numerals,
   `2026` + U+5E74 U+4E00 U+3007 U+6708, and the U+3007 U+3007 placeholder
   before kana or kanji pass. A U+3007 read as Latin counts as a Latin letter
   when the word's script is decided, so a Cyrillic or Greek letter beside it
-  is named. The cost is U+3007 meant as a numeral or a placeholder right
-  next to Latin letters: U+3007 + `GB`, the U+3007 U+3007 placeholder before a
-  Latin word, and a Latin word + U+3007 + a counter (`API` + U+3007 + U+4EF6,
+  is named when Latin wins or ties that vote. In a word where Cyrillic or
+  Greek letters are the majority (a Cyrillic-spelled `exec` + U+3007 + `t`)
+  U+3007 is not named: the same majority-vote limit lets an all-Cyrillic
+  lookalike of `execot` pass. The cost is U+3007 meant as a numeral or a
+  placeholder right next to Latin letters: U+3007 + `GB`, the U+3007 U+3007
+  placeholder before a Latin word, and a Latin word + U+3007 + a counter (`API` + U+3007 + U+4EF6,
   "API, zero items") are refused. The report names U+3007, and
   `allow = ["U+3007"]` admits it. A
   skeleton made only of characters no script owns

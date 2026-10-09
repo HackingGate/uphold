@@ -277,11 +277,15 @@ impl Lookalike {
 /// 2. Otherwise it is read with the letter before it, when it is drawn as
 ///    that letter's script: `TOD` + U+3007 + U+4E00 U+89A7, `HELL` + U+3007
 ///    U+3007, and `g` + U+3007 + a Cyrillic `o` are refused. After a kanji,
-///    a kana, a Hangul letter, a digit, or nothing, it stays Han, so a kanji
-///    numeral carrying it never crosses.
+///    a kana, a Hangul letter, a Cyrillic or Greek letter, a digit, or
+///    nothing, it stays Han, so a kanji numeral carrying it never crosses.
 ///
 /// `lookalikes_in_word` then judges each word whole, counting each letter as
-/// the script it is read as.
+/// the script it is read as. A U+3007 read as Latin is refused, and a
+/// Cyrillic or Greek letter beside it named, only when Latin wins or ties the
+/// word's script vote. In a Cyrillic- or Greek-majority word (a
+/// Cyrillic-spelled `exec` + U+3007 + `t`) U+3007 is not named, by the same
+/// majority-vote limit that lets an all-Cyrillic lookalike of `execot` pass.
 pub(crate) fn lookalikes(line: &str) -> Vec<Lookalike> {
     let mut found = Vec::new();
     let mut word: Vec<char> = Vec::new();
@@ -993,7 +997,7 @@ mod tests {
     #[test]
     fn an_ideographic_zero_inside_a_latin_word_is_a_lookalike() {
         // Rule 1: before a Latin letter it joins that word, whatever came
-        // before it -- kana, a counter kanji, a kanji numeral.
+        // before it -- kana, a kanji, a kanji numeral.
         for line in [
             "g\u{3007}od",
             "C\u{3007}DE",
@@ -1005,8 +1009,8 @@ mod tests {
         ] {
             zeros_found(line, 1);
         }
-        // Rule 3: before anything but a counter, after a Latin letter, it is
-        // read with that letter -- before kanji, kana, Hangul, or nothing.
+        // Rule 2: otherwise, after a Latin letter, it is read with that
+        // letter -- before kanji, kana, Hangul, or nothing.
         for line in [
             "HELL\u{3007}",
             "TOD\u{3007}\u{4E00}\u{89A7}",
