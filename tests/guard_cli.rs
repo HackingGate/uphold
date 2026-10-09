@@ -337,6 +337,30 @@ fn a_hash_subject_is_judged_and_an_east_asian_subject_passes_at_commit_msg() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
+/// U+3007 IDEOGRAPHIC NUMBER ZERO read with a Latin letter after it is that
+/// word's `O`, so "zero GB" in a Japanese subject is refused as a lookalike:
+/// the documented false positive of refusing U+3007 + `K` wherever it sits.
+/// The report names the codepoint, and listing it is the way out.
+#[test]
+fn an_ideographic_zero_before_latin_is_refused_and_its_allowance_admits_it() {
+    let subject = "\u{3007}GB\u{306E}\u{5834}\u{5408}\u{3092}\u{4FEE}\u{6B63}\n";
+    let root = repository(MESSAGE_UNICODE);
+    write(&root, "msg.txt", subject);
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let report = stderr(&output);
+    assert!(report.contains("U+3007"), "{report}");
+    assert!(report.contains("IDEOGRAPHIC NUMBER ZERO"), "{report}");
+
+    let root = repository(&MESSAGE_UNICODE.replace(
+        "builtin = \"prevent-unusual-unicode\"\n",
+        "builtin = \"prevent-unusual-unicode\"\nallow = [\"U+3007\"]\n",
+    ));
+    write(&root, "msg.txt", subject);
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
 /// The ordinary signs of prose, in a subject: refused by the old whitelist,
 /// and none of them a lookalike or an invisible.
 #[test]

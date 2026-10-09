@@ -265,52 +265,93 @@ impl Lookalike {
 /// run into a kanji compound is two single-script words, not one mixed one,
 /// and a script boundary between Latin and kanji is not a lookalike.
 ///
-/// Except where the letter at the boundary is itself drawn as the other
+/// Except for a letter at that boundary which is itself drawn as the other
 /// side's script. U+3007 IDEOGRAPHIC NUMBER ZERO is Han, and its skeleton is
-/// a Latin `O`: in `g` + U+3007 + `od` it is the disguise the rule exists
-/// for, and splitting there would leave three single-script words and no
-/// finding. So a crossing letter stays in the word when it is drawn as the
-/// word's script, or when every letter so far is drawn as the crossing one's
-/// (U+3007 + `K`), and `lookalikes_in_word` judges the word whole. A kanji
-/// compound carrying U+3007 with no Latin letter beside it never crosses.
+/// a Latin `O`. Such a letter is read with the letter AFTER it, which is how
+/// both languages read it: before `K` it is the `O` of `OK`, and before a
+/// counter kanji (U+4EF6, U+5E74) it is the numeral zero. So it joins the
+/// Latin word when a Latin letter follows it, wherever the run before it
+/// came from -- `g` + U+3007 + `od`, U+3007 + `K`, and U+4EF6 + U+3007 + `K`
+/// each carry the Latin word U+3007 + `K` or the whole `g` + U+3007 + `od`,
+/// and `lookalikes_in_word` judges it whole. Followed by a kanji it stays in
+/// the kanji run (`API` + U+3007 + U+4EF6 is `API` and a numeral). With no
+/// letter after it, it is read with the letter before it. A kanji compound
+/// carrying U+3007 with no Latin letter after it never crosses.
 pub(crate) fn lookalikes(line: &str) -> Vec<Lookalike> {
     let mut found = Vec::new();
     let mut word: Vec<char> = Vec::new();
     let mut start = 0usize;
-    // The script the word so far is written in, once a letter has said so. A
-    // mark carries no script and never decides it, and neither does a letter
-    // kept in the word as another script's disguise.
-    let mut current: Option<Script> = None;
+    // Whether the word so far reads as East Asian, once a letter has said so.
+    // A mark, or a letter no script owns, stays with the word it is in.
+    let mut side: Option<bool> = None;
     // A trailing space closes the last word, so the loop has one exit.
-    for (index, character) in line.chars().chain(std::iter::once(' ')).enumerate() {
-        let script = character.script();
-        let crossing = current.filter(|&decided| {
-            names_a_script(script) && is_east_asian(decided) != is_east_asian(script)
-        });
-        let disguised_here = crossing.is_some_and(|decided| drawn_as(character, decided));
-        let word_disguised = crossing.is_some()
-            && word
-                .iter()
-                .filter(|letter| names_a_script(letter.script()))
-                .all(|&letter| drawn_as(letter, script));
-        if !word.is_empty()
-            && (!in_a_word(character) || (crossing.is_some() && !disguised_here && !word_disguised))
-        {
+    let characters: Vec<char> = line.chars().chain(std::iter::once(' ')).collect();
+    let reading = reading_scripts(&characters);
+    for (index, (&character, script)) in characters.iter().zip(reading).enumerate() {
+        let east_asian = script.map(is_east_asian);
+        let crossing = side.is_some() && east_asian.is_some() && east_asian != side;
+        if !word.is_empty() && (!in_a_word(character) || crossing) {
             found.extend(lookalikes_in_word(&word, start));
             word.clear();
-            current = None;
+            side = None;
         }
         if in_a_word(character) {
             if word.is_empty() {
                 start = index;
             }
             word.push(character);
-            if names_a_script(script) && !disguised_here {
-                current = Some(script);
-            }
+            side = east_asian.or(side);
         }
     }
     found
+}
+
+/// The script each character of a line is READ as, for splitting a word at
+/// an East Asian boundary; `None` for a character no script owns.
+///
+/// A letter's own script, except where it is drawn as the script of the
+/// other side (see `lookalikes`): then it reads as the next letter of its
+/// word does, and the last letter of a word, with no next letter, reads as
+/// the one before it. Resolved from the right, so a run of such letters
+/// before a Latin word (U+3007 U+3007 + `API`) all read as Latin.
+fn reading_scripts(characters: &[char]) -> Vec<Option<Script>> {
+    let own = |character: char| Some(character.script()).filter(|&script| names_a_script(script));
+    let mut reading: Vec<Option<Script>> = Vec::with_capacity(characters.len());
+    // The reading of the next letter in the same word, scanning leftwards.
+    let mut next: Option<Script> = None;
+    for (position, &character) in characters.iter().enumerate().rev() {
+        if !in_a_word(character) {
+            next = None;
+            reading.push(None);
+            continue;
+        }
+        let Some(script) = own(character) else {
+            reading.push(None);
+            continue;
+        };
+        let neighbour = next.or_else(|| {
+            characters
+                .get(..position)
+                .unwrap_or_default()
+                .iter()
+                .rev()
+                .take_while(|&&before| in_a_word(before))
+                .find_map(|&before| own(before))
+        });
+        let read = match neighbour {
+            Some(neighbour)
+                if is_east_asian(neighbour) != is_east_asian(script)
+                    && drawn_as(character, neighbour) =>
+            {
+                neighbour
+            }
+            _ => script,
+        };
+        reading.push(Some(read));
+        next = Some(read);
+    }
+    reading.reverse();
+    reading
 }
 
 /// The scripts UTS #39's augmented sets join into one writing system: Han
@@ -885,13 +926,18 @@ mod tests {
 
     #[test]
     fn an_ideographic_zero_inside_a_latin_word_is_a_lookalike() {
-        // U+3007 is Han and its skeleton is a Latin O, so the East Asian
-        // boundary does not split the word at it, on either side.
+        // U+3007 is Han and its skeleton is a Latin O. Before a Latin letter
+        // it reads as that letter's word, whatever run came before it: kana,
+        // a counter kanji, a kanji numeral.
         for line in [
             "g\u{3007}od",
             "C\u{3007}DE",
             "\u{3007}K",
             "Fix the g\u{3007}od path",
+            "\u{30DC}\u{30BF}\u{30F3}\u{3092}\u{3007}K\u{306B}\u{3059}\u{308B}",
+            "\u{4EF6}\u{3007}K",
+            "\u{4E8C}\u{3007}K",
+            "HELL\u{3007}",
         ] {
             let found = lookalikes(line);
             assert_eq!(found.len(), 1, "{line}");
@@ -908,9 +954,37 @@ mod tests {
             "\u{4E8C}\u{3007}\u{4E8C}\u{516D}\u{5E74}",
             "\u{4E8C}\u{3007}\u{4E8C}\u{516D}\u{5E74}API\u{4E00}\u{89A7}",
             "API\u{4E00}\u{89A7}\u{3092}\u{8FFD}\u{52A0}",
+            "2026\u{5E74}\u{4E00}\u{3007}\u{6708}",
+            "\u{5168}\u{3007}\u{4EF6}",
+            "\u{4E8C}\u{3007}\u{3007}\u{3007}",
         ] {
             let found: Vec<String> = lookalikes(line).iter().map(Lookalike::describe).collect();
             assert!(found.is_empty(), "{line}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn an_ideographic_zero_reads_with_the_letter_after_it() {
+        // Before a counter kanji it is the numeral zero, so `API` + U+3007 +
+        // U+4EF6 ("API, zero items") is `API` and a kanji numeral. The cost
+        // of that reading: `HELL` + U+3007 run into a kanji passes too.
+        for line in ["API\u{3007}\u{4EF6}", "HELL\u{3007}\u{4EF6}"] {
+            let found: Vec<String> = lookalikes(line).iter().map(Lookalike::describe).collect();
+            assert!(found.is_empty(), "{line}: {found:?}");
+        }
+        // Before a Latin letter it is read as that word's letter, so the
+        // placeholder U+3007 U+3007 before a product name and "zero GB" are
+        // refused. These are the false positives `allow = ["U+3007"]` admits.
+        for (line, count) in [
+            ("\u{3007}\u{3007}API\u{3092}\u{4F7F}\u{3046}", 2),
+            ("\u{3007}GB", 1),
+        ] {
+            let found = lookalikes(line);
+            assert_eq!(found.len(), count, "{line}");
+            assert!(
+                found.iter().all(|finding| finding.character == '\u{3007}'),
+                "{line}"
+            );
         }
     }
 

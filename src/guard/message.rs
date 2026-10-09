@@ -283,22 +283,27 @@ fn unusual_findings(label: &str, text: &str, allowed: &[char], headlines: &[usiz
                     .map_or_else(|| String::from("UNKNOWN"), |name| name.to_string()),
             ));
         }
-        if !headlines.contains(&index) {
-            continue;
+        if headlines.contains(&index) {
+            findings.extend(lookalike_findings(label, index, line, allowed));
         }
-        for lookalike in crate::guard::unicode::lookalikes(line) {
-            if admitted_by_allowance(lookalike.character, allowed) {
-                continue;
-            }
-            findings.push(format!(
+    }
+    findings
+}
+
+/// The lookalike pass over one subject line, numbered from zero.
+fn lookalike_findings(label: &str, index: usize, line: &str, allowed: &[char]) -> Vec<String> {
+    crate::guard::unicode::lookalikes(line)
+        .into_iter()
+        .filter(|lookalike| !admitted_by_allowance(lookalike.character, allowed))
+        .map(|lookalike| {
+            format!(
                 "{label}:{}:{}: {} in the SUBJECT LINE",
                 index + 1,
                 lookalike.column + 1,
                 lookalike.describe(),
-            ));
-        }
-    }
-    findings
+            )
+        })
+        .collect()
 }
 
 pub(crate) fn prevent_ai_author(request: &Request<'_>) -> Result<Option<Refusal>> {
@@ -330,11 +335,34 @@ fn admitted_by_allowance(character: char, allowed: &[char]) -> bool {
 /// knows which line is the subject.
 pub(crate) fn prevent_unusual_unicode(request: &Request<'_>) -> Result<Option<Refusal>> {
     for (label, text, subjects) in headed_messages(request)? {
-        if let Some(refusal) = unusual_unicode_over(request.rule, &label, &text, &subjects)? {
+        if let Some(refusal) = unusual_unicode_in_message(request.rule, &label, &text, &subjects)? {
             return Ok(Some(refusal));
         }
     }
     Ok(None)
+}
+
+/// One message at a git hook, with the lines [`subject_lines`] made its
+/// candidates; the report carries [`comment_line_note`] when a lookalike was
+/// found on a candidate that opens with the comment character.
+fn unusual_unicode_in_message(
+    rule: &crate::config::Rule,
+    label: &str,
+    text: &str,
+    subjects: &[usize],
+) -> Result<Option<Refusal>> {
+    let Some(mut refusal) = unusual_unicode_over(rule, label, text, subjects)? else {
+        return Ok(None);
+    };
+    let allowed = allowances(rule)?;
+    refusal
+        .report
+        .push_str(comment_line_note(subjects, |commented| {
+            text.split('\n')
+                .nth(commented)
+                .is_some_and(|line| !lookalike_findings("", commented, line, &allowed).is_empty())
+        }));
+    Ok(Some(refusal))
 }
 
 /// A commit subject line that is not printable ASCII.
@@ -359,7 +387,9 @@ pub(crate) fn ascii_only_commit_subject(request: &Request<'_>) -> Result<Option<
                 "{}\n\nThis repository keeps commit subject lines to printable ASCII. Retype \
                  the character in ASCII, or admit its codepoint in the rule's `allow` list.{}",
                 findings.join("\n"),
-                comment_line_note(&text, &allowed, &subjects),
+                comment_line_note(&subjects, |commented| {
+                    !non_ascii_in_subject("", &text, &allowed, &[commented]).is_empty()
+                }),
             ),
         }));
     }
@@ -367,23 +397,26 @@ pub(crate) fn ascii_only_commit_subject(request: &Request<'_>) -> Result<Option<
 }
 
 /// Why a line that opens with the comment character was judged, where one
-/// was and is among the findings -- empty otherwise.
+/// was and `found_on` says the rule found something on it -- empty otherwise.
 ///
 /// The hook cannot tell `git commit -m "#42 ..."`, which records that line as
 /// the subject, from an editor session, which strips it (see
 /// [`subject_lines`]). So a `commit.template` whose first line is a non-ASCII
-/// comment is refused, and the report says so where it fires rather than
-/// leaving the author to reverse-engineer it.
-fn comment_line_note(text: &str, allowed: &[char], subjects: &[usize]) -> &'static str {
+/// comment -- one carrying a lookalike word, or any non-ASCII letter under
+/// `ascii-only-commit-subject` -- is refused, and the report says so where it
+/// fires rather than leaving the author to reverse-engineer it. Only the git
+/// hooks attach it: they are the seam whose subjects come from
+/// [`subject_lines`], and only there is a second candidate a comment.
+fn comment_line_note(subjects: &[usize], found_on: impl Fn(usize) -> bool) -> &'static str {
     let [commented, _, ..] = subjects else {
         return "";
     };
-    if non_ascii_in_subject("", text, allowed, &[*commented]).is_empty() {
+    if !found_on(*commented) {
         return "";
     }
-    "\n\nThe first line opens with the comment character and was judged as a subject: \
-     `git commit -m` records such a line, and this hook cannot see whether the editor will \
-     strip it. If it is a `commit.template` comment, open the template with an ASCII line."
+    "\n\nThe first non-blank line opens with the comment character and was judged as a \
+     subject: `git commit -m` records such a line, and this hook cannot see whether the \
+     editor will strip it. If it is a `commit.template` comment, open the template with an ASCII line."
 }
 
 fn non_ascii_in_subject(
@@ -742,21 +775,73 @@ mod tests {
             found.iter().all(|finding| finding.starts_with("m:1:")),
             "{found:?}"
         );
-        assert!(comment_line_note(&text, &[], &subjects).contains("commit.template"));
+        assert!(ascii_note(&text).contains("commit.template"));
         // An ASCII comment first keeps the Japanese one out of the candidates.
         let template = format!("# Summary\n# {JAPANESE}{KANA}\nFix the parser\n");
         let kept = subject_findings(&template, &[]);
         assert_eq!(kept, Vec::<String>::new());
         // And the note stays out of a report on an ordinary subject.
-        let plain = "Fix \u{2014} the parser\n";
-        assert_eq!(
-            comment_line_note(plain, &[], &subject_lines(plain, Some('#'))),
-            ""
+        assert_eq!(ascii_note("Fix \u{2014} the parser\n"), "");
+        assert_eq!(ascii_note("# Summary\nFix \u{2014} the parser\n"), "");
+    }
+
+    /// The note `ascii-only-commit-subject` would attach to this message.
+    fn ascii_note(text: &str) -> &'static str {
+        let subjects = subject_lines(text, Some('#'));
+        comment_line_note(&subjects, |commented| {
+            !non_ascii_in_subject("", text, &[], &[commented]).is_empty()
+        })
+    }
+
+    #[test]
+    fn the_note_names_the_first_non_blank_line() {
+        // Leading blank lines are skipped, so the comment is not the first
+        // line, and the note says which one it means.
+        let text = format!("\n\n# {JAPANESE}{KANA}\nFix the parser\n");
+        assert_eq!(subject_lines(&text, Some('#')), vec![2, 3]);
+        assert!(
+            ascii_note(&text).contains("The first non-blank line opens with the comment character"),
+            "{}",
+            ascii_note(&text)
         );
-        let under = "# Summary\nFix \u{2014} the parser\n";
-        assert_eq!(
-            comment_line_note(under, &[], &subject_lines(under, Some('#'))),
-            ""
+    }
+
+    #[test]
+    fn a_lookalike_on_a_comment_opened_first_line_carries_the_note() {
+        let rule = loaded_rule("message-comment-note", "prevent-unusual-unicode", "[]").unwrap();
+        let judged = |text: &str| {
+            unusual_unicode_in_message(&rule, "m", text, &subject_lines(text, Some('#'))).unwrap()
+        };
+        let commented = judged("# the c\u{0430}che template\nFix the parser\n")
+            .expect("a lookalike on the comment-opened candidate passed");
+        assert!(commented.report.contains("m:1:"), "{}", commented.report);
+        assert!(
+            commented
+                .report
+                .contains("The first non-blank line opens with the comment character"),
+            "{}",
+            commented.report
+        );
+        // The note stays out of a report on an ordinary subject, and out of
+        // one whose finding is on the line under the comment.
+        for text in [
+            "Fix the c\u{0430}che\n",
+            "# Summary\nFix the c\u{0430}che\n",
+        ] {
+            let refusal = judged(text).expect("the lookalike subject passed");
+            assert!(
+                !refusal.report.contains("comment character"),
+                "{text:?}: {}",
+                refusal.report
+            );
+        }
+        // An invisible on the comment line is refused on every line, subject
+        // or not, so it is no reason for the note.
+        let invisible = judged("# a pa\u{200D}rser\nFix the parser\n").expect("ZWJ passed");
+        assert!(
+            !invisible.report.contains("comment character"),
+            "{}",
+            invisible.report
         );
     }
 
