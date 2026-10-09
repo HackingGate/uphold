@@ -613,3 +613,145 @@ fn a_regexp_rule_that_does_not_name_the_hook_is_not_asked_there() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(stdout(&output), "", "{}", stdout(&output));
 }
+
+// -- a title argument is judged as a title ---------------------------------
+
+/// The invisible-character and lookalike guard, declared the way a repository
+/// declares it.
+const UNICODE_POLICY: &str = "\
+[rule.prevent-unusual-unicode]
+builtin = \"prevent-unusual-unicode\"
+git.hooks = [\"commit-msg\"]
+";
+
+/// A Latin word with a Cyrillic small a (U+0430) in it: a lookalike in a
+/// subject, and an ordinary letter in prose.
+const DISGUISED: &str = "Fix the p\u{0430}rser";
+
+fn unicode_call(root_name: &str, tool: &str, input: &Value) -> Output {
+    let root = workspace(root_name, Some(UNICODE_POLICY));
+    let event = serde_json::json!({"tool_name": tool, "tool_input": input}).to_string();
+    hook(&root, "claude-code", &event)
+}
+
+fn refused_as_lookalike(output: &Output) {
+    assert_eq!(code(output), 0, "{}", stderr(output));
+    let reason = reason(output);
+    assert!(reason.contains("prevent-unusual-unicode"), "{reason}");
+    assert!(reason.contains("CYRILLIC SMALL LETTER A"), "{reason}");
+}
+
+/// A merge's `commit_title` is the commit subject the forge writes, and the
+/// shim judges `gh pr merge --subject` and `gh api -f commit_title=` as one. The
+/// same title handed to an MCP server gets the same lookalike pass.
+#[test]
+fn a_commit_title_argument_is_judged_as_a_subject() {
+    let output = unicode_call(
+        "hook-commit-title",
+        "mcp__github__merge_pull_request",
+        &serde_json::json!({"pullNumber": 7, "commit_title": DISGUISED}),
+    );
+    refused_as_lookalike(&output);
+}
+
+/// A finding names the key the subject was found under, so the reader is
+/// pointed at `commit_title` or `squash_commit_message` and not at a "title"
+/// the call never carried.
+#[test]
+fn a_finding_names_the_key_it_was_found_under() {
+    for (name, key) in [
+        ("hook-key-commit-title", "commit_title"),
+        ("hook-key-subject", "subject"),
+        ("hook-key-squash-message", "squash_commit_message"),
+    ] {
+        let output = unicode_call(
+            name,
+            "mcp__forge__merge",
+            &serde_json::json!({ key: DISGUISED }),
+        );
+        refused_as_lookalike(&output);
+        let reason = reason(&output);
+        assert!(
+            reason.contains(&format!("mcp__forge__merge {key}")),
+            "{key}: {reason}"
+        );
+    }
+}
+
+/// A pull request's `title` is the subject a squash merge makes of it.
+#[test]
+fn a_title_argument_is_judged_as_a_subject() {
+    let output = unicode_call(
+        "hook-title",
+        "mcp__github__create_pull_request",
+        &serde_json::json!({"title": DISGUISED, "body": "An ordinary body."}),
+    );
+    refused_as_lookalike(&output);
+}
+
+/// A whole-message argument is a subject on its first line and prose below.
+#[test]
+fn a_merge_message_argument_is_a_subject_then_a_body() {
+    let refused = unicode_call(
+        "hook-merge-message-subject",
+        "mcp__gitlab__merge_merge_request",
+        &serde_json::json!({"squash_commit_message": format!("{DISGUISED}\n\nAn ordinary body.")}),
+    );
+    refused_as_lookalike(&refused);
+
+    let passed = unicode_call(
+        "hook-merge-message-body",
+        "mcp__gitlab__merge_merge_request",
+        &serde_json::json!({"squash_commit_message": format!("Fix the parser\n\n{DISGUISED}")}),
+    );
+    assert_eq!(code(&passed), 0, "{}", stderr(&passed));
+    assert_eq!(stdout(&passed), "", "{}", stdout(&passed));
+}
+
+/// The same word in a body is prose, where a lookalike letter is not a hazard.
+#[test]
+fn the_same_word_in_a_body_is_prose() {
+    let output = unicode_call(
+        "hook-body-prose",
+        "mcp__github__create_pull_request",
+        &serde_json::json!({"title": "Fix the parser", "body": DISGUISED}),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "", "{}", stdout(&output));
+}
+
+/// A key not on the list stays prose: the list can add a check, never remove
+/// one, and a key it lacks is judged the way every string was before it.
+#[test]
+fn an_unknown_key_stays_prose() {
+    let output = unicode_call(
+        "hook-unknown-key-prose",
+        "mcp__forge__publish",
+        &serde_json::json!({"headline_text": DISGUISED}),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "", "{}", stdout(&output));
+}
+
+/// A character that draws nothing is refused under any key, title or not.
+#[test]
+fn an_invisible_character_is_refused_under_any_key() {
+    for (name, key) in [
+        ("hook-invisible-body", "body"),
+        ("hook-invisible-title", "title"),
+        ("hook-invisible-unknown", "headline_text"),
+    ] {
+        let output = unicode_call(
+            name,
+            "mcp__github__create_pull_request",
+            &serde_json::json!({ key: "Fix the\u{202E}parser" }),
+        );
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        let reason = reason(&output);
+        assert!(
+            reason.contains("prevent-unusual-unicode"),
+            "{key}: {reason}"
+        );
+        assert!(reason.contains("U+202E"), "{key}: {reason}");
+    }
+}

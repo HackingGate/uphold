@@ -2653,6 +2653,9 @@ fn a_title_set_through_the_api_is_judged_as_the_title_it_is() {
     ));
     let title = format!("title={LOOKALIKE}");
     let commit_title = format!("commit_title={LOOKALIKE}");
+    // `subject` is the key `--subject` spells, and the list the harness hook
+    // reads a tool call's arguments by is this one.
+    let subject = format!("subject={LOOKALIKE}");
     for form in [
         vec![
             "gh",
@@ -2671,6 +2674,15 @@ fn a_title_set_through_the_api_is_judged_as_the_title_it_is() {
             "repos/o/r/pulls/1/merge",
             "-f",
             &commit_title,
+        ],
+        vec![
+            "gh",
+            "api",
+            "-X",
+            "PUT",
+            "repos/o/r/pulls/1/merge",
+            "-f",
+            &subject,
         ],
     ] {
         let output = shim(&root, &form);

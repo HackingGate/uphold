@@ -1511,9 +1511,15 @@ on a merge, and the subject GitHub composes for `gh pr merge --squash` or
 `glab mr merge -m`/`--squash-message` or GitLab's `squash_commit_message` and
 `merge_commit_message` fields, is judged as its first line, a subject, and
 the rest, prose. An `--input` JSON document is prose in every value, `title`
-included. A pull-request,
-issue, release or gist body, a comment, and
-anything handed to `uphold guard --text` or the harness hook is prose a reader
+included. The harness hook reads a tool call's arguments by the same keys: a
+string under `title`, `commit_title` or `subject` is a subject, and one under
+`squash_commit_message` or `merge_commit_message` is a message, so an MCP
+merge's commit title gets the check `gh pr merge --subject` gets. The keys are read in
+every tool the hook's matcher sends it, not only the forge tools, so a matcher
+wider than the documented one puts a `title`, `subject` or `commit_title` of
+any other tool under the lookalike check as well, and a finding names the key. A pull-request,
+issue, release or gist body, a comment, anything handed to
+`uphold guard --text`, and every other string of a tool call is prose a reader
 reads, and the rule asks it only for characters that draw nothing — so `gh issue edit --body-file` over a body that
 carries a degree sign someone typed months ago runs. **An edit is judged on
 what it adds.** `gh issue edit` and `gh pr edit` resubmit the whole body, so
@@ -2182,7 +2188,7 @@ in front of its own lookup is a loop.
 |---|---|
 | `-F`/`--field` | the value after `key=`, with `@file` read from the file and `@-` from stdin |
 | `-f`/`--raw-field` | the value after `key=` as written, `@` included, because that is what is sent |
-| either, by key | a **title** where the key is `title` or `commit_title`; a **message** (first line a title, the rest prose) where it is `squash_commit_message` or `merge_commit_message`; prose otherwise |
+| either, by key | a **title** where the key is `title`, `commit_title` or `subject`; a **message** (first line a title, the rest prose) where it is `squash_commit_message` or `merge_commit_message`; prose otherwise |
 | `--input FILE` | the whole file — each **string value** where it is JSON, the raw text where it is not; every value is prose, a `title` key included |
 | the endpoint path | `repos/OWNER/REPO/…`, or GitLab's `projects/OWNER%2FREPO`, as the **destination** |
 
@@ -2552,6 +2558,16 @@ Every string anywhere under the harness's input pointer, at any depth. Not a
 list of field names per tool: a server decides what to call the field holding a
 body, a release note or a branch name, and a table of those names is a table
 missing the one a new server just added — silently, and in the green direction.
+
+A key decides only which check a string gets. A string whose nearest key is
+`title`, `commit_title` or `subject` is judged as a subject, and one under
+`squash_commit_message` or `merge_commit_message` as a subject on its first line
+and prose below it — the closed list the shim reads `gh api` and `glab api`
+fields by, one list and not a copy. It fails the other way from a table of
+fields to read: a title key it lacks leaves that string prose, which is how
+every string here was judged before the list existed, so a missing key costs one
+field its lookalike pass and never costs the seam a string. Every checker other
+than the guards still reads the call's strings joined.
 
 ### Adding a harness
 

@@ -768,7 +768,7 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
         // reports in: a finding reached through `--text` and one reached
         // through a guard are the same verdict on the same text.
         let refusals: Vec<guard::Refusal> =
-            text::judged(text::Seam::Guard, &root, &policy, &source, &text)?
+            text::judged(text::Seam::Guard, &root, &policy, &source, &text, &[])?
                 .into_iter()
                 .map(|verdict| match verdict {
                     text::Verdict::Guard(refusal) => refusal,

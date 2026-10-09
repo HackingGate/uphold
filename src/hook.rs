@@ -51,6 +51,7 @@ use serde_json::Value;
 
 use crate::error::{Exit, Fatal, Result};
 use crate::guard;
+use crate::shim::{API_MESSAGE_KEYS, API_TITLE_KEYS, Subject, message_subjects};
 use crate::text::{self, Verdict};
 
 /// What one harness calls the three things every harness has.
@@ -90,35 +91,68 @@ pub(crate) fn known() -> String {
         .join("|")
 }
 
-/// Every string anywhere under `value`.
+/// Every string anywhere under `value`, as prose or as a headline.
 ///
-/// Deliberately not a list of field names per harness and per tool. A server
-/// decides what to call the field holding a pull-request body, a release note
-/// or a branch name, and a table of those names is a table that is missing the
-/// one a new server just added -- silently, and in the green direction. Reading
-/// them all costs a second pass over text that is already in memory; missing
-/// one costs the whole seam.
+/// Deliberately not a list of field names per harness and per tool to READ. A
+/// server decides what to call the field holding a pull-request body, a release
+/// note or a branch name, and a table of those names is a table that is missing
+/// the one a new server just added -- silently, and in the green direction.
+/// Reading them all costs a second pass over text that is already in memory;
+/// missing one costs the whole seam. Every string is read, whatever its key.
+///
+/// What a key does decide is which CHECK a string gets, and only towards the
+/// stricter one. A string whose nearest key is one the shim already treats as
+/// a title in an `api` field -- [`API_TITLE_KEYS`] -- is a headline, and one
+/// under a whole-message key -- [`API_MESSAGE_KEYS`] -- is a headline for its
+/// first line and prose for the rest. That list fails the other way from a
+/// table of fields to read: a title key it lacks leaves that string prose,
+/// which is what every string here was judged as before, so a missing key costs
+/// the lookalike pass on one field and never the seam. It is the shim's list,
+/// not a copy of it, so a key added for `gh api` is a key here too.
 ///
 /// The order is whatever the JSON reader hands back, which for an object is by
 /// key rather than by the order somebody wrote the fields in. Nothing here
 /// depends on it: the strings are joined and searched, and a rule that matched
 /// only when two fields happened to be adjacent would be a rule about the
 /// harness's serializer.
-fn strings(value: &Value, into: &mut Vec<String>) {
+fn strings(value: &Value, key: Option<&str>, into: &mut Collected) {
     match value {
-        Value::String(text) => into.push(text.clone()),
+        Value::String(text) => match key {
+            Some(key) if API_TITLE_KEYS.contains(&key) => {
+                into.headlines.push((key.to_owned(), text.clone()));
+            }
+            Some(key) if API_MESSAGE_KEYS.contains(&key) => {
+                for subject in message_subjects(text.clone()) {
+                    if subject.kind == Subject::HEADLINE {
+                        into.headlines.push((key.to_owned(), subject.value));
+                    } else {
+                        into.prose.push(subject.value);
+                    }
+                }
+            }
+            _ => into.prose.push(text.clone()),
+        },
         Value::Array(items) => {
             for item in items {
-                strings(item, into);
+                strings(item, key, into);
             }
         }
         Value::Object(fields) => {
-            for field in fields.values() {
-                strings(field, into);
+            for (name, field) in fields {
+                strings(field, Some(name), into);
             }
         }
         _ => {}
     }
+}
+
+/// A tool call's strings, sorted by the check each gets. A headline keeps the
+/// key it was found under, so a finding names `commit_title` or `subject`
+/// rather than a generic "title" the call never said.
+#[derive(Default)]
+struct Collected {
+    prose: Vec<String>,
+    headlines: Vec<(String, String)>,
 }
 
 /// Put the report inside the harness's refusal document.
@@ -235,17 +269,25 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
     // calls that happen to publish something.
     let (root, policy) = text::load_for(found)?;
 
-    let mut collected = Vec::new();
-    strings(subject, &mut collected);
+    let mut collected = Collected::default();
+    strings(subject, None, &mut collected);
     // Read, and carrying no text this binary has a rule about.
-    if collected.is_empty() {
+    if collected.prose.is_empty() && collected.headlines.is_empty() {
         return Ok(Exit::Clean);
     }
-    let text = collected.join("\n");
+    let text = collected.prose.join("\n");
+    let headlines: Vec<text::Headline> = collected
+        .headlines
+        .into_iter()
+        .map(|(key, headline)| text::Headline {
+            label: format!("{label} {key}"),
+            text: headline,
+        })
+        .collect();
 
     let mut report = String::new();
 
-    for verdict in text::judged(text::Seam::Hook, &root, &policy, label, &text)? {
+    for verdict in text::judged(text::Seam::Hook, &root, &policy, label, &text, &headlines)? {
         match verdict {
             // The message as well as the finding. At the shim and at `--text`
             // the message is what tells the author what to do instead; here the
@@ -305,10 +347,33 @@ mod tests {
             r#"{"title":"a","nested":{"body":"b"},"list":["c"],"count":1,"flag":true}"#,
         )
         .unwrap();
-        let mut found = Vec::new();
-        strings(&event, &mut found);
-        found.sort();
-        assert_eq!(found, vec!["a", "b", "c"]);
+        let mut found = Collected::default();
+        strings(&event, None, &mut found);
+        found.prose.sort();
+        assert_eq!(found.prose, vec!["b", "c"]);
+        assert_eq!(found.headlines, vec![("title".to_owned(), "a".to_owned())]);
+    }
+
+    /// A title key is read at any depth, and a message key splits its value
+    /// into the subject line and the body below it.
+    #[test]
+    fn a_title_key_marks_a_headline_at_any_depth() {
+        let event: Value = serde_json::from_str(
+            r#"{"merge":{"commit_title":"t","subject":["s"]},"squash_commit_message":"m\n\nbody"}"#,
+        )
+        .unwrap();
+        let mut found = Collected::default();
+        strings(&event, None, &mut found);
+        found.headlines.sort();
+        assert_eq!(
+            found.headlines,
+            vec![
+                ("commit_title".to_owned(), "t".to_owned()),
+                ("squash_commit_message".to_owned(), "m".to_owned()),
+                ("subject".to_owned(), "s".to_owned()),
+            ]
+        );
+        assert_eq!(found.prose, vec!["\n\nbody"]);
     }
 
     /// The report is what the offending text is quoted in, so the one thing the
