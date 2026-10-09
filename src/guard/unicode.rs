@@ -267,25 +267,25 @@ impl Lookalike {
 ///
 /// Except for a letter at that boundary which is itself drawn as the other
 /// side's script. U+3007 IDEOGRAPHIC NUMBER ZERO is Han, and its skeleton is
-/// a Latin `O`. A run of such letters is read by `reading_scripts`, in this
-/// order:
+/// a Latin `O`. A run of such letters is read by `reading_scripts`, by two
+/// rules in order:
 ///
 /// 1. Before a letter of the script it is drawn as, it joins that word,
-///    whatever came before it: U+3007 + `K`, `g` + U+3007 + `od`, and
-///    U+4EF6 + U+3007 + `K` each carry the Latin word U+3007 + `K` or the
-///    whole `g` + U+3007 + `od`. That holds after a kanji numeral as well
-///    (U+4E8C + U+3007 + `K`), because U+3007 + `K` is the disguise.
-/// 2. Before a counter kanji ([`COUNTERS`]) it is the numeral zero and stays
-///    Han: `API` + U+3007 + U+4EF6 is `API` and "zero items".
-/// 3. Otherwise it is read with the letter before it, when that letter is of
-///    the script it is drawn as: `TOD` + U+3007 + U+4E00 U+89A7, and `HELL` +
-///    U+3007 U+3007, are refused. After a kanji, a kana, or nothing, it stays
-///    Han, so a kanji numeral carrying it never crosses.
+///    whatever came before it: U+3007 + `K`, `g` + U+3007 + `od`, U+4EF6 +
+///    U+3007 + `K`, and U+4E8C + U+3007 + `K`, because U+3007 + `K` is the
+///    disguise even after a kanji numeral.
+/// 2. Otherwise it is read with the letter before it, when it is drawn as
+///    that letter's script: `TOD` + U+3007 + U+4E00 U+89A7, `HELL` + U+3007
+///    U+3007, and `g` + U+3007 + a Cyrillic `o` are refused. After a kanji,
+///    a kana, a Hangul letter, a digit, or nothing, it stays Han, so a kanji
+///    numeral carrying it never crosses.
 ///
-/// `lookalikes_in_word` then judges each word whole.
+/// `lookalikes_in_word` then judges each word whole, counting each letter as
+/// the script it is read as.
 pub(crate) fn lookalikes(line: &str) -> Vec<Lookalike> {
     let mut found = Vec::new();
     let mut word: Vec<char> = Vec::new();
+    let mut voices: Vec<Option<Script>> = Vec::new();
     let mut start = 0usize;
     // Whether the word so far reads as East Asian, once a letter has said so.
     // A mark, or a letter no script owns, stays with the word it is in.
@@ -297,8 +297,9 @@ pub(crate) fn lookalikes(line: &str) -> Vec<Lookalike> {
         let east_asian = script.map(is_east_asian);
         let crossing = side.is_some() && east_asian.is_some() && east_asian != side;
         if !word.is_empty() && (!in_a_word(character) || crossing) {
-            found.extend(lookalikes_in_word(&word, start));
+            found.extend(lookalikes_in_word(&word, &voices, start));
             word.clear();
+            voices.clear();
             side = None;
         }
         if in_a_word(character) {
@@ -306,31 +307,12 @@ pub(crate) fn lookalikes(line: &str) -> Vec<Lookalike> {
                 start = index;
             }
             word.push(character);
+            voices.push(script);
             side = east_asian.or(side);
         }
     }
     found
 }
-
-/// Kanji that count something, so that U+3007 right before one reads as the
-/// numeral zero (see `lookalikes`): Japanese and Chinese counters and units
-/// a number is written before -- items, pieces, times, yen and yuan, people,
-/// years, months, days, hours, minutes, seconds, long and flat things,
-/// machines, names, age, degrees, multiples, places, numbers, floors,
-/// points, lines, volumes, animals, weeks, tenths, Chinese `tiao`, and the
-/// place values.
-/// Closed on purpose: a kanji missing here leaves U+3007 read with the
-/// letter before it, which refuses a Latin word ending in U+3007, so the
-/// list can only let a numeral through and never lets a disguise in by
-/// omission.
-const COUNTERS: &[char] = &[
-    '\u{4EF6}', '\u{500B}', '\u{4E2A}', '\u{56DE}', '\u{6B21}', '\u{5186}', '\u{5143}', '\u{4EBA}',
-    '\u{5E74}', '\u{6708}', '\u{65E5}', '\u{6642}', '\u{5206}', '\u{79D2}', '\u{672C}', '\u{679A}',
-    '\u{53F0}', '\u{540D}', '\u{6B73}', '\u{5C81}', '\u{5EA6}', '\u{500D}', '\u{4F4D}', '\u{756A}',
-    '\u{53F7}', '\u{968E}', '\u{70B9}', '\u{884C}', '\u{518A}', '\u{5339}', '\u{982D}', '\u{9031}',
-    '\u{5468}', '\u{5272}', '\u{5341}', '\u{767E}', '\u{5343}', '\u{4E07}', '\u{5104}', '\u{4EBF}',
-    '\u{6761}',
-];
 
 /// The script each character of a line is READ as, for splitting a word at
 /// an East Asian boundary; `None` for a character no script owns.
@@ -382,13 +364,7 @@ fn reading_scripts(characters: &[char]) -> Vec<Option<Script>> {
         let read = next
             .and_then(own_script)
             .filter(|&script| all_drawn_as(&members, script))
-            .or_else(|| {
-                if next.is_some_and(|next| COUNTERS.contains(&next)) {
-                    None
-                } else {
-                    before.filter(|&script| all_drawn_as(&members, script))
-                }
-            });
+            .or_else(|| before.filter(|&script| all_drawn_as(&members, script)));
         if let Some(read) = read {
             for &offset in &run {
                 if let Some(slot) = reading.get_mut(offset) {
@@ -478,27 +454,13 @@ fn drawn_as(character: char, script: Script) -> bool {
 /// the one drawn as a Latin letter, so Latin is the word's script and the
 /// Cyrillic `o` is the finding -- and a word whose two halves are equally long
 /// is not let through for being balanced. With no such side, the first seen.
-fn script_of_word(word: &[char]) -> Option<Script> {
-    // A letter drawn across the East Asian boundary (U+3007) is the
-    // disguise, not the word's script: `Z` + U+3007 U+3007 is a Latin word.
-    // Counted only when the word has nothing else.
-    let voters: Vec<char> = if word
-        .iter()
-        .all(|&character| own_script(character).is_none() || drawn_across(character))
-    {
-        word.to_vec()
-    } else {
-        word.iter()
-            .copied()
-            .filter(|&character| !drawn_across(character))
-            .collect()
-    };
+fn script_of_word(word: &[char], voices: &[Option<Script>]) -> Option<Script> {
     let mut counts: Vec<(Script, usize)> = Vec::new();
-    for &character in &voters {
-        let script = character.script();
-        if !names_a_script(script) {
-            continue;
-        }
+    // Each letter votes for the script it is READ as (`reading_scripts`):
+    // U+3007 read as Latin is a Latin vote, so `Z` + U+3007 U+3007 is a
+    // Latin word, and in a Cyrillic-and-Latin word the zero counts on the
+    // Latin side.
+    for &script in voices.iter().flatten() {
         match counts.iter_mut().find(|(seen, _)| *seen == script) {
             Some((_, count)) => *count += 1,
             None => counts.push((script, 1)),
@@ -522,7 +484,7 @@ fn script_of_word(word: &[char]) -> Option<Script> {
         .or_else(|| tied.first().copied())
 }
 
-fn lookalikes_in_word(word: &[char], offset: usize) -> Vec<Lookalike> {
+fn lookalikes_in_word(word: &[char], voices: &[Option<Script>], offset: usize) -> Vec<Lookalike> {
     let spelled: String = word.iter().collect();
     if spelled.as_str().is_single_script() {
         return Vec::new();
@@ -535,7 +497,7 @@ fn lookalikes_in_word(word: &[char], offset: usize) -> Vec<Lookalike> {
     {
         return Vec::new();
     }
-    let Some(among) = script_of_word(word) else {
+    let Some(among) = script_of_word(word, voices) else {
         return Vec::new();
     };
     let mut found = Vec::new();
@@ -1089,31 +1051,73 @@ mod tests {
     }
 
     #[test]
-    fn an_ideographic_zero_before_a_counter_is_a_numeral() {
-        // Rule 2: "API, zero items", "zero yen", "zero times". The residual
-        // is the same shape: a Latin word ending in U+3007 before a counter.
-        for line in [
-            "API\u{3007}\u{4EF6}",
-            "PR\u{3007}\u{56DE}",
-            "API\u{3007}\u{5186}",
-            "TOD\u{3007}\u{4EF6}",
-        ] {
-            passes(line);
-        }
-        // And every counter in the list is a Han letter, so a wrong entry
-        // cannot quietly join a Latin word.
-        for &counter in COUNTERS {
-            assert_eq!(counter.script(), Script::Han, "U+{:04X}", counter as u32);
-        }
-    }
-
-    #[test]
     fn an_ideographic_zero_before_latin_is_refused_as_written() {
         // Before a Latin letter it is that word's `O` (rule 1), so the
         // placeholder U+3007 U+3007 before a product name and "zero GB" are
         // refused. These are the false positives `allow = ["U+3007"]` admits.
         zeros_found("\u{3007}\u{3007}API\u{3092}\u{4F7F}\u{3046}", 2);
         zeros_found("\u{3007}GB", 1);
+        // After a Latin letter it is read with it (rule 2), so a numeral
+        // glued to a Latin word -- "API, zero items" -- is refused too.
+        zeros_found("API\u{3007}\u{4EF6}", 1);
+        zeros_found("PR\u{3007}\u{56DE}", 1);
+    }
+
+    #[test]
+    fn an_ideographic_zero_after_a_latin_word_is_read_with_it_before_any_compound() {
+        // Common first kanji of a compound, which a counter list would have
+        // let through.
+        for line in [
+            "DEM\u{3007}\u{65E5}\u{672C}\u{8A9E}",
+            "DEM\u{3007}\u{672C}\u{756A}",
+            "TOD\u{3007}\u{884C}",
+            "REP\u{3007}\u{540D}\u{524D}",
+            "REP\u{3007}\u{756A}\u{53F7}",
+            "TOD\u{3007}\u{5206}\u{6790}",
+            "TOD\u{3007}\u{6642}\u{9593}",
+            "HELL\u{3007}\u{4EBA}\u{6C17}",
+            "REP\u{3007}\u{5E74}\u{5EA6}",
+            "G\u{3007}\u{5341}\u{5206}",
+            "R\u{3007}\u{5E74}",
+            "TOD\u{3007}\u{4EF6}",
+        ] {
+            zeros_found(line, 1);
+        }
+        // Everywhere else it is a numeral or a placeholder, and passes.
+        for line in [
+            "\u{7B2C}\u{3007}\u{7248}",
+            "\u{3007}\u{6642}\u{3007}\u{5206}",
+            "\u{5E73}\u{6210}\u{3007}\u{5E74}",
+            "\u{3007}\u{3007}\u{682A}\u{5F0F}\u{4F1A}\u{793E}",
+            "\u{3007}\u{3007}\u{3055}\u{3093}",
+            "v1\u{3007}\u{3007}",
+            "\u{3007}\u{4EF6}",
+            "1\u{3007}\u{4EF6}",
+        ] {
+            passes(line);
+        }
+    }
+
+    #[test]
+    fn an_ideographic_zero_read_as_latin_votes_latin() {
+        // A Cyrillic or Greek half the length of the word cannot outvote
+        // a zero read as Latin: the tie makes Latin the word's script and
+        // the letters drawn as Latin are named.
+        for line in [
+            "\u{0421}\u{041E}\u{3007}L",
+            "\u{0430}\u{043E}\u{3007}d",
+            "\u{03BF}\u{3007}d\u{03B1}",
+        ] {
+            let found = lookalikes(line);
+            assert!(!found.is_empty(), "{line}: passed");
+            assert!(
+                found.iter().all(|finding| finding.among == Script::Latin),
+                "{line}: {:?}",
+                found.iter().map(Lookalike::describe).collect::<Vec<_>>()
+            );
+        }
+        // And `Z` + U+3007 U+3007 is a Latin word naming both zeros.
+        zeros_found("Z\u{3007}\u{3007}", 2);
     }
 
     #[test]

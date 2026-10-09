@@ -1449,23 +1449,24 @@ file guard bans:
   `API` or `README` run straight into a Japanese or Chinese subject is not a
   mixed word and passes. The exception is a letter at that boundary which is
   itself drawn like the other side's script: U+3007 IDEOGRAPHIC NUMBER ZERO is
-  Han with a Latin `O` for its skeleton, and a run of it is read by three
-  rules in order. (1) Before a letter of the script it is drawn as, it joins
-  that word whatever comes before it, so `g` + U+3007 + `od`, U+3007 + `K`,
-  and a kanji or kana run + U+3007 + `K` (a kanji numeral included) are
-  refused. (2) Before a counter kanji it is the numeral zero and stays Han, so
-  `API` + U+3007 + U+4EF6 ("API, zero items") passes; the counters are the
-  closed list `COUNTERS` in `src/guard/unicode.rs` (items, pieces, times, yen
-  and yuan, people, dates and times of day, age, degrees, the place values and
-  the like). (3) Otherwise it is read with the letter before it when that
-  letter is of the script it is drawn as, so a Latin word ending in U+3007 is
-  refused before kanji, kana, Hangul or nothing (`TOD` + U+3007 + U+4E00
-  U+89A7, `HELL` + U+3007 U+3007), and after a kanji, a kana or nothing it
-  stays Han, so a kanji numeral carrying it passes. What still passes is a
-  Latin word ending in U+3007 right before a counter (`TOD` + U+3007 +
-  U+4EF6). What is refused although meant is U+3007 written as a numeral or a
-  placeholder right before Latin letters -- U+3007 + `GB`, or the U+3007
-  U+3007 placeholder before a product name; the report names U+3007, and
+  Han with a Latin `O` for its skeleton, and a run of it is read by two rules
+  in order, looking at the nearest letter after the run and before it in the
+  same word; marks and letters no script owns (such as the prolonged sound
+  mark U+30FC) are skipped in that search. (1) Before a Latin letter it joins
+  that Latin word whatever comes before it, so `g` + U+3007 + `od`, U+3007 +
+  `K`, and a kanji or kana run + U+3007 + `K` (a kanji numeral included) are
+  refused. (2) Otherwise it is read with the letter before it when it is
+  drawn as that letter's script: after a Latin letter it is part of the Latin
+  word, so `TOD` + U+3007 + U+4E00 U+89A7, `TOD` + U+3007 + kana, `HELL` +
+  U+3007 U+3007, and `g` + U+3007 + a Cyrillic `o` are refused; after a kanji,
+  a kana, a Hangul letter, a digit, or nothing it stays Han, so kanji numerals,
+  `2026` + U+5E74 U+4E00 U+3007 U+6708, and the U+3007 U+3007 placeholder
+  before kana or kanji pass. A U+3007 read as Latin counts as a Latin letter
+  when the word's script is decided, so a Cyrillic or Greek letter beside it
+  is named. The cost is U+3007 meant as a numeral or a placeholder right
+  next to Latin letters: U+3007 + `GB`, the U+3007 U+3007 placeholder before a
+  Latin word, and a Latin word + U+3007 + a counter (`API` + U+3007 + U+4EF6,
+  "API, zero items") are refused. The report names U+3007, and
   `allow = ["U+3007"]` admits it. A
   skeleton made only of characters no script owns
   (the kanji for "one" skeletons to the katakana prolonged sound mark) is not
