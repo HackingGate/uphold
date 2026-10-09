@@ -2,7 +2,12 @@
 # written)
 #
 # The two guards that read the message a commit is about to record, and every
-# message a push is about to publish. Pull in with:
+# message a push is about to publish. `prevent-unusual-unicode` refuses a
+# character that draws nothing anywhere in the message, and a lookalike letter
+# from another script inside a word of the SUBJECT LINE; it refuses no
+# punctuation or symbol. The typographic house style it used to carry is
+# `ascii-only-commit-subject`, which this set does not declare and no bundled
+# set does -- a repository that wants it writes it by name. Pull in with:
 #
 #   [inherit]
 #   sets = ["process-residue", "commit-message-residue"]

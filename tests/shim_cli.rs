@@ -1837,7 +1837,7 @@ before = ["faux"]
 
 [rule.prevent-unusual-unicode]
 builtin = "prevent-unusual-unicode"
-allow = ["U+FF01"]
+allow = ["U+0430"]
 
 [rule.prevent-unusual-unicode.git]
 hooks = ["commit-msg"]
@@ -1849,21 +1849,23 @@ text_flags = ["-t", "--title", "-b", "--body"]
 scope = "always"
 "#;
 
-/// The allowance a consumer writes on `prevent-unusual-unicode` is what the
-/// consultation honours for a pull-request body, because the consultation runs
-/// the rule as the effective policy holds it. Before this the field did not
-/// exist on the message guard, and the consumer's only lever was `UPHOLD_ALLOW`
-/// on the rule id in its exec line -- the whole guard off, invisibles included.
+/// A pull-request body is prose, so the consultation asks the message guard
+/// only for what draws nothing: a fullwidth mark passes with or without a
+/// list, and the list the consumer wrote on the rule admits nothing that
+/// draws nothing.
 #[test]
-fn a_text_guards_consultation_honours_the_allowance_declared_on_the_message_guard() {
+fn a_text_guards_consultation_judges_a_body_as_prose() {
     let root = workspace(UNICODE_ALLOWANCE_POLICY);
     std::fs::remove_file(root.join("bin/uphold")).unwrap();
 
-    let listed = shim(&root, &["faux", "pr", "create", "-b", "Ship it\u{FF01}"]);
-    assert_eq!(code(&listed), 0, "{}", stderr(&listed));
-    assert!(stdout(&listed).contains("faux ran:"), "{}", stdout(&listed));
+    let visible = shim(&root, &["faux", "pr", "create", "-b", "Ship it\u{FF01}"]);
+    assert_eq!(code(&visible), 0, "{}", stderr(&visible));
+    assert!(
+        stdout(&visible).contains("faux ran:"),
+        "{}",
+        stdout(&visible)
+    );
 
-    // The list admits what it names and nothing that draws nothing.
     let hidden = shim(&root, &["faux", "pr", "create", "-b", "Ship\u{200B} it"]);
     assert_eq!(code(&hidden), 1, "{}", stderr(&hidden));
     assert!(stderr(&hidden).contains("U+200B"), "{}", stderr(&hidden));
@@ -1871,6 +1873,71 @@ fn a_text_guards_consultation_honours_the_allowance_declared_on_the_message_guar
         !stdout(&hidden).contains("faux ran:"),
         "{}",
         stdout(&hidden)
+    );
+}
+
+/// The edit the scope failure was observed on: `gh issue edit --body-file`
+/// resubmits the whole body, including what the owner typed by hand.
+const GH_EDIT_POLICY: &str = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+builtin = "text-guards"
+
+[rule.no-published-markers.command]
+before = ["gh"]
+
+[rule.prevent-unusual-unicode]
+builtin = "prevent-unusual-unicode"
+
+[rule.prevent-unusual-unicode.git]
+hooks = ["commit-msg"]
+
+[[shim]]
+command = "gh"
+match = ["issue:edit"]
+text_flags = ["-b", "--body"]
+title_flags = ["-t", "--title"]
+file_flags = ["-F", "--body-file"]
+scope = "always"
+"#;
+
+#[test]
+fn an_issue_edit_carrying_a_degree_sign_runs_and_one_carrying_a_bidi_override_does_not() {
+    let root = workspace(GH_EDIT_POLICY);
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+    let stub = root.join("bin/gh");
+    std::fs::write(&stub, "#!/bin/sh\necho \"gh ran: $*\"\n").unwrap();
+    let mut permissions = std::fs::metadata(&stub).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&stub, permissions).unwrap();
+
+    std::fs::write(
+        root.join("body.md"),
+        "## Where\n\nThe office sits at 46\u{00B0}W.\n",
+    )
+    .unwrap();
+    let edited = shim(
+        &root,
+        &["gh", "issue", "edit", "1", "--body-file", "body.md"],
+    );
+    assert_eq!(code(&edited), 0, "{}", stderr(&edited));
+    assert!(stdout(&edited).contains("gh ran:"), "{}", stdout(&edited));
+
+    std::fs::write(
+        root.join("body.md"),
+        "## Where\n\nThe office sits at 46\u{00B0}W. \u{202E}txt.exe\n",
+    )
+    .unwrap();
+    let refused = shim(
+        &root,
+        &["gh", "issue", "edit", "1", "--body-file", "body.md"],
+    );
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("U+202E"), "{}", stderr(&refused));
+    assert!(
+        !stdout(&refused).contains("gh ran:"),
+        "{}",
+        stdout(&refused)
     );
 }
 

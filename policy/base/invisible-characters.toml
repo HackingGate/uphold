@@ -2,8 +2,10 @@
 # file or in the name of one)
 #
 # The tree-wide half of the Unicode guard: zero-width joiners, bidirectional
-# controls, unearned variation selectors and homoglyphs, in committed content
-# and in the paths that carry it. Pull in with:
+# controls and unearned variation selectors, in committed content and in the
+# paths that carry it; and in a PATH alone, a lookalike letter from another
+# script inside a word (UTS #39 mixed-script confusables). Content is not asked
+# about lookalikes: a file holds prose and data in every script. Pull in with:
 #
 #   [inherit]
 #   sets = ["process-residue", "invisible-characters"]

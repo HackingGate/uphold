@@ -284,6 +284,107 @@ fn a_symlinks_blob_is_its_target_path() {
     assert!(stderr(&output).contains("link:"), "{}", stderr(&output));
 }
 
+// ── lookalikes: a subject and a path, never prose or content ─────────
+
+const MESSAGE_UNICODE: &str = r#"
+[rule.prevent-unusual-unicode]
+builtin = "prevent-unusual-unicode"
+
+[rule.prevent-unusual-unicode.git]
+hooks = ["commit-msg"]
+"#;
+
+/// A Cyrillic `a` in a Latin word, the case UTS #39 mixed-script detection
+/// exists for. The same text passes `uphold guard --text`, where it is prose
+/// (`tests/text_cli.rs`); at `commit-msg` it is the subject line, which is
+/// what somebody searches the log for.
+#[test]
+fn a_lookalike_in_a_commit_subject_is_refused_at_commit_msg() {
+    let root = repository(MESSAGE_UNICODE);
+    write(&root, "msg.txt", "Fix the c\u{0430}che\n");
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let report = stderr(&output);
+    assert!(report.contains("CYRILLIC SMALL LETTER A"), "{report}");
+    assert!(report.contains("SUBJECT LINE"), "{report}");
+
+    // In the body it is prose, and passes.
+    write(
+        &root,
+        "msg.txt",
+        "Fix the cache\n\nThe c\u{0430}che word was pasted from a chat.\n",
+    );
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+/// The ordinary signs of prose, in a subject: refused by the old whitelist,
+/// and none of them a lookalike or an invisible.
+#[test]
+fn an_accent_a_degree_sign_and_a_comparison_sign_pass_at_commit_msg() {
+    let root = repository(MESSAGE_UNICODE);
+    write(
+        &root,
+        "msg.txt",
+        "Move S\u{00E3}o Paulo to 46\u{00B0}W, quota \u{2265} 3\n",
+    );
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+const ASCII_SUBJECT: &str = r#"
+[rule.ascii-only-commit-subject]
+builtin = "ascii-only-commit-subject"
+allow = ["U+2014"]
+
+[rule.ascii-only-commit-subject.git]
+hooks = ["commit-msg"]
+"#;
+
+/// The typographic rule, declared by name: an em dash it lists passes, a
+/// curly quote it does not is refused, and the body is not its business.
+#[test]
+fn the_ascii_subject_rule_holds_the_subject_line_to_ascii() {
+    let root = repository(ASCII_SUBJECT);
+    write(
+        &root,
+        "msg.txt",
+        "Fix \u{2014} the parser\n\nIt said \u{201C}no\u{201D}.\n",
+    );
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    write(&root, "msg.txt", "Fix the \u{201C}parser\u{201D}\n");
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let report = stderr(&output);
+    assert!(report.contains("ascii-only-commit-subject"), "{report}");
+    assert!(report.contains("U+201C"), "{report}");
+}
+
+const FILES_UNICODE: &str = "[rule.prevent-unusual-unicode-in-files]\nbuiltin = \"prevent-unusual-unicode-in-files\"\n\n[rule.prevent-unusual-unicode-in-files.git]\nhooks = [\"pre-commit\"]\n";
+
+/// A path is searched by substring, so a lookalike in one of its segments is
+/// refused and named. The same word in a file's CONTENT is not: the content
+/// half of this rule is the invisible ban and nothing more.
+#[test]
+fn a_lookalike_in_a_staged_path_is_refused_and_in_content_is_not() {
+    let root = repository(FILES_UNICODE);
+    write(&root, "src/c\u{0430}che.rs", "fn main() {}\n");
+    support::git(&root, &["add", "-A"]);
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let report = stderr(&output);
+    assert!(report.contains("CYRILLIC SMALL LETTER A"), "{report}");
+    assert!(report.contains("FILE NAME"), "{report}");
+
+    let root = repository(FILES_UNICODE);
+    write(&root, "src/cache.rs", "// the c\u{0430}che word, quoted\n");
+    support::git(&root, &["add", "-A"]);
+    let output = guard(&root, &["--stage", "pre-commit"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
 #[test]
 fn a_merge_in_progress_is_refused_at_pre_commit() {
     let root = repository(

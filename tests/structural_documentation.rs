@@ -63,8 +63,6 @@ const KNOWN: &[&str] = &[
     "git.rs::dir",
     "git.rs::run",
     "guard/message.rs::prevent_ai_author",
-    "guard/message.rs::prevent_unusual_unicode",
-    "guard/message.rs::unusual_unicode_in",
     "guard/mod.rs::RunRequest",
     "guard/names.rs::in_message",
     "guard/sets.rs::no_hand_copied_base_rule",
@@ -357,5 +355,130 @@ fn every_field_a_policy_file_may_write_is_named_in_the_reference() {
         missing.is_empty(),
         "a policy file may write these and no document says so, which leaves reading \
          src/config.rs as the only way to find out they exist: {missing:?}"
+    );
+}
+
+/// The quoted names in one `const NAME: &[&str] = &[...];` of a source file.
+///
+/// Read off the text rather than imported, because this is an integration
+/// test of a binary crate and there is no library to import from. Comment
+/// lines are skipped, so a name mentioned in a remark is not a name declared.
+fn names_in_const(source: &str, name: &str) -> Vec<String> {
+    let opening = format!("pub(crate) const {name}: &[&str] = &[");
+    let (_, rest) = source
+        .split_once(&opening)
+        .expect("the list is declared in src/guard/mod.rs");
+    let (body, _) = rest.split_once("];").expect("a closed list");
+    body.lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .flat_map(|line| line.split('"').skip(1).step_by(2))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Every built-in `uphold guard` runs has a row in REFERENCE.md's guard table.
+///
+/// The table is where a reader finds out what a `builtin = "..."` refuses, and
+/// a built-in with no row is one whose name can only be learned from
+/// `src/guard/mod.rs`. The scan-dispatched resolvers and the two consultations
+/// are documented in their own sections, not this table, and are left out.
+#[test]
+fn every_guard_builtin_has_a_row_in_the_reference_guard_table() {
+    let source = std::fs::read_to_string(PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/guard/mod.rs"
+    )))
+    .expect("src/guard/mod.rs");
+    let reference = std::fs::read_to_string(PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/docs/REFERENCE.md"
+    )))
+    .expect("docs/REFERENCE.md");
+    let every = names_in_const(&source, "EVERY_BUILTIN");
+    let elsewhere: Vec<String> = names_in_const(&source, "SCAN_BUILTINS")
+        .into_iter()
+        .chain(names_in_const(&source, "META_TEXT_GUARDS"))
+        .collect();
+    assert!(
+        every.len() > 15 && every.iter().any(|name| name == "ascii-only-commit-subject"),
+        "read {every:?} out of EVERY_BUILTIN, which is not the list -- the reader is broken"
+    );
+    let missing: Vec<&String> = every
+        .iter()
+        .filter(|name| !elsewhere.contains(name))
+        .filter(|name| {
+            !reference
+                .lines()
+                .any(|line| line.starts_with(&format!("| `{name}` |")))
+        })
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these built-ins have no row in the guard table of docs/REFERENCE.md: {missing:?}"
+    );
+}
+
+/// The dependencies that predate the convention below, named so that the
+/// list can only shrink: an entry that gains a reason, or leaves, fails.
+const DEPENDENCIES_WITHOUT_A_REASON: &[&str] = &["regex", "serde", "toml"];
+
+/// Every dependency in Cargo.toml says why it is there.
+///
+/// A comment block covers the run of entries directly under it, so one reason
+/// may stand for a family (the ripgrep stack). A dependency is a decision about
+/// what this binary trusts and ships, and the reason beside it is what lets a
+/// reviewer ask later whether the reason still holds.
+#[test]
+fn every_dependency_carries_its_reason() {
+    let manifest = std::fs::read_to_string(PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/Cargo.toml"
+    )))
+    .expect("Cargo.toml");
+    let mut in_dependencies = false;
+    let mut covered = false;
+    let mut bare: Vec<String> = Vec::new();
+    let mut read = 0_usize;
+    for line in manifest.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_dependencies = trimmed == "[dependencies]";
+            covered = false;
+            continue;
+        }
+        if !in_dependencies {
+            continue;
+        }
+        if trimmed.is_empty() {
+            covered = false;
+        } else if trimmed.starts_with('#') {
+            covered = true;
+        } else if let Some((name, _)) = trimmed.split_once('=') {
+            read += 1;
+            if !covered {
+                bare.push(name.trim().to_owned());
+            }
+        }
+    }
+    assert!(
+        read > 10,
+        "read {read} dependencies, which is not the manifest"
+    );
+    let unexcused: Vec<&String> = bare
+        .iter()
+        .filter(|name| !DEPENDENCIES_WITHOUT_A_REASON.contains(&name.as_str()))
+        .collect();
+    assert!(
+        unexcused.is_empty(),
+        "these dependencies carry no comment saying why they are here: {unexcused:?}"
+    );
+    let stale: Vec<&&str> = DEPENDENCIES_WITHOUT_A_REASON
+        .iter()
+        .filter(|name| !bare.iter().any(|found| found == *name))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "these carry a reason now, or are gone. Remove them from \
+         DEPENDENCIES_WITHOUT_A_REASON: {stale:?}"
     );
 }

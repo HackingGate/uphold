@@ -1737,7 +1737,10 @@ impl Rule {
         // judgement, so an entry that names no character, carries a glob, or
         // names a character no allowance may admit is refused when the policy
         // loads and not on the first commit somebody writes under it.
-        if self.builtin() == Some("prevent-unusual-unicode") {
+        if matches!(
+            self.builtin(),
+            Some("prevent-unusual-unicode" | "ascii-only-commit-subject")
+        ) {
             crate::guard::message::allowances(self)?;
         }
         Ok(())

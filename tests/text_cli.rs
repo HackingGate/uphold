@@ -673,18 +673,18 @@ fn a_bot_identity_whose_app_cannot_be_read_is_could_not_look() {
     );
 }
 
-// ── the message guard's allowance reaches the text seam ──────────────
+// ── the message guard at the text seam: prose, invisible-only ────────
 
 /// The message guard as a consumer declares it, allowance and all.
 ///
-/// The character under test is a fullwidth exclamation mark in an English
-/// sentence: no East Asian letter in the body vouches for it, so the whitelist
-/// refuses it and only the allowance can admit it. U+3000 would not do here --
-/// `is_whitespace` admits it with or without a list.
+/// The text seam is prose -- a pull-request body, a release note, a body piped
+/// in by hand -- so the guard asks it only for characters that draw nothing,
+/// and no allowance can admit one of those. The allowance still loads here,
+/// and still refuses an invisible at load (below).
 const MESSAGE_ALLOWANCE_POLICY: &str = r#"
 [rule.prevent-unusual-unicode]
 builtin = "prevent-unusual-unicode"
-allow = ["U+FF01"]
+allow = ["U+0430"]
 
 [rule.prevent-unusual-unicode.git]
 hooks = ["commit-msg"]
@@ -698,24 +698,44 @@ builtin = "prevent-unusual-unicode"
 hooks = ["commit-msg"]
 "#;
 
-const FULLWIDTH_BODY: &[u8] = "Ship it\u{FF01}\n".as_bytes();
 const ZERO_WIDTH_BODY: &[u8] = "Ship\u{200B} it\n".as_bytes();
 
-/// The lever the consumer lacked. Before this, a pull-request body carrying
-/// one such character had `UPHOLD_ALLOW` on the whole rule as its only way
-/// out, and the consumer wrote that into its policy file.
+/// The two observed failures, in one body: an accented city name, a degree
+/// sign in a longitude and a greater-or-equal sign in a quota were refused
+/// as paste artefacts and retyped as `deg` and `>=` to satisfy the tool.
 #[test]
-fn a_listed_codepoint_passes_guard_text_and_an_unlisted_body_is_refused() {
-    let allowed = workspace(MESSAGE_ALLOWANCE_POLICY);
-    let listed = guard_text(&allowed, FULLWIDTH_BODY, EXAMPLE_HOME, None);
-    assert_eq!(code(&listed), 0, "{}", stderr(&listed));
+fn accented_text_a_degree_sign_and_a_comparison_sign_pass_guard_text() {
+    let root = workspace(MESSAGE_POLICY);
+    let body = "The S\u{00E3}o Paulo office sits at 46\u{00B0}W.\n\nKeep the quota \u{2265} 3.\n";
+    let output = guard_text(&root, body.as_bytes(), EXAMPLE_HOME, None);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
 
-    let bare = workspace(MESSAGE_POLICY);
-    let unlisted = guard_text(&bare, FULLWIDTH_BODY, EXAMPLE_HOME, None);
-    assert_eq!(code(&unlisted), 1, "{}", stderr(&unlisted));
-    let report = stderr(&unlisted);
+#[test]
+fn a_zero_width_joiner_in_a_body_is_refused_by_guard_text() {
+    let root = workspace(MESSAGE_POLICY);
+    let output = guard_text(&root, "pa\u{200D}rser\n".as_bytes(), EXAMPLE_HOME, None);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let report = stderr(&output);
     assert!(report.contains("prevent-unusual-unicode"), "{report}");
-    assert!(report.contains("U+FF01"), "{report}");
+    assert!(report.contains("U+200D"), "{report}");
+}
+
+/// A Latin word with a Cyrillic letter in it is a lookalike, and a lookalike
+/// is a hazard where somebody searches by substring -- a commit subject, a
+/// path. A body is read, not searched, so the message guard passes it here.
+/// The same text as a commit subject at `commit-msg` is refused
+/// (`tests/guard_cli.rs`).
+#[test]
+fn a_lookalike_in_a_body_is_not_refused_by_the_message_guard() {
+    let root = workspace(MESSAGE_POLICY);
+    let output = guard_text(
+        &root,
+        "Fix the c\u{0430}che\n".as_bytes(),
+        EXAMPLE_HOME,
+        None,
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
 /// What the allowance cannot open. The exec-line workaround switched the

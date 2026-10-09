@@ -45,6 +45,12 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     "prevent-author-mismatch",
     "prevent-unusual-unicode",
     "prevent-unusual-unicode-in-files",
+    // The typographic half `prevent-unusual-unicode` used to carry, under its
+    // own name and in no bundled set: a house style for subject lines, opt in.
+    // Not a text guard -- its subject is a commit's subject line, which only a
+    // git hook has, and run over a pull-request body by `text-guards` it would
+    // be holding the first line of prose to a rule written about commits.
+    "ascii-only-commit-subject",
     "no-private-repo-names",
     "no-private-repo-names-staged",
     "no-private-repo-names-in-files",
@@ -523,6 +529,7 @@ pub(crate) fn evaluate(request: &Request<'_>) -> Result<Option<Refusal>> {
     match builtin {
         "prevent-ai-author" => message::prevent_ai_author(request),
         "prevent-unusual-unicode" => message::prevent_unusual_unicode(request),
+        "ascii-only-commit-subject" => message::ascii_only_commit_subject(request),
         "prevent-author-mismatch" => identity::prevent_author_mismatch(request),
         "no-merge-commit" => merge::no_merge_commit(request),
         "no-local-merge" => merge::no_local_merge(request),
@@ -588,11 +595,13 @@ pub(crate) fn parameters(builtin: &str) -> &'static [&'static str] {
         // about judging names in text, which this one never does.
         "no-stale-visibility" => &["visibility"],
         // One field, two readings. The file guard takes a path glob after the
-        // codepoint and lets a fixture earn an invisible; the message guard
-        // takes the codepoint alone and admits no invisible whatever is
+        // codepoint and lets a fixture earn an invisible; the two message
+        // guards take the codepoint alone and admit no invisible whatever is
         // listed -- see `message::allowances` for why the second reading is
         // the narrower one.
-        "prevent-unusual-unicode" | "prevent-unusual-unicode-in-files" => &["allow"],
+        "prevent-unusual-unicode"
+        | "prevent-unusual-unicode-in-files"
+        | "ascii-only-commit-subject" => &["allow"],
         _ => &[],
     }
 }
@@ -701,7 +710,7 @@ mod tests {
                 "{id} is in EVERY_BUILTIN with no dispatch arm"
             );
         }
-        assert_eq!(EVERY_BUILTIN.len(), 20);
+        assert_eq!(EVERY_BUILTIN.len(), 21);
     }
 
     #[test]

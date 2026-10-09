@@ -1,10 +1,6 @@
 //! Guards over the commit message.
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
-
-use regex::Regex;
-use unicode_script::{Script, UnicodeScript};
 
 use super::{Refusal, Request};
 use crate::error::{Fatal, Result};
@@ -112,7 +108,7 @@ pub(crate) fn ai_author_in(rule: &crate::config::Rule, label: &str, text: &str) 
     })
 }
 
-/// The codepoints a message rule's `allow` admits past the whitelist.
+/// The codepoints a message rule's `allow` admits.
 ///
 /// Read at load, where a bad entry is refused with the rule's id on it, and
 /// again at each judgement, so the guard reads the declaration and never a
@@ -155,46 +151,103 @@ pub(crate) fn allowances(rule: &crate::config::Rule) -> Result<Vec<char>> {
         .collect()
 }
 
+/// The message guard over text that has no subject line: a pull-request,
+/// issue, release or gist body, a comment, `uphold guard --text`.
+///
+/// Prose a reader reads, and nobody searches it by substring for a commit. So
+/// it is asked only whether it carries a character that draws nothing; a
+/// lookalike letter is not a hazard here, and an accented name, a degree sign
+/// or a comparison sign never was one.
 pub(crate) fn unusual_unicode_in(
     rule: &crate::config::Rule,
     label: &str,
     text: &str,
 ) -> Result<Option<Refusal>> {
-    let findings = unusual_findings(label, text, &allowances(rule)?);
+    unusual_unicode_over(rule, label, text, None)
+}
+
+/// The judgement, with the one line -- if any -- that is a subject.
+fn unusual_unicode_over(
+    rule: &crate::config::Rule,
+    label: &str,
+    text: &str,
+    subject: Option<usize>,
+) -> Result<Option<Refusal>> {
+    let findings = unusual_findings(label, text, &allowances(rule)?, subject);
     if findings.is_empty() {
         return Ok(None);
     }
     Ok(Some(Refusal {
         id: rule.id.clone(),
         report: format!(
-            "{}\n\nThis is prose somebody typed. Retype the character, or describe it in \
-             words.",
+            "{}\n\nA character that draws nothing, or a letter from another script inside \
+             a word of a commit subject, cannot be caught by reading. Delete the invisible \
+             character, retype the word in one script, or -- where the character is meant \
+             -- admit its codepoint in the rule's `allow` list.",
             findings.join("\n")
         ),
     }))
 }
 
-fn unusual_findings(label: &str, text: &str, allowed: &[char]) -> Vec<String> {
+/// Which line of a commit message is its subject: the first one with anything
+/// on it that git would keep. A comment line is stripped by git's default
+/// cleanup and is not the subject, and a blank line is not one either.
+fn subject_line(text: &str) -> Option<usize> {
+    text.split('\n').position(|line| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !trimmed.starts_with('#')
+    })
+}
+
+/// Two passes, and the second only over the subject.
+///
+/// Every line is asked for a character that draws nothing -- the "Trojan
+/// Source" set (CVE-2021-42574) and the rest of what
+/// [`crate::guard::unicode::draws_nothing`] names. The subject line, where one
+/// is given, is also asked for a mixed-script confusable word (UTS #39,
+/// [`crate::guard::unicode::lookalikes`]), because a subject is what somebody
+/// searches the log for. Nothing else is refused: a punctuation mark or a
+/// symbol, in any script or in none, is not this rule's business.
+fn unusual_findings(
+    label: &str,
+    text: &str,
+    allowed: &[char],
+    subject: Option<usize>,
+) -> Vec<String> {
     let mut findings = Vec::new();
-    // Read off the WHOLE message and not the line, because the line where a
-    // mark is refused is the line least likely to carry the letters that vouch
-    // for it: a subject line ending in a single `。` over a body written in
-    // Japanese is the ordinary shape of a Japanese commit.
-    let written = scripts_written_in(text);
     for (index, line) in text.split('\n').enumerate() {
-        for (column, character) in line.chars().enumerate() {
-            if message_character_is_ordinary(character, &written)
+        let characters: Vec<char> = line.chars().collect();
+        for (column, &character) in characters.iter().enumerate() {
+            let base = column
+                .checked_sub(1)
+                .and_then(|previous| characters.get(previous).copied());
+            let next = characters.get(column + 1).copied();
+            if !crate::guard::unicode::draws_nothing(character, base, next)
                 || admitted_by_allowance(character, allowed)
             {
                 continue;
             }
             findings.push(format!(
-                "{label}:{}:{}: U+{:04X} {}",
+                "{label}:{}:{}: U+{:04X} {}, which draws nothing",
                 index + 1,
                 column + 1,
                 character as u32,
                 unicode_names2::name(character)
                     .map_or_else(|| String::from("UNKNOWN"), |name| name.to_string()),
+            ));
+        }
+        if subject != Some(index) {
+            continue;
+        }
+        for lookalike in crate::guard::unicode::lookalikes(line) {
+            if admitted_by_allowance(lookalike.character, allowed) {
+                continue;
+            }
+            findings.push(format!(
+                "{label}:{}:{}: {} in the SUBJECT LINE",
+                index + 1,
+                lookalike.column + 1,
+                lookalike.describe(),
             ));
         }
     }
@@ -210,136 +263,6 @@ pub(crate) fn prevent_ai_author(request: &Request<'_>) -> Result<Option<Refusal>
     Ok(None)
 }
 
-/// The scripts this message is written in.
-///
-/// Read off the LETTERS, because a letter is the only character that says which
-/// script a text belongs to: `。` is shared by six of them and settles nothing,
-/// while one kana settles it. `Common`, `Inherited` and `Unknown` are dropped
-/// rather than collected -- they are the property's answer for a character no
-/// script owns, and a set holding one of them intersects every extension in
-/// Unicode, which is the whole of Unicode admitted by an English subject line.
-fn scripts_written_in(text: &str) -> Vec<Script> {
-    let mut written: Vec<Script> = Vec::new();
-    for character in text.chars() {
-        if !character.is_alphabetic() {
-            continue;
-        }
-        let script = character.script();
-        if matches!(script, Script::Common | Script::Inherited | Script::Unknown) {
-            continue;
-        }
-        if !written.contains(&script) {
-            written.push(script);
-        }
-    }
-    written
-}
-
-/// The scripts that write with the fullwidth forms.
-const EAST_ASIAN: &[Script] = &[
-    Script::Han,
-    Script::Hiragana,
-    Script::Katakana,
-    Script::Hangul,
-    Script::Bopomofo,
-    Script::Yi,
-];
-
-/// A fullwidth ASCII variant or fullwidth sign.
-///
-/// Named here because the script test below cannot reach these: U+FF01..U+FF60
-/// and U+FFE0..U+FFE6 carry `Script_Extensions=Common`, so `！` and `（` claim
-/// no script at all, and Unicode's own property has nothing to say about the
-/// one thing everybody knows about them. They are admitted on the presence of
-/// an East Asian script instead, and never unconditionally: a fullwidth
-/// exclamation mark in an English sentence is the paste artefact this rule
-/// exists to catch. The halfwidth CJK punctuation just above the range --
-/// U+FF61..U+FF65 -- needs no entry, because those DO name their scripts.
-const fn is_fullwidth_form(character: char) -> bool {
-    matches!(character as u32, 0xFF01..=0xFF60 | 0xFFE0..=0xFFE6)
-}
-
-/// Whether a mark is punctuation one of the message's own scripts writes with.
-fn mark_belongs_to_a_written_script(character: char, written: &[Script]) -> bool {
-    // The general category, so that this admits the MARKS a script writes with
-    // and not everything else that happens to carry a script extension.
-    if !is_punctuation_or_symbol(character) {
-        return false;
-    }
-    if is_fullwidth_form(character) {
-        return written.iter().any(|script| EAST_ASIAN.contains(script));
-    }
-    let extension = character.script_extension();
-    // `Common` and `Inherited` extensions intersect EVERY script by
-    // construction, so `contains_script` answers yes to all of them. Asked
-    // before the intersection because otherwise the presence of any script at
-    // all -- the Latin of an ordinary English subject line -- admits U+2014 EM
-    // DASH and the curly quotes, which are the characters this fleet most
-    // deliberately refuses in prose. An extension naming no script is not
-    // evidence about any.
-    if extension.is_common() || extension.is_inherited() || extension.is_empty() {
-        return false;
-    }
-    written
-        .iter()
-        .any(|&script| extension.contains_script(script))
-}
-
-/// Whether a character is punctuation or a symbol.
-///
-/// The general category, which `char` does not expose and the regex engine
-/// already in this binary does.
-fn is_punctuation_or_symbol(character: char) -> bool {
-    let mut buffer = [0u8; 4];
-    punctuation_or_symbol().is_match(character.encode_utf8(&mut buffer))
-}
-
-fn punctuation_or_symbol() -> &'static Regex {
-    static PUNCTUATION_OR_SYMBOL: OnceLock<Regex> = OnceLock::new();
-    PUNCTUATION_OR_SYMBOL.get_or_init(|| crate::engine::literal_pattern(r"^[\p{P}\p{S}]$"))
-}
-
-/// Characters refused in a commit message.
-///
-/// A message gets a WHITELIST and a file gets an invisible-character ban, and
-/// the asymmetry is deliberate: real repositories commit box drawing and emoji
-/// that are DATA, while a commit message is prose somebody typed and has no
-/// such need.
-///
-/// What the whitelist admits is decided by the message. ASCII and the letters
-/// and digits of every script, always; and then the punctuation of the scripts
-/// whose letters are ALREADY IN THIS TEXT. The rule before this one admitted
-/// every script's letters and only Latin's punctuation, so a line of kana
-/// passed and the same line with a full stop on it did not -- and Japanese
-/// prose cannot be written without `。`, `、` and `「」`, so what the rule
-/// actually produced downstream was a policy switching the whole of it off.
-/// Scoping the admission to the text keeps the
-/// case it exists for: a lone `。` in an English sentence is still a paste
-/// artefact, because no Han, kana or Hangul letter anywhere in the message
-/// vouches for it.
-fn message_character_is_ordinary(character: char, written: &[Script]) -> bool {
-    if character == '\n' || character == '\t' {
-        return true;
-    }
-    if character.is_ascii_graphic() || character == ' ' {
-        return true;
-    }
-    if character.is_control() {
-        return false;
-    }
-    // Everything the file guard bans outright is refused here too, and asked
-    // BEFORE any script can vouch for anything: U+3164 HANGUL FILLER is an
-    // invisible `Lo` whose script is Hangul, so a Korean message is exactly
-    // where a whitelist that asked the script first would let it through.
-    if crate::guard::unicode::is_invisible(character) {
-        return false;
-    }
-    if character.is_alphabetic() || character.is_numeric() || character.is_whitespace() {
-        return true;
-    }
-    mark_belongs_to_a_written_script(character, written)
-}
-
 /// Whether a listed codepoint is the one being read.
 ///
 /// The invisibility test is asked here as well as at load, and not as a second
@@ -353,13 +276,74 @@ fn admitted_by_allowance(character: char, allowed: &[char]) -> bool {
     allowed.contains(&character) && !crate::guard::unicode::is_invisible(character)
 }
 
+/// The message guard at a git hook, where the message has a subject line.
+///
+/// The subject gets both passes and the body the invisible pass alone -- the
+/// same split as the text seams, made here because this is the one seam that
+/// knows which line is the subject.
 pub(crate) fn prevent_unusual_unicode(request: &Request<'_>) -> Result<Option<Refusal>> {
     for (label, text) in message_subjects(request)? {
-        if let Some(refusal) = unusual_unicode_in(request.rule, &label, &text)? {
+        if let Some(refusal) =
+            unusual_unicode_over(request.rule, &label, &text, subject_line(&text))?
+        {
             return Ok(Some(refusal));
         }
     }
     Ok(None)
+}
+
+/// A commit subject line that is not printable ASCII.
+///
+/// A house style, not a security check, and opt in: no bundled set declares
+/// it. It is the typographic half `prevent-unusual-unicode` used to carry --
+/// the em dash, the curly quote, the fullwidth `!` -- under a name that says
+/// what it is, so a repository that wants it writes it by name and one that
+/// does not never has to reason about lookalikes to turn it off. `allow`
+/// admits a codepoint, and no allowance admits a character that draws nothing
+/// (`prevent-unusual-unicode` refuses those whatever this rule says).
+pub(crate) fn ascii_only_commit_subject(request: &Request<'_>) -> Result<Option<Refusal>> {
+    let allowed = allowances(request.rule)?;
+    for (label, text) in message_subjects(request)? {
+        let findings = non_ascii_in_subject(&label, &text, &allowed);
+        if findings.is_empty() {
+            continue;
+        }
+        return Ok(Some(Refusal {
+            id: request.rule.id.clone(),
+            report: format!(
+                "{}\n\nThis repository keeps commit subject lines to printable ASCII. Retype \
+                 the character in ASCII, or admit its codepoint in the rule's `allow` list.",
+                findings.join("\n")
+            ),
+        }));
+    }
+    Ok(None)
+}
+
+fn non_ascii_in_subject(label: &str, text: &str, allowed: &[char]) -> Vec<String> {
+    let Some(index) = subject_line(text) else {
+        return Vec::new();
+    };
+    let line = text.split('\n').nth(index).unwrap_or_default();
+    line.chars()
+        .enumerate()
+        .filter(|&(_, character)| {
+            !(character.is_ascii_graphic()
+                || character == ' '
+                || character == '\t'
+                || admitted_by_allowance(character, allowed))
+        })
+        .map(|(column, character)| {
+            format!(
+                "{label}:{}:{}: U+{:04X} {}",
+                index + 1,
+                column + 1,
+                character as u32,
+                unicode_names2::name(character)
+                    .map_or_else(|| String::from("UNKNOWN"), |name| name.to_string()),
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -367,62 +351,74 @@ mod tests {
     use super::*;
 
     // The letters under test, in escapes. This repository's own content policy
-    // sets `allowed_scripts = ["Latin"]`, so the scripts whose punctuation this
-    // guard now admits are scripts whose letters cannot be typed into its
-    // files -- and a fixture that cannot be committed is a test nobody runs.
-    // The punctuation is written out, because that is the character each
-    // assertion is about and it belongs to no script.
+    // sets `allowed_scripts = ["Latin"]`, so a fixture written in another
+    // script's letters could not be committed -- and a test nobody can commit
+    // is a test nobody runs. Every non-ASCII character below is an escape.
     const JAPANESE: &str = "\u{65E5}\u{672C}\u{8A9E}"; // "Japanese"
     const KANA: &str = "\u{30C6}\u{30B9}\u{30C8}"; // "test"
     const KOREAN: &str = "\u{D55C}\u{AD6D}\u{C5B4}"; // "Korean"
-    const GREEK: &str = "\u{0395}\u{03BB}\u{03BB}\u{03B7}\u{03BD}"; // "Hellen"
-    const ARABIC: &str = "\u{0627}\u{0644}\u{0639}\u{0631}\u{0628}"; // "al-arab"
-    const HEBREW: &str = "\u{05E2}\u{05D1}\u{05E8}"; // "ivr"
     const CYRILLIC: &str = "\u{043A}\u{044D}\u{0448}"; // "kesh"
 
+    /// The text as a commit message at a git hook: its subject line gets the
+    /// lookalike pass as well as the invisible one.
     fn findings(text: &str) -> Vec<String> {
-        unusual_findings("m", text, &[])
+        unusual_findings("m", text, &[], subject_line(text))
     }
 
-    /// The message rule as a policy loads it, with `allow` written out.
+    /// The text as prose at a text seam: the invisible pass alone.
+    fn prose_findings(text: &str) -> Vec<String> {
+        unusual_findings("m", text, &[], None)
+    }
+
+    fn subject_findings(text: &str, allowed: &[char]) -> Vec<String> {
+        non_ascii_in_subject("m", text, allowed)
+    }
+
+    /// A rule as a policy loads it, with `allow` written out.
     ///
     /// Through the loader rather than a struct literal, because the load is
     /// where a bad entry is refused and that refusal is one of the subjects
     /// below.
-    fn loaded(name: &str, allow: &str) -> Result<Option<Refusal>> {
+    fn loaded_rule(name: &str, builtin: &str, allow: &str) -> Result<crate::config::Rule> {
         let root = crate::fixture::scratch(name);
         std::fs::create_dir_all(root.join("policy")).unwrap();
         let path = root.join("policy/principles.toml");
         std::fs::write(
             &path,
             format!(
-                "[rule.prevent-unusual-unicode]\nbuiltin = \"prevent-unusual-unicode\"\n\
-                 allow = {allow}\n\n[rule.prevent-unusual-unicode.git]\nhooks = [\"commit-msg\"]\n"
+                "[rule.{builtin}]\nbuiltin = \"{builtin}\"\n\
+                 allow = {allow}\n\n[rule.{builtin}.git]\nhooks = [\"commit-msg\"]\n"
             ),
         )
         .unwrap();
         let policy = crate::config::load(&root, &path)?;
-        let rule = policy
+        Ok(policy
             .rules
             .iter()
-            .find(|rule| rule.id == "prevent-unusual-unicode")
-            .expect("the fixture rule did not survive the load");
-        // A fullwidth exclamation mark in an English sentence: nothing in the
-        // message vouches for it, so only the allowance can.
-        unusual_unicode_in(rule, "m", "Fix the parser\u{FF01}\n")
+            .find(|rule| rule.id == builtin)
+            .expect("the fixture rule did not survive the load")
+            .clone())
+    }
+
+    /// The message rule over a subject carrying a lookalike, which only the
+    /// allowance can admit.
+    fn loaded(name: &str, allow: &str) -> Result<Option<Refusal>> {
+        let rule = loaded_rule(name, "prevent-unusual-unicode", allow)?;
+        let text = "Fix the c\u{0430}che\n";
+        unusual_unicode_over(&rule, "m", text, subject_line(text))
     }
 
     #[test]
     fn a_listed_codepoint_is_admitted_and_an_unlisted_one_is_not() {
         assert!(
-            loaded("message-allow-listed", "[\"U+FF01\"]")
+            loaded("message-allow-listed", "[\"U+0430\"]")
                 .unwrap()
                 .is_none()
         );
         let refused = loaded("message-allow-unlisted", "[\"U+3000\"]")
             .unwrap()
-            .expect("an unlisted mark passed");
-        assert!(refused.report.contains("U+FF01"), "{}", refused.report);
+            .expect("an unlisted lookalike passed");
+        assert!(refused.report.contains("U+0430"), "{}", refused.report);
     }
 
     #[test]
@@ -434,63 +430,111 @@ mod tests {
         // And past the loader, the guard itself holds the line: a list that
         // somehow carries one admits nothing.
         assert_eq!(
-            unusual_findings("m", "a\u{200B}b\n", &['\u{200B}']).len(),
+            unusual_findings("m", "a\u{200B}b\n", &['\u{200B}'], None).len(),
             1
         );
     }
 
     #[test]
     fn a_glob_on_a_message_allowance_is_refused_at_load() {
-        let error = loaded("message-allow-glob", "[\"U+FF01:docs/**\"]").unwrap_err();
+        let error = loaded("message-allow-glob", "[\"U+0430:docs/**\"]").unwrap_err();
         assert!(error.to_string().contains("no path"), "{error}");
     }
 
+    // ── what a subject may carry ─────────────────────────────────────
+
     #[test]
-    fn a_japanese_sentence_brings_its_own_punctuation() {
-        // The case that made a consuming repository switch the rule off. Every
-        // mark here is refused on its own and admitted beside the kana.
-        let message = format!("{JAPANESE}\u{3002}\u{300C}{KANA}\u{300D}\u{3001}{JAPANESE}\n");
-        let found = findings(&message);
+    fn a_city_name_with_a_tilde_passes() {
+        let found = findings("Add the S\u{00E3}o Paulo office\n");
         assert!(found.is_empty(), "{found:?}");
     }
 
     #[test]
-    fn a_full_stop_from_a_script_nobody_wrote_in_is_still_a_paste_artefact() {
-        let found = findings("Fix the parser\u{3002}\n");
+    fn a_degree_sign_in_a_longitude_passes() {
+        let found = findings("Set the meridian to 100\u{00B0}W\n");
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_greater_than_or_equal_sign_passes() {
+        let found = findings("Keep the quota \u{2265} 3\n");
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn punctuation_and_symbols_of_any_script_pass() {
+        // What the old whitelist refused unless the script's letters vouched
+        // for it. None of it is a lookalike and none of it draws nothing.
+        for text in [
+            format!("{JAPANESE}\u{3002}\u{300C}{KANA}\u{300D}\u{3001}{JAPANESE}\n"),
+            String::from("Fix the parser\u{3002}\n"),
+            String::from("Fix \u{2014} the \u{2018}parser\u{2019}\n"),
+            String::from("Fix the parser\u{FF01}\n"),
+        ] {
+            assert!(
+                findings(&text).is_empty(),
+                "{text:?}: {:?}",
+                findings(&text)
+            );
+        }
+    }
+
+    #[test]
+    fn a_cyrillic_letter_in_a_latin_word_is_refused_and_named() {
+        let found = findings("Fix the c\u{0430}che\n");
         assert_eq!(found.len(), 1, "{found:?}");
-        assert!(found[0].contains("U+3002"), "{found:?}");
-        // And with no letters at all there is nothing to vouch for it either.
-        assert_eq!(findings("\u{3002}\n").len(), 1);
-    }
-
-    #[test]
-    fn a_fullwidth_form_needs_an_east_asian_script_beside_it() {
-        // `Script_Extensions=Common`, so the intersection cannot decide these
-        // and the range decides them instead.
+        assert!(found[0].starts_with("m:1:10: U+0430"), "{found:?}");
+        assert!(found[0].contains("CYRILLIC SMALL LETTER A"), "{found:?}");
         assert!(
-            findings(&format!("{JAPANESE}\u{FF08}{KANA}\u{FF09}\u{FF01}\n")).is_empty(),
+            found[0].contains("a Cyrillic letter in a Latin word"),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_cyrillic_word_beside_a_latin_word_passes() {
+        let found = findings(&format!("Rename the {CYRILLIC} cache\n"));
+        assert!(found.is_empty(), "{found:?}");
+        let beside = findings(&format!("{JAPANESE} {KANA} parser\n"));
+        assert!(beside.is_empty(), "{beside:?}");
+    }
+
+    #[test]
+    fn a_lookalike_in_the_body_is_prose_and_passes() {
+        // The subject is what is searched by substring; the body is read.
+        let found = findings("Fix the cache\n\nThe c\u{0430}che word was pasted.\n");
+        assert!(found.is_empty(), "{found:?}");
+        // And a text seam has no subject at all.
+        assert!(
+            prose_findings("Fix the c\u{0430}che\n").is_empty(),
             "{:?}",
-            findings(&format!("{JAPANESE}\u{FF08}{KANA}\u{FF09}\u{FF01}\n"))
+            prose_findings("Fix the c\u{0430}che\n")
         );
-        assert_eq!(findings("Fix the parser\u{FF01}\n").len(), 1);
-        assert_eq!(findings("Fix the parser\u{FF08}1\u{FF09}\n").len(), 2);
     }
 
     #[test]
-    fn an_em_dash_is_refused_whatever_the_message_is_written_in() {
-        // `Common`, which intersects every script: without the test that asks
-        // first, one kana anywhere in the message would admit it.
-        assert_eq!(findings("Fix \u{2014} the parser\n").len(), 1);
-        assert_eq!(findings(&format!("{JAPANESE} \u{2014} {KANA}\n")).len(), 1);
+    fn the_subject_is_the_first_line_git_keeps() {
+        let found = findings("\n# a comment c\u{0430}che\nFix the c\u{0430}che\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].starts_with("m:3:"), "{found:?}");
+    }
+
+    // ── what draws nothing, anywhere ─────────────────────────────────
+
+    #[test]
+    fn a_zero_width_joiner_between_two_letters_is_refused() {
+        let found = findings("Fix the pa\u{200D}rser\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("U+200D"), "{found:?}");
+        assert_eq!(prose_findings("pa\u{200D}rser\n").len(), 1);
     }
 
     #[test]
-    fn curly_quotes_are_refused_whatever_the_message_is_written_in() {
-        assert_eq!(findings("the \u{2018}parser\u{2019}\n").len(), 2);
-        assert_eq!(
-            findings(&format!("{JAPANESE} \u{201C}parser\u{201D}\n")).len(),
-            2
-        );
+    fn a_right_to_left_override_is_refused() {
+        let found = findings("Fix the parser\n\nsee \u{202E}txt.exe\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("U+202E"), "{found:?}");
+        assert_eq!(prose_findings("see \u{202E}txt.exe\n").len(), 1);
     }
 
     #[test]
@@ -503,44 +547,13 @@ mod tests {
     }
 
     #[test]
-    fn punctuation_is_admitted_only_by_the_script_that_owns_it() {
-        // Greek, Arabic and Hebrew marks beside their own letters.
+    fn an_emoji_with_its_selector_passes_and_a_selector_on_ascii_does_not() {
         assert!(
-            findings(&format!("{GREEK}\u{0384}\n")).is_empty(),
+            findings("Ship it \u{2615}\u{FE0F}\n").is_empty(),
             "{:?}",
-            findings(&format!("{GREEK}\u{0384}\n"))
+            findings("Ship it \u{2615}\u{FE0F}\n")
         );
-        assert!(
-            findings(&format!("{ARABIC}\u{060C} {ARABIC}\n")).is_empty(),
-            "{:?}",
-            findings(&format!("{ARABIC}\u{060C} {ARABIC}\n"))
-        );
-        assert!(
-            findings(&format!("{HEBREW}\u{05C3}\n")).is_empty(),
-            "{:?}",
-            findings(&format!("{HEBREW}\u{05C3}\n"))
-        );
-        // And the same marks with only Latin letters to vouch for them.
-        assert_eq!(findings("Fix the parser\u{0384}\n").len(), 1);
-        assert_eq!(findings("Fix the parser\u{060C}\n").len(), 1);
-        assert_eq!(findings("Fix the parser\u{05C3}\n").len(), 1);
-        // A script present in the message vouches for its own marks and for
-        // nobody else's: a danda is not Japanese punctuation.
-        assert_eq!(findings(&format!("{JAPANESE}\u{0964}\n")).len(), 1);
-    }
-
-    #[test]
-    fn a_cyrillic_letter_admits_no_punctuation_it_does_not_own() {
-        // Every script's LETTERS were ordinary before this change and still
-        // are, so a Cyrillic homoglyph inside a Latin word is not what this
-        // guard refuses. What it refuses is the mark that arrives with no
-        // letters of its own script, and a Cyrillic word vouches for none.
-        assert!(
-            findings("Fix the c\u{0430}che\n").is_empty(),
-            "{:?}",
-            findings("Fix the c\u{0430}che\n")
-        );
-        assert_eq!(findings(&format!("{CYRILLIC}\u{3002}\n")).len(), 1);
+        assert_eq!(findings("port 80\u{FE0F}80\n").len(), 1);
     }
 
     #[test]
@@ -550,5 +563,74 @@ mod tests {
             "{:?}",
             findings("Fix the parser\n\nIt read a\ttab.\n")
         );
+    }
+
+    // ── ascii-only-commit-subject, the typographic rule ──────────────
+
+    #[test]
+    fn an_em_dash_is_refused_in_a_subject_whatever_the_message_is_written_in() {
+        assert_eq!(subject_findings("Fix \u{2014} the parser\n", &[]).len(), 1);
+        assert_eq!(
+            subject_findings(&format!("{JAPANESE} \u{2014} {KANA}\n"), &[]).len(),
+            // The em dash and every letter around it: the rule is a house style
+            // for ASCII subjects, and a Japanese subject is not one.
+            7
+        );
+    }
+
+    #[test]
+    fn curly_quotes_are_refused_in_a_subject() {
+        assert_eq!(
+            subject_findings("the \u{2018}parser\u{2019}\n", &[]).len(),
+            2
+        );
+        assert_eq!(
+            subject_findings("the \u{201C}parser\u{201D}\n", &[]).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_fullwidth_form_is_refused_in_a_subject() {
+        let found = subject_findings("Fix the parser\u{FF01}\n", &[]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("U+FF01"), "{found:?}");
+    }
+
+    #[test]
+    fn only_the_subject_line_is_held_to_ascii() {
+        assert!(
+            subject_findings("Fix the parser\n\nIt said \u{2014} no.\n", &[]).is_empty(),
+            "{:?}",
+            subject_findings("Fix the parser\n\nIt said \u{2014} no.\n", &[])
+        );
+    }
+
+    #[test]
+    fn an_allowance_admits_the_em_dash_in_a_subject() {
+        let rule = loaded_rule(
+            "ascii-subject-allow",
+            "ascii-only-commit-subject",
+            "[\"U+2014\"]",
+        )
+        .unwrap();
+        let allowed = allowances(&rule).unwrap();
+        assert!(
+            subject_findings("Fix \u{2014} the parser\n", &allowed).is_empty(),
+            "{:?}",
+            subject_findings("Fix \u{2014} the parser\n", &allowed)
+        );
+        assert_eq!(
+            subject_findings("Fix \u{2013} the parser\n", &allowed).len(),
+            1
+        );
+        // The same field, the same load-time refusal of an invisible.
+        let error = loaded_rule(
+            "ascii-subject-invisible",
+            "ascii-only-commit-subject",
+            "[\"U+200B\"]",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("draws nothing"), "{error}");
     }
 }

@@ -48,6 +48,14 @@ serde_json = "1"
 # The Unicode Script property, which the Python engine could not read and
 # approximated by matching tokens in character names.
 unicode-script = "0.5"
+# UTS #39, Unicode Security Mechanisms: the confusable skeleton and the
+# resolved script sets mixed-script detection is defined over -- the library
+# rustc's `confusable_idents` and `mixed_script_confusables` lints are built
+# on. The lookalike test in a commit subject and a path is that standard's,
+# and a confusable table maintained by hand here would be one more list to
+# fall behind Unicode. It brings unicode-script, already here, and
+# unicode-normalization for the skeleton's NFD.
+unicode-security = "0.1"
 # The character NAME, which is the only part of this report a reader can act on.
 # A homoglyph finding shows a letter that looks exactly like the Latin one it
 # replaced, so printing the character is no help at all and "CYRILLIC SMALL
