@@ -560,15 +560,17 @@ target = "forge-repo"
 scope = "public-target"
 
   # `glab mr merge` writes the merge commit into the target branch, and its
-  # message reached no text guard: the verb was not matched. Read as titles,
-  # the way `gh pr merge --subject` is, because a squash message's first line
-  # is the commit subject. The list replaces the table's, so `-d` is not read
-  # here: on this verb it is `--remove-source-branch`, a switch, and reading it
-  # as a body would take the next word for one. No editor opens on this verb.
+  # message reached no text guard: the verb was not matched. Each flag carries
+  # a whole commit message, so its first line is judged as a title -- the
+  # commit subject -- and the rest as a body. The list replaces the table's,
+  # so `-d` is not read here: on this verb it is `--remove-source-branch`, a
+  # switch, and reading it as a body would take the next word for one. No
+  # editor opens; with no message GitLab composes one from its own template,
+  # and `editor = "forge"` says that it was not checked.
   [[shim.verbs]]
   match = ["mr:merge"]
-  title_flags = ["-m", "--message", "--squash-message"]
-  editor = "never"
+  message_flags = ["-m", "--message", "--squash-message"]
+  editor = "forge"
 
 # The case that proves a shim is not just a flag table. git publishes text no
 # git hook is in a position to read: a branch name goes onto a public forge in

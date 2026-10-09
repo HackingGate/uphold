@@ -137,6 +137,11 @@ pub(crate) enum Editor {
     /// with a flag in `editor_unless`, none opens, and a body that was not
     /// given is composed by the forge.
     Interactive,
+    /// No editor opens, and a body nobody gave is composed by the forge --
+    /// `glab mr merge`, whose merge commit message GitLab writes from its own
+    /// template when no message flag is given. Said, like the `interactive`
+    /// case off a terminal, rather than passed over in silence.
+    Forge,
 }
 
 /// What the flags of one invocation take away from its editor path.
@@ -181,7 +186,9 @@ const fn editor_path(editor: Editor, collected: &Collected, interactive: bool) -
         return EditorPath::Closed;
     }
     match editor {
-        Editor::WithoutBody if collected.body_given => EditorPath::Closed,
+        // A body given closes the path whether an editor would have opened
+        // for it or the forge would have composed it.
+        Editor::WithoutBody | Editor::Forge if collected.body_given => EditorPath::Closed,
         Editor::WithoutBody => EditorPath::Opens,
         Editor::Never => EditorPath::Closed,
         // `merge.go`: `MergeStrategyEmpty` and `CanPrompt()`, or no prompt and
@@ -191,7 +198,7 @@ const fn editor_path(editor: Editor, collected: &Collected, interactive: bool) -
             EditorPath::Offered
         }
         Editor::Interactive if collected.body_given => EditorPath::Closed,
-        Editor::Interactive => EditorPath::Forge,
+        Editor::Forge | Editor::Interactive => EditorPath::Forge,
     }
 }
 
@@ -207,6 +214,86 @@ fn can_prompt(collected: &Collected) -> bool {
 /// `--squash=true` do, `--squash=false` is the flag spelt off.
 fn switched_on(paired: bool, value: &str) -> bool {
     !(paired && matches!(value, "false" | "0" | "f" | "F" | "FALSE" | "False"))
+}
+
+/// One short-option word, read the way the forge CLIs' option parser reads it.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Cluster {
+    /// The letters before any value-taking one that are switches, as `-s`.
+    switches: Vec<String>,
+    /// The letters nothing classifies, as `-x`. Read past -- a parser that
+    /// does not know a letter cannot say whether it ends the cluster -- and
+    /// the caller decides whether that is good enough.
+    unknown: Vec<String>,
+    /// The letter that takes a value, and the value where the same word
+    /// carries it: `-bText`, `-b=Text`, or the `X` of `-stX`. `None` for the
+    /// value means it is the next word.
+    valued: Option<(String, Option<String>)>,
+}
+
+/// Read `-b`, `-bText`, `-b=Text` and a cluster such as `-sd` or `-stX`.
+///
+/// One reading for every collector, because two that disagree about one word
+/// is a body judged under one reading and published under the other: the text
+/// collectors took `-st X` for an option called `-st`, while `gh` reads `-s`
+/// and then `-t X`, so the subject went out unread. `arity` answers `Some(true)`
+/// for a letter that takes a value, `Some(false)` for a switch and `None` for
+/// a letter nothing here knows, which is read past as `unknown`.
+fn read_cluster(argument: &str, arity: impl Fn(&str) -> Option<bool>) -> Cluster {
+    let mut cluster = Cluster::default();
+    for (offset, letter) in argument.char_indices().skip(1) {
+        let flag = format!("-{letter}");
+        match arity(&flag) {
+            Some(false) => cluster.switches.push(flag),
+            None => cluster.unknown.push(flag),
+            Some(true) => {
+                let rest = argument
+                    .get(offset + letter.len_utf8()..)
+                    .unwrap_or_default();
+                // `-b=Text` is `-b Text` only where `-b` is the first letter,
+                // which is where the option parser strips the sign.
+                let rest = if offset == 1 {
+                    rest.strip_prefix('=').unwrap_or(rest)
+                } else {
+                    rest
+                };
+                cluster.valued = Some((flag, (!rest.is_empty()).then(|| rest.to_owned())));
+                break;
+            }
+        }
+    }
+    cluster
+}
+
+/// A whole commit message as the subjects it is: its first line a title,
+/// because that line is the commit subject, and the rest a body.
+fn message_subjects(message: String) -> Vec<Subject> {
+    let Some((first, rest)) = message.split_once('\n') else {
+        return vec![Subject {
+            kind: Subject::HEADLINE,
+            value: message,
+            added: None,
+        }];
+    };
+    let mut subjects = vec![Subject {
+        kind: Subject::HEADLINE,
+        value: first.trim_end_matches('\r').to_owned(),
+        added: None,
+    }];
+    if !rest.trim().is_empty() {
+        subjects.push(Subject {
+            kind: "text",
+            value: rest.to_owned(),
+            added: None,
+        });
+    }
+    subjects
+}
+
+/// Whether a word is a short option or a cluster of them rather than a
+/// single long-or-short option the table can name whole.
+fn is_short_word(argument: &str) -> bool {
+    argument.starts_with('-') && !argument.starts_with("--") && argument.len() > 1
 }
 
 /// How this command's subjects are found.
@@ -255,6 +342,8 @@ pub(crate) struct VerbFlags {
     #[serde(default)]
     pub title_flags: Vec<String>,
     #[serde(default)]
+    pub message_flags: Vec<String>,
+    #[serde(default)]
     pub file_flags: Vec<String>,
     #[serde(default)]
     pub path_flags: Vec<String>,
@@ -299,6 +388,12 @@ pub(crate) struct Shim {
     /// checkpoint over the body the command was about to open an editor for.
     #[serde(default)]
     pub title_flags: Vec<String>,
+    /// Flags whose value is a whole commit MESSAGE -- `glab mr merge
+    /// --squash-message`. Its first line is judged as a title, because it is
+    /// the commit subject, and the rest as a body; a value here counts as the
+    /// body given.
+    #[serde(default)]
+    pub message_flags: Vec<String>,
     #[serde(default)]
     pub file_flags: Vec<String>,
     #[serde(default)]
@@ -372,14 +467,17 @@ pub(crate) struct Shim {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Subject {
     pub kind: &'static str,
-    /// The text the checkers are asked about.
+    /// The whole text the command publishes, which every checker reads.
     pub value: String,
-    /// The whole text the command publishes, where `value` is only part of
-    /// it: an edit that resubmits a stored body is judged on the lines it
-    /// adds, and `value` holds those. A rule about what must be PRESENT --
-    /// `require_regexp` -- is about the whole, and reads this. `None` where
-    /// `value` is the whole.
-    pub whole: Option<String>,
+    /// The lines of `value` an edit adds to a body the forge already stores,
+    /// where the command resubmits one -- `gh issue edit --body`. Read by the
+    /// invisible-character and lookalike guard alone, whose question is what
+    /// this invocation types into the forge: a character somebody typed months
+    /// ago is not typed again by an edit that leaves its line alone. Every
+    /// other checker -- a pattern, a program, a name guard -- is asked about
+    /// the whole body as before, because what it judges is the document. `None`
+    /// where nothing narrower than the whole is known.
+    pub added: Option<String>,
 }
 
 impl Subject {
@@ -394,6 +492,7 @@ impl Subject {
         crate::guard::Published {
             label: self.kind,
             text: &self.value,
+            added: self.added.as_deref(),
             headline: self.kind == Self::HEADLINE,
         }
     }
@@ -431,19 +530,35 @@ const API_METHOD_FLAGS: &[&str] = &["-X", "--method"];
 
 /// The `api` options that carry one `key=value` of a body.
 ///
-/// Both commands spell the typed field and the raw one differently -- `gh` has
-/// `-F/--field` typed and `-f/--raw-field` raw, `glab` has `-f/--field` -- and
-/// this list deliberately does not try to tell them apart. A field is a field:
-/// its value is published either way, and reading all four spellings the same
-/// way costs a subject nobody minds being asked about, while telling them apart
-/// wrongly costs a body nobody read.
-const API_FIELD_FLAGS: &[&str] = &["-f", "--field", "-F", "--raw-field"];
+/// Both commands spell them the same way: `-F`/`--field` is the TYPED field,
+/// whose `@file` value is that file's contents, and `-f`/`--raw-field` is the
+/// raw one, whose value is sent as written -- `@notes.md` and all. Both are
+/// published, so both are subjects; only the typed one reads a file, because
+/// reading one for a raw field judges text the command never sends.
+const API_FIELD_FLAGS: &[&str] = &["-f", "--raw-field", "-F", "--field"];
+
+/// The typed field spellings, whose `@file` is read.
+const API_TYPED_FIELD_FLAGS: &[&str] = &["-F", "--field"];
 
 /// The `api` field keys whose value is a headline rather than prose: a pull
-/// request's or an issue's `title`, and the `commit_title` a merge writes as
-/// the commit subject. The same subject kind `--title` and `--subject` collect,
+/// request's, merge request's or issue's `title` on either forge, and the
+/// `commit_title` a GitHub merge writes as the commit subject. The same subject kind `--title` and `--subject` collect,
 /// so the same text gets the same check whichever door it came through.
 const API_TITLE_KEYS: &[&str] = &["title", "commit_title"];
+
+/// The `api` field keys whose value is a whole commit message: GitLab's
+/// `squash_commit_message` and `merge_commit_message` on a merge request's
+/// merge. The first line is the subject and is judged as a title, the rest as
+/// a body, the way `glab mr merge --squash-message` is.
+const API_MESSAGE_KEYS: &[&str] = &["squash_commit_message", "merge_commit_message"];
+
+/// Whether an `api` option takes the word after it.
+fn api_takes_value(flag: &str) -> bool {
+    API_METHOD_FLAGS.contains(&flag)
+        || API_FIELD_FLAGS.contains(&flag)
+        || API_INPUT_FLAGS.contains(&flag)
+        || API_OTHER_VALUE_FLAGS.contains(&flag)
+}
 
 /// The `api` option that names a file holding the whole body.
 const API_INPUT_FLAGS: &[&str] = &["--input"];
@@ -508,18 +623,28 @@ impl ApiCall {
                 call.positional.push(argument.clone());
                 continue;
             }
-            let (flag, inline) = match argument.split_once('=') {
-                Some((flag, value)) if argument.starts_with("--") => {
-                    (flag.to_owned(), Some(value.to_owned()))
+            let (flag, inline) = if is_short_word(argument) {
+                // `-ftitle=X` is `-f title=X`, and `-iXPATCH` is `-i -X
+                // PATCH`: read the way `gh` and `glab` read them, by the same
+                // parser the other collectors use. A letter nothing names is
+                // read past as a switch, as an unnamed long option is below.
+                let cluster = read_cluster(argument, |letter| {
+                    api_takes_value(letter).then_some(true).or(Some(false))
+                });
+                let Some(valued) = cluster.valued else {
+                    continue;
+                };
+                valued
+            } else {
+                match argument.split_once('=') {
+                    Some((flag, value)) if argument.starts_with("--") => {
+                        (flag.to_owned(), Some(value.to_owned()))
+                    }
+                    _ => (argument.clone(), None),
                 }
-                _ => (argument.clone(), None),
             };
             let name = flag.as_str();
-            if !(API_METHOD_FLAGS.contains(&name)
-                || API_FIELD_FLAGS.contains(&name)
-                || API_INPUT_FLAGS.contains(&name)
-                || API_OTHER_VALUE_FLAGS.contains(&name))
-            {
+            if !api_takes_value(name) {
                 // `--paginate`, `--silent`, `-i`, `--slurp`: options that take
                 // nothing, and the word after one of them is the next word.
                 continue;
@@ -929,6 +1054,8 @@ impl Shim {
     fn takes_value(&self, flag: &str) -> bool {
         in_list(&self.target_flags, flag)
             || in_list(&self.text_flags, flag)
+            || in_list(&self.title_flags, flag)
+            || in_list(&self.message_flags, flag)
             || in_list(&self.file_flags, flag)
             || in_list(&self.path_flags, flag)
     }
@@ -1299,6 +1426,7 @@ impl Shim {
         let mut effective = self.clone();
         effective.text_flags.clone_from(&entry.text_flags);
         effective.title_flags.clone_from(&entry.title_flags);
+        effective.message_flags.clone_from(&entry.message_flags);
         effective.file_flags.clone_from(&entry.file_flags);
         effective.path_flags.clone_from(&entry.path_flags);
         effective.skip_flags.clone_from(&entry.skip_flags);
@@ -1320,6 +1448,25 @@ impl Shim {
 
         let mut index = 0;
         while let Some(argument) = argv.get(index) {
+            // A short option the table does not name whole is read letter by
+            // letter, the way the command's option parser reads it: `-st X`
+            // is `-s` and `-t X`, and `-bText` is `-b Text`.
+            if is_short_word(argument) && !self.names_option(argument) {
+                let cluster = read_cluster(argument, |flag| self.short_arity(flag));
+                for switch in &cluster.switches {
+                    self.read_option(&mut collected, switch, String::new(), false)?;
+                }
+                let Some((flag, attached)) = cluster.valued else {
+                    index += 1;
+                    continue;
+                };
+                let paired = attached.is_some();
+                let value =
+                    attached.unwrap_or_else(|| argv.get(index + 1).cloned().unwrap_or_default());
+                let took_value = self.read_option(&mut collected, &flag, value, paired)?;
+                index += if paired || !took_value { 1 } else { 2 };
+                continue;
+            }
             // `--flag=value` and `--flag value` are the same flag. Splitting
             // here means every list a table writes is written once, in the
             // spelling a person would use.
@@ -1333,113 +1480,151 @@ impl Shim {
                     false,
                 ),
             };
-
-            // Whether this branch read the lookahead `value`. A flag that
-            // takes no value (`--fill`, `--web`) must not swallow whatever
-            // argument follows it -- that argument may be the very flag whose
-            // value is about to be published.
-            let took_value = if in_list(&self.target_flags, &flag) {
-                collected.target = Some(value);
-                true
-            } else if in_list(&self.text_flags, &flag) {
-                collected.subjects.push(Subject {
-                    kind: "text",
-                    value,
-                    whole: None,
-                });
-                collected.body_given = true;
-                true
-            } else if in_list(&self.title_flags, &flag) {
-                // NOT `body_given`. A title is a subject of its own, and a
-                // `text_flags` title used to mark the body as given -- which
-                // told the shim not to install itself as the editor, so the
-                // body the command then opened an editor FOR closed unread.
-                collected.subjects.push(Subject {
-                    kind: "title",
-                    value,
-                    whole: None,
-                });
-                true
-            } else if in_list(&self.path_flags, &flag) {
-                collected.subjects.push(Subject {
-                    kind: "path",
-                    value,
-                    whole: None,
-                });
-                true
-            } else if in_list(&self.file_flags, &flag) {
-                collected.body_given = true;
-                if value == "-" {
-                    // Reading stdin here means the real command can no longer
-                    // read it, so the bytes are kept whole and handed back on
-                    // the way through -- see `replayed`, which is where they
-                    // become a descriptor the command inherits. A guard that
-                    // silently eats the body it approved is worse than no
-                    // guard: the invocation still runs, and what it publishes
-                    // is empty.
-                    let mut buffer = Vec::new();
-                    std::io::stdin().read_to_end(&mut buffer)?;
-                    // Not text is not a pass. A checker reads a subject as
-                    // text, so bytes that are not text cannot be checked, and
-                    // saying so is the only honest answer available here.
-                    let text = std::str::from_utf8(&buffer)
-                        .map_err(|error| {
-                            Fatal::new(format!(
-                                "{flag} named stdin, which is not UTF-8 text ({error}), so no \
-                                 checker could read what would be published"
-                            ))
-                        })?
-                        .to_owned();
-                    collected.subjects.push(Subject {
-                        kind: "text",
-                        value: text,
-                        whole: None,
-                    });
-                    collected.stdin = Some(buffer);
-                } else if Path::new(&value).is_file() {
-                    collected.subjects.push(Subject {
-                        kind: "text",
-                        value: std::fs::read_to_string(&value)
-                            .map_err(|error| Fatal::at(Path::new(&value), error))?,
-                        whole: None,
-                    });
-                } else {
-                    // `body_given` was already set above, so a file that is not
-                    // there used to leave the shim with a body it had been told
-                    // about, no subject to check, and nothing to say -- it
-                    // collected nothing and exec'd the command.
-                    return Err(Fatal::new(format!(
-                        "{flag} names {value:?}, which is not a file. Refusing to run the \
-                         command with nothing checked when a body was named"
-                    )));
-                }
-                true
-            } else if in_list(&self.skip_flags, &flag) {
-                collected.body_given = true;
-                false
-            } else if in_list(&self.web_flags, &flag) {
-                collected.web = true;
-                false
-            } else if in_list(&self.editor_unless, &flag) {
-                // `--squash=false` is the flag spelt off, and reading it as
-                // on would stand the shim down from an editor that opens.
-                if switched_on(paired, &value) && collected.withheld == Withheld::Nothing {
-                    collected.withheld = Withheld::Prompt;
-                }
-                false
-            } else if in_list(&self.inert_flags, &flag) {
-                // The same reading: `--disable-auto=false` disables nothing.
-                if switched_on(paired, &value) {
-                    collected.withheld = Withheld::Everything;
-                }
-                false
-            } else {
-                index += 1;
-                continue;
-            };
+            let took_value = self.read_option(&mut collected, &flag, value, paired)?;
             index += if paired || !took_value { 1 } else { 2 };
         }
         Ok(collected)
+    }
+
+    /// Whether any list of this table names the word whole.
+    fn names_option(&self, word: &str) -> bool {
+        self.takes_value(word)
+            || in_list(&self.skip_flags, word)
+            || in_list(&self.web_flags, word)
+            || in_list(&self.editor_unless, word)
+            || in_list(&self.inert_flags, word)
+    }
+
+    /// One letter of a short cluster: a value, a switch, or nothing named.
+    fn short_arity(&self, flag: &str) -> Option<bool> {
+        if self.takes_value(flag) {
+            Some(true)
+        } else if self.names_option(flag) {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    /// Read one option and its value into what was collected, answering
+    /// whether the value was taken.
+    ///
+    /// Whether this branch read the lookahead `value` matters: a flag that
+    /// takes no value (`--fill`, `--web`) must not swallow whatever argument
+    /// follows it -- that argument may be the very flag whose value is about
+    /// to be published. An option no list names takes nothing here.
+    fn read_option(
+        &self,
+        collected: &mut Collected,
+        flag: &str,
+        value: String,
+        paired: bool,
+    ) -> Result<bool> {
+        Ok(if in_list(&self.target_flags, flag) {
+            collected.target = Some(value);
+            true
+        } else if in_list(&self.text_flags, flag) {
+            collected.subjects.push(Subject {
+                kind: "text",
+                value,
+                added: None,
+            });
+            collected.body_given = true;
+            true
+        } else if in_list(&self.title_flags, flag) {
+            // NOT `body_given`. A title is a subject of its own, and a
+            // `text_flags` title used to mark the body as given -- which
+            // told the shim not to install itself as the editor, so the
+            // body the command then opened an editor FOR closed unread.
+            collected.subjects.push(Subject {
+                kind: "title",
+                value,
+                added: None,
+            });
+            true
+        } else if in_list(&self.message_flags, flag) {
+            // A whole commit message: its first line is the subject and the
+            // rest is a body, so each is judged as what it is -- a lookalike on
+            // line three is not reported as one in a subject line.
+            collected.subjects.extend(message_subjects(value));
+            collected.body_given = true;
+            true
+        } else if in_list(&self.path_flags, flag) {
+            collected.subjects.push(Subject {
+                kind: "path",
+                value,
+                added: None,
+            });
+            true
+        } else if in_list(&self.file_flags, flag) {
+            collected.body_given = true;
+            if value == "-" {
+                // Reading stdin here means the real command can no longer
+                // read it, so the bytes are kept whole and handed back on
+                // the way through -- see `replayed`, which is where they
+                // become a descriptor the command inherits. A guard that
+                // silently eats the body it approved is worse than no
+                // guard: the invocation still runs, and what it publishes
+                // is empty.
+                let mut buffer = Vec::new();
+                std::io::stdin().read_to_end(&mut buffer)?;
+                // Not text is not a pass. A checker reads a subject as
+                // text, so bytes that are not text cannot be checked, and
+                // saying so is the only honest answer available here.
+                let text = std::str::from_utf8(&buffer)
+                    .map_err(|error| {
+                        Fatal::new(format!(
+                            "{flag} named stdin, which is not UTF-8 text ({error}), so no \
+                             checker could read what would be published"
+                        ))
+                    })?
+                    .to_owned();
+                collected.subjects.push(Subject {
+                    kind: "text",
+                    value: text,
+                    added: None,
+                });
+                collected.stdin = Some(buffer);
+            } else if Path::new(&value).is_file() {
+                collected.subjects.push(Subject {
+                    kind: "text",
+                    value: std::fs::read_to_string(&value)
+                        .map_err(|error| Fatal::at(Path::new(&value), error))?,
+                    added: None,
+                });
+            } else {
+                // `body_given` was already set above, so a file that is not
+                // there used to leave the shim with a body it had been told
+                // about, no subject to check, and nothing to say -- it
+                // collected nothing and exec'd the command.
+                return Err(Fatal::new(format!(
+                    "{flag} names {value:?}, which is not a file. Refusing to run the \
+                     command with nothing checked when a body was named"
+                )));
+            }
+            true
+        } else if in_list(&self.skip_flags, flag) {
+            collected.body_given = true;
+            false
+        } else if in_list(&self.web_flags, flag) {
+            collected.web = true;
+            false
+        } else if in_list(&self.editor_unless, flag) {
+            // `--squash=false` is the flag spelt off, and reading it as
+            // on would stand the shim down from an editor that opens.
+            if switched_on(paired, &value) && collected.withheld == Withheld::Nothing {
+                collected.withheld = Withheld::Prompt;
+            }
+            false
+        } else if in_list(&self.inert_flags, flag) {
+            // The same reading: `--disable-auto=false` disables nothing.
+            if switched_on(paired, &value) {
+                collected.withheld = Withheld::Everything;
+            }
+            false
+        } else {
+            false
+        })
     }
 
     /// Branch and tag names, which appear nowhere as a flag value.
@@ -1522,7 +1707,7 @@ impl Shim {
             .map(|value| Subject {
                 kind: "ref",
                 value,
-                whole: None,
+                added: None,
             })
             .collect())
     }
@@ -1543,7 +1728,7 @@ impl Shim {
                     subjects.push(Subject {
                         kind: "text",
                         value,
-                        whole: None,
+                        added: None,
                     });
                 }
             }
@@ -1552,13 +1737,13 @@ impl Shim {
             subjects.push(Subject {
                 kind: "text",
                 value: readme,
-                whole: None,
+                added: None,
             });
         }
         subjects.push(Subject {
             kind: "path",
             value: root.to_string_lossy().into_owned(),
-            whole: None,
+            added: None,
         });
         Ok(subjects)
     }
@@ -1622,16 +1807,27 @@ impl Shim {
             // a closed list, and never off the path -- which endpoint takes a
             // `title` is the forge's to say, and a key named `title` is a
             // headline on every one of them.
-            let kind = if API_TITLE_KEYS.contains(&key) {
-                Subject::HEADLINE
+            // A raw field is sent as written, `@` and all.
+            let value = if API_TYPED_FIELD_FLAGS.contains(&flag.as_str()) {
+                self.api_value(flag, value, &mut stdin)?
             } else {
-                "text"
+                value.to_owned()
             };
-            subjects.push(Subject {
-                kind,
-                value: self.api_value(flag, value, &mut stdin)?,
-                whole: None,
-            });
+            if API_TITLE_KEYS.contains(&key) {
+                subjects.push(Subject {
+                    kind: Subject::HEADLINE,
+                    value,
+                    added: None,
+                });
+            } else if API_MESSAGE_KEYS.contains(&key) {
+                subjects.extend(message_subjects(value));
+            } else {
+                subjects.push(Subject {
+                    kind: "text",
+                    value,
+                    added: None,
+                });
+            }
         }
         if let Some(file) = &call.input {
             let text = self.api_file("--input", file, &mut stdin)?;
@@ -1639,12 +1835,12 @@ impl Shim {
                 Some(values) => subjects.extend(values.into_iter().map(|value| Subject {
                     kind: "text",
                     value,
-                    whole: None,
+                    added: None,
                 })),
                 None => subjects.push(Subject {
                     kind: "text",
                     value: text,
-                    whole: None,
+                    added: None,
                 }),
             }
         }
@@ -1747,7 +1943,7 @@ impl Shim {
             collected.subjects.push(Subject {
                 kind: "argv",
                 value: argv.join(" "),
-                whole: None,
+                added: None,
             });
         }
         Ok(collected)
@@ -2224,43 +2420,106 @@ fn forge_field(
 /// reached the base branch with nothing reading it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Held {
-    /// The edit replaces a stored body; judge the lines it adds.
+    /// The edit replaces a stored body; the invisible-character guard judges
+    /// the lines it adds.
     StoredBody,
     /// The forge composes whatever part of the merge message was not given;
     /// ask it for that part and judge it.
     ComposedMerge,
 }
 
-/// The verbs whose text is partly the forge's, with the options each takes
-/// that consume no value.
+/// One `gh` verb whose text is partly the forge's, and its whole option
+/// grammar.
 ///
 /// Grammar rather than policy, beside [`FORGE_API_COMMANDS`] and for the same
 /// reason: that `gh issue edit --body` replaces a stored body, and that `gh pr
 /// merge --squash` publishes a message GitHub composes, are facts about `gh`,
 /// and no repository should have to write them into its table to be guarded.
-/// The bare list is what lets the operands be found: every other option of
-/// these verbs takes a value, so an option not named here is read as taking
-/// the word after it. A switch a later `gh` adds and this list lacks then
-/// swallows the next word, and what is asked about is a selector `gh` cannot
-/// resolve -- an exit 2, not a pass.
-const FORGE_HELD: &[(&str, &str, Held, &[&str])] = &[
-    (
-        "gh",
-        "issue:edit",
-        Held::StoredBody,
-        &["--remove-milestone", "-h", "--help"],
-    ),
-    (
-        "gh",
-        "pr:edit",
-        Held::StoredBody,
-        &["--remove-milestone", "-h", "--help"],
-    ),
-    (
-        "gh",
-        "pr:merge",
-        Held::ComposedMerge,
-        &[
+///
+/// Both lists are written out, switches and value-taking options alike, from
+/// `gh` 2.102's own help, and an option in neither is refused rather than
+/// guessed at. Guessing was the defect: an unlisted switch read as taking a
+/// value swallowed the selector after it, so `gh issue edit 5 --remove-type 6
+/// --body ...` asked about issue 5 alone while `gh` wrote the body to 5 and 6.
+/// A `gh` that grows an option this list lacks is exit 2 until the list
+/// learns it, which is a release of this tool and not a body published
+/// unread.
+struct HeldVerb {
+    command: &'static str,
+    verb: &'static str,
+    held: Held,
+    switches: &'static [&'static str],
+    values: &'static [&'static str],
+}
+
+/// The options `gh` takes on every verb.
+const GH_GLOBAL_SWITCHES: &[&str] = &["-h", "--help"];
+const GH_GLOBAL_VALUES: &[&str] = &["-R", "--repo"];
+
+const FORGE_HELD: &[HeldVerb] = &[
+    HeldVerb {
+        command: "gh",
+        verb: "issue:edit",
+        held: Held::StoredBody,
+        switches: &["--remove-milestone", "--remove-parent", "--remove-type"],
+        values: &[
+            "--add-assignee",
+            "--add-blocked-by",
+            "--add-blocking",
+            "--add-label",
+            "--add-project",
+            "--add-sub-issue",
+            "--attach",
+            "-b",
+            "--body",
+            "-F",
+            "--body-file",
+            "-m",
+            "--milestone",
+            "--parent",
+            "--remove-assignee",
+            "--remove-blocked-by",
+            "--remove-blocking",
+            "--remove-label",
+            "--remove-project",
+            "--remove-sub-issue",
+            "-t",
+            "--title",
+            "--type",
+        ],
+    },
+    HeldVerb {
+        command: "gh",
+        verb: "pr:edit",
+        held: Held::StoredBody,
+        switches: &["--remove-milestone"],
+        values: &[
+            "--add-assignee",
+            "--add-label",
+            "--add-project",
+            "--add-reviewer",
+            "--attach",
+            "-B",
+            "--base",
+            "-b",
+            "--body",
+            "-F",
+            "--body-file",
+            "-m",
+            "--milestone",
+            "--remove-assignee",
+            "--remove-label",
+            "--remove-project",
+            "--remove-reviewer",
+            "-t",
+            "--title",
+        ],
+    },
+    HeldVerb {
+        command: "gh",
+        verb: "pr:merge",
+        held: Held::ComposedMerge,
+        switches: &[
             "--admin",
             "--auto",
             "-d",
@@ -2272,11 +2531,34 @@ const FORGE_HELD: &[(&str, &str, Held, &[&str])] = &[
             "--rebase",
             "-s",
             "--squash",
-            "-h",
-            "--help",
         ],
-    ),
+        values: &[
+            "-A",
+            "--author-email",
+            "-b",
+            "--body",
+            "-F",
+            "--body-file",
+            "--match-head-commit",
+            "-t",
+            "--subject",
+        ],
+    },
 ];
+
+impl HeldVerb {
+    /// Whether an option takes a value: `Some(false)` a switch, `Some(true)`
+    /// a value, `None` an option this grammar does not know.
+    fn arity(&self, flag: &str) -> Option<bool> {
+        if self.switches.contains(&flag) || GH_GLOBAL_SWITCHES.contains(&flag) {
+            Some(false)
+        } else if self.values.contains(&flag) || GH_GLOBAL_VALUES.contains(&flag) {
+            Some(true)
+        } else {
+            None
+        }
+    }
+}
 
 /// The GraphQL fields GitHub answers "what would this merge write" with. They
 /// are what `gh pr merge` itself reads to seed "Edit commit message", so the
@@ -2304,11 +2586,10 @@ struct Operands {
     repo: Option<String>,
 }
 
-/// `gh`'s spellings of the repository option, on every verb.
-const GH_REPO_FLAGS: &[&str] = &["-R", "--repo"];
-
 impl Operands {
-    fn of(argv: &[String], bare: &[&str]) -> Self {
+    /// Read argv under one verb's grammar, or name the option it does not
+    /// know.
+    fn of(argv: &[String], grammar: &HeldVerb) -> std::result::Result<Self, String> {
         let mut positional = Vec::new();
         let mut operands = Self::default();
         let mut index = 0;
@@ -2330,44 +2611,37 @@ impl Operands {
                     None => (argument.clone(), None),
                 }
             } else {
-                // A short option, or a cluster of them: each letter a switch
-                // until one that takes a value, which takes the rest of the
-                // word or, at the end of it, the next word.
-                let mut found = None;
-                for (offset, letter) in argument.char_indices().skip(1) {
-                    let flag = format!("-{letter}");
-                    if bare.contains(&flag.as_str()) {
-                        operands.switches.push(flag);
-                        continue;
-                    }
-                    let rest = argument
-                        .get(offset + letter.len_utf8()..)
-                        .unwrap_or_default();
-                    found = Some((flag, (!rest.is_empty()).then(|| rest.to_owned())));
-                    break;
+                let cluster = read_cluster(argument, |flag| grammar.arity(flag));
+                if let Some(unknown) = cluster.unknown.first() {
+                    return Err(unknown.clone());
                 }
-                let Some(found) = found else {
+                operands.switches.extend(cluster.switches);
+                let Some(valued) = cluster.valued else {
                     continue;
                 };
-                found
+                valued
             };
-            if bare.contains(&flag.as_str()) {
-                if switched_on(inline.is_some(), inline.as_deref().unwrap_or_default()) {
-                    operands.switches.push(flag);
+            match grammar.arity(&flag) {
+                None => return Err(flag),
+                Some(false) => {
+                    if switched_on(inline.is_some(), inline.as_deref().unwrap_or_default()) {
+                        operands.switches.push(flag);
+                    }
                 }
-                continue;
-            }
-            let value = inline.or_else(|| {
-                let next = argv.get(index).cloned();
-                index += usize::from(next.is_some());
-                next
-            });
-            if GH_REPO_FLAGS.contains(&flag.as_str()) {
-                operands.repo = value.filter(|repo| !repo.is_empty());
+                Some(true) => {
+                    let value = inline.or_else(|| {
+                        let next = argv.get(index).cloned();
+                        index += usize::from(next.is_some());
+                        next
+                    });
+                    if GH_GLOBAL_VALUES.contains(&flag.as_str()) {
+                        operands.repo = value.filter(|repo| !repo.is_empty());
+                    }
+                }
             }
         }
         operands.selectors = positional.into_iter().skip(2).collect();
-        operands
+        Ok(operands)
     }
 
     fn switched(&self, spellings: &[&str]) -> bool {
@@ -2404,6 +2678,12 @@ fn held_text(
     shim.read_held(name, words, collected, path)
 }
 
+/// The bidirectional embeddings, overrides and isolates: a character that
+/// reorders what follows it until it is closed, on its own line and past it.
+const fn is_bidi_control(character: char) -> bool {
+    matches!(character, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
 /// The lines of `edited` that `stored` does not already hold, counted: a line
 /// the stored body carries once and the edit carries twice is added once.
 ///
@@ -2412,6 +2692,12 @@ fn held_text(
 /// a body typed in its web editor with CRLF and hands one written by a CLI
 /// back with LF. A line an edit changed is a line it added, whole -- so an
 /// invisible character on the line being edited is still read.
+///
+/// A line carrying a bidi control is kept whether the edit added it or not.
+/// Its effect is not confined to the line: an override left open reorders
+/// whatever is placed after it, so an edit that moves such a line, or writes a
+/// new line beneath it, changes what the old character does, and judging only
+/// the new line would miss exactly that.
 fn added_lines(stored: &str, edited: &str) -> String {
     let mut held: BTreeMap<&str, usize> = BTreeMap::new();
     for line in stored.lines() {
@@ -2421,6 +2707,9 @@ fn added_lines(stored: &str, edited: &str) -> String {
         .lines()
         .filter(|line| {
             let line = line.trim_end_matches('\r');
+            if line.chars().any(is_bidi_control) {
+                return true;
+            }
             match held.get_mut(line) {
                 Some(count) if *count > 0 => {
                     *count -= 1;
@@ -2446,6 +2735,16 @@ fn gh_json(args: &[&str]) -> std::result::Result<serde_json::Value, Silence> {
         .ok_or_else(|| Silence::Refused(String::from("`gh` exited 0 and printed no JSON")))
 }
 
+/// Whether a subject of this kind was given with something in it. An empty
+/// `--subject ""` or `--body ""` is not given: `gh` sends no headline or body
+/// for it, and the forge composes that part as if the flag were absent.
+fn given(collected: &Collected, kind: &str) -> bool {
+    collected
+        .subjects
+        .iter()
+        .any(|subject| subject.kind == kind && !subject.value.trim().is_empty())
+}
+
 impl Shim {
     /// What the forge holds of this invocation's text, folded into what it
     /// collected. True where the message the forge composes was read, so the
@@ -2466,41 +2765,69 @@ impl Shim {
     ) -> Result<bool> {
         let words = self.words(argv, false);
         let verb = format!("{}:{}", words.verb, words.noun);
-        let Some((_, _, held, bare)) = FORGE_HELD
+        let Some(grammar) = FORGE_HELD
             .iter()
-            .find(|(command, named, _, _)| *command == self.command && *named == verb)
+            .find(|held| held.command == self.command && held.verb == verb)
         else {
             return Ok(false);
         };
-        let operands = Operands::of(argv, bare);
-        let repo = operands.repo.clone();
-        match held {
+        // Read only once the answer is needed, so an option this grammar does
+        // not know refuses only an invocation whose text depends on it.
+        let operands = || {
+            Operands::of(argv, grammar).map_err(|flag| {
+                Fatal::new(format!(
+                    "{name}: `{name} {} {}` was given {flag:?}, an option this shim does not know \
+                     on that verb, so which {} the forge would be asked about could not be \
+                     established and nothing was checked. Nothing was published",
+                    words.verb,
+                    words.noun,
+                    match grammar.held {
+                        Held::StoredBody => "issue or pull request, and which stored body,",
+                        Held::ComposedMerge => "pull request and which merge method",
+                    }
+                ))
+            })
+        };
+        match grammar.held {
             Held::StoredBody => {
-                Self::narrow_to_added(name, &words, &operands, repo.as_deref(), collected)?;
+                if !collected
+                    .subjects
+                    .iter()
+                    .any(|subject| subject.kind == "text")
+                {
+                    return Ok(false);
+                }
+                Self::narrow_to_added(name, &words, &operands()?, collected)?;
                 Ok(false)
             }
             Held::ComposedMerge => {
-                Self::read_composed(name, &operands, repo.as_deref(), collected, path)
+                // An editor the shim stands in as reads the message the
+                // command seeds it with; `--web` and an inert flag merge
+                // nothing here.
+                if matches!(path, EditorPath::Opens | EditorPath::Offered)
+                    || collected.web
+                    || collected.withheld == Withheld::Everything
+                {
+                    return Ok(false);
+                }
+                let headline = !given(collected, Subject::HEADLINE);
+                let body = !given(collected, "text");
+                if !headline && !body {
+                    return Ok(false);
+                }
+                Self::read_composed(name, &operands()?, collected, headline, body)
             }
         }
     }
 
-    /// Replace every body subject with the lines it adds to the body stored
-    /// under each issue or pull request the edit names.
+    /// Mark every body subject with the lines it adds to the body stored under
+    /// each issue or pull request the edit names.
     fn narrow_to_added(
         name: &str,
         words: &Words,
         operands: &Operands,
-        repo: Option<&str>,
         collected: &mut Collected,
     ) -> Result<()> {
-        if !collected
-            .subjects
-            .iter()
-            .any(|subject| subject.kind == "text")
-        {
-            return Ok(());
-        }
         // `gh pr edit` with no selector edits the current branch's pull
         // request, and `gh pr view` with none answers about the same one.
         let selectors: Vec<Option<&str>> = if operands.selectors.is_empty() {
@@ -2509,14 +2836,14 @@ impl Shim {
             operands
                 .selectors
                 .iter()
-                .map(|s| Some(s.as_str()))
+                .map(|selector| Some(selector.as_str()))
                 .collect()
         };
         let mut stored = Vec::new();
         for selector in &selectors {
             let mut args = vec![words.verb.as_str(), "view"];
             args.extend(selector.iter());
-            if let Some(repo) = repo {
+            if let Some(repo) = operands.repo.as_deref() {
                 args.extend(["-R", repo]);
             }
             args.extend(["--json", "body"]);
@@ -2539,6 +2866,10 @@ impl Shim {
                 ))
             })?);
         }
+        // One subject per stored body, each carrying the whole text every
+        // checker reads and the added lines the invisible-character guard
+        // reads: the edit writes the same body to each, and what it adds
+        // differs per body.
         let mut narrowed = Vec::new();
         for subject in std::mem::take(&mut collected.subjects) {
             if subject.kind != "text" {
@@ -2548,8 +2879,8 @@ impl Shim {
             for body in &stored {
                 narrowed.push(Subject {
                     kind: subject.kind,
-                    value: added_lines(body, &subject.value),
-                    whole: Some(subject.value.clone()),
+                    added: Some(added_lines(body, &subject.value)),
+                    value: subject.value.clone(),
                 });
             }
         }
@@ -2562,18 +2893,10 @@ impl Shim {
     fn read_composed(
         name: &str,
         operands: &Operands,
-        repo: Option<&str>,
         collected: &mut Collected,
-        path: EditorPath,
+        headline: bool,
+        body: bool,
     ) -> Result<bool> {
-        // An editor the shim stands in as reads the message the command
-        // seeds it with; `--web` and an inert flag merge nothing here.
-        if matches!(path, EditorPath::Opens | EditorPath::Offered)
-            || collected.web
-            || collected.withheld == Withheld::Everything
-        {
-            return Ok(false);
-        }
         // A rebase writes no message of the forge's, and with no method at
         // all there is no merge here to compose one for: `gh` refuses the
         // invocation itself off a terminal.
@@ -2584,29 +2907,21 @@ impl Shim {
         } else {
             return Ok(false);
         };
-        let headline = !collected
-            .subjects
-            .iter()
-            .any(|subject| subject.kind == Subject::HEADLINE);
-        let body = !collected.body_given;
-        if !headline && !body {
-            return Ok(false);
-        }
+        let missing = match (headline, body) {
+            (true, true) => "subject or body",
+            (true, false) => "subject",
+            _ => "body",
+        };
         let mut view = vec!["pr", "view"];
         view.extend(operands.selectors.first().map(String::as_str));
-        if let Some(repo) = repo {
+        if let Some(repo) = operands.repo.as_deref() {
             view.extend(["-R", repo]);
         }
         view.extend(["--json", "id"]);
         let unasked = |what: &str, silence: &Silence| {
             Fatal::new(format!(
-                "{name}: no {} was given, so the forge composes it, and `{name} {what}` could not \
-                 ask the forge what it would compose. {} Nothing was published",
-                match (headline, body) {
-                    (true, true) => "subject or body",
-                    (true, false) => "subject",
-                    _ => "body",
-                },
+                "{name}: no {missing} was given, so the forge composes it, and `{name} {what}` \
+                 could not ask the forge what it would compose. {} Nothing was published",
                 silence.sentence()
             ))
         };
@@ -2660,24 +2975,19 @@ impl Shim {
             collected.subjects.push(Subject {
                 kind: Subject::HEADLINE,
                 value: field("viewerMergeHeadlineText")?,
-                whole: None,
+                added: None,
             });
         }
         if body {
             collected.subjects.push(Subject {
                 kind: "text",
                 value: field("viewerMergeBodyText")?,
-                whole: None,
+                added: None,
             });
         }
         eprintln!(
-            "{name}: no {} was given, so the {} message the forge composes was read from it and \
-             checked.",
-            match (headline, body) {
-                (true, true) => "subject or body",
-                (true, false) => "subject",
-                _ => "body",
-            },
+            "{name}: no {missing} was given, so the {} message the forge composes was read from \
+             it and checked.",
             method.to_lowercase()
         );
         Ok(true)
@@ -2758,10 +3068,8 @@ pub(crate) fn pattern_finding(rule: &Rule, subject: &Subject) -> Result<Option<S
         )));
     }
     if let Some(pattern) = rule.require_regexp() {
-        // What must be there is a question about the whole text published,
-        // not about the lines an edit added to it.
         let hits = crate::engine::search_text(
-            subject.whole.as_deref().unwrap_or(&subject.value),
+            &subject.value,
             &crate::engine::Query::regex(pattern, multiline),
             &rule.id,
         )?;
@@ -3642,7 +3950,7 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
     let subject = Subject {
         kind: "text",
         value: text,
-        whole: None,
+        added: None,
     };
     // The same kinds `run` consults, and for the reason the dispatch there
     // gives: a guard cannot judge a body typed into an editor one way and the
@@ -4334,6 +4642,7 @@ mod tests {
             match_: vec!["pr:create".into(), "issue:*".into()],
             text_flags: vec!["-t".into(), "--title".into(), "-b".into(), "--body".into()],
             title_flags: Vec::new(),
+            message_flags: Vec::new(),
             file_flags: vec!["-F".into(), "--body-file".into()],
             path_flags: Vec::new(),
             target_flags: vec!["-R".into(), "--repo".into()],
@@ -4363,6 +4672,7 @@ mod tests {
             match_: vec!["push:*".into()],
             text_flags: Vec::new(),
             title_flags: Vec::new(),
+            message_flags: Vec::new(),
             file_flags: Vec::new(),
             path_flags: Vec::new(),
             target_flags: Vec::new(),
@@ -5459,7 +5769,7 @@ mod tests {
         let title = Subject {
             kind: "title",
             value: String::from("Generated with Claude Code"),
-            whole: None,
+            added: None,
         };
         let refusal = pattern_refusal(&pattern_rule(CheckKind::Regexp, "Claude Code"), &title)
             .unwrap()
@@ -5486,7 +5796,7 @@ mod tests {
         let ordinary = Subject {
             kind: "title",
             value: String::from("v2.0.0"),
-            whole: None,
+            added: None,
         };
         assert!(
             pattern_refusal(&pattern_rule(CheckKind::Regexp, "Claude Code"), &ordinary)
@@ -5522,7 +5832,7 @@ mod tests {
         let subject = Subject {
             kind: "text",
             value: String::from("anything at all"),
-            whole: None,
+            added: None,
         };
         let blank = Rule::synthetic(
             "blank-exec",
@@ -5556,7 +5866,7 @@ mod tests {
         let subject = Subject {
             kind: "text",
             value: "ordinary text\n".repeat(80_000),
-            whole: None,
+            added: None,
         };
         let report = consult(Path::new("."), &deaf, &subject)
             .unwrap_err()
@@ -5659,26 +5969,111 @@ mod tests {
         );
         assert_eq!(added_lines(stored, "Intro\n"), "");
         assert_eq!(added_lines("", "a\nb"), "a\nb");
+        // A line carrying a bidi control is judged though it is unchanged:
+        // what it reorders is whatever the edit put after it.
+        let reordering = "Name: \u{202E}abc\nTail";
+        assert_eq!(
+            added_lines(reordering, "Name: \u{202E}abc\nTail\nNew"),
+            "Name: \u{202E}abc\nNew"
+        );
+    }
+
+    fn held(verb: &str) -> &'static HeldVerb {
+        FORGE_HELD.iter().find(|held| held.verb == verb).unwrap()
     }
 
     #[test]
     fn the_operands_of_a_verb_are_read_with_its_own_switches() {
-        let bare = &["-s", "--squash", "-d", "--delete-branch", "--auto"];
-        let merged = Operands::of(&argv("-R o/r pr merge -sd 7 --auto"), bare);
+        let merge = held("pr:merge");
+        let merged = Operands::of(&argv("-R o/r pr merge -sd 7 --auto"), merge).unwrap();
         assert_eq!(merged.selectors, vec![String::from("7")]);
         assert_eq!(merged.repo.as_deref(), Some("o/r"));
         assert!(merged.switched(&["-s"]) && merged.switched(&["-d"]));
         // A value-taking option takes the next word, or the rest of its own.
-        let valued = Operands::of(&argv("pr merge --body x -bz --repo=a/b -Rc/d 9"), bare);
+        let valued = Operands::of(
+            &argv("pr merge --body x -bz --repo=a/b -Rc/d -st y 9"),
+            merge,
+        )
+        .unwrap();
         assert_eq!(valued.selectors, vec![String::from("9")]);
         assert_eq!(valued.repo.as_deref(), Some("c/d"));
+        assert!(valued.switched(&["-s"]));
         // Spelt off is not on.
-        let off = Operands::of(&argv("pr merge 1 --squash=false"), bare);
+        let off = Operands::of(&argv("pr merge 1 --squash=false"), merge).unwrap();
         assert!(!off.switched(&["--squash"]));
-        // An option nothing names takes the word after it, so `bug` is a
-        // label and not an issue.
-        let edited = Operands::of(&argv("issue edit 1 2 --add-label bug"), &[]);
-        assert_eq!(edited.selectors, vec![String::from("1"), String::from("2")]);
+        // Every switch of `gh issue edit` leaves the selector after it a
+        // selector, and a value-taking option takes its value.
+        let edit = held("issue:edit");
+        for switch in edit.switches {
+            let line = format!("issue edit 5 {switch} 6 --add-label bug --type Bug");
+            let read = Operands::of(&argv(&line), edit).unwrap();
+            assert_eq!(
+                read.selectors,
+                vec![String::from("5"), String::from("6")],
+                "{switch}"
+            );
+        }
+        // An option the grammar does not know is named, not guessed at.
+        assert_eq!(
+            Operands::of(&argv("issue edit 5 --remove-everything 6"), edit),
+            Err(String::from("--remove-everything"))
+        );
+        assert_eq!(
+            Operands::of(&argv("issue edit 5 -x 6"), edit),
+            Err(String::from("-x"))
+        );
+    }
+
+    #[test]
+    fn a_short_cluster_is_read_as_the_option_parser_reads_it() {
+        let arity = |flag: &str| match flag {
+            "-s" | "-d" => Some(false),
+            "-b" | "-t" => Some(true),
+            _ => None,
+        };
+        let split = |word: &str| {
+            let cluster = read_cluster(word, arity);
+            (cluster.switches, cluster.unknown, cluster.valued)
+        };
+        assert_eq!(
+            split("-bX"),
+            (vec![], vec![], Some(("-b".into(), Some("X".into()))))
+        );
+        assert_eq!(
+            split("-b=X"),
+            (vec![], vec![], Some(("-b".into(), Some("X".into()))))
+        );
+        assert_eq!(split("-b"), (vec![], vec![], Some(("-b".into(), None))));
+        assert_eq!(
+            split("-sdt"),
+            (
+                vec!["-s".into(), "-d".into()],
+                vec![],
+                Some(("-t".into(), None))
+            )
+        );
+        assert_eq!(
+            split("-sxtY"),
+            (
+                vec!["-s".into()],
+                vec!["-x".into()],
+                Some(("-t".into(), Some("Y".into())))
+            )
+        );
+    }
+
+    #[test]
+    fn a_whole_message_is_a_subject_line_and_a_body() {
+        let subjects = message_subjects(String::from("Fix it\r\n\nThe body.\n"));
+        assert_eq!(subjects.len(), 2);
+        assert_eq!(
+            (subjects[0].kind, subjects[0].value.as_str()),
+            ("title", "Fix it")
+        );
+        assert_eq!(subjects[1].kind, "text");
+        let one_line = message_subjects(String::from("Fix it"));
+        assert_eq!(one_line.len(), 1);
+        assert_eq!(one_line[0].kind, "title");
     }
 
     #[test]
@@ -5690,6 +6085,7 @@ mod tests {
                 match_: vec!["pr:merge".into()],
                 text_flags: vec!["-b".into(), "--body".into()],
                 title_flags: vec!["-t".into(), "--subject".into()],
+                message_flags: Vec::new(),
                 file_flags: Vec::new(),
                 path_flags: Vec::new(),
                 skip_flags: Vec::new(),

@@ -320,6 +320,7 @@ pub(crate) fn judged(
                 let published = crate::guard::Published {
                     label,
                     text,
+                    added: None,
                     headline: false,
                 };
                 crate::guard::over_text(root, policy, None, &published, &mut |_| Ok(true))?
@@ -367,12 +368,12 @@ fn patterns_over(policy: &Policy, seam: Seam, label: &str, text: &str) -> Result
         crate::shim::Subject {
             kind: "text",
             value: text.to_owned(),
-            whole: None,
+            added: None,
         },
         crate::shim::Subject {
             kind: "tool",
             value: label.to_owned(),
-            whole: None,
+            added: None,
         },
     ];
     let mut failures = Vec::new();

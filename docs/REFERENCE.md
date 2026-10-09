@@ -203,7 +203,7 @@ a vocabulary nobody wrote — here `issue close --body`, a flag the real command
 does not accept — and reading a flag a command will not take is the shim
 claiming to have checked a subject that was never published.
 
-`text_flags`, `title_flags`, `file_flags`, `path_flags`, `skip_flags`,
+`text_flags`, `title_flags`, `message_flags`, `file_flags`, `path_flags`, `skip_flags`,
 `web_flags`, `argv_subject`, `editor`, `editor_unless` and `inert_flags` may be overridden. `target_flags` may not: `-R`/`--repo` means the same thing on every
 verb, and a per-verb answer to "which repository is this going to" would be a way
 to publish somewhere the table did not expect. An entry that leaves
@@ -235,6 +235,7 @@ three closed values:
 |---|---|---|
 | `without-body` (default) | whenever no body flag and no `--web` was given — `pr create` | — |
 | `never` | never — `pr close`, `issue reopen` | nothing is composed; nothing is said |
+| `forge` | never — `glab mr merge` | the forge composes the text from its own template, and the shim says on stderr that it was not checked |
 | `interactive` | only from the command's prompt: stdin and stdout are terminals, no body was read off stdin, and no flag in `editor_unless` was given. A body flag does not close it, because the prompt still offers to edit the body | the forge composes the text. On `gh pr merge --squash` and `--merge` the shim asks the forge for it and judges it (below); anywhere else it says on stderr that it was not checked |
 
 `editor_unless` lists the flags that skip the prompt. `--squash=false` is the
@@ -1472,21 +1473,31 @@ character, the first line that does not is judged as well. A pushed commit was
 already cleaned up, and its first line is its subject. A **title** a shim
 collects is a subject as well: `gh pr merge --subject` is one outright, and a
 pull-request title becomes one when the forge squash-merges it, on a branch no
-local hook sees. The same holds for a `title` or `commit_title` field of `gh
-api` or `glab api`, and for the subject GitHub composes for `gh pr merge
---squash` or `--merge`, which the shim fetches and judges. A pull-request,
+local hook sees. The same holds for a `title` field of `gh api` or `glab api`
+(a pull request's, merge request's or issue's title), GitHub's `commit_title`
+on a merge, and the subject GitHub composes for `gh pr merge --squash` or
+`--merge`, which the shim fetches and judges. A whole commit message, such as
+`glab mr merge -m`/`--squash-message` or GitLab's `squash_commit_message` and
+`merge_commit_message` fields, is judged as its first line, a subject, and
+the rest, prose. An `--input` JSON document is prose in every value, `title`
+included. A pull-request,
 issue, release or gist body, a comment, and
 anything handed to `uphold guard --text` or the harness hook is prose a reader
 reads, and the rule asks it only for characters that draw nothing — so `gh issue edit --body-file` over a body that
 carries a degree sign someone typed months ago runs. **An edit is judged on
 what it adds.** `gh issue edit` and `gh pr edit` resubmit the whole body, so
 with `--body` or `--body-file` the shim asks the forge for the stored body
-(`gh issue view --json body`, `gh pr view --json body`) and hands the rules
-only the lines the edit adds: a body that already carries a zero-width space
-can be edited without `UPHOLD_ALLOW`, and a line the edit adds or changes is
-read whole, invisible characters included. A `require_regexp` rule is still
-asked about the whole body, because what must be present is a question about
-all of it. A forge that cannot be asked is exit `2`, and the edit does not
+(`gh issue view --json body`, `gh pr view --json body`, once for every
+issue the edit names) and hands this rule only the lines the edit adds: a
+body that already carries a zero-width space can be edited without
+`UPHOLD_ALLOW`, and a line the edit adds or changes is read whole, invisible
+characters included. A line that carries a bidirectional embedding, override
+or isolate (U+202A to U+202E, U+2066 to U+2069) is read whether the edit
+changed it or not, because what it reorders is whatever follows it. Every
+other rule, whether a pattern, a program or another guard, is asked about the
+whole body as before. A forge that cannot be asked is exit `2`, and so is an
+option on that `gh` verb the shim does not know, because which issue it
+names cannot then be read off the command line; either way the edit does not
 run. The same split holds for
 paths: `prevent-unusual-unicode-in-files` asks each **path** for lookalike
 words as well as invisibles, and file **content** for invisibles only. A
@@ -1964,6 +1975,14 @@ unresolved = "refuse"                             # the default; "run" is the op
 kept separate for two reasons: a format rule with `subjects = ["title"]` is
 never asked about a body, and a title given alone is not taken as a supplied
 body, so the shim still installs itself as the editor and reads the body.
+`message_flags` names flags whose value is a whole commit message, such as
+`glab mr merge --squash-message`: the first line is judged as a title, because
+it is the commit subject, the rest as a body, and the flag counts as the body
+given.
+
+Every flag list is read the way the command's own option parser reads it: a
+short option the table does not name whole is read letter by letter, so `-st X`
+is `-s` and then `-t X`, and `-bText` or `-b=Text` is `-b Text`.
 
 `target` is `forge-repo` or `git-remote`, both built-in resolvers. `scope` is
 `public-target | public-registry | always`, with
@@ -2110,8 +2129,10 @@ in front of its own lookup is a loop.
 
 | what it reads | what becomes a subject |
 |---|---|
-| `-f`/`-F`/`--field`/`--raw-field` | the value after `key=`, with `@file` read from the file and `@-` from stdin; a **title** where the key is `title` or `commit_title`, prose otherwise |
-| `--input FILE` | the whole file — each **string value** where it is JSON, the raw text where it is not |
+| `-F`/`--field` | the value after `key=`, with `@file` read from the file and `@-` from stdin |
+| `-f`/`--raw-field` | the value after `key=` as written, `@` included, because that is what is sent |
+| either, by key | a **title** where the key is `title` or `commit_title`; a **message** (first line a title, the rest prose) where it is `squash_commit_message` or `merge_commit_message`; prose otherwise |
+| `--input FILE` | the whole file — each **string value** where it is JSON, the raw text where it is not; every value is prose, a `title` key included |
 | the endpoint path | `repos/OWNER/REPO/…`, or GitLab's `projects/OWNER%2FREPO`, as the **destination** |
 
 The destination is the same `owner/repo` a `--repo` resolves to on every other
@@ -2292,12 +2313,15 @@ GraphQL fields, the same text `gh` seeds its own "Edit commit message" with —
 and judges the subject as a title and the body as prose, saying on stderr
 that it did. Only the part nobody gave is asked for: `--subject` and `--body`
 together ask nothing. A forge that cannot be asked is exit `2` and the merge
-does not run; a composed message is never a silent pass. `--rebase` writes no
+does not run; a composed message is never a silent pass. So is an option on
+`gh pr merge` the shim does not know, where the message has to be fetched,
+because which pull request and which method it names cannot then be read. `--rebase` writes no
 message of GitHub's, and `--auto` with no method names no merge to ask about,
 so for those the shim prints one line saying the message was not checked.
 `--auto --squash` is judged on what GitHub would compose now; the merge itself
-happens later. `gh pr merge --help` and `gh pr merge --disable-auto` merge
-nothing, so neither is said.
+happens later. A `--subject ""` or `--body ""` counts as not given, because
+`gh` sends nothing for it and GitHub composes that part. `gh pr merge --help`
+and `gh pr merge --disable-auto` merge nothing, so neither is said.
 
 The re-entry is routed by a WORD on the command line. The editor variable is set
 to `<this binary> shim --as-editor <command>`, and `--as-editor` is what tells

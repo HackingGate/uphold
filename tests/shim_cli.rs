@@ -414,7 +414,8 @@ case "$1 $2" in
     fi
     case "$*" in
       *"--json id"*) echo '{"id":"PR_stub"}' ;;
-      *"--json body"*) cat "$here/stored.json" 2>/dev/null || echo '{"body":""}' ;;
+      *"--json body"*) cat "$here/stored-$3.json" 2>/dev/null ||
+           cat "$here/stored.json" 2>/dev/null || echo '{"body":""}' ;;
       *) cat "$here/merge.json" 2>/dev/null ||
            echo '{"data":{"node":{"viewerMergeHeadlineText":"Fix the cache (#1)","viewerMergeBodyText":"* Fix the cache"}}}' ;;
     esac
@@ -442,6 +443,16 @@ fn composes(root: &Path, headline: &str, body: &str) {
 fn stores(root: &Path, body: &str) {
     let answer = serde_json::json!({ "body": body });
     std::fs::write(root.join("stored.json"), answer.to_string()).unwrap();
+}
+
+/// The body [`GH_FORGE_STUB`] says the forge stores under one selector.
+fn stores_under(root: &Path, selector: &str, body: &str) {
+    let answer = serde_json::json!({ "body": body });
+    std::fs::write(
+        root.join(format!("stored-{selector}.json")),
+        answer.to_string(),
+    )
+    .unwrap();
 }
 
 /// What the shim asked the stub forge, one question per line.
@@ -2210,6 +2221,197 @@ fn an_edit_whose_stored_body_cannot_be_asked_for_is_exit_two_and_never_runs() {
 }
 
 #[test]
+fn every_issue_an_edit_names_is_asked_about_whichever_switch_sits_between_them() {
+    // `--remove-type` and `--remove-parent` take nothing. Read as taking a
+    // value, either swallowed the `6` after it: the shim asked about issue 5
+    // alone, whose body already held the line, while `gh` wrote it to 6 too.
+    for switch in ["--remove-type", "--remove-parent", "--remove-milestone"] {
+        let root = gh_stub_workspace(GH_EDIT_POLICY);
+        let line = "Ship\u{200B} it";
+        stores_under(&root, "5", line);
+        stores_under(&root, "6", "Nothing yet.");
+        let output = shim(
+            &root,
+            &["gh", "issue", "edit", "5", switch, "6", "--body", line],
+        );
+        assert_eq!(code(&output), 1, "{switch}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+200B"),
+            "{switch}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("gh ran:"), "{switch}");
+        assert!(
+            asked(&root).contains("issue view 5 --json body"),
+            "{switch}"
+        );
+        assert!(
+            asked(&root).contains("issue view 6 --json body"),
+            "{switch}"
+        );
+    }
+}
+
+#[test]
+fn an_edit_carrying_an_option_the_shim_does_not_know_is_exit_two_and_never_runs() {
+    let root = gh_stub_workspace(GH_EDIT_POLICY);
+    for form in [
+        vec![
+            "gh",
+            "issue",
+            "edit",
+            "5",
+            "--remove-everything",
+            "6",
+            "--body",
+            "x",
+        ],
+        vec!["gh", "issue", "edit", "5", "-x", "--body", "x"],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 2, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("an option this shim does not know"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("gh ran:"), "{form:?}");
+    }
+    // Where the text does not depend on it -- no body is resubmitted -- the
+    // option is the command's business.
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "issue",
+            "edit",
+            "5",
+            "--remove-everything",
+            "--title",
+            "x",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn a_stored_bidi_override_is_judged_when_an_edit_writes_beneath_it() {
+    // An override left open reorders what follows it, so a new line written
+    // after an old one is the old character's work as much as the new line's.
+    let root = gh_stub_workspace(GH_EDIT_POLICY);
+    stores(&root, "Owner: \u{202E}abc");
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "issue",
+            "edit",
+            "1",
+            "--body",
+            "Owner: \u{202E}abc\nRelease on Friday.",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("U+202E"), "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+/// An edit policy whose second checker is a program that keeps what it was
+/// handed.
+const GH_EDIT_EXEC_POLICY: &str = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+builtin = "text-guards"
+
+[rule.no-published-markers.command]
+before = ["gh"]
+
+[rule.prevent-unusual-unicode]
+builtin = "prevent-unusual-unicode"
+
+[rule.prevent-unusual-unicode.git]
+hooks = ["commit-msg"]
+
+[rule.keeps-the-body]
+message = "m"
+exec = "cat >> seen.txt"
+command.before = ["gh"]
+
+[[shim]]
+command = "gh"
+match = ["pr:edit"]
+text_flags = ["-b", "--body"]
+title_flags = ["-t", "--title"]
+file_flags = ["-F", "--body-file"]
+scope = "always"
+"#;
+
+#[test]
+fn only_the_invisible_character_guard_is_narrowed_to_what_an_edit_adds() {
+    // Narrowing is for the question "what does this invocation type". A
+    // program, a pattern or a name guard is asked about the document, as
+    // before, so it still sees the lines the edit kept.
+    let root = gh_stub_workspace(GH_EDIT_EXEC_POLICY);
+    stores(&root, "Kept\u{200B} line");
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "pr",
+            "edit",
+            "7",
+            "--body",
+            "Kept\u{200B} line\nNew line",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    let seen = std::fs::read_to_string(root.join("seen.txt")).unwrap();
+    assert!(seen.contains("Kept\u{200B} line"), "{seen}");
+    assert!(seen.contains("New line"), "{seen}");
+}
+
+#[test]
+fn an_empty_subject_or_body_is_not_given_and_the_forge_is_asked() {
+    // `gh` sends no headline for `--subject ""`, so the forge composes it,
+    // and that is the text to read.
+    let root = gh_workspace();
+    composes(&root, "WIP: fix the cache (#1)", "");
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "pr",
+            "merge",
+            "1",
+            "--squash",
+            "--subject",
+            "",
+            "-b",
+            "ok",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no-wip-subject"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+
+    let root = gh_stub_workspace(GH_TITLE_POLICY);
+    composes(&root, "Fix the cache (#1)", "* Rename \u{202E}txt.exe");
+    let output = shim(
+        &root,
+        &[
+            "gh", "pr", "merge", "1", "--squash", "-t", "Fix", "--body", "",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("U+202E"), "{}", stderr(&output));
+}
+
+#[test]
 fn a_title_set_through_the_api_is_judged_as_the_title_it_is() {
     // `gh api` is `gh pr edit --title` and `gh pr merge --subject` behind one
     // word, and its fields were all judged as prose: a lookalike `--title`
@@ -2367,6 +2569,181 @@ fn this_repositorys_own_glab_table_reads_the_merge_message() {
         ],
     );
     assert_eq!(code(&output), 1, "{}", stderr(&output));
+}
+
+#[test]
+fn a_glab_merge_message_is_a_subject_line_and_a_body() {
+    // `-m` carries the whole message: its first line is the commit subject
+    // and gets the lookalike check, and the rest is a body, which is asked
+    // only for invisibles -- and is never reported as a subject line.
+    let root = own_glab_workspace();
+    let body_lookalike = format!("Fix the cache\n\n{LOOKALIKE} in the body.");
+    let output = shim(&root, &["glab", "mr", "merge", "1", "-m", &body_lookalike]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("glab ran:"), "{}", stdout(&output));
+
+    let subject_lookalike = format!("{LOOKALIKE}\n\nThe body.");
+    let output = shim(
+        &root,
+        &["glab", "mr", "merge", "1", "-m", &subject_lookalike],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("CYRILLIC SMALL LETTER A"),
+        "{}",
+        stderr(&output)
+    );
+
+    // A message GitLab composes from its template is said to be unread, the
+    // way `gh pr merge` says it where it cannot ask; one given is not.
+    let output = shim(&root, &["glab", "mr", "merge", "1"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("the message the forge composes for it was not checked"),
+        "{}",
+        stderr(&output)
+    );
+    let output = shim(&root, &["glab", "mr", "merge", "1", "-m", "Fix it"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        !stderr(&output).contains("not checked"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_short_cluster_or_an_attached_value_is_read_as_the_command_reads_it() {
+    // The collectors used to take `-st X` for an option named `-st` and
+    // `-bX` for one named `-bX`, while `gh` reads `-s`, `-t X` and `-b X`:
+    // the text went out unread, and a merge said it had read the subject the
+    // forge composes when the subject was the one on the command line.
+    let root = gh_stub_workspace(GH_TITLE_POLICY);
+    let rlo = "Fix \u{202E}txt.exe";
+    let bound = format!("-b{rlo}");
+    for form in [
+        vec!["gh", "pr", "create", "-t", "Fix", &bound],
+        vec!["gh", "pr", "merge", "1", "-st", rlo, "-b", "ok"],
+        vec!["gh", "pr", "merge", "1", "-sb", rlo, "-t", "ok"],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+202E"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("gh ran:"), "{form:?}");
+        assert!(
+            !stderr(&output).contains("was read from it"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+    }
+
+    let root = gh_stub_workspace(&GH_TITLE_POLICY.replace(
+        "match = [\"pr:create\", \"pr:merge\"]",
+        "match = [\"pr:create\", \"pr:merge\", \"api:*\"]",
+    ));
+    let attached = format!("-ftitle={LOOKALIKE}");
+    let output = shim(
+        &root,
+        &["gh", "api", "-XPATCH", "repos/o/r/pulls/1", &attached],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("CYRILLIC SMALL LETTER A"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+
+    let root = own_glab_workspace();
+    let bound = format!("-m{rlo}");
+    for form in [
+        vec!["glab", "mr", "merge", "1", &bound],
+        vec!["glab", "mr", "merge", "1", "-sm", rlo],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+202E"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("glab ran:"), "{form:?}");
+    }
+}
+
+#[test]
+fn a_raw_field_is_sent_as_written_and_only_a_typed_one_reads_its_file() {
+    let root = gh_stub_workspace(&GH_TITLE_POLICY.replace(
+        "match = [\"pr:create\", \"pr:merge\"]",
+        "match = [\"pr:create\", \"pr:merge\", \"api:*\"]",
+    ));
+    std::fs::write(root.join("notes.md"), "Fix \u{202E}txt.exe\n").unwrap();
+    // `-f body=@notes.md` sends the eleven characters `@notes.md`.
+    for flag in ["-f", "--raw-field"] {
+        let output = shim(
+            &root,
+            &["gh", "api", "repos/o/r/issues", flag, "body=@notes.md"],
+        );
+        assert_eq!(code(&output), 0, "{flag}: {}", stderr(&output));
+        assert!(stdout(&output).contains("gh ran:"), "{flag}");
+    }
+    // `-F body=@notes.md` sends the file.
+    for flag in ["-F", "--field"] {
+        let output = shim(
+            &root,
+            &["gh", "api", "repos/o/r/issues", flag, "body=@notes.md"],
+        );
+        assert_eq!(code(&output), 1, "{flag}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+202E"),
+            "{flag}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("gh ran:"), "{flag}");
+    }
+}
+
+#[test]
+fn a_gitlab_merge_message_field_is_a_subject_line_and_a_body() {
+    let root = own_glab_workspace();
+    let subject = format!("squash_commit_message={LOOKALIKE}\n\nThe body.");
+    let output = shim(
+        &root,
+        &[
+            "glab",
+            "api",
+            "-X",
+            "PUT",
+            "projects/o%2Fr/merge_requests/1/merge",
+            "-f",
+            &subject,
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("CYRILLIC SMALL LETTER A"),
+        "{}",
+        stderr(&output)
+    );
+    let body = format!("merge_commit_message=Fix the cache\n\n{LOOKALIKE} in the body.");
+    let output = shim(
+        &root,
+        &[
+            "glab",
+            "api",
+            "-X",
+            "PUT",
+            "projects/o%2Fr/merge_requests/1/merge",
+            "-f",
+            &body,
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("glab ran:"), "{}", stdout(&output));
 }
 
 /// A workspace whose `gh` is a stub that says it ran, and with no `uphold` on
