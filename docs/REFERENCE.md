@@ -2001,8 +2001,8 @@ not name whole is skipped whole, never split. That reads `-Bmain`, `-lbug` and
 `-Hfeat` as the single options they are, so the text after them is read. It
 also means a short-option cluster or an attached value is **not read** there:
 `-st X`, `-bText`, `-b=Text`, `-ftitle=X`, `-iF=k=@f` and their like are
-passed to the command unchecked. This is a known gap, tracked in a follow-up
-issue; spell each option as a word of its own.
+passed to the command unchecked. This is a known gap; spell each option as a
+word of its own.
 
 `target` is `forge-repo` or `git-remote`, both built-in resolvers. `scope` is
 `public-target | public-registry | always`, with
