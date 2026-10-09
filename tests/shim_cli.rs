@@ -1903,13 +1903,7 @@ scope = "always"
 
 #[test]
 fn an_issue_edit_carrying_a_degree_sign_runs_and_one_carrying_a_bidi_override_does_not() {
-    let root = workspace(GH_EDIT_POLICY);
-    std::fs::remove_file(root.join("bin/uphold")).unwrap();
-    let stub = root.join("bin/gh");
-    std::fs::write(&stub, "#!/bin/sh\necho \"gh ran: $*\"\n").unwrap();
-    let mut permissions = std::fs::metadata(&stub).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
-    std::fs::set_permissions(&stub, permissions).unwrap();
+    let root = gh_stub_workspace(GH_EDIT_POLICY);
 
     std::fs::write(
         root.join("body.md"),
@@ -1939,6 +1933,99 @@ fn an_issue_edit_carrying_a_degree_sign_runs_and_one_carrying_a_bidi_override_do
         "{}",
         stdout(&refused)
     );
+}
+
+/// A workspace whose `gh` is a stub that says it ran, and with no `uphold` on
+/// PATH, so a `text-guards` consultation is the compiled-in one.
+fn gh_stub_workspace(policy: &str) -> PathBuf {
+    let root = workspace(policy);
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+    let stub = root.join("bin/gh");
+    std::fs::write(&stub, "#!/bin/sh\necho \"gh ran: $*\"\n").unwrap();
+    let mut permissions = std::fs::metadata(&stub).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&stub, permissions).unwrap();
+    root
+}
+
+/// The titles a forge turns into commit subjects with no local hook in the
+/// way: a pull-request title, which a squash merge makes the subject, and
+/// `gh pr merge --subject`, which is one.
+const GH_TITLE_POLICY: &str = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+builtin = "text-guards"
+
+[rule.no-published-markers.command]
+before = ["gh"]
+
+[rule.prevent-unusual-unicode]
+builtin = "prevent-unusual-unicode"
+
+[rule.prevent-unusual-unicode.git]
+hooks = ["commit-msg"]
+
+[[shim]]
+command = "gh"
+match = ["pr:create", "pr:merge"]
+text_flags = ["-b", "--body"]
+title_flags = ["-t", "--title"]
+scope = "always"
+
+  [[shim.verbs]]
+  match = ["pr:merge"]
+  text_flags = ["-b", "--body"]
+  title_flags = ["-t", "--subject"]
+"#;
+
+const LOOKALIKE: &str = "Fix the c\u{0430}che";
+
+#[test]
+fn a_lookalike_in_a_squash_merge_subject_is_refused_and_gh_never_runs() {
+    let root = gh_stub_workspace(GH_TITLE_POLICY);
+    let output = shim(
+        &root,
+        &["gh", "pr", "merge", "7", "--squash", "--subject", LOOKALIKE],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("CYRILLIC SMALL LETTER A"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_lookalike_in_a_pull_request_title_is_refused_and_gh_never_runs() {
+    let root = gh_stub_workspace(GH_TITLE_POLICY);
+    let output = shim(&root, &["gh", "pr", "create", "--title", LOOKALIKE]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("CYRILLIC SMALL LETTER A"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn the_same_lookalike_in_a_body_is_prose_and_gh_runs() {
+    let root = gh_stub_workspace(GH_TITLE_POLICY);
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "pr",
+            "create",
+            "--title",
+            "Fix the cache",
+            "--body",
+            LOOKALIKE,
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
 }
 
 // ── per-rule scope: the rule says when it applies ────────────────────

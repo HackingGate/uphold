@@ -158,22 +158,34 @@ pub(crate) fn allowances(rule: &crate::config::Rule) -> Result<Vec<char>> {
 /// it is asked only whether it carries a character that draws nothing; a
 /// lookalike letter is not a hazard here, and an accented name, a degree sign
 /// or a comparison sign never was one.
+///
+/// Except where the text IS a headline: `headline` is set for a subject a shim
+/// collected as a title -- a pull-request title, which a squash merge makes the
+/// commit subject on the forge, and `gh pr merge --subject`, which is one. A
+/// merge made on the forge passes no local hook, so this is the only seam that
+/// sees that subject, and every line of it gets the lookalike pass too.
 pub(crate) fn unusual_unicode_in(
     rule: &crate::config::Rule,
     label: &str,
     text: &str,
+    headline: bool,
 ) -> Result<Option<Refusal>> {
-    unusual_unicode_over(rule, label, text, None)
+    let headlines: Vec<usize> = if headline {
+        (0..text.split('\n').count()).collect()
+    } else {
+        Vec::new()
+    };
+    unusual_unicode_over(rule, label, text, &headlines)
 }
 
-/// The judgement, with the one line -- if any -- that is a subject.
+/// The judgement, with the lines that are a subject.
 fn unusual_unicode_over(
     rule: &crate::config::Rule,
     label: &str,
     text: &str,
-    subject: Option<usize>,
+    headlines: &[usize],
 ) -> Result<Option<Refusal>> {
-    let findings = unusual_findings(label, text, &allowances(rule)?, subject);
+    let findings = unusual_findings(label, text, &allowances(rule)?, headlines);
     if findings.is_empty() {
         return Ok(None);
     }
@@ -189,14 +201,54 @@ fn unusual_unicode_over(
     }))
 }
 
-/// Which line of a commit message is its subject: the first one with anything
-/// on it that git would keep. A comment line is stripped by git's default
-/// cleanup and is not the subject, and a blank line is not one either.
-fn subject_line(text: &str) -> Option<usize> {
-    text.split('\n').position(|line| {
-        let trimmed = line.trim();
-        !trimmed.is_empty() && !trimmed.starts_with('#')
-    })
+/// Which lines of a commit message may be its subject.
+///
+/// The first line with anything on it. A stored commit -- what a push
+/// publishes -- has no comments, so that is the whole answer there and
+/// `comment` is `None`. At `commit-msg` the file is read BEFORE git's cleanup,
+/// and whether a line opening with the comment character is stripped depends
+/// on a cleanup mode the hook cannot see: `git commit -m "#42 Fix it"` keeps
+/// it (`whitespace`), the editor strips it (`strip`). So where the first line
+/// opens with the comment character, the first line that does not is a
+/// candidate as well, and both are judged -- a subject is never let through
+/// for looking like a comment, and never missed for sitting under one.
+fn subject_lines(text: &str, comment: Option<char>) -> Vec<usize> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let written = |line: &&str| !line.trim().is_empty();
+    let Some(first) = lines.iter().position(written) else {
+        return Vec::new();
+    };
+    let mut subjects = vec![first];
+    if let Some(comment) = comment
+        && lines
+            .get(first)
+            .is_some_and(|line| line.starts_with(comment))
+        && let Some(kept) = lines
+            .iter()
+            .position(|line| written(line) && !line.starts_with(comment))
+    {
+        subjects.push(kept);
+    }
+    subjects
+}
+
+/// Every message this run is about, with the lines that may be its subject.
+fn headed_messages(request: &Request<'_>) -> Result<Vec<(String, String, Vec<usize>)>> {
+    let comment = if request.stage == super::Stage::PrePush {
+        None
+    } else {
+        Some(
+            crate::evidence::git::comment_char(request.root)
+                .map_err(|reason| Fatal::new(format!("{}: {reason}", request.rule.id)))?,
+        )
+    };
+    Ok(message_subjects(request)?
+        .into_iter()
+        .map(|(label, text)| {
+            let subjects = subject_lines(&text, comment);
+            (label, text, subjects)
+        })
+        .collect())
 }
 
 /// Two passes, and the second only over the subject.
@@ -208,12 +260,7 @@ fn subject_line(text: &str) -> Option<usize> {
 /// [`crate::guard::unicode::lookalikes`]), because a subject is what somebody
 /// searches the log for. Nothing else is refused: a punctuation mark or a
 /// symbol, in any script or in none, is not this rule's business.
-fn unusual_findings(
-    label: &str,
-    text: &str,
-    allowed: &[char],
-    subject: Option<usize>,
-) -> Vec<String> {
+fn unusual_findings(label: &str, text: &str, allowed: &[char], headlines: &[usize]) -> Vec<String> {
     let mut findings = Vec::new();
     for (index, line) in text.split('\n').enumerate() {
         let characters: Vec<char> = line.chars().collect();
@@ -236,7 +283,7 @@ fn unusual_findings(
                     .map_or_else(|| String::from("UNKNOWN"), |name| name.to_string()),
             ));
         }
-        if subject != Some(index) {
+        if !headlines.contains(&index) {
             continue;
         }
         for lookalike in crate::guard::unicode::lookalikes(line) {
@@ -282,10 +329,8 @@ fn admitted_by_allowance(character: char, allowed: &[char]) -> bool {
 /// same split as the text seams, made here because this is the one seam that
 /// knows which line is the subject.
 pub(crate) fn prevent_unusual_unicode(request: &Request<'_>) -> Result<Option<Refusal>> {
-    for (label, text) in message_subjects(request)? {
-        if let Some(refusal) =
-            unusual_unicode_over(request.rule, &label, &text, subject_line(&text))?
-        {
+    for (label, text, subjects) in headed_messages(request)? {
+        if let Some(refusal) = unusual_unicode_over(request.rule, &label, &text, &subjects)? {
             return Ok(Some(refusal));
         }
     }
@@ -303,8 +348,8 @@ pub(crate) fn prevent_unusual_unicode(request: &Request<'_>) -> Result<Option<Re
 /// (`prevent-unusual-unicode` refuses those whatever this rule says).
 pub(crate) fn ascii_only_commit_subject(request: &Request<'_>) -> Result<Option<Refusal>> {
     let allowed = allowances(request.rule)?;
-    for (label, text) in message_subjects(request)? {
-        let findings = non_ascii_in_subject(&label, &text, &allowed);
+    for (label, text, subjects) in headed_messages(request)? {
+        let findings = non_ascii_in_subject(&label, &text, &allowed, &subjects);
         if findings.is_empty() {
             continue;
         }
@@ -320,20 +365,27 @@ pub(crate) fn ascii_only_commit_subject(request: &Request<'_>) -> Result<Option<
     Ok(None)
 }
 
-fn non_ascii_in_subject(label: &str, text: &str, allowed: &[char]) -> Vec<String> {
-    let Some(index) = subject_line(text) else {
-        return Vec::new();
-    };
-    let line = text.split('\n').nth(index).unwrap_or_default();
-    line.chars()
+fn non_ascii_in_subject(
+    label: &str,
+    text: &str,
+    allowed: &[char],
+    subjects: &[usize],
+) -> Vec<String> {
+    text.split('\n')
         .enumerate()
-        .filter(|&(_, character)| {
+        .filter(|(index, _)| subjects.contains(index))
+        .flat_map(|(index, line)| {
+            line.chars()
+                .enumerate()
+                .map(move |(column, character)| (index, column, character))
+        })
+        .filter(|&(_, _, character)| {
             !(character.is_ascii_graphic()
                 || character == ' '
                 || character == '\t'
                 || admitted_by_allowance(character, allowed))
         })
-        .map(|(column, character)| {
+        .map(|(index, column, character)| {
             format!(
                 "{label}:{}:{}: U+{:04X} {}",
                 index + 1,
@@ -362,16 +414,16 @@ mod tests {
     /// The text as a commit message at a git hook: its subject line gets the
     /// lookalike pass as well as the invisible one.
     fn findings(text: &str) -> Vec<String> {
-        unusual_findings("m", text, &[], subject_line(text))
+        unusual_findings("m", text, &[], &subject_lines(text, Some('#')))
     }
 
     /// The text as prose at a text seam: the invisible pass alone.
     fn prose_findings(text: &str) -> Vec<String> {
-        unusual_findings("m", text, &[], None)
+        unusual_findings("m", text, &[], &[])
     }
 
     fn subject_findings(text: &str, allowed: &[char]) -> Vec<String> {
-        non_ascii_in_subject("m", text, allowed)
+        non_ascii_in_subject("m", text, allowed, &subject_lines(text, Some('#')))
     }
 
     /// A rule as a policy loads it, with `allow` written out.
@@ -405,7 +457,7 @@ mod tests {
     fn loaded(name: &str, allow: &str) -> Result<Option<Refusal>> {
         let rule = loaded_rule(name, "prevent-unusual-unicode", allow)?;
         let text = "Fix the c\u{0430}che\n";
-        unusual_unicode_over(&rule, "m", text, subject_line(text))
+        unusual_unicode_over(&rule, "m", text, &subject_lines(text, Some('#')))
     }
 
     #[test]
@@ -430,7 +482,7 @@ mod tests {
         // And past the loader, the guard itself holds the line: a list that
         // somehow carries one admits nothing.
         assert_eq!(
-            unusual_findings("m", "a\u{200B}b\n", &['\u{200B}'], None).len(),
+            unusual_findings("m", "a\u{200B}b\n", &['\u{200B}'], &[]).len(),
             1
         );
     }
@@ -513,10 +565,74 @@ mod tests {
     }
 
     #[test]
-    fn the_subject_is_the_first_line_git_keeps() {
+    fn a_subject_under_a_comment_line_is_judged_and_so_is_the_comment() {
+        // Whether git strips the `#` line depends on a cleanup mode the hook
+        // cannot see, so both candidates are judged.
         let found = findings("\n# a comment c\u{0430}che\nFix the c\u{0430}che\n");
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found[0].starts_with("m:2:"), "{found:?}");
+        assert!(found[1].starts_with("m:3:"), "{found:?}");
+        let under = findings("# a comment\nFix the c\u{0430}che\n");
+        assert_eq!(under.len(), 1, "{under:?}");
+        assert!(under[0].starts_with("m:2:"), "{under:?}");
+    }
+
+    #[test]
+    fn a_subject_opening_with_the_comment_character_is_still_the_subject() {
+        // `git commit -m "#42 Fix it"` keeps that line: `-m` cleans up
+        // whitespace only, so a `#` line can be the recorded subject.
+        let found = findings("#42 Fix the c\u{0430}che\n");
         assert_eq!(found.len(), 1, "{found:?}");
-        assert!(found[0].starts_with("m:3:"), "{found:?}");
+        assert!(found[0].starts_with("m:1:"), "{found:?}");
+        assert_eq!(
+            subject_findings("#42 Fix \u{2014} the parser\n", &[]).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_stored_message_has_no_comments_and_its_first_line_is_the_subject() {
+        // What a push publishes is a commit git already cleaned up.
+        assert_eq!(subject_lines("\n# Fix it\nmore\n", None), vec![1]);
+        assert_eq!(subject_lines("\n# Fix it\nmore\n", Some('#')), vec![1, 2]);
+        assert_eq!(subject_lines("; Fix it\nmore\n", Some(';')), vec![0, 1]);
+        assert!(
+            subject_lines("\n  \n", None).is_empty(),
+            "a blank message has no subject"
+        );
+    }
+
+    #[test]
+    fn ordinary_east_asian_subjects_pass() {
+        for text in [
+            "API\u{4E00}\u{89A7}\u{3092}\u{8FFD}\u{52A0}\n",
+            "CI\u{306E}\u{30CE}\u{30FC}\u{30C9}\u{6570}\u{3092}\u{5909}\u{66F4}\n",
+            "PR\u{4E00}\u{89A7}\n",
+            "\u{7D71}\u{4E00}API\n",
+            "\u{65B0}\u{589E}\u{4E00}\u{4E2A}API\n",
+            "JSON\u{4E00}\u{62EC}\u{51FA}\u{529B}\n",
+            "README\u{306B}\u{4E00}\u{884C}\u{8FFD}\u{52A0}\n",
+            "Webhook\u{4E00}\u{6642}\u{505C}\u{6B62}\n",
+            "Docker\u{30CE}\u{30FC}\u{30C9}\n",
+        ] {
+            assert!(findings(text).is_empty(), "{text:?}: {:?}", findings(text));
+        }
+    }
+
+    #[test]
+    fn a_greek_omicron_in_a_latin_word_is_refused() {
+        let found = findings("Say hell\u{03BF}\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("GREEK SMALL LETTER OMICRON"), "{found:?}");
+    }
+
+    #[test]
+    fn a_title_is_a_headline_and_a_body_is_prose() {
+        let rule = loaded_rule("message-headline", "prevent-unusual-unicode", "[]").unwrap();
+        let title = unusual_unicode_in(&rule, "title", "Fix the c\u{0430}che", true).unwrap();
+        assert!(title.is_some(), "a lookalike in a title passed");
+        let body = unusual_unicode_in(&rule, "text", "Fix the c\u{0430}che", false).unwrap();
+        assert!(body.is_none(), "{body:?}");
     }
 
     // ── what draws nothing, anywhere ─────────────────────────────────

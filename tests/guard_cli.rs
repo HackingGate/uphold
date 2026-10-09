@@ -318,6 +318,25 @@ fn a_lookalike_in_a_commit_subject_is_refused_at_commit_msg() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
+/// A subject opening with `#` is still the subject: `git commit -m "#42 ..."`
+/// keeps it. And an ordinary Japanese subject with a Latin token run into it
+/// is not a mixed word.
+#[test]
+fn a_hash_subject_is_judged_and_an_east_asian_subject_passes_at_commit_msg() {
+    let root = repository(MESSAGE_UNICODE);
+    write(&root, "msg.txt", "#42 Fix the c\u{0430}che\n");
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+
+    write(
+        &root,
+        "msg.txt",
+        "API\u{4E00}\u{89A7}\u{3092}\u{8FFD}\u{52A0}\n\nCI\u{306E}\u{30CE}\u{30FC}\u{30C9}\n",
+    );
+    let output = guard(&root, &["--stage", "commit-msg", "--message", "msg.txt"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
 /// The ordinary signs of prose, in a subject: refused by the old whitelist,
 /// and none of them a lookalike or an invisible.
 #[test]

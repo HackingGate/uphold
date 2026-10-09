@@ -418,67 +418,55 @@ fn every_guard_builtin_has_a_row_in_the_reference_guard_table() {
     );
 }
 
-/// The dependencies that predate the convention below, named so that the
-/// list can only shrink: an entry that gains a reason, or leaves, fails.
-const DEPENDENCIES_WITHOUT_A_REASON: &[&str] = &["regex", "serde", "toml"];
-
 /// Every dependency in Cargo.toml says why it is there.
 ///
-/// A comment block covers the run of entries directly under it, so one reason
-/// may stand for a family (the ripgrep stack). A dependency is a decision about
-/// what this binary trusts and ships, and the reason beside it is what lets a
-/// reviewer ask later whether the reason still holds.
+/// A comment covers the ONE entry directly under it. Letting a comment cover
+/// the run of entries beneath it would let a dependency added under an
+/// existing one pass with that one's reason, which is no reason at all. A
+/// family (the ripgrep stack) is introduced once and each member still says
+/// what it is in that family. A dependency is a decision about what this
+/// binary trusts and ships, and the reason beside it is what lets a reviewer
+/// ask later whether the reason still holds.
 #[test]
-fn every_dependency_carries_its_reason() {
+fn every_dependency_carries_its_own_reason() {
     let manifest = std::fs::read_to_string(PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/Cargo.toml"
     )))
     .expect("Cargo.toml");
     let mut in_dependencies = false;
-    let mut covered = false;
+    let mut after_comment = false;
     let mut bare: Vec<String> = Vec::new();
     let mut read = 0_usize;
     for line in manifest.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with('[') {
             in_dependencies = trimmed == "[dependencies]";
-            covered = false;
+            after_comment = false;
             continue;
         }
         if !in_dependencies {
             continue;
         }
-        if trimmed.is_empty() {
-            covered = false;
-        } else if trimmed.starts_with('#') {
-            covered = true;
-        } else if let Some((name, _)) = trimmed.split_once('=') {
+        if trimmed.starts_with('#') {
+            after_comment = true;
+            continue;
+        }
+        if let Some((name, _)) = trimmed.split_once('=') {
             read += 1;
-            if !covered {
+            if !after_comment {
                 bare.push(name.trim().to_owned());
             }
         }
+        after_comment = false;
     }
     assert!(
         read > 10,
         "read {read} dependencies, which is not the manifest"
     );
-    let unexcused: Vec<&String> = bare
-        .iter()
-        .filter(|name| !DEPENDENCIES_WITHOUT_A_REASON.contains(&name.as_str()))
-        .collect();
     assert!(
-        unexcused.is_empty(),
-        "these dependencies carry no comment saying why they are here: {unexcused:?}"
-    );
-    let stale: Vec<&&str> = DEPENDENCIES_WITHOUT_A_REASON
-        .iter()
-        .filter(|name| !bare.iter().any(|found| found == *name))
-        .collect();
-    assert!(
-        stale.is_empty(),
-        "these carry a reason now, or are gone. Remove them from \
-         DEPENDENCIES_WITHOUT_A_REASON: {stale:?}"
+        bare.is_empty(),
+        "these dependencies have no comment directly above them saying why they are \
+         here: {bare:?}"
     );
 }

@@ -1407,7 +1407,7 @@ stamped on it, the range about to be pushed.
 |---|---|
 | `prevent-ai-author` | AI-authorship markers in the message being written — and at a push, in **every commit message the push publishes** |
 | `prevent-author-mismatch` | an identity that is not your global one |
-| `prevent-unusual-unicode` | in the same set of messages, a character that **draws nothing**, and in a commit's **subject line** a lookalike letter from another script inside a word (UTS #39 mixed-script confusables). Through the `text-guards` consultation and `--text`, where the text is prose, only the first |
+| `prevent-unusual-unicode` | in the same set of messages, a character that **draws nothing**, and in a commit's **subject line** a lookalike letter from another script inside a word (UTS #39 mixed-script confusables). A title a shim collects (`gh pr create --title`, `gh pr merge --subject`) is a subject too; a body, through the `text-guards` consultation or `--text`, is prose and gets only the first |
 | `ascii-only-commit-subject` | a commit subject line that is not printable ASCII — a house style, **opt in**: no bundled set declares it. Reads the subject line of the message being written and, where declared at `pre-push`, of every pushed commit |
 | `prevent-unusual-unicode-in-files` | characters that draw nothing, in committed content **and in the paths that carry it** |
 | `no-private-repo-names` | a private repository named in a public one's message |
@@ -1440,22 +1440,41 @@ file guard bans:
   letter from its minority script is drawn like a letter of the majority's. A
   Cyrillic small a (U+0430) in a Latin word is refused, and the report names
   `CYRILLIC SMALL LETTER A`, its column and the script it came from, because the
-  glyph itself tells the reader nothing. A Japanese word beside an English one
-  is two single-script words and passes; kanji and kana in one word are one
-  script under UTS #39's augmented sets and pass.
+  glyph itself tells the reader nothing. On a tie (one letter of each script)
+  the letter drawn like the other script's is the one named. The East Asian
+  scripts count as one writing system, as UTS #39's augmented sets make them
+  (Han with kana, with Hangul, with Bopomofo), so kanji and kana in one word
+  pass. Because those languages are written without spaces, a run of East
+  Asian letters and a run of Latin letters are two words where they meet: an
+  `API` or `README` run straight into a Japanese or Chinese subject is not a
+  mixed word and passes. A skeleton made only of characters no script owns
+  (the kanji for "one" skeletons to the katakana prolonged sound mark) is not
+  "drawn like" any script.
 
 A punctuation mark or a symbol is never refused by this rule, in any script or
 in none: an accented name, a degree sign in a longitude, `≥` in a quota, an em
-dash, a `。` in an English sentence all pass. Whoever wants the typographic
+dash, a `。` in an English sentence all pass. Lookalikes **within one script or
+from no script** are out of its scope too, because the test is mixed-script: a
+fullwidth `c` (U+FF43) and a mathematical bold `c` (U+1D41C) are Latin, and
+U+0251 LATIN SMALL LETTER ALPHA is Latin. Fullwidth forms in a subject are
+`ascii-only-commit-subject`'s business. Whoever wants the typographic
 house style the rule used to enforce declares `ascii-only-commit-subject` by
 name.
 
 **The surface decides which checks run.** The subject line of a commit is what
 somebody searches the log for, so at `commit-msg` and over a pushed range the
-subject gets both checks and the body the invisible check alone. A
-pull-request, issue, release or gist body, a comment, and anything handed to
-`uphold guard --text` is prose a reader reads, and the rule asks it only for
-characters that draw nothing — so `gh issue edit --body-file` over a body that
+subject gets both checks and the body the invisible check alone. The subject is
+the first line with anything on it. At `commit-msg` the file is read before
+git's cleanup, and whether a line opening with `core.commentChar` (default `#`)
+is stripped depends on the cleanup mode (`git commit -m "#42 Fix"` keeps it, the
+editor strips it), so where the first such line opens with the comment
+character, the first line that does not is judged as well. A pushed commit was
+already cleaned up, and its first line is its subject. A **title** a shim
+collects is a subject as well: `gh pr merge --subject` is one outright, and a
+pull-request title becomes one when the forge squash-merges it, on a branch no
+local hook sees. A pull-request, issue, release or gist body, a comment, and
+anything handed to `uphold guard --text` or the harness hook is prose a reader
+reads, and the rule asks it only for characters that draw nothing — so `gh issue edit --body-file` over a body that
 carries a degree sign someone typed months ago runs. The same split holds for
 paths: `prevent-unusual-unicode-in-files` asks each **path** for lookalike
 words as well as invisibles, and file **content** for invisibles only. A

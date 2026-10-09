@@ -375,6 +375,23 @@ pub(crate) struct Subject {
     pub value: String,
 }
 
+impl Subject {
+    /// The kind of subject that is a headline: a title. A pull-request title
+    /// is the commit subject a squash merge writes on the forge, and
+    /// `gh pr merge --subject` is that subject outright, so a text guard
+    /// judges it as a subject and not as prose.
+    const HEADLINE: &'static str = "title";
+
+    /// This subject as a text guard is handed it.
+    pub(crate) fn published(&self) -> crate::guard::Published<'_> {
+        crate::guard::Published {
+            label: self.kind,
+            text: &self.value,
+            headline: self.kind == Self::HEADLINE,
+        }
+    }
+}
+
 fn in_list(list: &[String], needle: &str) -> bool {
     list.iter().any(|item| item == needle)
 }
@@ -3237,8 +3254,7 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
                     policy,
                     rule,
                     destination.as_deref(),
-                    subject.kind,
-                    &subject.value,
+                    &subject.published(),
                     &mut in_scope,
                 )? {
                     refusals.push(refusal.report);
@@ -3702,8 +3718,7 @@ pub(crate) fn run(
                                 policy,
                                 rule,
                                 destination.as_deref(),
-                                subject.kind,
-                                &subject.value,
+                                &subject.published(),
                                 &mut inner_in_scope,
                             )? {
                                 refusals.push(refusal.report);

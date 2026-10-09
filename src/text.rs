@@ -314,7 +314,15 @@ pub(crate) fn judged(
             // `public-target` scope about. The shim, which does have one,
             // passes its own memo.
             Judged::Guards => {
-                crate::guard::over_text(root, policy, None, label, text, &mut |_| Ok(true))?
+                // Not a headline: what these seams are handed is a body, or a
+                // tool call's strings joined, and neither says which part of
+                // it is a subject.
+                let published = crate::guard::Published {
+                    label,
+                    text,
+                    headline: false,
+                };
+                crate::guard::over_text(root, policy, None, &published, &mut |_| Ok(true))?
                     .into_iter()
                     .map(Verdict::Guard)
                     .collect()

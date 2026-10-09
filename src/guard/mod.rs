@@ -367,6 +367,20 @@ pub(crate) fn target_refusal(
 /// down a guard nobody scoped.
 pub(crate) type ScopeAsk<'a> = &'a mut dyn FnMut(&Rule) -> Result<bool>;
 
+/// One piece of published text, as a text guard is handed it.
+///
+/// `label` is what the report calls it -- the shim's subject kind, the tool
+/// name at the hook, the source at `--text`. `headline` says the text is a
+/// SUBJECT rather than prose: a title the shim collected, which a forge-side
+/// squash merge makes a commit subject on the default branch with no local
+/// hook in the way. It is set from the shim's subject kind and never read off
+/// the label.
+pub(crate) struct Published<'a> {
+    pub label: &'a str,
+    pub text: &'a str,
+    pub headline: bool,
+}
+
 /// Run every text-capable guard over one piece of text.
 ///
 /// `in_scope` is asked about each inner rule, because a rule reached through a
@@ -383,8 +397,7 @@ pub(crate) fn over_text(
     root: &Path,
     policy: &Policy,
     destination: Option<&str>,
-    label: &str,
-    text: &str,
+    published: &Published<'_>,
     in_scope: ScopeAsk<'_>,
 ) -> Result<Vec<Refusal>> {
     let mut refusals = Vec::new();
@@ -398,8 +411,7 @@ pub(crate) fn over_text(
         if !in_scope(rule)? {
             continue;
         }
-        if let Some(refusal) = text_refusal(root, policy, rule, destination, label, text, in_scope)?
-        {
+        if let Some(refusal) = text_refusal(root, policy, rule, destination, published, in_scope)? {
             refusals.push(refusal);
         }
     }
@@ -423,10 +435,14 @@ pub(crate) fn text_refusal(
     policy: &Policy,
     rule: &Rule,
     destination: Option<&str>,
-    label: &str,
-    text: &str,
+    published: &Published<'_>,
     in_scope: ScopeAsk<'_>,
 ) -> Result<Option<Refusal>> {
+    let &Published {
+        label,
+        text,
+        headline,
+    } = published;
     let Some(builtin) = rule.builtin() else {
         return Ok(None);
     };
@@ -435,14 +451,14 @@ pub(crate) fn text_refusal(
     }
     Ok(match builtin {
         "prevent-ai-author" => message::ai_author_in(rule, label, text),
-        "prevent-unusual-unicode" => message::unusual_unicode_in(rule, label, text)?,
+        "prevent-unusual-unicode" => message::unusual_unicode_in(rule, label, text, headline)?,
         "no-private-repo-names" => names::in_text(root, policy, rule, destination, label, text)?,
         // The consultations. Each folds what it ran into one refusal under this
         // rule's id, naming each inner rule, so the reader is told which check
         // refused and not only that the consultation did. `over_text` skips the
         // meta guards, so the recursion is one level deep by construction.
         "text-guards" => {
-            let inner = over_text(root, policy, destination, label, text, in_scope)?;
+            let inner = over_text(root, policy, destination, published, in_scope)?;
             fold(
                 rule,
                 inner

@@ -254,28 +254,53 @@ impl Lookalike {
 /// UTS #39, sections 4 and 5, through `unicode-security`, which carries the
 /// confusable table and the resolved script sets: a word is a maximal run of
 /// letters and the marks on them, and a word is a finding only when it is not
-/// single-script AND a letter from its minority script is drawn like the
-/// majority's. So a Japanese word beside an English one is two single-script
-/// words and passes, a kanji and kana word is single-script by the augmented
-/// sets UTS #39 defines and passes, and `Rust` run into a kanji compound is
-/// mixed and passes too, because no kanji is drawn like a Latin letter.
+/// single-script AND a letter from its minority script is drawn like a letter
+/// of its majority's.
+///
+/// The East Asian scripts are one writing system here, as UTS #39's augmented
+/// sets make them: kanji with kana is Japanese, kanji with Hangul is Korean,
+/// and kanji with Bopomofo is Chinese, so none of those is a mixed word. And
+/// because those languages are written without spaces, a run of East Asian
+/// letters and a run of anything else are two words where they meet: `API`
+/// run into a kanji compound is two single-script words, not one mixed one,
+/// and a script boundary between Latin and kanji is not a lookalike.
 pub(crate) fn lookalikes(line: &str) -> Vec<Lookalike> {
     let mut found = Vec::new();
     let mut word: Vec<char> = Vec::new();
     let mut start = 0usize;
+    // Whether the word so far is written in an East Asian script, once a
+    // letter has said so. A mark carries no script and never decides it.
+    let mut east_asian: Option<bool> = None;
     // A trailing space closes the last word, so the loop has one exit.
     for (index, character) in line.chars().chain(std::iter::once(' ')).enumerate() {
+        let script = character.script();
+        let crosses = names_a_script(script)
+            && east_asian.is_some_and(|current| current != is_east_asian(script));
+        if !word.is_empty() && (!in_a_word(character) || crosses) {
+            found.extend(lookalikes_in_word(&word, start));
+            word.clear();
+            east_asian = None;
+        }
         if in_a_word(character) {
             if word.is_empty() {
                 start = index;
             }
             word.push(character);
-        } else if !word.is_empty() {
-            found.extend(lookalikes_in_word(&word, start));
-            word.clear();
+            if names_a_script(script) {
+                east_asian = Some(is_east_asian(script));
+            }
         }
     }
     found
+}
+
+/// The scripts UTS #39's augmented sets join into one writing system: Han
+/// with kana (Jpan), with Hangul (Kore), with Bopomofo (Hanb).
+const fn is_east_asian(script: Script) -> bool {
+    matches!(
+        script,
+        Script::Han | Script::Hiragana | Script::Katakana | Script::Hangul | Script::Bopomofo
+    )
 }
 
 /// A letter, or a mark riding on one. A combining accent is `Inherited` and
@@ -298,23 +323,30 @@ fn skeleton_of(character: char) -> Vec<char> {
 }
 
 /// Whether `character` is drawn as a letter of `script`: its skeleton is not
-/// itself, and everything in the skeleton is that script's or no script's.
+/// itself, holds at least one letter OF that script, and nothing from a third.
+///
+/// The "at least one" is the whole difference between a lookalike and a
+/// shape. U+4E00 (the kanji for one) skeletons to U+30FC, a prolonged sound
+/// mark no script owns, and a skeleton made only of such characters is drawn
+/// like nothing in particular -- it would otherwise be "drawn as" every
+/// script there is.
 fn drawn_as(character: char, script: Script) -> bool {
     let skeleton = skeleton_of(character);
     skeleton != [character]
-        && !skeleton.is_empty()
+        && skeleton.iter().any(|part| part.script() == script)
         && skeleton
             .iter()
             .all(|&part| part.script() == script || !names_a_script(part.script()))
 }
 
-fn lookalikes_in_word(word: &[char], offset: usize) -> Vec<Lookalike> {
-    let spelled: String = word.iter().collect();
-    if spelled.as_str().is_single_script() {
-        return Vec::new();
-    }
-    // The majority by count, the first seen on a tie. Only the minority is
-    // reported: in `c\u{0430}che` it is the one letter that was swapped in.
+/// The script the word is written in, against which the rest is judged.
+///
+/// The majority by count. On a tie the side that is the PROTOTYPE wins: in
+/// `ok` spelt with a Cyrillic `o` (one letter each), the Cyrillic letter is
+/// the one drawn as a Latin letter, so Latin is the word's script and the
+/// Cyrillic `o` is the finding -- and a word whose two halves are equally long
+/// is not let through for being balanced. With no such side, the first seen.
+fn script_of_word(word: &[char]) -> Option<Script> {
     let mut counts: Vec<(Script, usize)> = Vec::new();
     for &character in word {
         let script = character.script();
@@ -326,17 +358,38 @@ fn lookalikes_in_word(word: &[char], offset: usize) -> Vec<Lookalike> {
             None => counts.push((script, 1)),
         }
     }
-    let Some(among) = counts
+    let most = counts.iter().map(|&(_, count)| count).max()?;
+    let tied: Vec<Script> = counts
         .iter()
-        .fold(
-            None::<(Script, usize)>,
-            |best, &(script, count)| match best {
-                Some((_, most)) if most >= count => best,
-                _ => Some((script, count)),
-            },
-        )
-        .map(|(script, _)| script)
-    else {
+        .filter(|&&(_, count)| count == most)
+        .map(|&(script, _)| script)
+        .collect();
+    tied.iter()
+        .copied()
+        .find(|&candidate| {
+            word.iter().any(|&other| {
+                names_a_script(other.script())
+                    && other.script() != candidate
+                    && drawn_as(other, candidate)
+            })
+        })
+        .or_else(|| tied.first().copied())
+}
+
+fn lookalikes_in_word(word: &[char], offset: usize) -> Vec<Lookalike> {
+    let spelled: String = word.iter().collect();
+    if spelled.as_str().is_single_script() {
+        return Vec::new();
+    }
+    // A word of East Asian letters only is one writing system (see
+    // `lookalikes`), whichever of its scripts each letter carries.
+    if word
+        .iter()
+        .all(|character| !names_a_script(character.script()) || is_east_asian(character.script()))
+    {
+        return Vec::new();
+    }
+    let Some(among) = script_of_word(word) else {
         return Vec::new();
     };
     let mut found = Vec::new();
@@ -348,7 +401,7 @@ fn lookalikes_in_word(word: &[char], offset: usize) -> Vec<Lookalike> {
         // Either way round. The Cyrillic `a` in a Latin word is drawn as a
         // Latin letter; the Latin `a` in a Cyrillic word is the prototype the
         // Cyrillic letters around it are drawn as, which is the same disguise
-        // seen from the other side. A kanji is neither, and passes.
+        // seen from the other side.
         let disguised = drawn_as(character, among)
             || (skeleton_of(character) == [character]
                 && unicode_security::is_potential_mixed_script_confusable_char(character)
@@ -786,6 +839,52 @@ mod tests {
         assert!(lookalikes("Dockerfile\u{3092}\u{4FEE}\u{6B63}").is_empty());
         // Kanji and kana together are single-script by UTS #39's augmented sets.
         assert!(lookalikes("\u{65E5}\u{672C}\u{30C6}\u{30B9}\u{30C8}").is_empty());
+    }
+
+    #[test]
+    fn ordinary_east_asian_subjects_carry_no_lookalike() {
+        // U+4E00 skeletons to a character no script owns, which is drawn as
+        // no script; and a Latin run meeting kanji is two words, not one
+        // mixed word.
+        for line in [
+            "API\u{4E00}\u{89A7}\u{3092}\u{8FFD}\u{52A0}",
+            "CI\u{306E}\u{30CE}\u{30FC}\u{30C9}\u{6570}\u{3092}\u{5909}\u{66F4}",
+            "PR\u{4E00}\u{89A7}",
+            "\u{7D71}\u{4E00}API",
+            "\u{65B0}\u{589E}\u{4E00}\u{4E2A}API",
+            "JSON\u{4E00}\u{62EC}\u{51FA}\u{529B}",
+            "README\u{306B}\u{4E00}\u{884C}\u{8FFD}\u{52A0}",
+            "Webhook\u{4E00}\u{6642}\u{505C}\u{6B62}",
+            "Docker\u{30CE}\u{30FC}\u{30C9}",
+            "\u{D55C}\u{AD6D}\u{C5B4}API\u{6587}\u{66F8}",
+        ] {
+            let found: Vec<String> = lookalikes(line).iter().map(Lookalike::describe).collect();
+            assert!(found.is_empty(), "{line}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_tie_names_the_letter_drawn_as_the_other() {
+        // A Cyrillic o and a Latin k, one letter each: the Cyrillic letter is
+        // the disguise, whichever came first.
+        for (line, character) in [
+            ("\u{043E}k", '\u{043E}'),
+            ("\u{0441}d", '\u{0441}'),
+            ("\u{041E}K", '\u{041E}'),
+            ("k\u{043E}", '\u{043E}'),
+        ] {
+            let found = lookalikes(line);
+            assert_eq!(found.len(), 1, "{line}");
+            assert_eq!(found[0].character, character, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_greek_omicron_in_a_latin_word_is_a_lookalike() {
+        let found = lookalikes("hell\u{03BF}");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].character, '\u{03BF}');
+        assert!(found[0].describe().contains("GREEK SMALL LETTER OMICRON"));
     }
 
     #[test]
