@@ -577,6 +577,153 @@ fn a_close_opens_no_editor_and_announces_none() {
     );
 }
 
+/// The `gh` table out of a policy, as the shim would read it.
+fn gh_table(policy: &str) -> toml::Table {
+    let policy: toml::Table = policy.parse().unwrap();
+    policy
+        .get("shim")
+        .and_then(toml::Value::as_array)
+        .unwrap()
+        .iter()
+        .map(|shim| shim.as_table().unwrap())
+        .find(|shim| shim.get("command").and_then(toml::Value::as_str) == Some("gh"))
+        .unwrap()
+        .clone()
+}
+
+/// This repository's own `gh` table, which every merge made here passes
+/// through -- not the copy `uphold init` writes, which is what the cases above
+/// stand in for.
+fn own_gh_table() -> toml::Table {
+    gh_table(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/policy/principles.toml"
+        ))
+        .unwrap(),
+    )
+}
+
+/// The table `uphold init` writes, read out of a tree it was run in.
+fn init_gh_table() -> toml::Table {
+    let root = support::scratch("shim-init");
+    std::fs::create_dir_all(&root).unwrap();
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command
+        .args(["init", "--owner", "example-owner", "--visibility", "public"])
+        .current_dir(&root);
+    support::without_git_environment(&mut command);
+    let output = command.output().unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    gh_table(&std::fs::read_to_string(root.join("policy/principles.toml")).unwrap())
+}
+
+#[test]
+fn this_repositorys_own_merge_opens_no_editor_and_says_the_forge_message_was_not_checked() {
+    // Every case above loads a table written for the test, so this
+    // repository's own `pr:merge` entry went without `editor` while they
+    // passed, and a squash merge here announced an editor checkpoint that
+    // never opened (#320, #323). Its own table is driven here, with the scope
+    // made `always` because there is no forge to ask.
+    let mut table = own_gh_table();
+    table.insert("scope".into(), "always".into());
+    table.remove("target");
+    let mut policy: toml::Table = r#"
+[rule.no-wip-subject]
+message = "a merge subject marked unfinished is not ready to merge"
+regexp = '^WIP\b'
+subjects = ["title"]
+command.before = ["gh"]
+command.scope = "always"
+"#
+    .parse()
+    .unwrap();
+    policy.insert("shim".into(), toml::Value::Array(vec![table.into()]));
+    let root = workspace(&toml::to_string(&policy).unwrap());
+    std::fs::write(
+        root.join("bin/gh"),
+        "#!/bin/sh\necho \"gh ran: $*\"\necho \"editor: $GH_EDITOR\"\n",
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(root.join("bin/gh"))
+        .unwrap()
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(root.join("bin/gh"), permissions).unwrap();
+
+    let output = shim(
+        &root,
+        &["gh", "pr", "merge", "1", "--squash", "--delete-branch"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    assert!(
+        !stderr(&output).contains("the editor is the checkpoint"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("the message the forge composes for it was not checked"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stdout(&output).contains("--as-editor"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn this_repositorys_own_gh_verbs_say_where_an_editor_opens_as_uphold_inits_do() {
+    // The case above holds one verb; this holds every verb `uphold init`
+    // gives an editor answer to, so the next one added there and not here is
+    // a failure rather than a checkpoint announced over nothing.
+    let entries = |table: &toml::Table| -> Vec<toml::Table> {
+        table
+            .get("verbs")
+            .and_then(toml::Value::as_array)
+            .map(|verbs| {
+                verbs
+                    .iter()
+                    .map(|verb| verb.as_table().unwrap().clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let ours = entries(&own_gh_table());
+    let mut compared = 0;
+    for theirs in entries(&init_gh_table()) {
+        let keys = ["editor", "editor_unless", "inert_flags"];
+        if !keys.iter().any(|key| theirs.contains_key(*key)) {
+            continue;
+        }
+        let ours = ours
+            .iter()
+            .find(|ours| ours.get("match") == theirs.get("match"));
+        assert!(
+            ours.is_some(),
+            "no entry here matches {:?}",
+            theirs.get("match")
+        );
+        let ours = ours.unwrap();
+        for key in keys {
+            assert_eq!(
+                ours.get(key),
+                theirs.get(key),
+                "{key} on {:?} differs from uphold init's",
+                theirs.get("match")
+            );
+        }
+        compared += 1;
+    }
+    assert!(
+        compared > 0,
+        "uphold init's table declares no editor answer to compare"
+    );
+}
+
 #[test]
 fn the_bypass_names_the_checker_it_switched_off() {
     let root = workspace(POLICY);
