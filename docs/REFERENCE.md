@@ -1488,7 +1488,9 @@ carries a degree sign someone typed months ago runs. **An edit is judged on
 what it adds.** `gh issue edit` and `gh pr edit` resubmit the whole body, so
 with `--body` or `--body-file` the shim asks the forge for the stored body
 (`gh issue view --json body`, `gh pr view --json body`, once for every
-issue the edit names) and hands this rule only the lines the edit adds: a
+issue the edit names) and hands this rule only the lines the edit adds to
+that body. Only the body is narrowed, never a title on the same command line,
+and an edit with no body flag asks the forge nothing. So a
 body that already carries a zero-width space can be edited without
 `UPHOLD_ALLOW`, and a line the edit adds or changes is read whole, invisible
 characters included. A line that carries a bidirectional embedding, override
@@ -1982,7 +1984,14 @@ given.
 
 Every flag list is read the way the command's own option parser reads it: a
 short option the table does not name whole is read letter by letter, so `-st X`
-is `-s` and then `-t X`, and `-bText` or `-b=Text` is `-b Text`.
+is `-s` and then `-t X`. The value follows pflag, which `gh` and `glab` parse
+with, at whichever letter takes it: `=` plus at least one character gives
+what follows the `=` (`-b=Text` and `-st=Text` are `Text`), anything else
+after the letter is the value whole (`-bText`; `-b=` alone is the value `=`),
+and nothing after it takes the next word. On `gh issue edit`, `gh pr edit` and
+`gh pr merge`, an option the table does not name is read with the arity `gh`
+gives it, so `gh pr merge -A -b -t X` is an author email `-b` and the subject
+`X`.
 
 `target` is `forge-repo` or `git-remote`, both built-in resolvers. `scope` is
 `public-target | public-registry | always`, with
@@ -2319,8 +2328,9 @@ because which pull request and which method it names cannot then be read. `--reb
 message of GitHub's, and `--auto` with no method names no merge to ask about,
 so for those the shim prints one line saying the message was not checked.
 `--auto --squash` is judged on what GitHub would compose now; the merge itself
-happens later. A `--subject ""` or `--body ""` counts as not given, because
-`gh` sends nothing for it and GitHub composes that part. `gh pr merge --help`
+happens later. A `--subject ""` counts as not given, because `gh` sends no
+headline for an empty subject and GitHub composes it; a `--body ""` is the
+body, because `gh` sends a body whenever the flag is given, empty or not. `gh pr merge --help`
 and `gh pr merge --disable-auto` merge nothing, so neither is said.
 
 The re-entry is routed by a WORD on the command line. The editor variable is set

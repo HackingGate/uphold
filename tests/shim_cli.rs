@@ -2372,9 +2372,10 @@ fn only_the_invisible_character_guard_is_narrowed_to_what_an_edit_adds() {
 }
 
 #[test]
-fn an_empty_subject_or_body_is_not_given_and_the_forge_is_asked() {
-    // `gh` sends no headline for `--subject ""`, so the forge composes it,
-    // and that is the text to read.
+fn an_empty_subject_is_composed_by_the_forge_and_an_empty_body_is_the_body() {
+    // `gh` 2.102 sends no headline for `--subject ""`, so the forge composes
+    // it, and that is the text to read. It sends `--body ""` as the body,
+    // empty, so there is nothing composed to ask for.
     let root = gh_workspace();
     composes(&root, "WIP: fix the cache (#1)", "");
     let output = shim(
@@ -2407,8 +2408,233 @@ fn an_empty_subject_or_body_is_not_given_and_the_forge_is_asked() {
             "gh", "pr", "merge", "1", "--squash", "-t", "Fix", "--body", "",
         ],
     );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    assert!(asked(&root).is_empty(), "{}", asked(&root));
+}
+
+#[test]
+fn an_empty_attached_value_is_the_sign_and_never_the_next_word() {
+    // pflag gives `-b=` the value `=`. Reading it as `-b` with the next word
+    // as its value took the title for the body, and the body for nothing.
+    let root = gh_stub_workspace(&GH_TITLE_POLICY.replace(
+        "match = [\"pr:create\", \"pr:merge\"]",
+        "match = [\"pr:create\", \"pr:merge\", \"issue:edit\"]",
+    ));
+    let output = shim(&root, &["gh", "pr", "create", "-b=", "-t", LOOKALIKE]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(stderr(&output).contains("U+202E"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("CYRILLIC SMALL LETTER A"),
+        "{}",
+        stderr(&output)
+    );
+
+    // `-t=` on an edit is a title `=`, and the `6` after it is an issue.
+    stores_under(&root, "5", "Ship\u{200B} it");
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "issue",
+            "edit",
+            "5",
+            "-t=",
+            "6",
+            "-b",
+            "Ship\u{200B} it",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        asked(&root).contains("issue view 6 --json body"),
+        "{}",
+        asked(&root)
+    );
+
+    // `-st=WIP x` is `-s` and the subject `WIP x`.
+    let root = gh_workspace();
+    let output = shim(&root, &["gh", "pr", "merge", "7", "-st=WIP x", "-b", "ok"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no-wip-subject"),
+        "{}",
+        stderr(&output)
+    );
+    let output = shim(
+        &root,
+        &["gh", "pr", "merge", "7", "-s", "-b=", "-t", "WIP x"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no-wip-subject"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(asked(&root).is_empty(), "{}", asked(&root));
+
+    // `-iF=body=@notes.md` is `-i` and a typed field, which reads the file.
+    let root = gh_stub_workspace(&GH_TITLE_POLICY.replace(
+        "match = [\"pr:create\", \"pr:merge\"]",
+        "match = [\"pr:create\", \"pr:merge\", \"api:*\"]",
+    ));
+    std::fs::write(root.join("notes.md"), "Ship\u{200B} it\n").unwrap();
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "PATCH",
+            "repos/o/r/issues/1",
+            "-iF=body=@notes.md",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("U+200B"), "{}", stderr(&output));
+}
+
+#[test]
+fn a_title_is_not_narrowed_against_the_stored_body_under_uphold_inits_table() {
+    // `uphold init`'s table reads `--title` as text. The stored body of #5
+    // holding the same line is no reason to let the title past, and a title
+    // alone asks the forge nothing.
+    let mut table = init_gh_table();
+    table.insert("scope".into(), "always".into());
+    table.remove("target");
+    let mut policy: toml::Table = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+builtin = "text-guards"
+command.before = ["gh"]
+
+[rule.prevent-unusual-unicode]
+builtin = "prevent-unusual-unicode"
+
+[rule.prevent-unusual-unicode.git]
+hooks = ["commit-msg"]
+"#
+    .parse()
+    .unwrap();
+    policy.insert("shim".into(), toml::Value::Array(vec![table.into()]));
+    let root = workspace(&toml::to_string(&policy).unwrap());
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+    forge_stub(&root);
+    stores(&root, "Fix\u{200B} cache");
+    let output = shim(
+        &root,
+        &["gh", "issue", "edit", "5", "-t", "Fix\u{200B} cache"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("U+200B"), "{}", stderr(&output));
+    assert!(asked(&root).is_empty(), "{}", asked(&root));
+
+    // The body beside it is still narrowed.
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "issue",
+            "edit",
+            "5",
+            "-t",
+            "Fix cache",
+            "-b",
+            "Fix\u{200B} cache\nMore.",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        asked(&root).contains("issue view 5 --json body"),
+        "{}",
+        asked(&root)
+    );
+}
+
+#[test]
+fn an_option_the_table_does_not_name_takes_the_value_gh_gives_it() {
+    // `-A` is `--author-email` on `gh pr merge` and takes a value: `-A -b -t
+    // WIP` sets the email to `-b` and the subject to `WIP`.
+    let root = gh_workspace();
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "pr",
+            "merge",
+            "1",
+            "--squash",
+            "-A",
+            "-b",
+            "-t",
+            "WIP merge",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no-wip-subject"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn draft_is_a_switch_on_create_and_the_text_after_it_is_read() {
+    // `-d` is `--draft` on `gh pr create` and `gh release create`, a switch.
+    // This repository's own table read it as a body, so the flag after it
+    // was taken for its value and went unread.
+    let mut table = own_gh_table();
+    table.insert("scope".into(), "always".into());
+    table.remove("target");
+    let mut policy: toml::Table = r#"
+[rule.no-published-markers]
+message = "remove the marker"
+builtin = "text-guards"
+command.before = ["gh"]
+
+[rule.prevent-unusual-unicode]
+builtin = "prevent-unusual-unicode"
+
+[rule.prevent-unusual-unicode.git]
+hooks = ["commit-msg"]
+"#
+    .parse()
+    .unwrap();
+    policy.insert("shim".into(), toml::Value::Array(vec![table.into()]));
+    let root = workspace(&toml::to_string(&policy).unwrap());
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+    forge_stub(&root);
+    let zw = "x\u{200B}y";
+    for form in [
+        vec!["gh", "pr", "create", "-d", "-t", LOOKALIKE, "-b", "ok"],
+        vec!["gh", "release", "create", "v1", "-d", "-n", zw],
+        vec!["gh", "release", "create", "v1", "-dn", zw],
+        // `gist create`'s own description flag is still read.
+        vec!["gh", "gist", "create", "f.txt", "-d", zw],
+        vec!["gh", "gist", "create", "f.txt", "--desc", zw],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("gh ran:"), "{form:?}");
+    }
+}
+
+#[test]
+fn a_finding_in_a_message_body_is_reported_by_its_line_in_the_message() {
+    let root = own_glab_workspace();
+    let output = shim(
+        &root,
+        &[
+            "glab",
+            "mr",
+            "merge",
+            "1",
+            "-m",
+            "Fix it\n\nThe body \u{202E}here.",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("text:3:"), "{}", stderr(&output));
 }
 
 #[test]

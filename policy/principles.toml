@@ -495,7 +495,10 @@ match = [
   # front of its own lookup is a loop.
   "api:*",
 ]
-text_flags = ["-b", "--body", "-n", "--notes", "-d", "--description"]
+# Not `-d`: it is `--draft`, a switch, on `pr create` and `release create`,
+# and reading it as a body took the flag after it for its value. `gist create`
+# spells its description `-d`/`--desc` and has an entry of its own below.
+text_flags = ["-b", "--body", "-n", "--notes"]
 # A title is a subject of its own kind, so a format rule about titles is never
 # asked about a body -- and a title given alone no longer reads as "the body
 # was supplied", which used to close the editor checkpoint over the body the
@@ -525,6 +528,14 @@ scope = "public-target"
   [[shim.verbs]]
   match = ["issue:close", "pr:close", "issue:reopen", "pr:reopen"]
   text_flags = ["-c", "--comment"]
+  editor = "never"
+
+  # `gh gist create -d` is `--desc`, the gist's description, and on no other
+  # verb is `-d` text. No editor opens on this verb: its content is files.
+  [[shim.verbs]]
+  match = ["gist:create"]
+  text_flags = ["-d", "--desc"]
+  web_flags = ["-w", "--web"]
   editor = "never"
 
   # `--subject` is `-t`'s long form here and on no other verb, and it was read

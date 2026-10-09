@@ -239,25 +239,36 @@ struct Cluster {
 /// and then `-t X`, so the subject went out unread. `arity` answers `Some(true)`
 /// for a letter that takes a value, `Some(false)` for a switch and `None` for
 /// a letter nothing here knows, which is read past as `unknown`.
+///
+/// The value rule is pflag's `parseSingleShortArg`, which `gh` and `glab` both
+/// parse with, applied at whichever letter is being read: where what follows
+/// the letter is `=` and at least one more character, the value is what comes
+/// after the `=` (`-b=Text`, `-st=Text`); otherwise, where anything follows,
+/// that is the value whole (`-bText`, and `-b=` whose value is `=`); otherwise
+/// it is the next word. A switch follows the same `=` rule -- `-s=false` is
+/// the switch spelt off -- and otherwise takes nothing.
 fn read_cluster(argument: &str, arity: impl Fn(&str) -> Option<bool>) -> Cluster {
     let mut cluster = Cluster::default();
     for (offset, letter) in argument.char_indices().skip(1) {
         let flag = format!("-{letter}");
+        let rest = argument
+            .get(offset + letter.len_utf8()..)
+            .unwrap_or_default();
+        let assigned = rest.strip_prefix('=').filter(|value| !value.is_empty());
         match arity(&flag) {
-            Some(false) => cluster.switches.push(flag),
+            Some(false) => {
+                if let Some(value) = assigned {
+                    if switched_on(true, value) {
+                        cluster.switches.push(flag);
+                    }
+                    break;
+                }
+                cluster.switches.push(flag);
+            }
             None => cluster.unknown.push(flag),
             Some(true) => {
-                let rest = argument
-                    .get(offset + letter.len_utf8()..)
-                    .unwrap_or_default();
-                // `-b=Text` is `-b Text` only where `-b` is the first letter,
-                // which is where the option parser strips the sign.
-                let rest = if offset == 1 {
-                    rest.strip_prefix('=').unwrap_or(rest)
-                } else {
-                    rest
-                };
-                cluster.valued = Some((flag, (!rest.is_empty()).then(|| rest.to_owned())));
+                let value = assigned.or_else(|| (!rest.is_empty()).then_some(rest));
+                cluster.valued = Some((flag, value.map(str::to_owned)));
                 break;
             }
         }
@@ -281,9 +292,11 @@ fn message_subjects(message: String) -> Vec<Subject> {
         added: None,
     }];
     if !rest.trim().is_empty() {
+        // Kept a line down, behind the empty line the subject was, so a
+        // finding in the body is reported by its line in the message.
         subjects.push(Subject {
             kind: "text",
-            value: rest.to_owned(),
+            value: format!("\n{rest}"),
             added: None,
         });
     }
@@ -1445,6 +1458,14 @@ impl Shim {
     /// Walk argv once, reading the flags this table names.
     fn collect_flags(&self, argv: &[String]) -> Result<Collected> {
         let mut collected = Collected::default();
+        // Where `gh`'s own grammar for this verb is written down, an option
+        // the table does not name is still read with the arity `gh` gives it:
+        // `-A` on `gh pr merge` takes a value, so in `-A -b -t WIP` the `-b`
+        // is the author email and `WIP` the subject, not `-t` a body.
+        let held = self.held_verb(argv);
+        let held_value = |flag: &str| {
+            !self.names_option(flag) && held.is_some_and(|held| held.arity(flag) == Some(true))
+        };
 
         let mut index = 0;
         while let Some(argument) = argv.get(index) {
@@ -1452,7 +1473,10 @@ impl Shim {
             // letter, the way the command's option parser reads it: `-st X`
             // is `-s` and `-t X`, and `-bText` is `-b Text`.
             if is_short_word(argument) && !self.names_option(argument) {
-                let cluster = read_cluster(argument, |flag| self.short_arity(flag));
+                let cluster = read_cluster(argument, |flag| {
+                    self.short_arity(flag)
+                        .or_else(|| held.and_then(|held| held.arity(flag)))
+                });
                 for switch in &cluster.switches {
                     self.read_option(&mut collected, switch, String::new(), false)?;
                 }
@@ -1463,7 +1487,8 @@ impl Shim {
                 let paired = attached.is_some();
                 let value =
                     attached.unwrap_or_else(|| argv.get(index + 1).cloned().unwrap_or_default());
-                let took_value = self.read_option(&mut collected, &flag, value, paired)?;
+                let took_value =
+                    self.read_option(&mut collected, &flag, value, paired)? || held_value(&flag);
                 index += if paired || !took_value { 1 } else { 2 };
                 continue;
             }
@@ -1480,10 +1505,21 @@ impl Shim {
                     false,
                 ),
             };
-            let took_value = self.read_option(&mut collected, &flag, value, paired)?;
+            let took_value =
+                self.read_option(&mut collected, &flag, value, paired)? || held_value(&flag);
             index += if paired || !took_value { 1 } else { 2 };
         }
         Ok(collected)
+    }
+
+    /// `gh`'s written-down grammar for the verb this argv invokes, where
+    /// [`FORGE_HELD`] has one.
+    fn held_verb(&self, argv: &[String]) -> Option<&'static HeldVerb> {
+        let words = self.words(argv, false);
+        let verb = format!("{}:{}", words.verb, words.noun);
+        FORGE_HELD
+            .iter()
+            .find(|held| held.command == self.command && held.verb == verb)
     }
 
     /// Whether any list of this table names the word whole.
@@ -1514,6 +1550,23 @@ impl Shim {
     /// follows it -- that argument may be the very flag whose value is about
     /// to be published. An option no list names takes nothing here.
     fn read_option(
+        &self,
+        collected: &mut Collected,
+        flag: &str,
+        value: String,
+        paired: bool,
+    ) -> Result<bool> {
+        let before = collected.subjects.len();
+        let took = self.read_one_option(collected, flag, value, paired)?;
+        // Which flag each subject came through, so a step that is about one
+        // flag's text -- the body an edit resubmits -- can find it.
+        for index in before..collected.subjects.len() {
+            collected.flagged.push((index, flag.to_owned()));
+        }
+        Ok(took)
+    }
+
+    fn read_one_option(
         &self,
         collected: &mut Collected,
         flag: &str,
@@ -1851,6 +1904,7 @@ impl Shim {
             web: false,
             withheld: Withheld::Nothing,
             stdin,
+            flagged: Vec::new(),
         })
     }
 
@@ -2137,6 +2191,9 @@ pub(crate) struct Collected {
     /// command publishes must be what was submitted to it byte for byte, and
     /// the subject is a decoded copy.
     pub stdin: Option<Vec<u8>>,
+    /// The flag each flag-collected subject came through, by its index in
+    /// `subjects`.
+    pub flagged: Vec<(usize, String)>,
 }
 
 /// The forges whose questions this tool knows how to ask.
@@ -2450,17 +2507,24 @@ struct HeldVerb {
     held: Held,
     switches: &'static [&'static str],
     values: &'static [&'static str],
+    /// The options whose value is the body the forge stores. A title on the
+    /// same command line is not that body, whatever the table calls it --
+    /// `uphold init`'s table reads `--title` as text.
+    body_flags: &'static [&'static str],
 }
 
 /// The options `gh` takes on every verb.
 const GH_GLOBAL_SWITCHES: &[&str] = &["-h", "--help"];
 const GH_GLOBAL_VALUES: &[&str] = &["-R", "--repo"];
+/// `gh`'s body options, on every verb that stores or merges a body.
+const GH_BODY_FLAGS: &[&str] = &["-b", "--body", "-F", "--body-file"];
 
 const FORGE_HELD: &[HeldVerb] = &[
     HeldVerb {
         command: "gh",
         verb: "issue:edit",
         held: Held::StoredBody,
+        body_flags: GH_BODY_FLAGS,
         switches: &["--remove-milestone", "--remove-parent", "--remove-type"],
         values: &[
             "--add-assignee",
@@ -2492,6 +2556,7 @@ const FORGE_HELD: &[HeldVerb] = &[
         command: "gh",
         verb: "pr:edit",
         held: Held::StoredBody,
+        body_flags: GH_BODY_FLAGS,
         switches: &["--remove-milestone"],
         values: &[
             "--add-assignee",
@@ -2519,6 +2584,7 @@ const FORGE_HELD: &[HeldVerb] = &[
         command: "gh",
         verb: "pr:merge",
         held: Held::ComposedMerge,
+        body_flags: GH_BODY_FLAGS,
         switches: &[
             "--admin",
             "--auto",
@@ -2735,16 +2801,6 @@ fn gh_json(args: &[&str]) -> std::result::Result<serde_json::Value, Silence> {
         .ok_or_else(|| Silence::Refused(String::from("`gh` exited 0 and printed no JSON")))
 }
 
-/// Whether a subject of this kind was given with something in it. An empty
-/// `--subject ""` or `--body ""` is not given: `gh` sends no headline or body
-/// for it, and the forge composes that part as if the flag were absent.
-fn given(collected: &Collected, kind: &str) -> bool {
-    collected
-        .subjects
-        .iter()
-        .any(|subject| subject.kind == kind && !subject.value.trim().is_empty())
-}
-
 impl Shim {
     /// What the forge holds of this invocation's text, folded into what it
     /// collected. True where the message the forge composes was read, so the
@@ -2764,11 +2820,7 @@ impl Shim {
         path: EditorPath,
     ) -> Result<bool> {
         let words = self.words(argv, false);
-        let verb = format!("{}:{}", words.verb, words.noun);
-        let Some(grammar) = FORGE_HELD
-            .iter()
-            .find(|held| held.command == self.command && held.verb == verb)
-        else {
+        let Some(grammar) = self.held_verb(argv) else {
             return Ok(false);
         };
         // Read only once the answer is needed, so an option this grammar does
@@ -2790,14 +2842,18 @@ impl Shim {
         };
         match grammar.held {
             Held::StoredBody => {
-                if !collected
-                    .subjects
+                // Only the body an edit resubmits is narrowed, and only a body
+                // flag asks the forge: a title-only edit costs no round trip.
+                let bodies: Vec<usize> = collected
+                    .flagged
                     .iter()
-                    .any(|subject| subject.kind == "text")
-                {
+                    .filter(|(_, flag)| grammar.body_flags.contains(&flag.as_str()))
+                    .map(|(index, _)| *index)
+                    .collect();
+                if bodies.is_empty() {
                     return Ok(false);
                 }
-                Self::narrow_to_added(name, &words, &operands()?, collected)?;
+                Self::narrow_to_added(name, &words, &operands()?, collected, &bodies)?;
                 Ok(false)
             }
             Held::ComposedMerge => {
@@ -2810,8 +2866,18 @@ impl Shim {
                 {
                     return Ok(false);
                 }
-                let headline = !given(collected, Subject::HEADLINE);
-                let body = !given(collected, "text");
+                // `gh` 2.102, pkg/cmd/pr/merge: `commitHeadline` is sent only
+                // where `--subject` is not empty (`http.go`, `if
+                // payload.commitSubject != ""`), while `commitBody` is sent
+                // whenever `--body` or `--body-file` was given (`merge.go`
+                // sets `BodySet` on either flag; `http.go` sends it on
+                // `setCommitBody`), empty or not. So an empty subject is the
+                // forge's to compose, and an empty body is the body.
+                let headline = !collected
+                    .subjects
+                    .iter()
+                    .any(|subject| subject.kind == Subject::HEADLINE && !subject.value.is_empty());
+                let body = !collected.body_given;
                 if !headline && !body {
                     return Ok(false);
                 }
@@ -2827,6 +2893,7 @@ impl Shim {
         words: &Words,
         operands: &Operands,
         collected: &mut Collected,
+        bodies: &[usize],
     ) -> Result<()> {
         // `gh pr edit` with no selector edits the current branch's pull
         // request, and `gh pr view` with none answers about the same one.
@@ -2871,8 +2938,11 @@ impl Shim {
         // reads: the edit writes the same body to each, and what it adds
         // differs per body.
         let mut narrowed = Vec::new();
-        for subject in std::mem::take(&mut collected.subjects) {
-            if subject.kind != "text" {
+        for (index, subject) in std::mem::take(&mut collected.subjects)
+            .into_iter()
+            .enumerate()
+        {
+            if !bodies.contains(&index) {
                 narrowed.push(subject);
                 continue;
             }
@@ -6044,6 +6114,29 @@ mod tests {
             (vec![], vec![], Some(("-b".into(), Some("X".into()))))
         );
         assert_eq!(split("-b"), (vec![], vec![], Some(("-b".into(), None))));
+        // pflag: `-b=` has the value `=`, it does not take the next word.
+        assert_eq!(
+            split("-b="),
+            (vec![], vec![], Some(("-b".into(), Some("=".into()))))
+        );
+        // The `=` is stripped after whichever letter takes the value.
+        assert_eq!(
+            split("-st=X"),
+            (
+                vec!["-s".into()],
+                vec![],
+                Some(("-t".into(), Some("X".into())))
+            )
+        );
+        // A switch spelt `=false` is off, and ends the word.
+        assert_eq!(split("-s=false"), (vec![], vec![], None));
+        let api = |flag: &str| match flag {
+            "-F" => Some(true),
+            _ => Some(false),
+        };
+        let cluster = read_cluster("-iF=k=@f", api);
+        assert_eq!(cluster.switches, vec![String::from("-i")]);
+        assert_eq!(cluster.valued, Some(("-F".into(), Some("k=@f".into()))));
         assert_eq!(
             split("-sdt"),
             (
@@ -6071,6 +6164,9 @@ mod tests {
             ("title", "Fix it")
         );
         assert_eq!(subjects[1].kind, "text");
+        // The body keeps its place in the message, so its line numbers are
+        // the message's.
+        assert_eq!(subjects[1].value.lines().nth(2), Some("The body."));
         let one_line = message_subjects(String::from("Fix it"));
         assert_eq!(one_line.len(), 1);
         assert_eq!(one_line[0].kind, "title");
