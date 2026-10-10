@@ -1379,13 +1379,21 @@ a literal" is what separates that from a boolean switch.
 
 Supported languages: Go and Rust.
 
-`command_sources` accepts `*`, `**`, `/` and literal text, and **refuses the
-rest of the glob syntax at load** — `?`, bracket classes and brace alternation.
-The pattern is used twice, once as a glob to select the files and once as a
-regex to read the command's name out of the path, and a construct only the first
-of those understands would select a file the second cannot name, and that file
-would drop out of the discovered count unreported. A path selected and not
-nameable is reported and counted anyway.
+`command_sources` is a glob read the way `files.glob` is: `**/` is zero or
+more directories, a pattern with no `/` matches at any depth, and a leading `/`
+anchors it at the repository root. The pattern is used twice, once with `{}`
+widened to `*` to select the files and once to read the command's name out of
+each path, and both readings are the same glob engine's — the name is captured
+from the regex that engine compiles the pattern to, so `*/cmd/{}/**/*.go` names
+`tool/cmd/foo/main.go` as surely as `tool/cmd/foo/sub/x.go`.
+
+It **refuses at load** what would let the two readings part: `?`, bracket
+classes and brace alternation, which can leave the placeholder something other
+than one path segment; a `*` beside the placeholder or a backslash before it,
+which change what the widened `*` means; and a leading `!` or `#`, which
+selection reads as an exclusion or a comment. A path selected and not nameable
+anyway — `cmd/.go` under `cmd/{}.go`, where the `*` matched nothing — is
+reported as a failure, never dropped from the count.
 
 What it deliberately does not do:
 
