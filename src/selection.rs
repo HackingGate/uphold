@@ -738,9 +738,12 @@ fn selection_regex(glob: &str) -> std::result::Result<String, String> {
 /// `git check-attr` and describe files declared binary; a caller asking about a
 /// path it is about to read as text has already answered that question.
 pub(crate) fn selects(root: &Path, rule: &Rule, relative: &Path) -> Result<bool> {
-    let prefixes = include_prefixes(rule);
-    if !prefixes
+    // An entry that leaves the tree selects nothing here. The scan refuses it,
+    // and this caller is asking about a path inside the tree, which no such
+    // entry can name.
+    if !include_prefixes(rule)
         .iter()
+        .filter_map(|(_, prefix)| prefix.as_deref())
         .any(|prefix| prefix.as_os_str().is_empty() || relative.starts_with(prefix))
     {
         return Ok(false);
@@ -749,45 +752,61 @@ pub(crate) fn selects(root: &Path, rule: &Rule, relative: &Path) -> Result<bool>
     Ok(!overrides.matched(relative, false).is_ignore())
 }
 
-/// The repository-relative roots one rule searches under, as written.
+/// The repository-relative roots one rule searches under, each beside the
+/// entry it was read from.
 ///
 /// Split out of [`search_roots`] so [`selects`] can ask the same question
 /// without the side effects that belong to a real search: the warning about an
 /// include that is not there, and the refusal of one that leaves the tree. Both
 /// are reports about a scan that is happening, and neither is true of a caller
 /// that only wants to know whether a path is in scope.
-fn include_prefixes(rule: &Rule) -> Vec<PathBuf> {
+///
+/// Both read every entry through [`include_prefix`] and through nothing else.
+/// Each once compared the entry to `"."` as a string on its own, and the two
+/// readings parted on `./policy`: the scan joined it to the root and found the
+/// policy directory, and the scope test kept the `./` as a leading component no
+/// repository-relative path begins with, so it answered "not selected" for
+/// every path. That answer is what the self-match check at load asks for, so a
+/// `require_regexp` naming its own text exempted the policy file from itself
+/// under `include = ["./policy"]` and was refused under `["policy"]`.
+fn include_prefixes(rule: &Rule) -> Vec<(&str, Option<PathBuf>)> {
     let include = rule.include();
     if include.is_empty() {
-        return vec![PathBuf::new()];
+        return vec![(".", Some(PathBuf::new()))];
     }
     include
         .iter()
-        .map(|spec| {
-            if spec == "." {
-                PathBuf::new()
-            } else {
-                PathBuf::from(spec)
-            }
-        })
+        .map(|spec| (spec.as_str(), include_prefix(spec)))
         .collect()
+}
+
+/// One `files.include` entry as the repository-relative path it names, with
+/// the empty path for the whole tree; `None` where it names a place outside it.
+///
+/// Read by component, so every spelling of one directory is one path:
+/// `policy`, `./policy`, `policy/` and `./policy/.` are all `policy`, and `.`,
+/// `./` and the empty string are all the root. Any `..` is outside, even one
+/// that climbs back in -- `policy/../policy` is refused rather than resolved,
+/// because resolving it would need the tree to say what `policy` is, and the
+/// answer to "does this include leave the repository" must not depend on what
+/// exists. An absolute path is outside for the same reason a policy about this
+/// repository cannot mean one.
+fn include_prefix(spec: &str) -> Option<PathBuf> {
+    let mut prefix = PathBuf::new();
+    for part in Path::new(spec).components() {
+        match part {
+            Component::Normal(name) => prefix.push(name),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(prefix)
 }
 
 /// The roots one rule searches under, refusing any that leaves the repository.
 fn search_roots(root: &Path, rule: &Rule) -> Result<Vec<PathBuf>> {
-    let include = rule.include();
-    if include.is_empty() {
-        return Ok(vec![root.to_path_buf()]);
-    }
-
     let mut roots: Vec<PathBuf> = Vec::new();
-    for spec in include {
-        let search_root = if spec == "." {
-            root.to_path_buf()
-        } else {
-            root.join(spec)
-        };
-
+    for (spec, prefix) in include_prefixes(rule) {
         // Refused, and refused here rather than survived downstream. A
         // selection reports repository-relative paths, so a root outside the
         // repository has no name to report a hit under: every file found there
@@ -795,7 +814,7 @@ fn search_roots(root: &Path, rule: &Rule) -> Result<Vec<PathBuf>> {
         // empty selection reads as `policy checks passed`. The two ways to
         // write it are an absolute path and one that climbs out with `..`, and
         // neither is a thing a policy about this repository can mean.
-        if !under(root, &search_root) {
+        let Some(prefix) = prefix else {
             return Err(Fatal::new(format!(
                 "rule {:?}: `files.include` names {spec:?}, which is outside {}. An include \
                  names a path inside the repository, relative to its root -- a root outside it \
@@ -803,7 +822,12 @@ fn search_roots(root: &Path, rule: &Rule) -> Result<Vec<PathBuf>> {
                 rule.id,
                 root.display()
             )));
-        }
+        };
+        let search_root = if prefix.as_os_str().is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(prefix)
+        };
 
         // An `include` root that is not there searches nothing, and a rule whose
         // directory was renamed away selects no files and reports `policy
@@ -844,15 +868,6 @@ fn search_roots(root: &Path, rule: &Rule) -> Result<Vec<PathBuf>> {
         roots.push(search_root);
     }
     Ok(roots)
-}
-
-/// Whether `candidate` is `root` itself or something under it, decided
-/// lexically -- the answer must not depend on what exists, so that a root
-/// outside the repository is refused for that reason whether or not it is there.
-fn under(root: &Path, candidate: &Path) -> bool {
-    candidate
-        .strip_prefix(root)
-        .is_ok_and(|rest| !rest.components().any(|part| part == Component::ParentDir))
 }
 
 /// Select from what git tracks: the files, and the paths that could not be read.
@@ -1335,6 +1350,84 @@ mod tests {
         assert!(selects(&root, &scoped, Path::new("src/a.rs")).unwrap());
         assert!(!selects(&root, &scoped, Path::new("docs/a.md")).unwrap());
         assert!(selects(&root, &rule(Files::default()), Path::new("a.md")).unwrap());
+    }
+
+    #[test]
+    fn every_spelling_of_one_include_is_one_scope_to_the_scan_and_the_scope_test() {
+        // The scan and the scope test each read `include` on their own, and
+        // they disagreed on `./policy`: the scan searched the policy directory
+        // and the scope test said no path was under it. The scope test is
+        // what the self-match check at load asks, so the policy file was
+        // searched by a rule that had been told it could not reach it.
+        let root = repository("spelling");
+        write(&root, "policy/rules.toml", "x\n");
+        write(&root, "src/a.rs", "x\n");
+        crate::fixture::git(&root, &["add", "policy/rules.toml", "src/a.rs"]);
+        let policy = Path::new("policy/rules.toml");
+        let source = Path::new("src/a.rs");
+
+        for spec in ["policy", "./policy", "policy/", "./policy/", "./policy/."] {
+            let files = Files {
+                include: Some(vec![spec.to_owned()]),
+                ..Files::default()
+            };
+            let scoped = rule(files.clone());
+            assert!(selects(&root, &scoped, policy).unwrap(), "{spec:?}");
+            assert!(!selects(&root, &scoped, source).unwrap(), "{spec:?}");
+            assert_eq!(
+                search_roots(&root, &scoped).unwrap(),
+                [root.join("policy")],
+                "{spec:?}"
+            );
+            assert_eq!(selected(&root, files), ["policy/rules.toml"], "{spec:?}");
+        }
+
+        // The whole tree has as many spellings, and none of them is the one
+        // string the old comparison knew.
+        for spec in [".", "./", "", "./."] {
+            let files = Files {
+                include: Some(vec![spec.to_owned()]),
+                ..Files::default()
+            };
+            let scoped = rule(files.clone());
+            assert!(selects(&root, &scoped, policy).unwrap(), "{spec:?}");
+            assert!(selects(&root, &scoped, source).unwrap(), "{spec:?}");
+            assert_eq!(
+                search_roots(&root, &scoped).unwrap(),
+                [root.as_path()],
+                "{spec:?}"
+            );
+            assert_eq!(
+                selected(&root, files),
+                ["policy/rules.toml", "src/a.rs"],
+                "{spec:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_include_that_climbs_out_and_back_is_refused_by_the_scan_and_selects_nothing() {
+        // `policy/../policy` names `policy` only if `policy` is a directory
+        // and not a link elsewhere, which is a question about the tree. The
+        // answer to "does this leave the repository" is not allowed to depend
+        // on one, so any `..` is outside. The scope test does not refuse --
+        // refusing is the scan's report to make -- but it must not answer yes
+        // for an entry the scan will not search.
+        let root = repository("climb");
+        write(&root, "policy/rules.toml", "x\n");
+        crate::fixture::git(&root, &["add", "policy/rules.toml"]);
+        for spec in ["policy/../policy", "./../policy", "/etc"] {
+            let scoped = rule(Files {
+                include: Some(vec![spec.to_owned()]),
+                ..Files::default()
+            });
+            let error = search_roots(&root, &scoped).unwrap_err();
+            assert!(error.to_string().contains("outside"), "{spec:?}: {error}");
+            assert!(
+                !selects(&root, &scoped, Path::new("policy/rules.toml")).unwrap(),
+                "{spec:?}"
+            );
+        }
     }
 
     #[test]

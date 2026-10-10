@@ -457,7 +457,11 @@ directions:
 declaration is in is refused at load.** Both halves are required. Most rules
 never select the policy file — an `include` of `["cmd", "internal"]` with a
 `glob` of `["*.go"]` cannot reach `policy/` — and a pattern matching its own
-text under such a rule is harmless, so the scope test comes first.
+text under such a rule is harmless, so the scope test comes first. It reads
+`include` exactly as the scan does, by path component: `policy`, `./policy`
+and `policy/` are one scope, and `.`, `./` and the empty string are each the
+whole tree, so no spelling of an entry reaches the policy file in the scan and
+misses it here.
 
 Three cures, and the refusal names all of them:
 
