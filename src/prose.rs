@@ -126,25 +126,127 @@ fn unwrapped(lines: &[&str]) -> String {
         .join(" ")
 }
 
-/// The fence a line opens or closes, as the three characters it is made of.
-///
-/// Compared by its characters rather than by its whole length so that a longer
-/// closing fence -- which `CommonMark` allows -- still closes the block.
-fn fence_of(trimmed: &str) -> Option<&'static str> {
-    if trimmed.starts_with("```") {
-        return Some("```");
-    }
-    if trimmed.starts_with("~~~") {
-        return Some("~~~");
-    }
-    None
+/// A fenced block that is open: the character it is made of, the length of the
+/// run that opened it, and the column of the list item it opened inside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Fence {
+    mark: char,
+    length: usize,
+    base: usize,
 }
 
+/// The width of a line's indentation and the text after it, a tab counted to
+/// the next stop of four the way `CommonMark` counts it.
+fn indented(line: &str) -> (usize, &str) {
+    let rest = line.trim_start_matches([' ', '\t']);
+    let width = line
+        .chars()
+        .take_while(|character| matches!(character, ' ' | '\t'))
+        .fold(0, |width, character| {
+            if character == '\t' {
+                width + 4 - width % 4
+            } else {
+                width + 1
+            }
+        });
+    (width, rest)
+}
+
+/// The fence a line opens, if it opens one: a run of three or more backticks
+/// or tildes. A backtick run followed by another backtick is a code span, as
+/// in ```` ```a``` ````, and opens nothing.
+fn fence_of(rest: &str, base: usize) -> Option<Fence> {
+    let mark = rest
+        .chars()
+        .next()
+        .filter(|first| matches!(first, '`' | '~'))?;
+    let length = rest.chars().take_while(|found| *found == mark).count();
+    let info = rest.trim_start_matches(mark);
+    (length >= 3 && !(mark == '`' && info.contains('`'))).then_some(Fence { mark, length, base })
+}
+
+/// Whether a line closes an open fence: a run of the same character at least
+/// as long as the one that opened it, and nothing after it but spaces.
+///
+/// Compared by length rather than by the three characters so that a longer
+/// closing fence closes the block and a shorter one -- a three-backtick fence
+/// quoted inside a four-backtick one -- is a line of it. And a closing fence
+/// carries no info string, so ```` ```bash ```` inside an open ```` ```sh ````
+/// block is a line of it rather than its end.
+fn closes(fence: Fence, rest: &str) -> bool {
+    let length = rest
+        .chars()
+        .take_while(|found| *found == fence.mark)
+        .count();
+    length >= fence.length
+        && rest
+            .trim_start_matches(fence.mark)
+            .trim_matches([' ', '\t'])
+            .is_empty()
+}
+
+/// The column a list item's text starts at, if the line opens one: a bullet
+/// (`-`, `*`, `+`) or up to nine digits and `.` or `)`, then a space or the end
+/// of the line. One to four spaces after the marker are part of it; past four,
+/// the text starts one space after the marker and the rest is its indentation.
+fn item_of(width: usize, rest: &str) -> Option<usize> {
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    let marker = match rest.chars().nth(digits)? {
+        '-' | '*' | '+' if digits == 0 => 1,
+        '.' | ')' if (1..=9).contains(&digits) => digits + 1,
+        _ => return None,
+    };
+    let (gap, text) = indented(rest.get(marker..)?);
+    match (gap, text.is_empty()) {
+        (_, true) | (5.., false) => Some(width + marker + 1),
+        (0, false) => None,
+        (_, false) => Some(width + marker + gap),
+    }
+}
+
+/// Whether a line is an ATX heading: one to six `#` and then a space or the end
+/// of the line. A heading is not a paragraph, so code may follow it directly.
+fn heading(rest: &str) -> bool {
+    let hashes = rest.chars().take_while(|found| *found == '#').count();
+    (1..=6).contains(&hashes)
+        && rest
+            .trim_start_matches('#')
+            .chars()
+            .next()
+            .is_none_or(|after| matches!(after, ' ' | '\t'))
+}
+
+/// The paragraphs of a document, by the `CommonMark` rules for where code
+/// starts and ends.
+///
+/// A fence opens on three or more backticks or tildes and closes on the rules
+/// of [`closes`]; one never closed runs to the end of the document, as it does
+/// in `CommonMark`. In Markdown a fence or a closing fence indented four spaces
+/// past its container is not one, and four spaces open an indented code block
+/// only where they do not continue a paragraph and are counted from the text of
+/// the list item the line sits in, not from the margin.
+///
+/// Lists are approximated rather than parsed. A line opening a list item pushes
+/// the column its text starts at, and a line indented less than that column --
+/// after a blank line, or when it opens something itself -- pops it. A line
+/// under paragraph text that opens no fence, item or heading continues the
+/// paragraph however it is indented, which is the lazy continuation
+/// `CommonMark` allows. Not modelled: block quotes, an item's first line
+/// holding a fence or code of its own, the rule that only an ordinal of 1 and
+/// a non-empty item may interrupt a paragraph, and a fence ending because the
+/// list item around it ended -- here it ends only at its closing line.
+///
+/// A plain text file has no indented code and no lists, so there a fence opens
+/// and closes at any indentation and every other line is prose.
 fn of_document(text: &str, markdown: bool) -> Vec<Span> {
     let mut spans = Vec::new();
     let mut run: Vec<&str> = Vec::new();
     let mut start = 0_u64;
-    let mut fence: Option<&str> = None;
+    let mut fence: Option<Fence> = None;
+    // The column each open list item's text starts at, innermost last.
+    let mut items: Vec<usize> = Vec::new();
+    // Whether the last line was paragraph text the next one may continue.
+    let mut paragraph = false;
 
     let mut flush = |pending: &mut Vec<&str>, from: u64| {
         if !pending.is_empty() {
@@ -158,33 +260,58 @@ fn of_document(text: &str, markdown: bool) -> Vec<Span> {
 
     for (index, line) in text.lines().enumerate() {
         let number = index as u64 + 1;
-        let trimmed = line.trim_start();
+        let (width, rest) = indented(line);
         if let Some(open) = fence {
-            if trimmed.starts_with(open) {
+            if closes(open, rest) && (!markdown || width < open.base + 4) {
                 fence = None;
             }
             continue;
         }
-        if let Some(opened) = fence_of(trimmed) {
+        if rest.trim_start().is_empty() {
+            flush(&mut run, start);
+            paragraph = false;
+            continue;
+        }
+        if markdown {
+            let inside = items.last().copied().unwrap_or(0);
+            let opens = width < inside + 4
+                && (fence_of(rest, inside).is_some()
+                    || item_of(width, rest).is_some()
+                    || heading(rest));
+            if opens || !paragraph {
+                while items.last().is_some_and(|column| *column > width) {
+                    items.pop();
+                }
+                let base = items.last().copied().unwrap_or(0);
+                // An indented block is code in Markdown and is a sentence
+                // somebody indented anywhere else. Refusing a shape inside a
+                // four-space block of a plain text file would be refusing the
+                // indentation, not the prose.
+                if width >= base + 4 {
+                    flush(&mut run, start);
+                    paragraph = false;
+                    continue;
+                }
+                if let Some(opened) = fence_of(rest, base) {
+                    flush(&mut run, start);
+                    fence = Some(opened);
+                    paragraph = false;
+                    continue;
+                }
+                if let Some(column) = item_of(width, rest) {
+                    items.push(column);
+                }
+                paragraph = !heading(rest);
+            }
+        } else if let Some(opened) = fence_of(rest, 0) {
             flush(&mut run, start);
             fence = Some(opened);
-            continue;
-        }
-        // An indented block is code in Markdown and is a sentence somebody
-        // indented anywhere else. Refusing a shape inside a four-space block of
-        // a plain text file would be refusing the indentation, not the prose.
-        if markdown && (line.starts_with("    ") || line.starts_with('\t')) {
-            flush(&mut run, start);
-            continue;
-        }
-        if trimmed.is_empty() {
-            flush(&mut run, start);
             continue;
         }
         if run.is_empty() {
             start = number;
         }
-        run.push(trimmed);
+        run.push(rest);
     }
     flush(&mut run, start);
     spans
@@ -364,6 +491,113 @@ mod tests {
         assert_eq!(
             texts(&of("notes.txt", sample)),
             ["Before.", "it could be argued", "After."]
+        );
+    }
+
+    /// Indented code cannot interrupt a paragraph, so a line indented four
+    /// spaces under paragraph text continues it -- lazily or inside the item
+    /// the paragraph belongs to.
+    #[test]
+    fn an_indented_line_under_paragraph_text_continues_it() {
+        assert_eq!(
+            texts(&of("notes.md", "A paragraph\n    banana continues it.\n")),
+            ["A paragraph banana continues it."]
+        );
+        assert_eq!(
+            texts(&of(
+                "notes.md",
+                "- The first item\n    banana continues it.\n"
+            )),
+            ["- The first item banana continues it."]
+        );
+        assert_eq!(
+            texts(&of("notes.md", "1. Install it.\n    - banana nested\n")),
+            ["1. Install it. - banana nested"]
+        );
+    }
+
+    /// Inside a list item four spaces are counted from where the item's text
+    /// starts, not from the margin, so a nested bullet or a second paragraph
+    /// after a blank line is prose and only four more than that is code.
+    #[test]
+    fn a_list_item_counts_its_indentation_from_its_text() {
+        assert_eq!(
+            texts(&of("notes.md", "1. Install it.\n\n    - banana nested\n")),
+            ["1. Install it.", "- banana nested"]
+        );
+        assert_eq!(
+            texts(&of("notes.md", "- An item.\n\n    banana in the item.\n")),
+            ["- An item.", "banana in the item."]
+        );
+        assert_eq!(
+            texts(&of("notes.md", "- An item.\n\n      banana code\n")),
+            ["- An item."]
+        );
+        assert_eq!(
+            texts(&of(
+                "notes.md",
+                "1. Run it:\n\n   ```sh\n   banana code\n   ```\n\n   After it, banana.\n"
+            )),
+            ["1. Run it:", "After it, banana."]
+        );
+    }
+
+    /// A paragraph at the margin closes the list, and indented code after it
+    /// is code again; a heading is no paragraph, so code may follow one.
+    #[test]
+    fn an_indented_block_after_a_closed_list_or_a_heading_is_code() {
+        assert_eq!(
+            texts(&of("notes.md", "- An item.\n\nAfter.\n\n    banana code\n")),
+            ["- An item.", "After."]
+        );
+        assert_eq!(
+            texts(&of("notes.md", "# Title\n    banana code\n")),
+            ["# Title"]
+        );
+        assert_eq!(
+            texts(&of("notes.md", "Text.\n# Title\n    banana code\n")),
+            ["Text. # Title"]
+        );
+    }
+
+    /// A fence closes only on a run of its own character at least as long as
+    /// the one that opened it, so a four-backtick fence can quote a
+    /// three-backtick one.
+    #[test]
+    fn a_shorter_fence_inside_a_longer_one_is_its_content() {
+        assert_eq!(
+            texts(&of(
+                "notes.md",
+                "````markdown\nA fence opens with\n```\n````\n\nAfter, banana.\n"
+            )),
+            ["After, banana."]
+        );
+    }
+
+    /// A closing fence carries no info string, so a ```` ```bash ```` line
+    /// inside an open ```` ```sh ```` block is a line of it rather than its
+    /// end -- in a text file too.
+    #[test]
+    fn a_fence_with_an_info_string_does_not_close_one() {
+        let sample = "```sh\necho one\n```bash\nbanana inside\n```\n\nAfter, banana.\n";
+        assert_eq!(texts(&of("notes.md", sample)), ["After, banana."]);
+        assert_eq!(texts(&of("notes.txt", sample)), ["After, banana."]);
+    }
+
+    /// Four spaces before a closing fence make it a line of the block, and a
+    /// backtick in the info string makes the opener a code span instead.
+    #[test]
+    fn a_fence_opens_and_closes_only_where_commonmark_says() {
+        assert_eq!(
+            texts(&of(
+                "notes.md",
+                "```\n    ```\nbanana code\n```\n\nAfter, banana.\n"
+            )),
+            ["After, banana."]
+        );
+        assert_eq!(
+            texts(&of("notes.md", "```a``` is a span, banana.\n\nAfter.\n")),
+            ["```a``` is a span, banana.", "After."]
         );
     }
 
