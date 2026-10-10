@@ -4580,6 +4580,48 @@ mod tests {
     }
 
     #[test]
+    fn a_require_regexp_that_satisfies_itself_is_refused_however_its_include_is_spelled() {
+        // The scope test read `include` by its spelling. `["policy"]` reached
+        // the check and was refused; `["./policy"]` and `["./"]` answered "not
+        // selected" for every path, so the same rule loaded, and the scan --
+        // which read the same entries as the directories they name -- searched
+        // the policy file, found the requirement in its own declaration, and
+        // printed `policy checks passed`. Every spelling of one directory is
+        // the same scope, so every one is refused the same way.
+        let dir = crate::fixture::scratch("config-include-spelling");
+        std::fs::create_dir_all(dir.join("policy")).unwrap();
+        let path = dir.join("policy/principles.toml");
+        for include in ["policy", "./policy", "policy/", "./policy/", ".", "./", ""] {
+            std::fs::write(
+                &path,
+                format!(
+                    "[rule.every-file]\nrequire_regexp = 'Copyright'\nmessage = \"m\"\n\
+                     [rule.every-file.files]\ninclude = [{include:?}]\n"
+                ),
+            )
+            .unwrap();
+            let error = load(&dir, &path).expect_err(include);
+            let text = error.to_string();
+            assert!(text.contains("every-file"), "{include:?}: {text}");
+            assert!(text.contains("exempt"), "{include:?}: {text}");
+        }
+
+        // And a scope that does not reach the file still loads under every
+        // spelling, so the refusal above is about the scope and not the `./`.
+        for include in ["src", "./src", "src/"] {
+            std::fs::write(
+                &path,
+                format!(
+                    "[rule.every-file]\nrequire_regexp = 'Copyright'\nmessage = \"m\"\n\
+                     [rule.every-file.files]\ninclude = [{include:?}]\n"
+                ),
+            )
+            .unwrap();
+            load(&dir, &path).expect(include);
+        }
+    }
+
+    #[test]
     fn a_requirement_the_policy_file_does_not_declare_still_loads() {
         // The narrowing that fixes it, and the case that must keep working: a
         // requirement whose pattern is nowhere in its own section has nothing
