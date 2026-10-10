@@ -1779,17 +1779,22 @@ impl Rule {
                     )));
                 }
                 // The pattern is read TWICE -- once as a glob, to select the
-                // files, and once as a regex, to read the command's name out of
-                // the path each one has. Only `*`, `**`, `/` and literal text
-                // mean the same thing to both. A `?`, a bracket class or a brace
-                // alternation would select a file the second reading cannot
-                // name, and that file would then vanish out of the discovered
-                // count with nothing said -- which is the failure this rule
-                // exists to refuse, arriving through its own configuration.
+                // files, and once to read the command's name out of the path
+                // each one has. Both readings are globset's: the name is read
+                // with the regex globset compiles the pattern to, after the
+                // same gitignore normalization selection applies, so `**/` is
+                // zero or more directories to both and a pattern with no slash
+                // matches at any depth to both.
                 //
-                // Refused rather than translated. Teaching the regex the rest of
-                // globset's syntax is a second implementation of somebody else's
-                // grammar, free to disagree with it on the next version.
+                // What stays refused is syntax that can put the placeholder
+                // somewhere it is not one path segment of its own. Inside a
+                // brace alternation it is a branch that may go untaken, inside
+                // a bracket class it is one character, and beside a `?` --
+                // which globset reads as one byte -- a name can be cut inside a
+                // character. Telling those placements apart from harmless ones
+                // would mean parsing globset's grammar here, a second
+                // implementation of somebody else's grammar, free to disagree
+                // with it on the next version.
                 let outside_placeholder = pattern.replacen("{}", "", 1);
                 if let Some(unsupported) = ['?', '[', ']']
                     .into_iter()
@@ -1802,11 +1807,24 @@ impl Rule {
                 {
                     return Err(Fatal::new(format!(
                         "rule {:?}: `command_sources` entry {pattern:?} uses {unsupported:?}, \
-                         which this field does not accept. The pattern selects the files as \
-                         a glob AND names the command as a regex, and only `*`, `**`, `/` \
-                         and literal text mean the same thing to both -- anything else \
-                         would select a source whose command could not be named, and drop \
-                         it out of the count in silence.",
+                         which this field does not accept. A `?`, a bracket class or a brace \
+                         alternation can leave the placeholder something other than one \
+                         path segment, and a source selected under it could then not be \
+                         named.",
+                        self.id
+                    )));
+                }
+                // The rest is asked of the reading itself rather than listed
+                // here: a `*` beside the placeholder, a backslash before it, or
+                // a leading `!` or `#` makes selection read the line as
+                // something the pattern does not say, and the name reading
+                // refuses each with the reason. Refused at load, so the scan
+                // never meets a pattern it cannot read a name with.
+                if let Err(why) = crate::selection::command_name_pattern(pattern) {
+                    return Err(Fatal::new(format!(
+                        "rule {:?}: `command_sources` entry {pattern:?} is read one way as \
+                         written and another by selection, which this field does not \
+                         accept: {why}.",
                         self.id
                     )));
                 }

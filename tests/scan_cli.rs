@@ -3065,18 +3065,178 @@ glob = ["*.md"]
 
 #[test]
 fn glob_syntax_the_name_capture_cannot_read_is_refused_at_load() {
-    // The pattern is read twice -- as a glob to select the files, as a regex to
-    // name the command in each path -- and only `*`, `**`, `/` and literal text
-    // mean the same thing to both. A construct only the glob understands selects
-    // a source whose command cannot be named, and that source then vanishes out
-    // of the discovered count with nothing said, which is the failure this rule
-    // exists to refuse arriving through its own configuration.
+    // The pattern is read twice -- to select the files, and to name the command
+    // in each path. A `?`, a bracket class or a brace alternation can leave the
+    // placeholder something other than one path segment, which selects a
+    // source whose command cannot be named; refused at load rather than met
+    // during the scan.
     for pattern in ["cmd/{}/main?.go", "cmd/{}/[ab].go", "cmd/{}/{a,b}.go"] {
         let root = workspace();
         write(
             &root,
             "policy/principles.toml",
             &COMMANDS_POLICY.replace("cmd/{}/*.go", pattern),
+        );
+        write(&root, "README.md", "x\n");
+
+        let output = scan(&root);
+        assert_eq!(code(&output), 2, "{pattern}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("does not accept"),
+            "{pattern}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+/// Two commands under the documented pattern, one with its sources directly in
+/// the command's directory and one with them a directory further down, and a
+/// README naming a verb neither dispatches on.
+fn two_commands_one_level_apart(root: &Path, pattern: &str) {
+    write(
+        root,
+        "policy/principles.toml",
+        &COMMANDS_POLICY.replace("cmd/{}/*.go", pattern),
+    );
+    write(
+        root,
+        "tool/cmd/foo/main.go",
+        &FG_REGISTRY.replace("fg-registry", "foo"),
+    );
+    write(
+        root,
+        "tool/cmd/bar/sub/x.go",
+        &FG_REGISTRY.replace("fg-registry", "bar"),
+    );
+    write(
+        root,
+        "README.md",
+        "```\nfoo credentials\n```\n\n```\nbar credentials\n```\n",
+    );
+}
+
+#[test]
+fn a_doublestar_reads_as_zero_or_more_directories_when_naming_the_command() {
+    // Selection reads `**/` the way gitignore does, as zero or more
+    // directories, and found both sources. The name used to be read by a regex
+    // that spelled `**/` as one directory or more, so `foo`, whose source sits
+    // directly in its own directory, was selected, could not be named, and
+    // dropped out of the count without a word -- and its document's bad verb
+    // passed. Asked of the walk and of git's index both, because the two
+    // enumerate the files differently and must name them the same.
+    for indexed in [false, true] {
+        let root = workspace();
+        two_commands_one_level_apart(&root, "*/cmd/{}/**/*.go");
+        if indexed {
+            repository(&root);
+            add(&root);
+        }
+
+        let output = scan(&root);
+        assert_eq!(code(&output), 1, "indexed {indexed}: {}", stderr(&output));
+        let out = stdout(&output);
+        assert!(
+            out.contains("2 command(s) discovered, 2 judged, 0 skipped"),
+            "indexed {indexed}: {out}"
+        );
+        let text = stderr(&output);
+        assert!(
+            text.contains("foo credentials"),
+            "indexed {indexed}: {text}"
+        );
+        assert!(
+            text.contains("bar credentials"),
+            "indexed {indexed}: {text}"
+        );
+    }
+}
+
+#[test]
+fn a_pattern_with_no_slash_names_a_command_at_any_depth() {
+    // A slashless glob matches at any depth to selection, as a gitignore line
+    // does, so `{}.go` selects `deep/x/foo.go`. The name has to be read out of
+    // that path by the same reading, or the source is found and then lost.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        &COMMANDS_POLICY.replace("cmd/{}/*.go", "{}.go"),
+    );
+    write(
+        &root,
+        "deep/x/foo.go",
+        &FG_REGISTRY.replace("fg-registry", "foo"),
+    );
+    write(&root, "README.md", "```\nfoo credentials\n```\n");
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(
+        out.contains("1 command(s) discovered, 1 judged, 0 skipped"),
+        "{out}"
+    );
+    assert!(
+        stderr(&output).contains("foo credentials"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_selected_source_the_pattern_cannot_name_is_reported() {
+    // The pattern's `*` stands in for the placeholder when files are selected,
+    // and a `*` matches nothing at all, so `cmd/.go` is selected under
+    // `cmd/{}.go` with no name to give it. That is a disagreement between the
+    // two readings of one pattern, and it used to be resolved by dropping the
+    // file from the count in silence -- beside a command that WAS judged, so
+    // the run passed.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        &COMMANDS_POLICY.replace("cmd/{}/*.go", "cmd/{}.go"),
+    );
+    write(&root, "cmd/fg-registry.go", FG_REGISTRY);
+    write(&root, "cmd/.go", FG_REGISTRY);
+    write(
+        &root,
+        "README.md",
+        "Fast-forward with `fg-registry sync`.\n",
+    );
+
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("cmd/.go"), "{text}");
+    assert!(text.contains("cannot read a command's name"), "{text}");
+    // The command that could be named is still judged beside it.
+    assert!(
+        stdout(&output).contains("1 command(s) discovered, 1 judged, 0 skipped"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_pattern_selection_reads_differently_from_its_text_is_refused_at_load() {
+    // The placeholder is widened to `*` for selection. Beside another `*` that
+    // makes a `**` whose meaning depends on where it sits, after a backslash it
+    // makes an escaped literal `*`, and a leading `!` or `#` turns the whole
+    // line into an exclusion or a comment -- each of which selects files the
+    // pattern as written does not describe.
+    for pattern in [
+        "cmd/*{}/*.go",
+        "cmd/{}*/*.go",
+        "cmd/\\{}/*.go",
+        "!cmd/{}/*.go",
+        "#cmd/{}/*.go",
+    ] {
+        let root = workspace();
+        write(
+            &root,
+            "policy/principles.toml",
+            &COMMANDS_POLICY.replace("\"cmd/{}/*.go\"", &format!("'{pattern}'")),
         );
         write(&root, "README.md", "x\n");
 
