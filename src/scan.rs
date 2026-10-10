@@ -13,34 +13,17 @@ use crate::config::{Check, CheckKind, Files, Policy, Reach, Rule};
 use crate::engine::{self, Hit, Query};
 use crate::error::{Fatal, Result};
 use crate::report::{Failure, body_for};
-use crate::selection::{Pinned, Selection, normalize_rel, not_text_paths};
+use crate::selection::{
+    Pinned, Selection, command_glob, command_name_pattern, normalize_rel, not_text_paths,
+};
 
-/// The command name a `command_sources` pattern captures out of a path.
-///
-/// Built from the two halves the placeholder splits the pattern into, so the
-/// name is read from the same string that selected the file. `*` and `**` become
-/// what they mean to a glob rather than what they mean to a regex, and the
-/// placeholder becomes one path segment -- a command's name is a directory or a
-/// file stem, never a path.
-fn command_name_pattern(before: &str, after: &str) -> Option<Regex> {
-    fn as_regex(part: &str) -> String {
-        let mut out = String::new();
-        let mut rest = part;
-        while let Some(index) = rest.find('*') {
-            if let Some(literal) = rest.get(..index) {
-                out.push_str(&regex::escape(literal));
-            }
-            let doubled = rest.get(index..index + 2) == Some("**");
-            out.push_str(if doubled { ".*" } else { "[^/]*" });
-            let Some(remainder) = rest.get(index + if doubled { 2 } else { 1 }..) else {
-                return out;
-            };
-            rest = remainder;
-        }
-        out.push_str(&regex::escape(rest));
-        out
-    }
-    Regex::new(&format!("^{}([^/]+){}$", as_regex(before), as_regex(after))).ok()
+/// What the `command_sources` patterns found: each command's name with its
+/// sources' paths and text, and every selected path no name could be read out
+/// of, already described for a report.
+#[derive(Debug)]
+struct CommandSources {
+    discovered: BTreeMap<String, Vec<(String, String)>>,
+    unnamed: Vec<String>,
 }
 
 /// Explains a baseline entry that no longer matches.
@@ -1023,19 +1006,33 @@ impl<'a> Scan<'a> {
 
     // -- documented commands ------------------------------------------------
 
-    /// The sources of every command one `command_sources` pattern discovers.
+    /// The sources of every command one `command_sources` pattern discovers,
+    /// and the selected paths no command could be named from.
     ///
     /// The pattern selects the files and the `{}` names the command, so the two
     /// halves cannot disagree: a file is a command's source exactly when the
     /// pattern that named the command selected it. A table of names beside a
     /// glob would be two statements of one fact, which is the shape this rule
     /// exists to refuse in documents.
-    fn command_sources(&self, rule: &Rule) -> Result<BTreeMap<String, Vec<(String, String)>>> {
+    ///
+    /// The unnamed paths are returned rather than skipped. The name is read by
+    /// the same engine that selected the file, so one can only arise where the
+    /// placeholder's `*` matched nothing -- and if the two readings ever do
+    /// part, a source that vanished from the count in silence is the failure
+    /// the count is printed to prevent.
+    fn command_sources(&self, rule: &Rule) -> Result<CommandSources> {
         let mut discovered: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+        let mut unnamed: Vec<String> = Vec::new();
         for pattern in rule.command_sources() {
-            let Some((before, after)) = pattern.split_once("{}") else {
+            if !pattern.contains("{}") {
                 continue;
-            };
+            }
+            let name_of = command_name_pattern(pattern).map_err(|why| {
+                Fatal::new(format!(
+                    "rule {:?}: `command_sources` entry {pattern:?}: {why}",
+                    rule.id
+                ))
+            })?;
             // The concrete glob the selection machinery is asked for, with the
             // placeholder widened to one path segment. Selection is reused
             // rather than reimplemented so a source file is found under the
@@ -1043,17 +1040,17 @@ impl<'a> Scan<'a> {
             // unreadable-path accounting as every other file this scan reads.
             let mut probe = Rule::synthetic(&rule.id, Check::empty(CheckKind::Builtin));
             probe.files = Some(Files {
-                glob: vec![format!("{before}*{after}")],
+                glob: vec![command_glob(pattern)],
                 ..Files::default()
             });
-            let name_of = command_name_pattern(before, after);
             for relative in self.select(&probe)? {
                 let Some(name) = name_of
-                    .as_ref()
-                    .and_then(|matcher| matcher.captures(&relative))
+                    .captures(relative.as_bytes())
                     .and_then(|captured| captured.get(1))
-                    .map(|found| found.as_str().to_owned())
+                    .and_then(|found| std::str::from_utf8(found.as_bytes()).ok())
+                    .map(str::to_owned)
                 else {
+                    unnamed.push(format!("{relative} (selected by {pattern:?})"));
                     continue;
                 };
                 let text = match std::fs::read_to_string(self.root.join(&relative)) {
@@ -1067,7 +1064,10 @@ impl<'a> Scan<'a> {
                 discovered.entry(name).or_default().push((relative, text));
             }
         }
-        Ok(discovered)
+        Ok(CommandSources {
+            discovered,
+            unnamed,
+        })
     }
 
     /// Fail every document that tells a reader to run a verb no command offers.
@@ -1080,7 +1080,25 @@ impl<'a> Scan<'a> {
     /// says nothing about the other ninety-six reads exactly like one that read
     /// them all.
     fn command_failures(&self, rule: &Rule) -> Result<Vec<Failure>> {
-        let discovered = self.command_sources(rule)?;
+        let CommandSources {
+            discovered,
+            unnamed,
+        } = self.command_sources(rule)?;
+        // Reported beside whatever the commands that were named go on to find,
+        // not instead of it: one source the pattern could not name says
+        // nothing about the verbs of the ones it could.
+        let mut failures: Vec<Failure> = Vec::new();
+        if !unnamed.is_empty() {
+            failures.push(Failure::new(
+                &rule.id,
+                rule.message(),
+                format!(
+                    "`command_sources` selected these paths and cannot read a command's name \
+                     out of them, so they belong to no command and were not read:\n{}",
+                    unnamed.join("\n")
+                ),
+            ));
+        }
         let mut trusted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut skipped: Vec<String> = Vec::new();
 
@@ -1122,7 +1140,7 @@ impl<'a> Scan<'a> {
             // Not a pass. Zero commands judged is the state a broken pattern, a
             // renamed directory and a grammar that stopped matching all arrive
             // in, and it is indistinguishable from a clean tree without this.
-            return Ok(vec![Failure::new(
+            failures.push(Failure::new(
                 &rule.id,
                 rule.message(),
                 format!(
@@ -1132,7 +1150,8 @@ impl<'a> Scan<'a> {
                      read -- both of which report a clean tree while checking nothing.",
                     discovered.len()
                 ),
-            )]);
+            ));
+            return Ok(failures);
         }
 
         let files = self.select(rule)?;
@@ -1169,14 +1188,15 @@ impl<'a> Scan<'a> {
         }
 
         if hits.is_empty() {
-            return Ok(Vec::new());
+            return Ok(failures);
         }
         let body = if self.redact() {
             crate::report::redacted_body(&hits)
         } else {
             detailed.join("\n")
         };
-        Ok(vec![Failure::new(&rule.id, rule.message(), body)])
+        failures.push(Failure::new(&rule.id, rule.message(), body));
+        Ok(failures)
     }
 
     // -- anchors ------------------------------------------------------------

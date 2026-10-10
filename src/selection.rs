@@ -593,6 +593,138 @@ fn overrides_for(root: &Path, rule: &Rule, not_text: &[String]) -> Result<Overri
         .map_err(|error| Fatal::new(format!("rule {:?}: {error}", rule.id)))
 }
 
+/// The glob a `command_sources` pattern selects its files by: the placeholder
+/// widened to `*`, one path segment of anything.
+pub(crate) fn command_glob(pattern: &str) -> String {
+    pattern.replacen("{}", "*", 1)
+}
+
+/// The command name a `command_sources` pattern captures out of a path it
+/// selected, read by the same glob engine that selected it.
+///
+/// The regex is not translated from the pattern by hand. A hand translation is
+/// a second reader of the glob grammar, and this one was: it spelled `**/` as
+/// one directory or more where the matcher reads zero or more, and anchored a
+/// slashless pattern at the root where the matcher lets it match at any depth,
+/// so a source selected under `*/cmd/{}/**/*.go` or `{}.go` could not be named
+/// and dropped out of the count. Instead the pattern is put through the line
+/// normalization of the gitignore builder that [`overrides_for`] hands it to,
+/// compiled by globset with that builder's options, and the regex globset
+/// produces is the one the name is read with -- with the one literal that
+/// stood for the placeholder swapped for a capture of one segment.
+///
+/// Editing globset's output is sound only where that literal came through as
+/// itself, so it is checked rather than assumed. The same pattern, widened to
+/// `*` as it is for selection, must compile to the identical regex with
+/// `[^/]*` where the capture is. Anything that made the placeholder something
+/// other than a wildcard of its own -- a neighbouring `*` that turns it into
+/// half of a `**`, a backslash that makes it an escaped `*`, a bracket class
+/// around it -- changes that regex and is refused with the reason, not
+/// captured from.
+///
+/// `Err` carries the reason, for a caller to put beside the rule and pattern.
+pub(crate) fn command_name_pattern(
+    pattern: &str,
+) -> std::result::Result<regex::bytes::Regex, String> {
+    // Alphanumeric, so globset renders it as the same run of letters in its
+    // regex, and absent from the pattern, so it cannot be confused with text
+    // the author wrote. No two candidates can start at the same place in the
+    // pattern, so one more candidate than the pattern has characters always
+    // leaves one absent.
+    let sentinel = (0..=pattern.len())
+        .map(|attempt| format!("uphold{attempt}command"))
+        .find(|candidate| !pattern.contains(candidate.as_str()))
+        .ok_or_else(|| "no placeholder spelling is absent from the pattern".to_owned())?;
+    let selected = selection_regex(&command_glob(pattern))?;
+    let named = selection_regex(&pattern.replacen("{}", &sentinel, 1))?;
+    // Counted with overlaps, so an occurrence that began in the text before
+    // the placeholder cannot be the one replaced.
+    let occurrences = (0..named.len())
+        .filter(|&start| {
+            named
+                .get(start..)
+                .is_some_and(|rest| rest.starts_with(&sentinel))
+        })
+        .count();
+    if occurrences != 1 || named.replacen(&sentinel, "[^/]*", 1) != selected {
+        return Err(
+            "the placeholder, widened to `*` to select the files, does not read as a \
+             wildcard of its own: beside another `*` it becomes half of a `**`, after a \
+             backslash an escaped `*`, and inside brackets one character of a class"
+                .to_owned(),
+        );
+    }
+    // `regex::bytes`, because globset's regex opens with `(?-u)`, which the
+    // `str` engine refuses. The path it is asked about is a `&str`'s bytes.
+    let matcher = regex::bytes::Regex::new(&named.replacen(&sentinel, "([^/]+)", 1))
+        .map_err(|error| error.to_string())?;
+    if matcher.captures_len() != 2 {
+        return Err("the placeholder does not capture exactly one path segment".to_owned());
+    }
+    Ok(matcher)
+}
+
+/// The regex globset compiles one selection glob to, as [`overrides_for`]'s
+/// builder would.
+///
+/// The normalization is `GitignoreBuilder::add_line`'s, in the `ignore` version
+/// Cargo.lock pins: trailing whitespace is dropped unless escaped; a leading
+/// `\!` or `\#` loses its backslash; a leading `!` makes the line an exclusion
+/// and a leading `#` a comment, neither of which selects a file by this
+/// pattern; a leading `/` anchors at the root and is removed; a trailing `/`
+/// is removed (it also restricts the line to directories, which selects no
+/// file, so the name is never asked of one); a line with no `/` left is
+/// prefixed with `**/` unless it already starts that way; and a trailing `/**`
+/// gains `/*`. The glob is then built with a literal separator, backslash
+/// escapes, case-sensitively, and with an unclosed class refused, as
+/// `OverrideBuilder` sets it. The unit tests ask the override matcher itself
+/// about the same paths, so a version of `ignore` that changes any of this
+/// fails there rather than here.
+fn selection_regex(glob: &str) -> std::result::Result<String, String> {
+    const EXCLUDED: &str = "selection reads a line starting with `!` as an exclusion and one \
+         starting with `#` as a comment, so this pattern would select every file it does not \
+         describe";
+    if glob.starts_with('#') {
+        return Err(EXCLUDED.to_owned());
+    }
+    let mut line = if glob.ends_with("\\ ") {
+        glob
+    } else {
+        glob.trim_end()
+    };
+    let mut anchored = false;
+    if let Some(escaped) = line
+        .strip_prefix('\\')
+        .filter(|rest| rest.starts_with(['!', '#']))
+    {
+        line = escaped;
+    } else if line.starts_with('!') {
+        return Err(EXCLUDED.to_owned());
+    } else if let Some(rooted) = line.strip_prefix('/') {
+        line = rooted;
+        anchored = true;
+    }
+    if let Some(directory) = line.strip_suffix('/') {
+        line = directory.strip_suffix('\\').unwrap_or(directory);
+    }
+    let mut actual = if anchored || line.contains('/') || line.starts_with("**/") || line == "**" {
+        line.to_owned()
+    } else {
+        format!("**/{line}")
+    };
+    if actual.ends_with("/**") {
+        actual.push_str("/*");
+    }
+    globset::GlobBuilder::new(&actual)
+        .literal_separator(true)
+        .case_insensitive(false)
+        .backslash_escape(true)
+        .allow_unclosed_class(false)
+        .build()
+        .map(|built| built.regex().to_owned())
+        .map_err(|error| error.to_string())
+}
+
 /// Whether one repository-relative path is a file this rule selects.
 ///
 /// The same two tests [`from_index`] applies to every tracked path -- under an
@@ -1449,5 +1581,133 @@ mod tests {
         crate::fixture::git(&root, &["add", "embedded"]);
         let pinned_content = Pinned::read(&root).unwrap().unwrap();
         assert_eq!(pinned_content.tracked, ["embedded/inside.txt"]);
+    }
+
+    // -- command names ------------------------------------------------------
+
+    /// The name `pattern` reads out of `path`, or `None` where it reads none.
+    fn named(pattern: &str, path: &str) -> Option<String> {
+        command_name_pattern(pattern)
+            .unwrap()
+            .captures(path.as_bytes())?
+            .get(1)
+            .map(|found| String::from_utf8(found.as_bytes().to_vec()).unwrap())
+    }
+
+    #[test]
+    fn a_doublestar_between_slashes_is_zero_directories_as_well_as_several() {
+        let pattern = "*/cmd/{}/**/*.go";
+        assert_eq!(
+            named(pattern, "tool/cmd/foo/main.go").as_deref(),
+            Some("foo")
+        );
+        assert_eq!(
+            named(pattern, "tool/cmd/bar/sub/x.go").as_deref(),
+            Some("bar")
+        );
+        assert_eq!(
+            named(pattern, "tool/cmd/baz/a/b/c.go").as_deref(),
+            Some("baz")
+        );
+    }
+
+    #[test]
+    fn a_pattern_without_a_slash_names_a_command_at_any_depth() {
+        assert_eq!(named("{}.go", "foo.go").as_deref(), Some("foo"));
+        assert_eq!(named("{}.go", "deep/x/foo.go").as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn a_leading_doublestar_is_zero_directories_too() {
+        assert_eq!(
+            named("**/cmd/{}/*.go", "cmd/foo/main.go").as_deref(),
+            Some("foo")
+        );
+        assert_eq!(
+            named("**/cmd/{}/*.go", "a/b/cmd/foo/main.go").as_deref(),
+            Some("foo")
+        );
+    }
+
+    #[test]
+    fn a_leading_slash_anchors_at_the_root_and_is_not_part_of_the_path() {
+        assert_eq!(named("/{}.go", "foo.go").as_deref(), Some("foo"));
+        assert_eq!(named("/{}.go", "deep/foo.go"), None);
+    }
+
+    #[test]
+    fn the_placeholder_captures_exactly_one_segment() {
+        assert_eq!(
+            named("cmd/{}/*.go", "cmd/foo/main.go").as_deref(),
+            Some("foo")
+        );
+        assert_eq!(named("cmd/{}/*.go", "cmd/foo/bar/main.go"), None);
+        assert_eq!(named("cmd/{}.go", "cmd/.go"), None);
+    }
+
+    #[test]
+    fn a_trailing_doublestar_is_everything_inside_the_directory() {
+        assert_eq!(
+            named("cmd/{}/**", "cmd/foo/main.go").as_deref(),
+            Some("foo")
+        );
+        assert_eq!(named("cmd/{}/**", "cmd/foo/a/b.rs").as_deref(), Some("foo"));
+    }
+
+    /// The name reading and selection, asked about the same paths, agree.
+    ///
+    /// The pattern widened to `*` is handed to the override matcher selection
+    /// builds, and every path it selects must be one the name reading names --
+    /// and every path the name reading names must be one it selects. This is
+    /// the claim the whole function exists to make, checked against the engine
+    /// that makes the other half of it rather than against a second copy. The
+    /// one known exception, a `*` that matched nothing and so left no name, is
+    /// kept out of the paths here and reported by the scan instead.
+    #[test]
+    fn every_path_selection_takes_is_a_path_the_name_reading_names() {
+        let patterns = [
+            "*/cmd/{}/**/*.go",
+            "{}.go",
+            "/{}.go",
+            "cmd/{}/*.go",
+            "**/cmd/{}/*.go",
+            "cmd/{}/**",
+            "src/**/{}/main.rs",
+            "scripts/{}.rs",
+            "a\\*b/{}.go",
+            "\\!x/{}.go",
+            "{}.go  ",
+        ];
+        let paths = [
+            "foo.go",
+            "deep/x/foo.go",
+            "cmd/foo/main.go",
+            "cmd/foo/bar/main.go",
+            "a/b/cmd/foo/main.go",
+            "tool/cmd/foo/main.go",
+            "tool/cmd/bar/sub/x.go",
+            "src/foo/main.rs",
+            "src/a/b/foo/main.rs",
+            "scripts/foo.rs",
+            "scripts/sub/foo.rs",
+            "a*b/foo.go",
+            "axb/foo.go",
+            "!x/foo.go",
+            "!x/sub/foo.go",
+        ];
+        for pattern in patterns {
+            let mut builder = OverrideBuilder::new("/repo");
+            builder.add(&pattern.replacen("{}", "*", 1)).unwrap();
+            let overrides = builder.build().unwrap();
+            for path in paths {
+                let selected = overrides.matched(path, false).is_whitelist();
+                let name = named(pattern, path);
+                assert_eq!(
+                    selected,
+                    name.is_some(),
+                    "{pattern:?} on {path:?}: selected {selected}, named {name:?}"
+                );
+            }
+        }
     }
 }
