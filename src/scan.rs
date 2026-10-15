@@ -1917,9 +1917,12 @@ fn below_floor_failure(rule: &Rule, selected: usize) -> Option<Failure> {
 /// not code, and a line-by-line count read it as code -- closing a test module
 /// early (reporting test hits) or never closing it (hiding every hit after it).
 ///
-/// An attribute counts when its `cfg` predicate is true under `test`: `test`
-/// alone or as an operand of `all` or `any`, never beneath `not`, and never a
-/// `key = "value"` pair such as `feature = "test"`. An inner `#![cfg(test)]`
+/// An attribute counts when its `cfg` predicate implies `test`, so the item
+/// cannot be compiled outside tests: `test` alone, an `all` with an operand
+/// that implies it, or an `any` whose every operand does. `any(unix, test)` is
+/// compiled into a production build on unix, so it does not count. Neither
+/// does anything under `not`, nor a `key = "value"` pair such as
+/// `feature = "test"`; when unsure, the hit is reported. An inner `#![cfg(test)]`
 /// marks the item that holds it, a whole file when it opens the file.
 ///
 /// A file that does not parse excludes nothing. Error recovery can stretch or
@@ -2002,7 +2005,7 @@ fn attribute_is_cfg_test(node: tree_sitter::Node<'_>, text: &str) -> bool {
     let Some(arguments) = attribute.child_by_field_name("arguments") else {
         return false;
     };
-    is_cfg && predicate_holds_under_test(&token_tree_operands(arguments), text)
+    is_cfg && predicate_implies_test(&token_tree_operands(arguments), text)
 }
 
 /// The tokens between a token tree's brackets, split at its top-level commas.
@@ -2024,11 +2027,11 @@ fn token_tree_operands(tree: tree_sitter::Node<'_>) -> Vec<Vec<tree_sitter::Node
     operands
 }
 
-/// A `cfg` predicate is true under `test` when it is `test`, or an `all` or
-/// `any` with an operand that is. `not` is never counted: code behind
-/// `not(test)` is the code that runs outside tests, and hiding it hides real
-/// hits. A `key = "value"` pair is a feature or target, not the harness.
-fn predicate_holds_under_test(operands: &[Vec<tree_sitter::Node<'_>>], text: &str) -> bool {
+/// A `cfg` predicate implies `test` when it is `test`, an `all` with an operand
+/// that does, or an `any` whose every operand does. `not` never does: code
+/// behind `not(test)` is the code that runs outside tests, and hiding it hides
+/// real hits. A `key = "value"` pair is a feature or target, not the harness.
+fn predicate_implies_test(operands: &[Vec<tree_sitter::Node<'_>>], text: &str) -> bool {
     let [single] = operands else {
         return false;
     };
@@ -2038,12 +2041,14 @@ fn predicate_holds_under_test(operands: &[Vec<tree_sitter::Node<'_>>], text: &st
         [ident, args] if ident.kind() == "identifier" && args.kind() == "token_tree" => {
             let inner = token_tree_operands(*args);
             let holds = |operand: &Vec<tree_sitter::Node<'_>>| {
-                predicate_holds_under_test(std::slice::from_ref(operand), text)
+                predicate_implies_test(std::slice::from_ref(operand), text)
             };
             match name(ident) {
-                // `all(test, unix)` is a test-only item on the platform the
-                // tests run on, so a sibling predicate does not undo `test`.
-                "all" | "any" => inner.iter().any(holds),
+                // `all` is as narrow as its narrowest operand; `any` is as wide
+                // as its widest, so one operand outside tests lets it compile
+                // outside tests.
+                "all" => inner.iter().any(holds),
+                "any" => !inner.is_empty() && inner.iter().all(holds),
                 _ => false,
             }
         }
