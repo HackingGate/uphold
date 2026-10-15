@@ -3985,7 +3985,7 @@ fn gh_with_aliases(aliases: &str) -> PathBuf {
         "gh",
         "#!/bin/sh\n\
          if [ \"$1 $2\" = \"alias list\" ]; then cat \"$(dirname \"$0\")/../aliases.yml\"; exit 0; fi\n\
-         echo \"gh ran: $*\"\n",
+         printf 'gh ran: %s\\n' \"$*\"\n",
     );
     root
 }
