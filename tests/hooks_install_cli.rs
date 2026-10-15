@@ -520,6 +520,38 @@ fn check_reports_the_directory_and_writes_nothing() {
 }
 
 #[test]
+#[cfg(unix)]
+fn check_refuses_hooks_git_ignores_without_changing_their_permissions() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = repository();
+    let stub = stub_runner("prek");
+    let installed = install(&root, &[], &stub);
+    assert_eq!(code(&installed), 0, "{}", text(&installed));
+
+    for stage in ["pre-commit", "commit-msg", "pre-merge-commit", "pre-push"] {
+        let hook = root.join(".githooks").join(stage);
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let checked = install(&root, &["--check"], &stub);
+        assert_eq!(code(&checked), 1, "{}", text(&checked));
+        assert!(
+            text(&checked).contains(&format!("{stage}: not executable, so git ignores it")),
+            "{}",
+            text(&checked)
+        );
+        assert_eq!(
+            std::fs::metadata(&hook).unwrap().permissions().mode() & 0o111,
+            0
+        );
+
+        let repaired = install(&root, &[], &stub);
+        assert_eq!(code(&repaired), 0, "{}", text(&repaired));
+        let checked = install(&root, &["--check"], &stub);
+        assert_eq!(code(&checked), 0, "{}", text(&checked));
+    }
+}
+
+#[test]
 fn adopt_and_check_together_are_a_usage_error() {
     let root = repository();
     let stub = stub_runner("prek");

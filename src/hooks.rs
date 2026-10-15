@@ -751,6 +751,18 @@ fn check(root: &Path, runner: &str, directory: &str, hooks_path: Option<&str>) -
             println!("  {directory}/{stage}: absent");
             continue;
         };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let metadata = std::fs::metadata(&path).map_err(|error| Fatal::at(&path, error))?;
+            if metadata.permissions().mode() & 0o111 == 0 {
+                wrong += 1;
+                println!(
+                    "  {directory}/{stage}: not executable, so git ignores it. \
+                     Rerunning `hooks --install` restores its executable permissions"
+                );
+            }
+        }
         let theirs = effective_lines(&current);
         let ours = effective_lines(&written(runner, directory, stage));
         let marked = current.contains(MARKER);
@@ -789,7 +801,7 @@ fn check(root: &Path, runner: &str, directory: &str, hooks_path: Option<&str>) -
     }
     match hooks_path {
         Some(path) if path == directory => {
-            println!("  core.hooksPath is {directory}, so these are the hooks git runs");
+            println!("  core.hooksPath is {directory}, so git looks for hooks here");
         }
         Some(other) => {
             wrong += 1;
