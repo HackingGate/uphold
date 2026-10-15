@@ -92,6 +92,7 @@ fn shim_with(root: &Path, args: &[&str], variables: &[(&str, &str)]) -> Output {
         .env_remove("UPHOLD_ALLOW")
         .env_remove("UPHOLD_SHIM_INNER")
         .env_remove("GH_REPO")
+        .env_remove("GITLAB_GROUP")
         .envs(variables.iter().copied())
         .output()
         .unwrap()
@@ -7797,4 +7798,102 @@ fn a_verbs_entry_can_hand_the_rules_the_command_line_for_that_verb_alone() {
     let other = shim(&root, &["faux", "pr", "create", "-b", "release create"]);
     assert_eq!(code(&other), 0, "{}", stderr(&other));
     assert!(stdout(&other).contains("faux ran:"), "{}", stdout(&other));
+}
+
+#[test]
+fn glab_work_items_judge_titles_descriptions_files_and_attachment_names() {
+    let root = own_glab_workspace();
+    let hidden = "a\u{200B}b";
+    let attachment = format!("./{hidden}.png");
+    let body_file = root.join("description.md");
+    std::fs::write(&body_file, hidden).unwrap();
+    for verb in ["create", "update"] {
+        let mut command = vec!["glab", "work-items", verb];
+        if verb == "update" {
+            command.push("42");
+        }
+        for flag in ["-t", "--title", "-d", "--description"] {
+            let mut args = command.clone();
+            args.extend([flag, hidden]);
+            refuses_each(&root, &[args], "glab ran:");
+        }
+        for pair in [
+            ("--description-file", body_file.to_str().unwrap()),
+            ("--attach", attachment.as_str()),
+        ] {
+            let mut args = command.clone();
+            args.extend(<[&str; 2]>::from(pair));
+            refuses_each(&root, &[args], "glab ran:");
+        }
+        let mut title = command.clone();
+        title.extend(["--title", LOOKALIKE]);
+        let output = shim(&root, &title);
+        assert_eq!(code(&output), 1, "{}", stderr(&output));
+        assert!(stderr(&output).contains("SUBJECT LINE"));
+        assert!(!stdout(&output).contains("glab ran:"));
+
+        let mut args = command.clone();
+        args.extend(["--description-file", "-"]);
+        let output = shim_fed(&root, &args, hidden);
+        assert_eq!(code(&output), 1, "{}", stderr(&output));
+        assert!(!stdout(&output).contains("glab ran:"));
+
+        let mut args = command;
+        args.extend([
+            "-tClean title",
+            "--description=Clean body",
+            "--attach",
+            "./plain.png",
+        ]);
+        if verb == "create" {
+            args.extend(["-Tissue", "--output=json"]);
+        } else {
+            // This is a milestone, not the table's parent-level message flag.
+            args.extend(["-m", hidden]);
+        }
+        let output = shim(&root, &args);
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert!(stdout(&output).contains("glab ran:"));
+        assert!(!stderr(&output).contains("editor"));
+    }
+}
+
+#[test]
+fn glab_work_items_refuse_unread_editor_text_and_group_targets() {
+    let root = own_glab_workspace();
+    for verb in ["create", "update"] {
+        for flag in ["-d", "--description"] {
+            unreadable_each(
+                &root,
+                &[vec!["glab", "work-items", verb, flag, "-"]],
+                "pass the text with `--description-file` instead",
+                "glab ran:",
+            );
+        }
+        for flag in ["-gteam", "--group=team"] {
+            unreadable_each(
+                &root,
+                &[vec!["glab", "work-items", verb, flag, "-tClean"]],
+                "targets a group",
+                "glab ran:",
+            );
+        }
+    }
+}
+
+#[test]
+fn glab_work_items_group_environment_requires_a_project_override() {
+    let root = own_glab_workspace();
+    for verb in ["create", "update"] {
+        let command = ["glab", "work-items", verb, "-tClean"];
+        let output = shim_with(&root, &command, &[("GITLAB_GROUP", "team")]);
+        assert_eq!(code(&output), 2, "{}", stderr(&output));
+        assert!(stderr(&output).contains("`GITLAB_GROUP` targets a group"));
+        assert!(!stdout(&output).contains("glab ran:"));
+        let mut args = command.to_vec();
+        args.extend(["--repo", "team/project"]);
+        let output = shim_with(&root, &args, &[("GITLAB_GROUP", "team")]);
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert!(stdout(&output).contains("glab ran:"));
+    }
 }

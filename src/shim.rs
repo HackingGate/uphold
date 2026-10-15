@@ -2303,6 +2303,28 @@ impl Shim {
                 index += 1;
                 next
             });
+            // Work items can name a group instead of a project. The existing
+            // destination resolver asks about repositories, so it cannot prove
+            // the visibility of that target. A description of `-` opens an
+            // editor even when a body flag was given, outside the table's
+            // normal editor condition.
+            if self.command == "glab" && grammar.verb.starts_with("work-items:") {
+                if matches!(flag.as_str(), "-g" | "--group") && !value.is_empty() {
+                    return Err(Fatal::new(format!(
+                        "{}: `{flag}` targets a group, whose visibility this shim cannot \
+                         establish. Nothing was published; use a project target instead",
+                        on()
+                    )));
+                }
+                if matches!(flag.as_str(), "-d" | "--description") && value == "-" {
+                    return Err(Fatal::new(format!(
+                        "{}: `{flag} -` opens an editor whose text this shim cannot read on \
+                         this verb. Nothing was published; pass the text with \
+                         `--description-file` instead",
+                        on()
+                    )));
+                }
+            }
             given.push((flag.clone(), value.clone()));
             if ATTACH_FLAGS.contains(&flag.as_str()) {
                 collected
@@ -2320,6 +2342,24 @@ impl Shim {
                 });
             }
             self.read_option(&mut collected, &flag, value, paired)?;
+        }
+        // GroupOverride uses GITLAB_GROUP when no nonempty --repo was
+        // supplied, even inside a repository. Do not mistake that group for
+        // the current project's destination.
+        if self.command == "glab"
+            && grammar.verb.starts_with("work-items:")
+            && std::env::var_os("GITLAB_GROUP").is_some_and(|group| !group.is_empty())
+            && given
+                .iter()
+                .rev()
+                .find(|(flag, _)| matches!(flag.as_str(), "-R" | "--repo"))
+                .is_none_or(|(_, value)| value.is_empty())
+        {
+            return Err(Fatal::new(format!(
+                "{}: `GITLAB_GROUP` targets a group, whose visibility this shim cannot \
+                 establish. Nothing was published; use a project target with `--repo` instead",
+                on()
+            )));
         }
         if let Some(body) = grammar.stdin_body {
             self.stdin_body(&mut collected, &given, body, &on)?;
@@ -4384,6 +4424,52 @@ const FORGE_GRAMMAR: &[Grammar] = &[
         aliases: &["comment"],
         ..grammar("glab", "issue:note", &[], &["--attach", "-m", "--message"])
     },
+    grammar(
+        "glab",
+        "work-items:create",
+        &["-c", "--confidential"],
+        &[
+            "--attach",
+            "-d",
+            "--description",
+            "--description-file",
+            "-g",
+            "--group",
+            "--jq",
+            "-F",
+            "--output",
+            "-t",
+            "--title",
+            "-T",
+            "--type",
+        ],
+    ),
+    grammar(
+        "glab",
+        "work-items:update",
+        &[],
+        &[
+            "-a",
+            "--assignee",
+            "--attach",
+            "-d",
+            "--description",
+            "--description-file",
+            "--duedate",
+            "-g",
+            "--group",
+            "--jq",
+            "-m",
+            "--milestone",
+            "-F",
+            "--output",
+            "--startdate",
+            "-t",
+            "--title",
+            "-w",
+            "--weight",
+        ],
+    ),
     Grammar {
         repo: false,
         ..grammar(
@@ -8697,7 +8783,10 @@ mod tests {
             entries.sort();
             for page in entries {
                 let stem = page.file_stem().unwrap().to_string_lossy().into_owned();
-                let verb = stem.replace('-', ":");
+                let verb = stem.strip_prefix("work-items-").map_or_else(
+                    || stem.replace('-', ":"),
+                    |noun| format!("work-items:{noun}"),
+                );
                 let grammar = Grammar::of(command, &verb);
                 assert!(
                     grammar.is_some(),

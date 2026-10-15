@@ -2084,8 +2084,9 @@ option grammar and reads each option word as the command's own parser does:
 `gh pr create|edit|comment|review|merge|close|reopen`, `gh issue
 create|edit|comment|close|reopen`, `gh release create|edit|upload`, `gh gist create`
 and `gh api` from `gh` 2.102, and `glab mr create|update|note|merge`, `glab
-issue create|update|note` and `glab api` from `glab` 1.123.0, with each `glab mr
-note` subcommand, and each `glab mr note draft` subcommand below it, read with
+issue create|update|note`, `glab work-items create|update` and `glab api` from
+`glab` 1.123.0, with each `glab mr note` subcommand, and each `glab mr note
+draft` subcommand below it, read with
 its own. So `-st X` is `-s` and then `-t
 X`, and `-iF k=v` is `-i` and `-F k=v`. The value follows pflag, which both
 parse with, at whichever letter takes it: `=` plus at least one character gives
@@ -2095,6 +2096,14 @@ the letter is the value whole (`-bText`, `-ftitle=X`; `-b=` alone is the value
 name is read with the arity the command gives it, so `-Bmain` and `-lwip` are
 one option each, `gh pr merge -A -b -t X` is an author email `-b` and the
 subject `X`, and `gh issue create -l -b -t X` is a label `-b` and the title `X`.
+
+`glab work-items create|update` reads titles, descriptions, description files
+(including stdin), and attachment names with the same checks. Its `-m` on
+update names a milestone. A nonempty `--group`, or `GITLAB_GROUP` without a
+nonempty `--repo` override, is exit `2`: the repository target resolver cannot
+establish a group's visibility. Its
+`--description -` editor form is also exit `2`; use `--description-file`
+instead so the text can be read before publication.
 
 A letter or an option the verb's grammar does not have is exit `2`, naming it:
 a letter nothing here knows cannot be told from a value, so where the options
