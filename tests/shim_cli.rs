@@ -789,9 +789,14 @@ fn own_gh_table() -> toml::Table {
 
 /// The table `uphold init` writes, read out of a tree it was run in.
 fn init_gh_table() -> toml::Table {
-    let root = support::scratch("shim-init");
-    std::fs::create_dir_all(&root).unwrap();
-    support::git(&root, &["init", "-q", "-b", "main"]);
+    let root = initialized_workspace();
+    gh_table(&std::fs::read_to_string(root.join("policy/principles.toml")).unwrap())
+}
+
+/// A real consumer policy, with the same command stubs as the other fixtures.
+fn initialized_workspace() -> PathBuf {
+    let root = workspace("");
+    std::fs::remove_file(root.join("policy/principles.toml")).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
     command
         .args(["init", "--owner", "example-owner", "--visibility", "public"])
@@ -799,7 +804,39 @@ fn init_gh_table() -> toml::Table {
     support::without_git_environment(&mut command);
     let output = command.output().unwrap();
     assert_eq!(code(&output), 0, "{}", stderr(&output));
-    gh_table(&std::fs::read_to_string(root.join("policy/principles.toml")).unwrap())
+    root
+}
+
+#[test]
+fn an_initialized_policy_keeps_the_body_editor_checkpoint_after_a_title() {
+    let root = initialized_workspace();
+    support::git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example-owner/widget.git",
+        ],
+    );
+    forge_stub(&root);
+    for title in [vec!["-t", "plain"], vec!["--title=plain"]] {
+        let mut args = vec!["gh", "issue", "create"];
+        args.extend(title);
+        let output = shim_with(&root, &args, &[("GH_EDITOR", "")]);
+        assert_eq!(code(&output), 0, "{args:?}: {}", stderr(&output));
+        assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+        assert!(
+            stdout(&output).contains("shim --as-editor 'gh'"),
+            "{args:?}: {}",
+            stdout(&output)
+        );
+        assert!(
+            stderr(&output).contains("the editor is the checkpoint"),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+    }
 }
 
 #[test]
@@ -1146,6 +1183,52 @@ fn with_no_policy_in_reach_a_private_name_bound_for_a_public_repository_is_refus
     assert_eq!(code(&private), 0, "{}", stderr(&private));
     assert!(stdout(&private).contains("gh ran:"), "{}", stdout(&private));
     assert_eq!(stderr(&private), "", "{}", stderr(&private));
+}
+
+#[test]
+fn with_no_policy_a_gist_description_cannot_publish_a_declared_private_name() {
+    let root = workspace(POLICY);
+    let config = user_config(&root, Some("acme-private\n"));
+    let (elsewhere, path) = gh_without_policy(&root);
+    // Keep a public destination resolvable without putting a policy in reach.
+    support::git(&elsewhere, &["init", "-q", "-b", "main"]);
+    support::git(
+        &elsewhere,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example-user/public-widget.git",
+        ],
+    );
+    std::fs::write(elsewhere.join("f.txt"), "ordinary content").unwrap();
+    for flag in ["-d", "--desc"] {
+        let output = Command::new(root.join("front/gh"))
+            .args([
+                "gist",
+                "create",
+                "--public",
+                flag,
+                "refs acme-private/thing",
+                "f.txt",
+            ])
+            .current_dir(&elsewhere)
+            .env("PATH", &path)
+            .env("XDG_CONFIG_HOME", &config)
+            .env_remove("UPHOLD_ALLOW")
+            .env_remove("UPHOLD_SHIM_INNER")
+            .env_remove("GH_EDITOR")
+            .env_remove("GH_REPO")
+            .output()
+            .unwrap();
+        assert_eq!(code(&output), 1, "{flag}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+        assert!(
+            stderr(&output).contains("acme-private"),
+            "{}",
+            stderr(&output)
+        );
+    }
 }
 
 /// The other half of the contract: an invocation that publishes nothing runs
@@ -2508,9 +2591,8 @@ fn an_empty_attached_value_is_the_sign_and_never_the_next_word() {
 
 #[test]
 fn a_title_is_not_narrowed_against_the_stored_body_under_uphold_inits_table() {
-    // `uphold init`'s table reads `--title` as text. The stored body of #5
-    // holding the same line is no reason to let the title past, and a title
-    // alone asks the forge nothing.
+    // The stored body of #5 holding the same line is no reason to let a
+    // title past, and a title alone asks the forge nothing.
     let mut table = init_gh_table();
     table.insert("scope".into(), "always".into());
     table.remove("target");
@@ -2594,7 +2676,11 @@ fn an_option_the_table_does_not_name_takes_the_value_gh_gives_it() {
 /// This repository's own `gh` table, scoped `always` because there is no
 /// forge to ask about visibility, under the unicode rule, with the stub forge.
 fn own_gh_workspace() -> PathBuf {
-    let mut table = own_gh_table();
+    gh_table_workspace(own_gh_table())
+}
+
+/// Drive a shipped table under a local unicode guard, without a forge lookup.
+fn gh_table_workspace(mut table: toml::Table) -> PathBuf {
     table.insert("scope".into(), "always".into());
     table.remove("target");
     let mut policy: toml::Table = r#"
@@ -2620,21 +2706,30 @@ hooks = ["commit-msg"]
 
 #[test]
 fn draft_is_a_switch_on_create_and_the_text_after_it_is_read() {
-    // `-d` is `--draft` on `gh pr create` and `gh release create`, a switch.
-    // This repository's own table read it as a body, so the flag after it
-    // was taken for its value and went unread.
-    let root = own_gh_workspace();
-    let zw = "x\u{200B}y";
-    for form in [
-        vec!["gh", "pr", "create", "-d", "-t", LOOKALIKE, "-b", "ok"],
-        vec!["gh", "release", "create", "v1", "-d", "-n", zw],
-        // `gist create`'s own description flag is still read.
-        vec!["gh", "gist", "create", "f.txt", "-d", zw],
-        vec!["gh", "gist", "create", "f.txt", "--desc", zw],
-    ] {
-        let output = shim(&root, &form);
-        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
-        assert!(!stdout(&output).contains("gh ran:"), "{form:?}");
+    // Both consumer and repository tables must read the body after a draft
+    // switch, while the same short flag carries text on gist create.
+    for (source, table) in [("repository", own_gh_table()), ("init", init_gh_table())] {
+        let root = gh_table_workspace(table);
+        std::fs::write(root.join("f.txt"), "ordinary content").unwrap();
+        let zw = "x\u{200B}y";
+        for form in [
+            vec!["gh", "pr", "create", "-d", "-t", LOOKALIKE, "-b", "ok"],
+            vec!["gh", "pr", "create", "-d", "-b", zw],
+            vec!["gh", "pr", "create", "--draft", "-b", zw],
+            vec!["gh", "release", "create", "v1.0.0", "-d", "-n", zw],
+            vec!["gh", "release", "create", "v1.0.0", "--draft", "-n", zw],
+            vec!["gh", "gist", "create", "f.txt", "-d", zw],
+            vec!["gh", "gist", "create", "f.txt", "--desc", zw],
+        ] {
+            let output = shim(&root, &form);
+            assert_eq!(code(&output), 1, "{source} {form:?}: {}", stderr(&output));
+            assert!(!stdout(&output).contains("gh ran:"), "{source} {form:?}");
+            assert!(
+                stderr(&output).contains("prevent-unusual-unicode"),
+                "{source} {form:?}: {}",
+                stderr(&output)
+            );
+        }
     }
 }
 
@@ -6388,12 +6483,33 @@ scope = "always"
 
 #[test]
 fn the_plumbing_a_push_is_built_on_is_named_too() {
-    let root = workspace(SEND_PACK_POLICY);
-    plumbing_git(&root);
+    let initialized = initialized_workspace();
+    let initialized_policy =
+        std::fs::read_to_string(initialized.join("policy/principles.toml")).unwrap();
+    for (source, mut table) in [
+        ("fixture", shim_table(SEND_PACK_POLICY, "git")),
+        ("init", shim_table(&initialized_policy, "git")),
+    ] {
+        table.insert("scope".into(), "always".into());
+        table.remove("target");
+        let mut policy: toml::Table = SEND_PACK_POLICY.parse().unwrap();
+        policy.insert("shim".into(), toml::Value::Array(vec![table.into()]));
+        let root = workspace(&toml::to_string(&policy).unwrap());
+        plumbing_git(&root);
 
-    let output = shim(&root, &["git", "send-pack", "origin", "fix/acme-outage"]);
-    assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(!stdout(&output).contains("git ran:"), "{}", stdout(&output));
+        let output = shim(&root, &["git", "send-pack", "origin", "fix/acme-outage"]);
+        assert_eq!(code(&output), 1, "{source}: {}", stderr(&output));
+        assert!(
+            !stdout(&output).contains("git ran:"),
+            "{source}: {}",
+            stdout(&output)
+        );
+        assert!(
+            stderr(&output).contains("no-customer-in-a-branch-name"),
+            "{source}: {}",
+            stderr(&output)
+        );
+    }
 }
 
 // ── a scope that could not be evaluated ──────────────────────────────
