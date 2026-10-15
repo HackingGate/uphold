@@ -351,7 +351,13 @@ mod tests {
             assert_ne!(normalized_table(changed), expected, "removed {field}");
         }
         let mut changed = original.clone();
-        changed["verbs"][0]["text_flags"]
+        let verb = changed["verbs"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|verb| verb.get("text_flags").is_some())
+            .unwrap();
+        verb["text_flags"]
             .as_array_mut()
             .unwrap()
             .push(toml::Value::String("--unexpected".into()));
