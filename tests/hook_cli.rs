@@ -110,7 +110,15 @@ fn code(output: &Output) -> i32 {
 }
 
 fn event(tool: &str, body: &str) -> String {
-    serde_json::json!({"tool_name": tool, "tool_input": {"body": body}}).to_string()
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "test-session",
+        "turn_id": "test-turn",
+        "tool_use_id": "test-call",
+        "tool_name": tool,
+        "tool_input": {"body": body},
+    })
+    .to_string()
 }
 
 // -- what the harness reads ------------------------------------------------
@@ -119,42 +127,50 @@ fn event(tool: &str, body: &str) -> String {
 ///
 /// This is the inversion the module doc explains and the one thing about this
 /// seam that is easy to get wrong: everywhere else in this binary 1 means
-/// refused, and here a non-zero status is read as the hook itself having
-/// failed, which lets the call proceed. A regression here does not look like a
+/// refused, and here exit 1 is read as the hook itself having failed, which
+/// lets the call proceed. A regression here does not look like a
 /// refusal that stopped working. It looks like a complaint on a published body.
 #[test]
 fn a_refusal_is_a_document_on_stdout_at_exit_zero() {
-    let root = workspace("hook-deny", Some(POLICY));
-    let output = hook(
-        &root,
-        "claude-code",
-        &event(
-            "mcp__github__create_pull_request",
-            "Co-Authored-By: Claude <noreply@anthropic.com>",
-        ),
-    );
+    for harness in ["claude-code", "codex"] {
+        let root = workspace("hook-deny", Some(POLICY));
+        let output = hook(
+            &root,
+            harness,
+            &event(
+                "mcp__github__create_pull_request",
+                "Co-Authored-By: Claude <noreply@anthropic.com>",
+            ),
+        );
 
-    assert_eq!(code(&output), 0, "{}", stderr(&output));
-    let document: Value = serde_json::from_str(stdout(&output).trim()).unwrap();
-    assert_eq!(
-        document
-            .pointer("/hookSpecificOutput/permissionDecision")
-            .and_then(Value::as_str),
-        Some("deny"),
-        "{}",
-        stdout(&output)
-    );
-    let reason = document
-        .pointer("/hookSpecificOutput/permissionDecisionReason")
-        .and_then(Value::as_str)
-        .unwrap();
-    assert!(reason.contains("prevent-ai-author"), "{reason}");
-    // The tool is named because the operator has several in flight and the
-    // report is the only place they learn which one was stopped.
-    assert!(
-        reason.contains("mcp__github__create_pull_request"),
-        "{reason}"
-    );
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        let document: Value = serde_json::from_str(stdout(&output).trim()).unwrap();
+        assert_eq!(
+            document
+                .pointer("/hookSpecificOutput/permissionDecision")
+                .and_then(Value::as_str),
+            Some("deny"),
+            "{}",
+            stdout(&output)
+        );
+        assert_eq!(
+            document
+                .pointer("/hookSpecificOutput/hookEventName")
+                .and_then(Value::as_str),
+            Some("PreToolUse"),
+        );
+        let reason = document
+            .pointer("/hookSpecificOutput/permissionDecisionReason")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(reason.contains("prevent-ai-author"), "{reason}");
+        // The tool is named because the operator has several in flight and the
+        // report is the only place they learn which one was stopped.
+        assert!(
+            reason.contains("mcp__github__create_pull_request"),
+            "{reason}"
+        );
+    }
 }
 
 /// A clean call says nothing at all.
@@ -164,14 +180,16 @@ fn a_refusal_is_a_document_on_stdout_at_exit_zero() {
 /// output gets filtered and then whose matcher gets deleted.
 #[test]
 fn a_clean_call_is_silent() {
-    let root = workspace("hook-clean", Some(POLICY));
-    let output = hook(
-        &root,
-        "claude-code",
-        &event("mcp__github__create_issue", "an ordinary body"),
-    );
-    assert_eq!(code(&output), 0);
-    assert_eq!(stdout(&output), "");
+    for harness in ["claude-code", "codex"] {
+        let root = workspace("hook-clean", Some(POLICY));
+        let output = hook(
+            &root,
+            harness,
+            &event("mcp__github__create_issue", "an ordinary body"),
+        );
+        assert_eq!(code(&output), 0);
+        assert_eq!(stdout(&output), "");
+    }
 }
 
 // -- the prose rules reach this seam ---------------------------------------
@@ -293,21 +311,23 @@ fn a_prose_rule_naming_no_command_is_not_asked_about_a_tool_call() {
 /// places nobody thought to configure it, which is how identity gets published.
 #[test]
 fn without_a_policy_the_identity_rules_still_refuse() {
-    let root = workspace("hook-no-policy", None);
-    let output = hook(
-        &root,
-        "claude-code",
-        &event("mcp__github__create_issue", "see /home/example-user/notes"),
-    );
+    for harness in ["claude-code", "codex"] {
+        let root = workspace("hook-no-policy", None);
+        let output = hook(
+            &root,
+            harness,
+            &event("mcp__github__create_issue", "see /home/example-user/notes"),
+        );
 
-    assert_eq!(code(&output), 0, "{}", stderr(&output));
-    let document: Value = serde_json::from_str(stdout(&output).trim()).unwrap();
-    assert_eq!(
-        document
-            .pointer("/hookSpecificOutput/permissionDecision")
-            .and_then(Value::as_str),
-        Some("deny")
-    );
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        let document: Value = serde_json::from_str(stdout(&output).trim()).unwrap();
+        assert_eq!(
+            document
+                .pointer("/hookSpecificOutput/permissionDecision")
+                .and_then(Value::as_str),
+            Some("deny")
+        );
+    }
 }
 
 /// ... and says so, because partial coverage reported as a pass is the failure
@@ -346,7 +366,7 @@ fn an_unknown_harness_is_refused_and_names_the_known_ones() {
     let output = hook(&root, "some-other-agent", &event("x", "body"));
     assert_eq!(code(&output), 2);
     assert!(
-        stderr(&output).contains("claude-code"),
+        stderr(&output).contains("claude-code|codex"),
         "{}",
         stderr(&output)
     );
@@ -357,14 +377,16 @@ fn an_unknown_harness_is_refused_and_names_the_known_ones() {
 /// a harness that changed its schema looks like from here.
 #[test]
 fn a_malformed_event_is_could_not_look_and_not_a_pass() {
-    let root = workspace("hook-malformed", Some(POLICY));
-    let output = hook(&root, "claude-code", "{not json");
-    assert_eq!(code(&output), 2);
-    assert!(
-        stderr(&output).contains("would mean"),
-        "{}",
-        stderr(&output)
-    );
+    for harness in ["claude-code", "codex"] {
+        let root = workspace("hook-malformed", Some(POLICY));
+        let output = hook(&root, harness, "{not json");
+        assert_eq!(code(&output), 2);
+        assert!(
+            stderr(&output).contains("would mean"),
+            "{}",
+            stderr(&output)
+        );
+    }
 }
 
 /// An event with no subject at all is could-not-look, not a clean call.
@@ -375,19 +397,21 @@ fn a_malformed_event_is_could_not_look_and_not_a_pass() {
 /// would leave the seam silently switched off at the version it changed.
 #[test]
 fn an_event_with_no_subject_is_could_not_look_and_not_a_pass() {
-    let root = workspace("hook-no-subject", Some(POLICY));
-    let output = hook(
-        &root,
-        "claude-code",
-        r#"{"tool_name":"mcp__github__create_pull_request","toolInput":{"body":"renamed"}}"#,
-    );
-    assert_eq!(code(&output), 2, "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("/tool_input"),
-        "the report names the pointer that found nothing: {}",
-        stderr(&output)
-    );
-    assert_eq!(stdout(&output), "");
+    for harness in ["claude-code", "codex"] {
+        let root = workspace("hook-no-subject", Some(POLICY));
+        let output = hook(
+            &root,
+            harness,
+            r#"{"tool_name":"mcp__github__create_pull_request","toolInput":{"body":"renamed"}}"#,
+        );
+        assert_eq!(code(&output), 2, "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("/tool_input"),
+            "the report names the pointer that found nothing: {}",
+            stderr(&output)
+        );
+        assert_eq!(stdout(&output), "");
+    }
 }
 
 /// A subject that is present and is not an object is still read.
@@ -492,17 +516,19 @@ fn a_call_with_no_strings_is_allowed_without_looking_further() {
 /// at exit 0 and announced itself only on the calls that published text.
 #[test]
 fn a_call_with_no_strings_under_a_broken_policy_is_could_not_look() {
-    let root = workspace(
-        "hook-no-strings-broken-policy",
-        Some("[rule.no-example-needle\nmessage = \"unterminated table header\"\n"),
-    );
-    let output = hook(
-        &root,
-        "claude-code",
-        r#"{"tool_name":"mcp__forge__count","tool_input":{"limit":10,"all":true}}"#,
-    );
-    assert_eq!(code(&output), 2, "{}", stderr(&output));
-    assert_eq!(stdout(&output), "");
+    for harness in ["claude-code", "codex"] {
+        let root = workspace(
+            "hook-no-strings-broken-policy",
+            Some("[rule.no-example-needle\nmessage = \"unterminated table header\"\n"),
+        );
+        let output = hook(
+            &root,
+            harness,
+            r#"{"tool_name":"mcp__forge__count","tool_input":{"limit":10,"all":true}}"#,
+        );
+        assert_eq!(code(&output), 2, "{}", stderr(&output));
+        assert_eq!(stdout(&output), "");
+    }
 }
 
 /// No policy found is not a policy that failed to load: it loads as empty, and
@@ -571,32 +597,34 @@ command.scope = \"always\"
 /// subject, so the refusal is by what the call is rather than by what it says.
 #[test]
 fn a_regexp_rule_naming_the_hook_refuses_the_tool_call_by_its_name() {
-    let root = workspace("hook-regexp-seams", Some(RELEASE_POLICY));
-    let refused = hook(
-        &root,
-        "claude-code",
-        &event("mcp__github__create_release", "v1.2.0"),
-    );
-    assert_eq!(code(&refused), 0, "{}", stderr(&refused));
-    let reason = reason(&refused);
-    assert!(reason.contains("no-release-by-hand"), "{reason}");
-    assert!(
-        reason.contains("Cut a release from the release workflow."),
-        "{reason}"
-    );
+    for harness in ["claude-code", "codex"] {
+        let root = workspace("hook-regexp-seams", Some(RELEASE_POLICY));
+        let refused = hook(
+            &root,
+            harness,
+            &event("mcp__github__create_release", "v1.2.0"),
+        );
+        assert_eq!(code(&refused), 0, "{}", stderr(&refused));
+        let reason = reason(&refused);
+        assert!(reason.contains("no-release-by-hand"), "{reason}");
+        assert!(
+            reason.contains("Cut a release from the release workflow."),
+            "{reason}"
+        );
 
-    // A body that only mentions the command is text, and the rule asks about
-    // the tool: a pull request describing a release is not a release.
-    let clean = hook(
-        &root,
-        "claude-code",
-        &event(
-            "mcp__github__create_pull_request",
-            "Stop running gh release create by hand.",
-        ),
-    );
-    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
-    assert_eq!(stdout(&clean), "", "{}", stdout(&clean));
+        // A body that only mentions the command is text, and the rule asks about
+        // the tool: a pull request describing a release is not a release.
+        let clean = hook(
+            &root,
+            harness,
+            &event(
+                "mcp__github__create_pull_request",
+                "Stop running gh release create by hand.",
+            ),
+        );
+        assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+        assert_eq!(stdout(&clean), "", "{}", stdout(&clean));
+    }
 }
 
 /// Without `seams`, a `regexp` rule stays where it ran before the field

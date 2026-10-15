@@ -239,6 +239,7 @@ uphold shim gh pr create ...    # stand in front of a command, then exec
 uphold shim --install           # link this binary under each command's name
 uphold shim --status            # what is linked, and whether PATH reaches it
 uphold hook claude-code         # judge a pending agent tool call, read on stdin
+uphold hook codex               # the same checks through Codex's PreToolUse hook
 uphold audit --for-publication  # before flipping private -> public
 uphold supply-chain             # six scanners over the pushed range; a missing one is exit 2
 uphold supply-chain --all       # the same over every manifest and every commit
@@ -319,6 +320,22 @@ its name.
    "hooks": [{"type": "command", "command": "uphold hook claude-code"}]}
 ]}}
 ```
+
+Codex uses the same event and denial format. Add this to `.codex/hooks.json`
+in the repository, or `~/.codex/hooks.json` for all projects:
+
+```json
+{"hooks": {"PreToolUse": [
+  {"matcher": "mcp__github__.*",
+   "hooks": [{"type": "command", "command": "uphold hook codex"}]}
+]}}
+```
+
+Use `/hooks` in Codex to review and trust the hook before it runs. Project
+hooks also require a trusted project. Set the matcher to the MCP tools that
+publish your text; the example covers the GitHub MCP server. See
+[Codex hooks](https://learn.chatgpt.com/docs/hooks) and the
+[configuration reference](docs/REFERENCE.md#configuring-it) for inline TOML.
 
 **`uphold hooks --identity DIR...`** and **`uphold probe`** answer two questions
 a single repository cannot answer about itself. A forked hook declaration is
