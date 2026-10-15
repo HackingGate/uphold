@@ -1905,9 +1905,11 @@ fn staged_with_a_range_flag_is_a_usage_error() {
     }
 }
 
-/// guarddog 3.2.0's report on `swagger-ui-express` 5.0.1, trimmed to the keys
-/// read here: its `metadata_mismatch` finding is the registry `test` script and
-/// the tarball's differing only by npm's publish-time rewrite.
+/// A guarddog 3.2.0 report on `swagger-ui-express` 5.0.1, trimmed to the keys
+/// read here, with a `metadata_mismatch` risk whose description is not one
+/// this reads as npm's publish-time rewrites, so the finding stands until a
+/// waiver excuses it. The real report, which is that rewrite and nothing else,
+/// is tolerated; see the test after these.
 const GUARDDOG_MISMATCH: &str = "echo '[{\"dependency\":\"swagger-ui-express\",\
     \"version\":\"5.0.1\",\"result\":{\"errors\":{},\"issues\":1,\
     \"results\":{\"metadata_mismatch\":\"test script differs\"},\
@@ -2024,6 +2026,45 @@ fn an_unmatched_pypi_metadata_mismatch_waiver_is_not_called_removable() {
     );
     assert!(line.contains("another host may still need it"), "{line}");
     assert!(!line.contains("remove it"), "{line}");
+}
+
+/// guarddog's report for a release whose only mismatch is npm's own default
+/// `start` script passes without a waiver, and the run names what it let
+/// through. A waiver written for it before is now one that matched nothing.
+#[test]
+fn a_mismatch_that_is_only_npms_publish_rewrite_is_tolerated_and_named() {
+    let root = repository();
+    std::fs::create_dir_all(root.join("web")).unwrap();
+    std::fs::write(
+        root.join("web/package.json"),
+        "{\"name\": \"web\", \"dependencies\": {\"react-dom\": \"19.2.0\"}}\n",
+    )
+    .unwrap();
+    let report = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/guarddog/npm-react-dom-19.2.0.json");
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        ("guarddog", &format!("cat '{}'\nexit 0", report.display())),
+    ]);
+    waiving(&root, "npm:react-dom@19.2.0");
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let said = text(&output);
+    let line = said
+        .lines()
+        .find(|line| line.contains("tolerated: metadata_mismatch on npm:react-dom@19.2.0 at "))
+        .unwrap_or_default();
+    assert!(
+        line.ends_with("-- npm default start script (scripts.start = \"node server.js\")"),
+        "{said}"
+    );
+    assert!(!said.contains("waived:"), "{said}");
+    assert!(
+        said.contains(
+            "waiver matched nothing in this run: metadata_mismatch on npm:react-dom@19.2.0"
+        ),
+        "{said}"
+    );
 }
 
 /// A waiver with no reason, or no version, is refused at load: exit 2 before
