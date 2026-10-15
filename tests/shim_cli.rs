@@ -3993,6 +3993,61 @@ fn an_alias_is_read_with_the_arguments_it_puts_into_its_expansion() {
     assert!(stdout(&output).contains("glab ran:"), "{}", stdout(&output));
 }
 
+#[test]
+fn a_glab_alias_table_must_expose_the_complete_expansion() {
+    let root = own_glab_workspace();
+    stub(
+        &root,
+        "glab",
+        "#!/bin/sh\n\
+         if [ \"$1 $2\" = \"alias list\" ]; then cat \"$(dirname \"$0\")/../aliases.txt\"; exit 0; fi\n\
+         echo \"glab ran: $*\"\n",
+    );
+    // glab's table uses an empty first cell for continuation rows, both
+    // when wrapping at a column boundary and for a literal newline.
+    for aliases in [
+        "Alias\tCommand\nmc\tmr note 5 -m safe\n  \t--message x\u{200B}y\n",
+        "Alias\tCommand\nmc\tmr note 5 -m \"safe\n  \tx\u{200B}y\"\n",
+        // A first-line-only reader would also miss a later shell command.
+        "Alias\tCommand\nmc\tmr note 5 -m safe\n  \t!shell command\n",
+        // An unread list cannot prove that an unknown verb is no alias.
+        "Alias\tCommand\nmc mr note 5 -m safe\n",
+    ] {
+        std::fs::write(root.join("aliases.txt"), aliases).unwrap();
+        for word in ["mc", "unknown"] {
+            let output = shim(&root, &["glab", word]);
+            assert_eq!(code(&output), 2, "{aliases:?}: {}", stderr(&output));
+            assert!(
+                stderr(&output).contains("continuation or unread row"),
+                "{}",
+                stderr(&output)
+            );
+            assert!(
+                !stdout(&output).contains("glab ran:"),
+                "{}",
+                stdout(&output)
+            );
+        }
+    }
+    // The same real table shape remains usable for ordinary aliases,
+    // including long values when glab prints them without wrapping.
+    for message in [
+        "safe".to_owned(),
+        "safe ".repeat(30),
+        "x\u{200B}y".to_owned(),
+    ] {
+        std::fs::write(
+            root.join("aliases.txt"),
+            format!("Alias\tCommand\nmc\tmr note 5 -m \"{message}\"\nother\tmr list\n"),
+        )
+        .unwrap();
+        let output = shim(&root, &["glab", "mc"]);
+        let expected = i32::from(message.contains('\u{200B}'));
+        assert_eq!(code(&output), expected, "{}", stderr(&output));
+        assert_eq!(stdout(&output).contains("glab ran:"), expected == 0);
+    }
+}
+
 /// `shim`, with `input` on its stdin -- a file, which is not a terminal.
 fn shim_fed(root: &Path, args: &[&str], input: &str) -> Output {
     let fed = root.join("stdin.txt");

@@ -1150,16 +1150,30 @@ fn command_line_alias(argv: &[String], word: &str) -> Option<String> {
 
 /// One alias out of what `glab alias list` printed.
 ///
-/// It prints one alias per line as a name and an expansion, and promises no
-/// separator: `co: pr checkout`, `co\tpr checkout` and `co=pr checkout` have
-/// all been shipped by one forge CLI or the other. Splitting on the first of
-/// the three reads every one of them, and a line that carries none is not an
-/// alias. `gh` prints YAML, and is read by [`Shim::gh_alias`].
-fn alias_in_list(text: &str, word: &str) -> Option<String> {
-    text.lines().find_map(|line| {
-        let (name, expansion) = line.split_once([':', '\t', '='])?;
-        (name.trim() == word).then(|| expansion.trim().to_owned())
-    })
+/// The table can put a wrapped or multiline expansion on continuation rows
+/// with no name. Its presentation does not say which line breaks belonged to
+/// the expansion, so refuse those rows rather than judging only its first
+/// line. Read the entire list even after finding the requested alias.
+/// `gh` prints YAML, and is read by [`Shim::gh_alias`].
+fn alias_in_list(text: &str, word: &str) -> Result<Option<String>> {
+    let mut found = None;
+    for line in text.lines() {
+        if line.trim().is_empty() && !line.contains('\t') {
+            continue;
+        }
+        let row = line.split_once([':', '\t', '=']);
+        let Some((name, expansion)) = row.filter(|(name, _)| !name.trim().is_empty()) else {
+            return Err(Fatal::new(format!(
+                "glab: `glab alias list` printed a continuation or unread row ({line:?}), so \
+                 whether {word:?} is an alias and its complete expansion could not be \
+                 established. Nothing was published; run the command the alias stands for"
+            )));
+        };
+        if name.trim() == word {
+            found = Some(expansion.trim().to_owned());
+        }
+    }
+    Ok(found)
 }
 
 /// An alias one invocation names, as the command's alias list holds it.
@@ -2112,7 +2126,7 @@ impl Shim {
         if self.command == "gh" {
             return self.gh_alias(&text, argv);
         }
-        Ok(alias_in_list(&text, word).map(one))
+        Ok(alias_in_list(&text, word)?.map(one))
     }
 
     /// This table, with the flag lists of whichever `[[shim.verbs]]` entry

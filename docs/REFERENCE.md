@@ -2245,8 +2245,11 @@ where git's splitter and this one differ, is exit `2`.
 decoded as YAML: a quoted expansion (`note2: 'pr comment $1 --body "Note:
 $2"'`), a block scalar (`ml: |-` and the indented lines under it) and a quoted
 name are each read as `gh` reads them. Output that is not a map of names to
-expansions is exit `2`. `glab alias list` prints a table, read a line at a
-time. An alias's name is split into words as `gh` splits it, so one set with
+expansions is exit `2`. `glab alias list` prints a table. A continuation row
+from a wrapped or multiline expansion, or a row the shim cannot read, makes
+the lookup exit `2`: the complete expansion cannot be recovered reliably
+from its presentation. Run the command the alias stands for instead. An
+alias's name is split into words as `gh` splits it, so one set with
 `gh alias set 'pr say' …` is found where `gh` runs it, at `gh pr say`, and its
 arguments are the words around both. A name of three words or more whose first
 two the invocation spells is exit `2`, and so is an invocation two aliases
@@ -2391,6 +2394,13 @@ what is judged:
   and percent-decoded. A finding in any of them refuses, so a remote holding a
   name the rule refuses blocks the placeholder even where the command would
   have picked another. `glab api` reads no `GITLAB_REPO`.
+
+  The shim does not read `glab`'s per-host `subfolder` configuration or
+  `GITLAB_SUBFOLDER`. For an instance installed below the domain root, the
+  remote URL alone cannot distinguish that installation prefix from the
+  project's namespace. The source judged for `:group` or `:namespace` can
+  therefore include an installation prefix that `glab` removes when filling
+  the placeholder; it is not a reconstruction of the substituted segment.
 
 A placeholder that asks for a branch where none is checked out, or for a
 repository where there is no source to read, is exit `2`. The command cannot fill it
