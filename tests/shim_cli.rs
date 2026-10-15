@@ -5125,6 +5125,7 @@ fn a_release_upload_judges_asset_labels_and_file_names() {
     );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    assert!(!stderr(&output).contains("editor"), "{}", stderr(&output));
 }
 
 #[test]

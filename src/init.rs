@@ -72,6 +72,10 @@ target = "forge-repo"
 scope = "public-target"
 
   [[shim.verbs]]
+  match = ["release:upload"]
+  editor = "never"
+
+  [[shim.verbs]]
   match = ["issue:close", "pr:close", "issue:reopen", "pr:reopen"]
   text_flags = ["-c", "--comment"]
   editor = "never"

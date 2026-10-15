@@ -526,6 +526,10 @@ scope = "public-target"
   # these commands accept, and reading a flag a command will not take is this
   # shim claiming to have checked a subject that was never published.
   [[shim.verbs]]
+  match = ["release:upload"]
+  editor = "never"
+
+  [[shim.verbs]]
   match = ["issue:close", "pr:close", "issue:reopen", "pr:reopen"]
   text_flags = ["-c", "--comment"]
   editor = "never"
