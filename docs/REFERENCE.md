@@ -2089,18 +2089,32 @@ in its word end, and which word after it is text, is not known. A `gh` or
 it; a test compares each grammar with the help pages checked in under
 `tests/fixtures/forge-help`, whose directory names carry the version they were
 taken from. The grammar alone decides where an option ends; the table decides
-only what a value it names is. A table or a `[[shim.verbs]]` entry naming an
-option with the other arity — `-c` as text on `gh pr review`, where it is a
-switch — is exit `2` wherever the option is used.
+only what a value it names is. Where a table or a `[[shim.verbs]]` entry names
+a switch as taking a value — a workspace's `-d` as a description, on `gh pr
+create` where `-d` is `--draft` — the command sends no value with it, so the
+table's reading is dropped for that word on that verb and the next word is read
+for what it is. The other way round, a value-taking option the table names as a
+switch (a web, skip or inert flag), would leave the value unread, and is exit
+`2` wherever the option is used.
 
-On a verb with no grammar — one a table matches beyond those above, such as
-`pr:*`, and `glab mr note draft` — a word the table does not name whole is
-skipped whole, never split. That reads `-Bmain`, `-lbug` and `-Hfeat` as the
-single options they are, so the text after them is read. It also means a
-short-option cluster or an attached value is **not read** there: `-st X`,
-`-bText`, `-b=Text` and their like are passed to the command unchecked, and an
-unnamed option that takes a value shifts the reading of the words after it.
-This is a known gap; spell each option as a word of its own there.
+The verb, the noun and a subcommand are found where the command's parser finds
+them (cobra's `stripFlags`): an option the level above does not know as a
+switch takes the word after it. So `gh pr -d 1 close -c X` is `pr close`, read
+with that verb's grammar, its `[[shim.verbs]]` entry and what the forge holds of
+it, and `1` is its selector.
+
+On a verb with no grammar — one a table matches beyond those above, such as a
+consumer's `repo:create` — a word the table does not name whole is skipped
+whole, never split. That reads `-Bmain`, `-lbug` and `-Hfeat` as the single
+options they are, so the text after them is read. It also means a short-option
+cluster or an attached value is **not read** there: `-st X`, `-bText`,
+`-b=Text` and their like are passed to the command unchecked, and an unnamed
+option that takes a value shifts the reading of the words after it. This is a
+known gap; spell each option as a word of its own there. Two more are known
+limits: `glab mr note draft …` has no grammar and is read that way, and a verb
+the command spells by a built-in alias — `gh pr new`, `glab mr accept`, `glab
+mr comment` — is not matched by a table that names `pr:create`, `mr:merge` or
+`mr:note`, so it is not checked at all unless the table names the alias too.
 
 `target` is `forge-repo` or `git-remote`, both built-in resolvers. `scope` is
 `public-target | public-registry | always`, with

@@ -1179,7 +1179,9 @@ impl Shim {
             return Reading::Named;
         }
         let bare = self.words(argv, false);
-        if self.names(&bare) {
+        if self.names(&bare)
+            || (self.forge_path(argv).is_some() && self.names(&self.verb_words(argv)))
+        {
             return Reading::Named;
         }
         // One reading found nothing; the other is what an option that DOES take
@@ -1399,7 +1401,7 @@ impl Shim {
         if self.verbs.is_empty() {
             return std::borrow::Cow::Borrowed(self);
         }
-        let words = self.words(argv, false);
+        let words = self.verb_words(argv);
         let exact = format!("{}:{}", words.verb, words.noun);
         let any = format!("{}:*", words.verb);
         let Some(entry) = self
@@ -1498,14 +1500,22 @@ impl Shim {
                 ))
             })?;
             for (switch, paired) in word.switches {
-                self.agrees(&switch, false, &on)?;
+                // A table that reads a switch as taking a value -- a
+                // workspace's `-d` for a description, on a verb where `-d` is
+                // `--draft` -- has no value to read here: the command takes
+                // none, so nothing is published through it, and the next word
+                // is read for what it is. Its reading is dropped for this word
+                // on this verb, never applied.
+                if self.takes_value(&switch) {
+                    continue;
+                }
                 let spelt = paired.is_some();
                 self.read_option(&mut collected, &switch, paired.unwrap_or_default(), spelt)?;
             }
             let Some((flag, inline)) = word.valued else {
                 continue;
             };
-            self.agrees(&flag, true, &on)?;
+            self.agrees(&flag, &on)?;
             let paired = inline.is_some();
             let value = inline.unwrap_or_else(|| {
                 // The word after it, whatever it is, as the parser takes it.
@@ -1519,54 +1529,101 @@ impl Shim {
         Ok(collected)
     }
 
-    /// Whether this table reads an option with the arity the verb's grammar
-    /// gives it, or names it not at all.
+    /// Whether this table can read a value-taking option at all: it names the
+    /// option as taking a value, or does not name it.
     ///
-    /// A `[[shim.verbs]]` entry, or the table it overrides, that names `-c` as
-    /// text where the command reads it as a switch would take the word after
-    /// it for a value the command never reads -- the next option, whose text
-    /// then goes out unread. Refused where the option is used rather than read
-    /// either way, because both readings are a guess about which of the two is
-    /// wrong.
-    fn agrees(&self, flag: &str, takes_value: bool, on: &impl Fn() -> String) -> Result<()> {
-        let table = if self.takes_value(flag) {
-            Some(true)
-        } else if self.names_option(flag) {
-            Some(false)
-        } else {
-            None
-        };
-        if table.is_none_or(|table| table == takes_value) {
+    /// A table that names one as a switch -- a web or skip flag, an inert one
+    /// -- would read no value where the command reads one, and act on a switch
+    /// the command never saw: the value goes out unread. Refused where the
+    /// option is used, because reading it either way is a guess about which of
+    /// the two is wrong. The other disagreement, a switch the table reads as
+    /// taking a value, is no guess: the command sends no value, so there is
+    /// nothing to read, and `collect_by_grammar` drops the table's reading.
+    fn agrees(&self, flag: &str, on: &impl Fn() -> String) -> Result<()> {
+        if self.takes_value(flag) || !self.names_option(flag) {
             return Ok(());
         }
-        let reading = |value: bool| {
-            if value {
-                "as taking a value"
-            } else {
-                "as a switch"
-            }
-        };
         Err(Fatal::new(format!(
-            "{}: this policy's `[[shim]]` table reads {flag:?} {}, and `{}` reads it {}, so \
-             which word is its value could not be settled and nothing was checked. Correct the \
-             table, or a `[[shim.verbs]]` entry for this verb. Nothing was published",
+            "{}: this policy's `[[shim]]` table reads {flag:?} as a switch, and `{}` reads it as \
+             taking a value, so the value would go out unread and nothing was checked. Correct \
+             the table, or a `[[shim.verbs]]` entry for this verb. Nothing was published",
             self.command,
-            reading(!takes_value),
-            on(),
-            reading(takes_value)
+            on()
         )))
     }
 
     /// The written-down grammar of the verb this argv invokes, where
     /// [`FORGE_GRAMMAR`] has one, and of its subcommand where it names one.
     fn grammar_of(&self, argv: &[String]) -> Option<&'static Grammar> {
-        let words = self.words(argv, false);
+        self.grammar_at(argv).map(|(grammar, _)| grammar)
+    }
+
+    /// That grammar, and the indices in argv of the words naming it: the verb,
+    /// the noun, and the subcommand where there is one.
+    ///
+    /// The subcommand is found as `cobra` finds it, by `stripFlags` under the
+    /// parent's own options with the verb and the noun taken out, so `glab mr
+    /// note create` is read with `create`'s options. One the parent lists with
+    /// no grammar of its own leaves the invocation read without one.
+    fn grammar_at(&self, argv: &[String]) -> Option<(&'static Grammar, Vec<usize>)> {
+        let mut path = self.forge_path(argv)?;
+        let words = self.verb_words(argv);
         let verb = if words.verb == "api" {
             words.verb
         } else {
             format!("{}:{}", words.verb, words.noun)
         };
-        Grammar::of(&self.command, &verb)?.subcommand(argv)
+        let parent = Grammar::of(&self.command, &verb)?;
+        if parent.subcommands.is_empty() {
+            return Some((parent, path));
+        }
+        let first = strip_flags(argv, |flag| parent.arity(flag) == Some(false), &path)
+            .first()
+            .copied();
+        let Some(sub) = first
+            .and_then(|index| argv.get(index))
+            .filter(|word| parent.subcommands.contains(&word.as_str()))
+        else {
+            return Some((parent, path));
+        };
+        path.extend(first);
+        Some((
+            Grammar::of(&self.command, &format!("{}:{sub}", parent.verb))?,
+            path,
+        ))
+    }
+
+    /// Where the verb and the noun are, for a command whose grammar is written
+    /// down here, read with its parser's own rule; `None` for any other.
+    fn forge_path(&self, argv: &[String]) -> Option<Vec<usize>> {
+        FORGE_GRAMMAR
+            .iter()
+            .any(|grammar| grammar.command == self.command)
+            .then(|| forge_path(&self.command, argv))
+    }
+
+    /// The verb and the noun this argv invokes, as the command resolves them:
+    /// by `cobra`'s rule on a forge CLI, and otherwise by the table's bare
+    /// reading. Every step after matching -- the verb's grammar, its
+    /// `[[shim.verbs]]` entry, what the forge holds of its text -- asks this,
+    /// so none of them reads `gh pr -d 1 close` as the verb `pr` and the noun
+    /// `1`.
+    fn verb_words(&self, argv: &[String]) -> Words {
+        let Some(path) = self.forge_path(argv) else {
+            return self.words(argv, false);
+        };
+        let word = |at: usize| {
+            path.get(at)
+                .and_then(|index| argv.get(*index))
+                .cloned()
+                .unwrap_or_default()
+        };
+        Words {
+            verb: word(0),
+            noun: word(1),
+            unclear: None,
+            unclear_count: 0,
+        }
     }
 
     /// Whether any list of this table names the word whole.
@@ -3191,42 +3248,68 @@ impl Grammar {
             None
         }
     }
+}
 
-    /// The verb and the noun with a written grammar, read off `cobra`'s own
-    /// rule for a subcommand: the first word that is not an option once each
-    /// option the parent knows as a switch is passed over, and every other
-    /// option with the word after it.
-    fn subcommand(&'static self, argv: &[String]) -> Option<&'static Self> {
-        if self.subcommands.is_empty() {
-            return Some(self);
+/// The words `cobra` reads as the command path and its arguments, by index:
+/// its `stripFlags`, which every `gh` and `glab` verb is found with.
+///
+/// An option without `=` -- long, or a two-character short one -- that
+/// `switch` does not name takes the word after it, whether the level knows the
+/// option or not; a cluster, an `=` form, `-` and an empty word take nothing
+/// and are no command. `--` ends the walk. The words at `taken` are the path
+/// levels above this one, which `cobra` removes before it looks
+/// (`argsMinusFirstX`).
+///
+/// It is not pflag's rule, and the difference is a hole: `gh pr -d 1 close`
+/// is `pr close`, because `pr` does not know `-d` and passes `1` over with it,
+/// while a reading that took `-d` for a switch found the pair `pr:1`, matched
+/// no grammar and no `[[shim.verbs]]` entry, and read the comment after it
+/// with neither.
+fn strip_flags(argv: &[String], switch: impl Fn(&str) -> bool, taken: &[usize]) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut index = 0;
+    while let Some(argument) = argv.get(index) {
+        index += 1;
+        if taken.contains(&(index - 1)) {
+            continue;
         }
-        let mut positional = 0usize;
-        let mut index = 0;
-        while let Some(argument) = argv.get(index) {
-            index += 1;
-            if argument == "--" {
-                return Some(self);
-            }
-            // `stripFlags`: an option it does not know as a switch takes the
-            // word after it, `=` or a cluster takes none, and `-` and an empty
-            // word are no subcommand.
-            if argument.is_empty() || argument.starts_with('-') {
-                let spelt = argument.starts_with("--") || argument.len() == 2;
-                if spelt && !argument.contains('=') && self.arity(argument) != Some(false) {
+        if argument == "--" {
+            break;
+        }
+        if argument.is_empty() || argument.starts_with('-') {
+            let spelt = argument.starts_with("--") || argument.len() == 2;
+            if spelt && !argument.contains('=') && !switch(argument) {
+                // The next word that is still there, as `cobra` sees the
+                // arguments once the path above has been taken out of them.
+                while taken.contains(&index) {
                     index += 1;
                 }
-                continue;
+                index += 1;
             }
-            positional += 1;
-            if positional == 3 {
-                if !self.subcommands.contains(&argument.as_str()) {
-                    return Some(self);
-                }
-                return Self::of(self.command, &format!("{}:{argument}", self.verb));
-            }
+            continue;
         }
-        Some(self)
+        found.push(index - 1);
     }
+    found
+}
+
+/// Where in argv a forge CLI finds its verb and noun: `stripFlags` at the
+/// root, then again at the verb with the verb taken out. Both levels know only
+/// the help and version switches, so every other option there takes a word.
+fn forge_path(command: &str, argv: &[String]) -> Vec<usize> {
+    let switch = |flag: &str| {
+        FORGE_GLOBAL_SWITCHES.contains(&flag)
+            || flag == "--version"
+            || (command == "glab" && flag == "-v")
+    };
+    let mut path = Vec::new();
+    for _ in 0..2 {
+        let Some(next) = strip_flags(argv, switch, &path).first().copied() else {
+            break;
+        };
+        path.push(next);
+    }
+    path
 }
 
 /// One option word, read under a verb's whole grammar: the switches it turns
@@ -3301,7 +3384,9 @@ struct Operands {
 impl Operands {
     /// Read argv under one verb's grammar, or name the option it does not
     /// know.
-    fn of(argv: &[String], grammar: &Grammar) -> std::result::Result<Self, String> {
+    /// `path` is where the command's own words are -- `pr merge` -- which are
+    /// no selector wherever they stand.
+    fn of(argv: &[String], grammar: &Grammar, path: &[usize]) -> std::result::Result<Self, String> {
         let mut positional = Vec::new();
         let mut operands = Self::default();
         let mut index = 0;
@@ -3312,7 +3397,9 @@ impl Operands {
                 break;
             }
             if !argument.starts_with('-') || argument == "-" {
-                positional.push(argument.clone());
+                if !path.contains(&(index - 1)) {
+                    positional.push(argument.clone());
+                }
                 continue;
             }
             let word = OptionWord::read(argument, grammar)?;
@@ -3333,7 +3420,7 @@ impl Operands {
                 operands.repo = value.filter(|repo| !repo.is_empty());
             }
         }
-        operands.selectors = positional.into_iter().skip(2).collect();
+        operands.selectors = positional;
         Ok(operands)
     }
 
@@ -3448,17 +3535,17 @@ impl Shim {
         collected: &mut Collected,
         path: EditorPath,
     ) -> Result<bool> {
-        let words = self.words(argv, false);
-        let Some((grammar, held)) = self
-            .grammar_of(argv)
-            .and_then(|grammar| Some((grammar, grammar.held?)))
+        let words = self.verb_words(argv);
+        let Some((grammar, held, at)) = self
+            .grammar_at(argv)
+            .and_then(|(grammar, at)| Some((grammar, grammar.held?, at)))
         else {
             return Ok(false);
         };
         // Read only once the answer is needed, so an option this grammar does
         // not know refuses only an invocation whose text depends on it.
         let operands = || {
-            Operands::of(argv, grammar).map_err(|flag| {
+            Operands::of(argv, grammar, &at).map_err(|flag| {
                 Fatal::new(format!(
                     "{name}: `{name} {} {}` was given {flag:?}, an option this shim does not know \
                      on that verb, so which {} the forge would be asked about could not be \
@@ -5388,7 +5475,7 @@ pub(crate) fn run(
             // is said, so nobody takes the silence for a pass.
             EditorPath::Forge if composed_read => {}
             EditorPath::Forge => {
-                let verb = shim.words(&words, false);
+                let verb = shim.verb_words(&words);
                 eprintln!(
                     "{name}: no body was given and `{} {}` opens no editor here, so the message \
                      the forge composes for it was not checked.",
@@ -6764,6 +6851,13 @@ mod tests {
         );
     }
 
+    /// One line read under a `gh` verb's grammar, with its path where `gh`
+    /// finds it.
+    fn operands(line: &str, grammar: &Grammar) -> std::result::Result<Operands, String> {
+        let words = argv(line);
+        Operands::of(&words, grammar, &forge_path("gh", &words))
+    }
+
     fn held(verb: &str) -> &'static Grammar {
         Grammar::of("gh", verb).unwrap()
     }
@@ -6771,28 +6865,24 @@ mod tests {
     #[test]
     fn the_operands_of_a_verb_are_read_with_its_own_switches() {
         let merge = held("pr:merge");
-        let merged = Operands::of(&argv("-R o/r pr merge -sd 7 --auto"), merge).unwrap();
+        let merged = operands("-R o/r pr merge -sd 7 --auto", merge).unwrap();
         assert_eq!(merged.selectors, vec![String::from("7")]);
         assert_eq!(merged.repo.as_deref(), Some("o/r"));
         assert!(merged.switched(&["-s"]) && merged.switched(&["-d"]));
         // A value-taking option takes the next word, or the rest of its own.
-        let valued = Operands::of(
-            &argv("pr merge --body x -bz --repo=a/b -Rc/d -st y 9"),
-            merge,
-        )
-        .unwrap();
+        let valued = operands("pr merge --body x -bz --repo=a/b -Rc/d -st y 9", merge).unwrap();
         assert_eq!(valued.selectors, vec![String::from("9")]);
         assert_eq!(valued.repo.as_deref(), Some("c/d"));
         assert!(valued.switched(&["-s"]));
         // Spelt off is not on.
-        let off = Operands::of(&argv("pr merge 1 --squash=false"), merge).unwrap();
+        let off = operands("pr merge 1 --squash=false", merge).unwrap();
         assert!(!off.switched(&["--squash"]));
         // Every switch of `gh issue edit` leaves the selector after it a
         // selector, and a value-taking option takes its value.
         let edit = held("issue:edit");
         for switch in edit.switches {
             let line = format!("issue edit 5 {switch} 6 --add-label bug --type Bug");
-            let read = Operands::of(&argv(&line), edit).unwrap();
+            let read = operands(&line, edit).unwrap();
             assert_eq!(
                 read.selectors,
                 vec![String::from("5"), String::from("6")],
@@ -6801,13 +6891,10 @@ mod tests {
         }
         // An option the grammar does not know is named, not guessed at.
         assert_eq!(
-            Operands::of(&argv("issue edit 5 --remove-everything 6"), edit),
+            operands("issue edit 5 --remove-everything 6", edit),
             Err(String::from("--remove-everything"))
         );
-        assert_eq!(
-            Operands::of(&argv("issue edit 5 -x 6"), edit),
-            Err(String::from("-x"))
-        );
+        assert_eq!(operands("issue edit 5 -x 6", edit), Err(String::from("-x")));
     }
 
     #[test]
