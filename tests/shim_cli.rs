@@ -3486,6 +3486,83 @@ fn the_api_verb_is_found_where_the_command_finds_it() {
 }
 
 #[test]
+fn an_alias_is_found_where_the_command_finds_it() {
+    // `gh` registers an alias as a command, so cobra finds `pc` in `gh
+    // --edit-last 5 pc -b X` past the option and the value the root takes
+    // with it. Found by the bare reading, the alias was `5`, which nothing
+    // expands, and the comment went out with nothing judged.
+    let zw = "x\u{200B}y";
+    let root = own_gh_workspace();
+    stub(
+        &root,
+        "gh",
+        "#!/bin/sh\nif [ \"$1 $2\" = \"alias list\" ]; then echo 'pc: pr comment'; exit 0; fi\necho \"gh ran: $*\"\n",
+    );
+    let glued = format!("-b{zw}");
+    for form in [
+        vec!["gh", "--edit-last", "5", "pc", &glued],
+        vec!["gh", "--edit-last", "5", "pc", "-b", zw],
+        vec!["gh", "pc", "5", "-b", zw],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+200B"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("gh ran:"), "{form:?}");
+    }
+    for form in [
+        vec!["gh", "pc", "-b", "ok"],
+        vec!["gh", "--edit-last", "5", "pc", "-b", "ok"],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 0, "{form:?}: {}", stderr(&output));
+        assert!(stdout(&output).contains("gh ran:"), "{form:?}");
+    }
+
+    // `glab` expands an alias only as its first word, and there it is read.
+    // After an option it expands none; that rests on one version's source,
+    // so it is refused rather than passed as nothing to check.
+    let root = own_glab_workspace();
+    stub(
+        &root,
+        "glab",
+        "#!/bin/sh\nif [ \"$1 $2\" = \"alias list\" ]; then echo 'mc: mr note'; exit 0; fi\necho \"glab ran: $*\"\n",
+    );
+    let glued = format!("-m{zw}");
+    for form in [
+        vec!["glab", "mc", "5", &glued],
+        vec!["glab", "mc", "5", "-m", zw],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+200B"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("glab ran:"), "{form:?}");
+    }
+    let output = shim(&root, &["glab", "--unique", "5", "mc", "-m", zw]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("where glab does not expand one"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stdout(&output).contains("glab ran:"),
+        "{}",
+        stdout(&output)
+    );
+    let output = shim(&root, &["glab", "mc", "5", "-m", "ok"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("glab ran:"), "{}", stdout(&output));
+}
+
+#[test]
 fn a_glab_merge_says_which_commit_message_the_forge_composes_unread() {
     let root = own_glab_workspace();
     // `-mWIP` is a message given: it is read, and nothing is said about one

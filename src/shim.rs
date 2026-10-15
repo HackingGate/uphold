@@ -1240,13 +1240,33 @@ impl Shim {
         if !ALIAS_COMMANDS.contains(&self.command.as_str()) {
             return Ok(None);
         }
-        let scanned = self.scan(argv, false, 1);
-        let (Some(index), Some(word)) = (scanned.first, scanned.positional.first().copied()) else {
+        // The word the command would expand, found where it finds it. `gh`
+        // registers each alias as a command of its own, so cobra finds it the
+        // way it finds `pr` -- past `--edit-last 5`, which the root takes for
+        // an option and its value. `git` reads its global options first, which
+        // its own grammar here does.
+        let index = self.forge_path(argv).map_or_else(
+            || self.scan(argv, false, 1).first,
+            |path| path.first().copied(),
+        );
+        let Some((index, word)) = index.and_then(|index| Some((index, argv.get(index)?.as_str())))
+        else {
             return Ok(None);
         };
         let Some(expansion) = self.alias_expansion(root, argv, word)? else {
             return Ok(None);
         };
+        // `glab` expands an alias only where it is the first word
+        // (`expand.ExpandAlias`, `args[1]`), and runs one anywhere else as no
+        // command at all. That is read as unclear rather than as nothing to
+        // check: the answer rests on one version's source.
+        if self.command == "glab" && index != 0 {
+            return Err(Fatal::new(format!(
+                "glab: {word:?} is an alias, and it stands after an option, where glab does not \
+                 expand one, so which invocation this is could not be established. Nothing was \
+                 published; put the alias first, or run the command it stands for"
+            )));
+        }
         // `!` is git's and gh's spelling for "run this through a shell", and
         // what the shell then runs is not a verb any table can match. It may
         // well be a push. Naming it as unreadable is the only honest answer.
@@ -1258,7 +1278,6 @@ impl Shim {
                 self.command
             )));
         }
-        let mut words: Vec<String> = argv.get(..index).unwrap_or_default().to_vec();
         let expanded = self.split_alias(word, &expansion)?;
         if expanded.is_empty() {
             return Err(Fatal::new(format!(
@@ -1267,8 +1286,17 @@ impl Shim {
                 self.command
             )));
         }
-        words.extend(expanded);
-        words.extend(argv.get(index + 1..).unwrap_or_default().iter().cloned());
+        let before = argv.get(..index).unwrap_or_default().iter().cloned();
+        let after = argv.get(index + 1..).unwrap_or_default().iter().cloned();
+        // `git` keeps its global options in front of the expansion. `gh` runs
+        // the expansion followed by every other word, those before the alias
+        // included (`NewCmdAlias`, with flag parsing off); the cobra reading
+        // of either order is the same command.
+        let words: Vec<String> = if self.command == "gh" {
+            expanded.into_iter().chain(before).chain(after).collect()
+        } else {
+            before.chain(expanded).chain(after).collect()
+        };
         Ok(Some(words))
     }
 
