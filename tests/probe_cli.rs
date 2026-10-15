@@ -267,6 +267,88 @@ fn the_operators_own_tree_is_never_planted_in() {
 }
 
 #[test]
+fn fixture_paths_cannot_escape_the_worktree_or_name_git_metadata() {
+    for path in [
+        "../escaped.txt",
+        "/absolute.txt",
+        ".git",
+        ".git/config",
+        "",
+        ".",
+    ] {
+        let config = ONE_PROBE.replace("sample.txt", path);
+        let root = repository(&config);
+        let stub = runner("exit 1");
+        let output = probe(&root, Some(&stub));
+        assert_eq!(code(&output), 2, "{path:?}: {}", text(&output));
+        assert!(text(&output).contains("fixture path"), "{}", text(&output));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn fixture_paths_cannot_follow_a_tracked_symlink() {
+    for directory_link in [false, true] {
+        let root = repository(ONE_PROBE);
+        let outside = support::scratch("probe-outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let sentinel = outside.join("sentinel.txt");
+        std::fs::write(&sentinel, "keep this\n").unwrap();
+        let (link, target, fixture) = if directory_link {
+            ("linked", outside.as_path(), "linked/sentinel.txt")
+        } else {
+            ("sample.txt", sentinel.as_path(), "sample.txt")
+        };
+        std::os::unix::fs::symlink(target, root.join(link)).unwrap();
+        std::fs::write(
+            root.join("policy/hooks.toml"),
+            ONE_PROBE.replace("sample.txt", fixture),
+        )
+        .unwrap();
+        support::git(&root, &["add", "-A"]);
+        support::git(&root, &["commit", "-qm", "symlink fixture", "--no-verify"]);
+        let stub = runner("exit 1");
+
+        let output = probe(&root, Some(&stub));
+        assert_eq!(code(&output), 2, "{}", text(&output));
+        assert!(text(&output).contains("symlink"), "{}", text(&output));
+        assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "keep this\n");
+    }
+}
+
+#[test]
+fn a_failed_fixture_stage_is_unmeasured() {
+    let root = repository(ONE_PROBE);
+    let stub = runner(
+        "if grep -q MARKER sample.txt; then\n  touch \"$(git rev-parse --git-path index.lock)\"\n  exit 1\nfi\nexit 0",
+    );
+    let output = probe(&root, Some(&stub));
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    assert!(
+        text(&output).contains("could not stage"),
+        "{}",
+        text(&output)
+    );
+    assert!(text(&output).contains("index.lock"), "{}", text(&output));
+}
+
+#[test]
+fn an_ignored_fixture_is_staged_for_the_hook() {
+    let root = repository(ONE_PROBE);
+    std::fs::write(root.join(".gitignore"), "sample.txt\n").unwrap();
+    support::git(&root, &["add", ".gitignore"]);
+    support::git(&root, &["commit", "-qm", "ignored fixture", "--no-verify"]);
+    let stub = runner("git show :sample.txt | grep -q MARKER && exit 1\nexit 0");
+    let output = probe(&root, Some(&stub));
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains("accepts a clean one"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
 fn a_probe_run_from_inside_a_hook_does_not_borrow_that_hooks_index() {
     // Found by running this suite from inside a hook, which is where `probe`
     // is most likely to be used. A hook runner exports `GIT_INDEX_FILE` and

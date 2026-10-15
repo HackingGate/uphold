@@ -546,8 +546,8 @@ fn check_refuses_hooks_git_ignores_without_changing_their_permissions() {
 
         let repaired = install(&root, &[], &stub);
         assert_eq!(code(&repaired), 0, "{}", text(&repaired));
-        let checked = install(&root, &["--check"], &stub);
-        assert_eq!(code(&checked), 0, "{}", text(&checked));
+        let restored = install(&root, &["--check"], &stub);
+        assert_eq!(code(&restored), 0, "{}", text(&restored));
     }
 }
 

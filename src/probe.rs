@@ -41,7 +41,7 @@
 //! `allows` name one destination each.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use serde::Deserialize;
@@ -617,29 +617,57 @@ impl Worktree {
     }
 
     fn plant(&self, relative: &str, contents: &str) -> Result<()> {
-        let file = self.path.join(relative);
+        let file = self.fixture_path(relative)?;
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent).map_err(|error| Fatal::at(parent, error))?;
         }
         std::fs::write(&file, contents).map_err(|error| Fatal::at(&file, error))?;
-        self.stage()
+        self.stage(relative)
     }
 
     fn remove(&self, relative: &str) -> Result<()> {
-        let file = self.path.join(relative);
+        let file = self.fixture_path(relative)?;
         if file.exists() {
             std::fs::remove_file(&file).map_err(|error| Fatal::at(&file, error))?;
         }
-        self.stage()
+        self.stage(relative)
+    }
+
+    /// Check every existing component before writing or removing a fixture.
+    /// A tracked symlink can lead outside this checkout even when its spelling
+    /// is repository-relative. Check again after the hook, which can change it.
+    fn fixture_path(&self, relative: &str) -> Result<PathBuf> {
+        let mut file = self.path.clone();
+        for component in Path::new(relative).components() {
+            file.push(component);
+            match std::fs::symlink_metadata(&file) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(Fatal::at(
+                        &file,
+                        "fixture path traverses a symlink, so it cannot be planted or removed safely",
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(Fatal::at(&file, error)),
+            }
+        }
+        Ok(file)
     }
 
     /// Staged, because that is the set lefthook runs over and the state
     /// pre-commit expects to be given.
-    fn stage(&self) -> Result<()> {
-        detached("git", &self.path)
-            .args(["add", "-A"])
+    fn stage(&self, relative: &str) -> Result<()> {
+        let output = detached("git", &self.path)
+            .args(["--literal-pathspecs", "add", "--force", "--", relative])
             .output()
             .map_err(|error| Fatal::new(format!("could not stage the fixture: {error}")))?;
+        if !output.status.success() {
+            return Err(Fatal::new(format!(
+                "could not stage the fixture {relative:?}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
         Ok(())
     }
 
@@ -793,6 +821,18 @@ fn probes(root: &Path) -> Result<(Vec<Probe>, Option<u64>)> {
                         ),
                     ));
                 }
+                let fixture = probe.path.as_deref().unwrap_or_default();
+                if !is_fixture_path(fixture) {
+                    return Err(Fatal::at(
+                        &path,
+                        format!(
+                            "the probe for `{}` has an invalid fixture path {fixture:?}; \
+                             use a repository-relative file path without parent traversal \
+                             or .git metadata",
+                            probe.id
+                        ),
+                    ));
+                }
             }
             Some("empty") => {
                 // The fields a push probe has no use for are refused rather
@@ -849,6 +889,18 @@ fn probes(root: &Path) -> Result<(Vec<Probe>, Option<u64>)> {
         ));
     }
     Ok((parsed.probes, parsed.timeout_seconds))
+}
+
+fn is_fixture_path(value: &str) -> bool {
+    let mut file = false;
+    for component in Path::new(value).components() {
+        match component {
+            Component::Normal(name) if !name.eq_ignore_ascii_case(".git") => file = true,
+            Component::CurDir => {}
+            _ => return false,
+        }
+    }
+    file
 }
 
 /// `owner/repo`, as a push probe's fixture: the two path segments a bare
