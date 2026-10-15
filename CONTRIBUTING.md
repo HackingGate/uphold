@@ -83,6 +83,13 @@ one ruling label. The template files it with `ruling:pending`, and the ruling
 is recorded by replacing that label with `ruling:accepted`, `ruling:rejected`
 or `ruling:deferred`.
 
+The scheduled, read-only Design record workflow checks that each open Design
+record has exactly one recognized ruling label and flags records left at
+`ruling:pending` past the configured window. Run `python3 scripts/design_age.py`
+with `GITHUB_REPOSITORY` and `GH_TOKEN` set to perform the same check manually.
+Rule a pending record or mark it `ruling:deferred` to record that a ruling is
+intentionally postponed.
+
 The repository receives only what runs, plus
 [REFERENCE.md](docs/REFERENCE.md), which stays the normative statement of what
 uphold does now. Tracked files carry no issue numbers, dates or status lines;
