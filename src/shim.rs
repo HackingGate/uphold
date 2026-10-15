@@ -613,6 +613,217 @@ pub(crate) const API_MESSAGE_KEYS: &[&str] = &["squash_commit_message", "merge_c
 /// The `api` option that names a file holding the whole body.
 const API_INPUT_FLAGS: &[&str] = &["--input"];
 
+/// The `api` option that defines a placeholder of the call's own: `glab api
+/// --placeholder name=value`, expanded from `:name` in the endpoint and in a
+/// typed field's value.
+const API_PLACEHOLDER_FLAGS: &[&str] = &["--placeholder"];
+
+/// The placeholders `glab api` expands in a typed field and in the endpoint,
+/// without their colon, in the order its own pattern tries them: a longer one
+/// before any it starts with. `glab` 1.123.0's `Placeholders`.
+const GLAB_PLACEHOLDERS: &[&str] = &[
+    "group/:namespace/:repo",
+    "namespace/:repo",
+    "fullpath",
+    "id",
+    "user",
+    "username",
+    "group",
+    "namespace",
+    "repo",
+    "branch",
+];
+
+/// The `gh api` placeholders spelt with a colon. Any `{word}` is one as well,
+/// and only `{owner}`, `{repo}` and `{branch}` are filled. `gh` 2.102's
+/// `placeholderRE`.
+const GH_PLACEHOLDERS: &[&str] = &["owner", "repo", "branch"];
+
+/// The placeholders whose value names the current repository, on either
+/// command. What a command puts in their place is never computed here: see
+/// [`Shim::repository_sources`].
+const REPOSITORY_PLACEHOLDERS: &[&str] = &[
+    "owner",
+    "repo",
+    "group/:namespace/:repo",
+    "namespace/:repo",
+    "fullpath",
+    "group",
+    "namespace",
+];
+
+/// The placeholders one `api` call is written with, read by the command's own
+/// pattern, and what it puts in their place.
+///
+/// The value is put in before the text is judged, because it is the text
+/// that is published: `glab api -F title=:t --placeholder t=X` sends `X` as
+/// the title, and reading the field as written judged `:t`.
+struct Placeholders<'a> {
+    command: &'a str,
+    pattern: regex::Regex,
+    own: &'a [(String, String)],
+}
+
+impl<'a> Placeholders<'a> {
+    fn of(command: &'a str, own: &'a [(String, String)]) -> Result<Self> {
+        let source = if command == "gh" {
+            format!(r"(?-u::(?:{})\b)|\{{[a-z]+\}}", GH_PLACEHOLDERS.join("|"))
+        } else {
+            // With names of its own, `glab` tries the longest first.
+            let mut names: Vec<&str> = GLAB_PLACEHOLDERS.to_vec();
+            names.extend(own.iter().map(|(name, _)| name.as_str()));
+            if !own.is_empty() {
+                names.sort_by_key(|name| std::cmp::Reverse(name.len()));
+            }
+            let names: Vec<String> = names.iter().map(|name| regex::escape(name)).collect();
+            format!(r"(?-u::(?:{})\b)", names.join("|"))
+        };
+        let pattern = regex::Regex::new(&source).map_err(|error| {
+            Fatal::new(format!(
+                "{command}: a placeholder this call defines could not be read ({error}). Nothing \
+                 was published"
+            ))
+        })?;
+        Ok(Self {
+            command,
+            pattern,
+            own,
+        })
+    }
+
+    /// Each placeholder `text` holds, by name.
+    fn names<'t>(&self, text: &'t str) -> impl Iterator<Item = &'t str> + use<'t, '_> {
+        self.pattern.find_iter(text).map(|found| {
+            let token = found.as_str();
+            token
+                .strip_prefix(':')
+                .or_else(|| {
+                    token
+                        .strip_prefix('{')
+                        .and_then(|rest| rest.strip_suffix('}'))
+                })
+                .unwrap_or(token)
+        })
+    }
+
+    fn is_own(&self, name: &str) -> bool {
+        self.command == "glab" && self.own.iter().any(|(own, _)| own == name)
+    }
+
+    /// Whether `text` asks for the current branch.
+    fn asks_for_branch(&self, text: &str) -> bool {
+        self.names(text)
+            .any(|name| name == "branch" && !self.is_own(name))
+    }
+
+    /// Whether `text` asks for the current repository's names.
+    fn asks_for_repository(&self, text: &str) -> bool {
+        self.names(text)
+            .any(|name| REPOSITORY_PLACEHOLDERS.contains(&name) && !self.is_own(name))
+    }
+
+    /// `text` with the call's own placeholders and the current `branch`
+    /// filled, and every other placeholder left as written. `escape` is the
+    /// endpoint's spelling, where a value is one path segment.
+    fn fill(&self, text: &str, branch: Option<&str>, escape: bool) -> String {
+        self.pattern
+            .replace_all(text, |found: &regex::Captures<'_>| {
+                let token = found.get(0).map_or("", |token| token.as_str());
+                let name = self.names(token).next().unwrap_or(token);
+                self.value(name, branch).map_or_else(
+                    || token.to_owned(),
+                    |value| {
+                        if escape {
+                            value.replace('%', "%25").replace('/', "%2F")
+                        } else {
+                            value
+                        }
+                    },
+                )
+            })
+            .into_owned()
+    }
+
+    /// What the command puts in place of one placeholder, where it is the
+    /// call's own or the branch. A repository's names are judged as the
+    /// sources they are read from instead, and the account's own name
+    /// (`:user`) and the numeric project id (`:id`) are only the forge's to
+    /// say: all of those stay as written.
+    fn value(&self, name: &str, branch: Option<&str>) -> Option<String> {
+        if self.command == "glab"
+            && let Some((_, value)) = self.own.iter().find(|(own, _)| own == name)
+        {
+            return Some(value.clone());
+        }
+        (name == "branch")
+            .then(|| branch.map(str::to_owned))
+            .flatten()
+    }
+}
+
+/// The checkout one `api` call asked about, read once however many of its
+/// fields ask.
+#[derive(Default)]
+struct Current {
+    branch: Option<String>,
+    repositories: Option<String>,
+}
+
+/// Every string and every key under `value`.
+fn json_texts(value: &serde_json::Value, into: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(text) => into.push(text.clone()),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                json_texts(item, into);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for (key, field) in fields {
+                into.push(key.clone());
+                json_texts(field, into);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every key under `value`.
+fn json_keys(value: &serde_json::Value, into: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Array(items) => {
+            for item in items {
+                json_keys(item, into);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for (key, field) in fields {
+                into.push(key.clone());
+                json_keys(field, into);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `value` with every string and every key passed through `fill`, as `glab`
+/// expands placeholders in a JSON field after decoding it.
+fn fill_json(value: &serde_json::Value, fill: &impl Fn(&str) -> String) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(text) => serde_json::Value::String(fill(text)),
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(|item| fill_json(item, fill)).collect())
+        }
+        serde_json::Value::Object(fields) => serde_json::Value::Object(
+            fields
+                .iter()
+                .map(|(key, field)| (fill(key), fill_json(field, fill)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 /// One `gh api` or `glab api` invocation, read off the words after the verb.
 ///
 /// Read with the `api` verb's own grammar rather than through the table's flag
@@ -634,6 +845,8 @@ struct ApiCall {
     fields: Vec<(String, String)>,
     /// The file `--input` named.
     input: Option<String>,
+    /// Each `--placeholder name=value`, in the order given.
+    placeholders: Vec<(String, String)>,
 }
 
 impl ApiCall {
@@ -687,6 +900,12 @@ impl ApiCall {
                 call.fields.push((flag, value));
             } else if API_INPUT_FLAGS.contains(&name) {
                 call.input = Some(value);
+            } else if API_PLACEHOLDER_FLAGS.contains(&name) {
+                // One with no `=` is refused by the command, and publishes
+                // nothing.
+                if let Some((own, filled)) = value.split_once('=') {
+                    call.placeholders.push((own.to_owned(), filled.to_owned()));
+                }
             }
         }
         Ok(call)
@@ -719,10 +938,15 @@ impl ApiCall {
     /// here and falls through to the table's own resolver, which is the bound
     /// on this: the destination of a GraphQL mutation is inside its query, and
     /// nothing in a path can say.
-    fn target(&self) -> Option<String> {
+    ///
+    /// A placeholder of the call's own is put into the path first, as one
+    /// path segment, because the command puts it there: `projects/:p/issues
+    /// --placeholder p=owner/repo` is aimed at `owner/repo`, and reading the
+    /// path as written found no repository and fell through to `origin`.
+    fn target(&self, placeholders: &Placeholders<'_>) -> Option<String> {
         self.positional
             .iter()
-            .find_map(|word| repo_in_api_path(word))
+            .find_map(|word| repo_in_api_path(&placeholders.fill(word, None, true)))
     }
 }
 
@@ -830,6 +1054,48 @@ pub(crate) struct Walked {
     pub(crate) headlines: Vec<(String, String)>,
 }
 
+/// One field's value as the subjects it is, by its key: a title where the key
+/// is a title's, a whole commit message where it is a message's, and prose
+/// otherwise.
+///
+/// A title set through the API is the title `gh pr edit --title` sets, and a
+/// merge subject set through it is `gh pr merge --subject`: both were judged
+/// as prose here, so a lookalike that `--title` refuses walked through `-f
+/// title=`. Read off the key, a closed list, and never off the path -- which
+/// endpoint takes a `title` is the forge's to say, and a key named `title` is
+/// a headline on every one of them.
+fn field_subjects(subjects: &mut Vec<Subject>, key: &str, value: String) {
+    if API_TITLE_KEYS.contains(&key) {
+        subjects.push(Subject {
+            kind: Subject::HEADLINE,
+            value,
+            added: None,
+        });
+    } else if API_MESSAGE_KEYS.contains(&key) {
+        subjects.extend(message_subjects(value));
+    } else {
+        subjects.push(Subject {
+            kind: "text",
+            value,
+            added: None,
+        });
+    }
+}
+
+/// A JSON document's strings as subjects, each by the check its key gives it.
+fn walked_subjects(subjects: &mut Vec<Subject>, walked: Walked) {
+    subjects.extend(walked.headlines.into_iter().map(|(_, value)| Subject {
+        kind: Subject::HEADLINE,
+        value,
+        added: None,
+    }));
+    subjects.extend(walked.prose.into_iter().map(|value| Subject {
+        kind: "text",
+        value,
+        added: None,
+    }));
+}
+
 /// Every string in a JSON document, keyed as [`walk_strings`] reads it, or
 /// nothing where the text is not one.
 ///
@@ -840,20 +1106,24 @@ pub(crate) struct Walked {
 /// the way a `--field` value is, and by the key they sit under the way a
 /// `--field` value is. A file that is NOT JSON is judged whole, which is what
 /// it is.
-fn json_strings(text: &str) -> Option<Walked> {
+///
+/// One that starts as JSON and does not decode here is an error, never the
+/// raw text: the forge's decoder takes documents this one refuses (a lone
+/// surrogate escape, a number past `f64`, nesting past 128), and the raw text
+/// of one still spells every escaped string as escapes.
+fn json_strings(text: &str) -> std::result::Result<Option<Walked>, serde_json::Error> {
     // Deliberately strict, and deliberately not the YAML reader the rest of
     // this file uses on forge responses: YAML 1.2 is a superset of JSON, so an
     // ordinary Markdown body with a `Note: something` line parses as a mapping
     // and would be read for its "values" -- most of the body then reaching no
     // checker at all. A body is JSON when somebody wrote JSON.
-    let trimmed = text.trim_start();
-    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
-        return None;
+    if !text.trim_start().starts_with(['{', '[', '"']) {
+        return Ok(None);
     }
-    let parsed = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    let parsed = serde_json::from_str::<serde_json::Value>(text)?;
     let mut found = Walked::default();
     walk_strings(&parsed, None, &mut found);
-    Some(found)
+    Ok(Some(found))
 }
 
 /// An `alias.<name>` set with `-c` on the command line, which outranks config.
@@ -1887,8 +2157,8 @@ impl Shim {
     /// Under the verb's own grammar where [`FORGE_GRAMMAR`] has one, and
     /// otherwise word by word as the table names them.
     fn collect_flags(&self, argv: &[String]) -> Result<Collected> {
-        if let Some(grammar) = self.grammar_of(argv) {
-            return self.collect_by_grammar(argv, grammar);
+        if let Some((grammar, path)) = self.grammar_at(argv) {
+            return self.collect_by_grammar(argv, grammar, &path);
         }
         let mut collected = Collected::default();
         let mut index = 0;
@@ -1928,20 +2198,41 @@ impl Shim {
     /// it names is. An option the grammar does not know is exit 2, never read
     /// past, and so is one the table reads with the other arity -- a table
     /// cannot move where the command's options end.
-    fn collect_by_grammar(&self, argv: &[String], grammar: &Grammar) -> Result<Collected> {
+    ///
+    /// Two values publish text the table cannot name, because what they
+    /// publish is not the value as written, and both are read here whatever
+    /// the table says: an `--attach`'s alt text and file name (see
+    /// [`attached_subjects`]), and on a verb whose operands are release
+    /// assets, each asset's label and file name (see [`asset_subjects`]).
+    fn collect_by_grammar(
+        &self,
+        argv: &[String],
+        grammar: &Grammar,
+        path: &[usize],
+    ) -> Result<Collected> {
         let mut collected = Collected::default();
         let on = || format!("{} {}", self.command, grammar.verb.replace(':', " "));
         // Each value-taking option as given, for a verb whose body hangs on
         // which were.
         let mut given = Vec::new();
+        let mut operands: Vec<&str> = Vec::new();
         let mut index = 0;
         while let Some(argument) = argv.get(index) {
             index += 1;
             // `--` ends the options, and nothing after it is one.
             if argument == "--" {
+                operands.extend(
+                    argv.get(index..)
+                        .unwrap_or_default()
+                        .iter()
+                        .map(String::as_str),
+                );
                 break;
             }
             if !argument.starts_with('-') || argument == "-" {
+                if !path.contains(&(index - 1)) {
+                    operands.push(argument);
+                }
                 continue;
             }
             let word = OptionWord::read(argument, grammar).map_err(|unknown| {
@@ -1955,6 +2246,18 @@ impl Shim {
                 ))
             })?;
             for (switch, paired) in word.switches {
+                if let Some((_, _, instead)) = UNREAD_SOURCE_SWITCHES
+                    .iter()
+                    .find(|(command, flag, _)| *command == self.command && *flag == switch)
+                {
+                    return Err(Fatal::new(format!(
+                        "{}: `{}` with `{switch}` publishes text from outside the command line, \
+                         which this shim cannot read. Nothing was published; pass the text with \
+                         {instead} instead",
+                        self.command,
+                        on()
+                    )));
+                }
                 // A table that reads a switch as taking a value -- a
                 // workspace's `-d` for a description, on a verb where `-d` is
                 // `--draft` -- has no value to read here: the command takes
@@ -1980,10 +2283,23 @@ impl Shim {
                 next
             });
             given.push((flag.clone(), value.clone()));
+            if ATTACH_FLAGS.contains(&flag.as_str()) {
+                collected
+                    .subjects
+                    .extend(attached_subjects(&self.command, &value));
+            }
             self.read_option(&mut collected, &flag, value, paired)?;
         }
         if let Some(body) = grammar.stdin_body {
             self.stdin_body(&mut collected, &given, body, &on)?;
+        }
+        // The first operand is the tag.
+        if grammar.assets {
+            for asset in operands.iter().skip(1) {
+                collected
+                    .subjects
+                    .extend(asset_subjects(&self.command, &on(), asset)?);
+            }
         }
         Ok(collected)
     }
@@ -2055,6 +2371,7 @@ impl Shim {
 
     /// The written-down grammar of the verb this argv invokes, where
     /// [`FORGE_GRAMMAR`] has one, and of its subcommand where it names one.
+    #[cfg(test)]
     fn grammar_of(&self, argv: &[String]) -> Option<&'static Grammar> {
         self.grammar_at(argv).map(|(grammar, _)| grammar)
     }
@@ -2460,6 +2777,8 @@ impl Shim {
     fn collect_api(&self, call: &ApiCall) -> Result<Collected> {
         let mut subjects = Vec::new();
         let mut stdin = None;
+        let placeholders = Placeholders::of(&self.command, &call.placeholders)?;
+        let mut current = Current::default();
         for (flag, field) in &call.fields {
             // `key=value`: the key names the field and the value is what
             // reaches the forge. A field spelt without one is passed whole,
@@ -2468,66 +2787,241 @@ impl Shim {
             let (key, value) = field
                 .split_once('=')
                 .map_or(("", field.as_str()), |(key, rest)| (key, rest));
-            // A title set through the API is the title `gh pr edit --title`
-            // sets, and a merge subject set through it is `gh pr merge
-            // --subject`: both were judged as prose here, so a lookalike that
-            // `--title` refuses walked through `-f title=`. Read off the key,
-            // a closed list, and never off the path -- which endpoint takes a
-            // `title` is the forge's to say, and a key named `title` is a
-            // headline on every one of them.
-            // A raw field is sent as written, `@` and all.
-            let value = if API_TYPED_FIELD_FLAGS.contains(&flag.as_str()) {
-                self.api_value(flag, value, &mut stdin)?
+            // A raw field is sent as written, `@` and all, and so is a typed
+            // one's file.
+            if !API_TYPED_FIELD_FLAGS.contains(&flag.as_str()) || value.starts_with('@') {
+                let value = if API_TYPED_FIELD_FLAGS.contains(&flag.as_str()) {
+                    self.api_value(flag, value, &mut stdin)?
+                } else {
+                    value.to_owned()
+                };
+                field_subjects(&mut subjects, key, value);
+                continue;
+            }
+            let what = format!("`{flag} {key}=...`");
+            // `glab` decodes a typed value that starts as JSON does, and puts
+            // the placeholders into each string and key of it, so a string
+            // escaped as `\u....` is published as the character it spells.
+            // Judged by its strings and keys, under the field's key the way
+            // `--input` is judged. One this shim cannot decode is exit 2:
+            // `glab`'s decoder takes what this one refuses (a lone surrogate,
+            // a number past `f64`, nesting past 128), so "the command will
+            // refuse it too" is not a reading this shim can stand behind.
+            let document = if self.command == "glab" && value.starts_with(['[', '{']) {
+                Some(
+                    serde_json::from_str::<serde_json::Value>(value)
+                        .map_err(|error| self.undecoded(&what, "glab", &error))?,
+                )
             } else {
-                value.to_owned()
+                None
             };
-            if API_TITLE_KEYS.contains(&key) {
-                subjects.push(Subject {
-                    kind: Subject::HEADLINE,
-                    value,
-                    added: None,
-                });
-            } else if API_MESSAGE_KEYS.contains(&key) {
-                subjects.extend(message_subjects(value));
+            let mut texts = Vec::new();
+            match &document {
+                Some(document) => json_texts(document, &mut texts),
+                None => texts.push(value.to_owned()),
+            }
+            let branch = self.asked_branch(&placeholders, &texts, &what, &mut current)?;
+            if let Some(sources) =
+                self.asked_repositories(&placeholders, &texts, &what, &mut current)?
+            {
+                field_subjects(&mut subjects, key, sources);
+            }
+            let fill = |text: &str| placeholders.fill(text, branch.as_deref(), false);
+            if let Some(document) = document {
+                let filled = fill_json(&document, &fill);
+                let mut walked = Walked::default();
+                walk_strings(&filled, Some(key), &mut walked);
+                json_keys(&filled, &mut walked.prose);
+                walked_subjects(&mut subjects, walked);
             } else {
-                subjects.push(Subject {
-                    kind: "text",
-                    value,
-                    added: None,
-                });
+                field_subjects(&mut subjects, key, fill(value));
+            }
+        }
+        // The endpoint's query string is sent as written, with the call's
+        // placeholders put in, and a forge reads its parameters as it reads a
+        // field: `projects/1/issues?title=:t --placeholder t=X` opens an issue
+        // titled `X`. Judged as prose, and percent-decoded as well, since that
+        // is how the forge reads it.
+        if let Some((_, query)) = call
+            .positional
+            .first()
+            .and_then(|endpoint| endpoint.split_once('?'))
+        {
+            let texts = [query.to_owned()];
+            let what = "the endpoint's query string";
+            let branch = self.asked_branch(&placeholders, &texts, what, &mut current)?;
+            if let Some(sources) =
+                self.asked_repositories(&placeholders, &texts, what, &mut current)?
+            {
+                field_subjects(&mut subjects, "", sources);
+            }
+            let filled = placeholders.fill(query, branch.as_deref(), false);
+            let decoded = crate::scan::percent_decode(&filled.replace('+', " "));
+            for value in [filled, decoded] {
+                field_subjects(&mut subjects, "", value);
             }
         }
         if let Some(file) = &call.input {
             let text = self.api_file("--input", file, &mut stdin)?;
             match json_strings(&text) {
-                Some(walked) => {
-                    subjects.extend(walked.headlines.into_iter().map(|(_, value)| Subject {
-                        kind: Subject::HEADLINE,
-                        value,
-                        added: None,
-                    }));
-                    subjects.extend(walked.prose.into_iter().map(|value| Subject {
+                Ok(Some(walked)) => walked_subjects(&mut subjects, walked),
+                Ok(None) if self.command == "gh" || text.trim().is_empty() => {
+                    subjects.push(Subject {
                         kind: "text",
-                        value,
+                        value: text,
                         added: None,
-                    }));
+                    });
                 }
-                None => subjects.push(Subject {
-                    kind: "text",
-                    value: text,
-                    added: None,
-                }),
+                // `glab` sends every `--input` body as JSON.
+                Ok(None) => {
+                    return Err(Fatal::new(format!(
+                        "glab: `--input {file}` is sent as a JSON body, and it is not JSON, so \
+                         what would be published could not be read. Nothing was published"
+                    )));
+                }
+                Err(error) => {
+                    return Err(self.undecoded(&format!("`--input {file}`"), "the forge", &error));
+                }
             }
         }
         Ok(Collected {
             subjects,
-            target: call.target(),
+            target: call.target(&placeholders),
             body_given: true,
             web: false,
             withheld: Withheld::Nothing,
             stdin,
             flagged: Vec::new(),
         })
+    }
+
+    /// The exit 2 for a value the command reads as JSON that this shim could
+    /// not decode.
+    fn undecoded(&self, what: &str, reader: &str, error: &serde_json::Error) -> Fatal {
+        Fatal::new(format!(
+            "{}: {what} is read as JSON by {reader}, and it could not be decoded here ({error}), \
+             so what would be published could not be read. Nothing was published; write it as \
+             plain JSON (no lone surrogate escape, no number too large for a double, nesting \
+             under 128 deep)",
+            self.command
+        ))
+    }
+
+    /// The current branch, where one of `texts` asks for it, read once per
+    /// call. None checked out is exit 2: the command cannot read one either,
+    /// but what this shim cannot read it does not call clean.
+    fn asked_branch(
+        &self,
+        placeholders: &Placeholders<'_>,
+        texts: &[String],
+        what: &str,
+        current: &mut Current,
+    ) -> Result<Option<String>> {
+        if !texts.iter().any(|text| placeholders.asks_for_branch(text)) {
+            return Ok(None);
+        }
+        if current.branch.is_none() {
+            current.branch = git::try_run(
+                Path::new("."),
+                &["symbolic-ref", "--quiet", "--short", "HEAD"],
+            )?
+            .map(|branch| branch.trim().to_owned())
+            .filter(|branch| !branch.is_empty());
+        }
+        current.branch.clone().map(Some).ok_or_else(|| {
+            Fatal::new(format!(
+                "{}: {what} puts the current branch into what it publishes, and no branch is \
+                 checked out here to read, so what would be published could not be read. Nothing \
+                 was published",
+                self.command
+            ))
+        })
+    }
+
+    /// Everything the command may read a repository's names from, as one
+    /// text to judge, where one of `texts` asks for those names; read once
+    /// per call.
+    ///
+    /// The names are not worked out here. Which remote `gh` or `glab` picks,
+    /// and how it reads a url, are each command's own rules -- a resolution
+    /// it saved in git config, a push url where the fetch url names nothing,
+    /// a percent escape it decodes -- and a copy of them here drifts from
+    /// each release of the command. Every source is judged instead, so a
+    /// name the command could put in fails the rule wherever it came from.
+    /// No source at all is exit 2.
+    fn asked_repositories(
+        &self,
+        placeholders: &Placeholders<'_>,
+        texts: &[String],
+        what: &str,
+        current: &mut Current,
+    ) -> Result<Option<String>> {
+        if !texts
+            .iter()
+            .any(|text| placeholders.asks_for_repository(text))
+        {
+            return Ok(None);
+        }
+        if current.repositories.is_none() {
+            current.repositories = Some(self.repository_sources()?);
+        }
+        let sources = current.repositories.clone().unwrap_or_default();
+        if sources.is_empty() {
+            return Err(Fatal::new(format!(
+                "{}: {what} puts the current repository's name into what it publishes, and no \
+                 remote here names a repository, so what would be published could not be read. \
+                 Nothing was published",
+                self.command
+            )));
+        }
+        Ok(Some(sources))
+    }
+
+    /// Every `remote.<name>.url` and `pushurl`, every repository resolution
+    /// `gh` or `glab` saved beside a remote, each remote's urls as `git
+    /// remote -v` prints them (with `insteadOf` applied), and for `gh`
+    /// `GH_REPO` -- each as written and percent-decoded, one per line.
+    fn repository_sources(&self) -> Result<String> {
+        let here = Path::new(".");
+        let mut found: Vec<String> = Vec::new();
+        if self.command == "gh" {
+            found.extend(nonempty_env("GH_REPO"));
+        }
+        let saved = git::try_run(
+            here,
+            &[
+                "config",
+                "-z",
+                "--get-regexp",
+                r"^remote\..*\.(url|pushurl|gh-resolved|glab-resolved|glab-resolved-base|glab-resolved-head)$",
+            ],
+        )?
+        .unwrap_or_default();
+        found.extend(
+            saved
+                .split('\0')
+                .filter_map(|entry| entry.split_once('\n'))
+                .map(|(_, value)| value.to_owned()),
+        );
+        let listed = git::try_run(here, &["remote", "-v"])?.unwrap_or_default();
+        found.extend(listed.lines().filter_map(|line| {
+            let (_, rest) = line.split_once('\t')?;
+            Some(
+                rest.rsplit_once(" (")
+                    .map_or(rest, |(url, _)| url)
+                    .to_owned(),
+            )
+        }));
+        let mut sources: Vec<String> = Vec::new();
+        for source in found {
+            let decoded = crate::scan::percent_decode(&source);
+            for text in [source, decoded] {
+                if !text.is_empty() && !sources.contains(&text) {
+                    sources.push(text);
+                }
+            }
+        }
+        Ok(sources.join("\n"))
     }
 
     /// One field value, with `@` read the way a forge CLI reads it.
@@ -3166,6 +3660,10 @@ struct Grammar {
     /// `match` entry, a `[[shim.verbs]]` entry and a rule's `command.before`
     /// that name the verb name its alias too.
     aliases: &'static [&'static str],
+    /// Whether the operands after the first are files the verb uploads, each
+    /// spelt `file#label`: `gh release create <tag> [<file>...]`. The label
+    /// and the file's name are published beside the release.
+    assets: bool,
     /// What the forge holds of this verb's text, where it holds any.
     held: Option<Held>,
     /// Where the verb takes its body off stdin when no message was given.
@@ -3227,6 +3725,7 @@ const fn grammar(
         repo: true,
         subcommands: &[],
         aliases: &[],
+        assets: false,
         held: None,
         stdin_body: None,
     }
@@ -3455,6 +3954,7 @@ const FORGE_GRAMMAR: &[Grammar] = &[
     grammar("gh", "issue:reopen", &[], &["-c", "--comment"]),
     Grammar {
         aliases: &["new"],
+        assets: true,
         ..grammar(
             "gh",
             "release:create",
@@ -3861,6 +4361,143 @@ const FORGE_GRAMMAR: &[Grammar] = &[
         )
     },
 ];
+
+/// The option that uploads a file and writes a reference to it into the text,
+/// on every verb of either command that takes one.
+const ATTACH_FLAGS: &[&str] = &["--attach"];
+
+/// The switches that make a verb publish text from a source this shim never
+/// reads, by command, with the options that put the same text on the command
+/// line instead.
+///
+/// `gh release create --notes-from-tag` publishes the tag's annotation as the
+/// notes, and `glab mr create --recover` and `glab issue create --recover`
+/// load the title and description from a recovery file `glab` keeps. Neither
+/// is on the command line, so neither is judged, and the switch is refused
+/// rather than read: a copy of where `git` keeps a tag's message, or of
+/// `glab`'s recovery file format, would be one more reading of the command's
+/// internals inside the guard. Each verb's grammar decides where the switch
+/// is one.
+const UNREAD_SOURCE_SWITCHES: &[(&str, &str, &str)] = &[
+    ("gh", "--notes-from-tag", "`--notes`/`-n`"),
+    (
+        "glab",
+        "--recover",
+        "`--title`/`-t` and `--description`/`-d`",
+    ),
+];
+
+/// A file's name as `filepath.Base` gives it, where it has one.
+fn base_name(path: &str) -> Option<String> {
+    Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+}
+
+/// What one `--attach` publishes besides the file itself.
+///
+/// `gh` writes an image as `![alt](url)`: the alt is what follows the `#`
+/// after the longest prefix of the value that names a file, and where there
+/// is none, the file's name without its extension and with each `.` a space
+/// (`internal/attachments`, `parseArg` and `newImageAsset`). A comment that
+/// attaches a file needs no body, so that text was the whole of what it
+/// published. `glab` uploads the file under its own name, and GitLab writes
+/// the name into the reference; `-` is uploaded as `upload` and an extension.
+/// The file's name is judged on both, because both send it.
+fn attached_subjects(command: &str, value: &str) -> Vec<Subject> {
+    let text = |published: String| Subject {
+        kind: "text",
+        value: published,
+        added: None,
+    };
+    if command == "glab" {
+        return if value == "-" {
+            Vec::new()
+        } else {
+            base_name(value).map(text).into_iter().collect()
+        };
+    }
+    let (file, alt) = attach_parts(value);
+    let name = base_name(file);
+    let alt = if alt.is_empty() {
+        name.as_deref().map_or_else(String::new, |name| {
+            let stem = name
+                .rfind('.')
+                .map_or(name, |dot| name.get(..dot).unwrap_or_default());
+            stem.replace('.', " ")
+        })
+    } else {
+        alt.to_owned()
+    };
+    let mut subjects: Vec<Subject> = name.into_iter().map(text).collect();
+    if !alt.is_empty() {
+        subjects.push(text(alt));
+    }
+    subjects
+}
+
+/// `gh`'s split of `path#alt text`: an existing file wins over the `#`, and
+/// of the prefixes before a `#` that name one, the longest does.
+fn attach_parts(value: &str) -> (&str, &str) {
+    if Path::new(value).exists() {
+        return (value, "");
+    }
+    let mut end = value.len();
+    while let Some(hash) = value.get(..end).and_then(|head| head.rfind('#')) {
+        if hash == 0 {
+            break;
+        }
+        let file = value.get(..hash).unwrap_or_default();
+        if Path::new(file).exists() {
+            return (file, value.get(hash + 1..).unwrap_or_default());
+        }
+        end = hash;
+    }
+    match value.rfind('#') {
+        Some(hash) if hash > 0 => (
+            value.get(..hash).unwrap_or_default(),
+            value.get(hash + 1..).unwrap_or_default(),
+        ),
+        _ => (value, ""),
+    }
+}
+
+/// What one release asset operand publishes besides the file: its label and
+/// its name, which the release lists it by.
+///
+/// `gh`'s `AssetsFromArgs`: an operand holding a `#` is `file#label`, split at
+/// the first `#` past the start, and any other operand is a pattern `gh`
+/// expands itself. The names a pattern matches are not on the command line,
+/// so one that holds a pattern character is refused rather than read as one
+/// file: let the shell expand it, and the names are the operands.
+fn asset_subjects(command: &str, on: &str, operand: &str) -> Result<Vec<Subject>> {
+    let text = |value: &str| Subject {
+        kind: "text",
+        value: value.to_owned(),
+        added: None,
+    };
+    let (file, label) = match operand.find('#') {
+        Some(hash) if hash > 0 => (
+            operand.get(..hash).unwrap_or_default(),
+            operand.get(hash + 1..).unwrap_or_default(),
+        ),
+        None if operand.contains(['*', '?', '[', '\\']) => {
+            return Err(Fatal::new(format!(
+                "{command}: `{on}` expands {operand:?} itself, and the names of the files it \
+                 matches are published with the release, so what would be published could not be \
+                 read. Nothing was published; let the shell expand the pattern"
+            )));
+        }
+        // A `#` that opens the operand names a file of that name.
+        Some(_) | None => (operand, ""),
+    };
+    let mut subjects: Vec<Subject> = base_name(file).iter().map(|name| text(name)).collect();
+    if !label.is_empty() {
+        subjects.push(text(label));
+    }
+    Ok(subjects)
+}
 
 impl Grammar {
     /// The grammar written down for one command's verb, where there is one.
@@ -5963,7 +6600,11 @@ pub(crate) fn run(
                 // asked, and the command supplies whatever default it has. This
                 // is the case where the flag WAS given and what it named is
                 // empty, which is a published subject like any other.
-                let empty = subject.value.trim().is_empty();
+                //
+                // Empty of ASCII blanks only. `trim` also strips U+000B and
+                // U+0085, which are what a guard is there to see, so an alt
+                // text made of nothing else read as empty and went unjudged.
+                let empty = subject.value.trim_ascii().is_empty();
                 for rule in &checkers {
                     if crate::guard::bypassed(&rule.id) {
                         continue;
@@ -8131,5 +8772,114 @@ mod tests {
             }
         }
         assert!(checked > 100, "{checked}");
+    }
+
+    #[test]
+    fn a_placeholder_is_filled_the_way_its_command_fills_it() {
+        let checked_out = Some("topic");
+        // `gh`: `:name` and `{name}` for three names, and any other `{word}`
+        // left as written; `:owners` is no placeholder. A repository's names
+        // are judged as their sources, and stay as written here.
+        let gh = Placeholders::of("gh", &[]).unwrap();
+        assert_eq!(
+            gh.fill(
+                "{owner}/{repo} on {branch}, :owner/:repo on :branch, {foo} :owners",
+                checked_out,
+                false
+            ),
+            "{owner}/{repo} on topic, :owner/:repo on topic, {foo} :owners"
+        );
+        assert!(gh.asks_for_branch("x {branch}"));
+        assert!(gh.asks_for_repository(":repo"));
+        assert!(!gh.asks_for_repository(":repository"));
+        // `glab`: its own names first where they are longer, the account's
+        // name and the project id left as the forge's to say.
+        let own = vec![
+            (String::from("t"), String::from("X")),
+            (String::from("fullpathx"), String::from("Y")),
+        ];
+        let glab = Placeholders::of("glab", &own).unwrap();
+        assert_eq!(
+            glab.fill(
+                ":t :fullpathx :fullpath :branch :id :user :username",
+                checked_out,
+                false
+            ),
+            "X Y :fullpath topic :id :user :username"
+        );
+        for name in [
+            ":fullpath",
+            ":group/:namespace/:repo",
+            ":namespace/:repo",
+            ":group",
+            ":namespace",
+            ":repo",
+        ] {
+            assert!(glab.asks_for_repository(name), "{name}");
+        }
+        assert!(!glab.asks_for_repository(":fullpathx"));
+        assert!(!glab.asks_for_branch(":t"));
+        // In the endpoint a value is one path segment.
+        let segment = vec![(String::from("p"), String::from("acme/widget"))];
+        let endpoint = Placeholders::of("glab", &segment).unwrap();
+        assert_eq!(
+            endpoint.fill("projects/:p/issues", None, true),
+            "projects/acme%2Fwidget/issues"
+        );
+        let call = ApiCall {
+            positional: vec![String::from("projects/:p/issues")],
+            placeholders: segment.clone(),
+            ..ApiCall::default()
+        };
+        assert_eq!(call.target(&endpoint).as_deref(), Some("acme/widget"));
+    }
+
+    #[test]
+    fn an_attachment_is_split_where_gh_splits_it() {
+        let dir = crate::fixture::scratch("shim-attach");
+        std::fs::create_dir_all(&dir).unwrap();
+        let hashed = dir.join("a#b.png");
+        std::fs::write(&hashed, "x").unwrap();
+        let hashed = hashed.to_string_lossy().into_owned();
+        // An existing file wins over the `#` in its name.
+        assert_eq!(attach_parts(&hashed), (hashed.as_str(), ""));
+        // The longest prefix naming a file, and the rest is the alt.
+        let with_alt = format!("{hashed}#an alt");
+        assert_eq!(attach_parts(&with_alt), (hashed.as_str(), "an alt"));
+        // No file at all: the last `#`.
+        assert_eq!(attach_parts("./none.png#x#y"), ("./none.png#x", "y"));
+        assert_eq!(attach_parts("#x"), ("#x", ""));
+        let values = |subjects: Vec<Subject>| -> Vec<String> {
+            subjects.into_iter().map(|subject| subject.value).collect()
+        };
+        // The name, and the alt `gh` writes where none is given.
+        assert_eq!(
+            values(attached_subjects("gh", "./shot.of.it.png")),
+            ["shot.of.it.png", "shot of it"]
+        );
+        assert_eq!(
+            values(attached_subjects("gh", "./shot.png#An alt")),
+            ["shot.png", "An alt"]
+        );
+        assert_eq!(
+            values(attached_subjects("glab", "dir/shot.png")),
+            ["shot.png"]
+        );
+        assert_eq!(attached_subjects("glab", "-"), Vec::<Subject>::new());
+        // A release asset: split at the first `#`, and a pattern refused.
+        let on = "gh release create";
+        assert_eq!(
+            values(asset_subjects("gh", on, "dist/a.zip#Linux #1").unwrap()),
+            ["a.zip", "Linux #1"]
+        );
+        assert_eq!(
+            values(asset_subjects("gh", on, "dist/a.zip").unwrap()),
+            ["a.zip"]
+        );
+        assert!(asset_subjects("gh", on, "dist/*.zip").is_err());
+        assert_eq!(
+            values(asset_subjects("gh", on, "dist/*.zip#label").unwrap()),
+            ["*.zip", "label"]
+        );
     }
 }

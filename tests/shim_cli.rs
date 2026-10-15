@@ -74,6 +74,11 @@ fn workspace(policy: &str) -> PathBuf {
 }
 
 fn shim(root: &Path, args: &[&str]) -> Output {
+    shim_with(root, args, &[])
+}
+
+/// [`shim`], with `variables` set in its environment.
+fn shim_with(root: &Path, args: &[&str], variables: &[(&str, &str)]) -> Output {
     let path = format!(
         "{}:{}",
         root.join("bin").display(),
@@ -86,6 +91,8 @@ fn shim(root: &Path, args: &[&str]) -> Output {
         .env("PATH", path)
         .env_remove("UPHOLD_ALLOW")
         .env_remove("UPHOLD_SHIM_INNER")
+        .env_remove("GH_REPO")
+        .envs(variables.iter().copied())
         .output()
         .unwrap()
 }
@@ -4227,6 +4234,862 @@ fn a_raw_field_is_sent_as_written_and_only_a_typed_one_reads_its_file() {
         );
         assert!(!stdout(&output).contains("gh ran:"), "{flag}");
     }
+}
+
+/// Run each form, and require it refused for the U+200B it publishes with the
+/// stub never reached.
+fn refuses_each(root: &Path, forms: &[Vec<&str>], ran: &str) {
+    for form in forms {
+        let output = shim(root, form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+200B"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains(ran), "{form:?}");
+    }
+}
+
+#[test]
+fn a_placeholder_of_the_calls_own_is_judged_as_the_value_glab_sends() {
+    // `glab` puts `--placeholder` values into the typed fields that name
+    // them, and the field was judged as `:t`.
+    let zw = "x\u{200B}y";
+    let root = own_glab_workspace();
+    let defined = format!("t={zw}");
+    let paired = format!("--placeholder=t={zw}");
+    let post = ["glab", "api", "-X", "POST", "projects/1/issues"];
+    let with = |rest: &[&'static str], tail: Vec<&str>| -> Vec<String> {
+        post.iter()
+            .chain(rest)
+            .map(|word| (*word).to_owned())
+            .chain(tail.into_iter().map(str::to_owned))
+            .collect()
+    };
+    let forms: Vec<Vec<String>> = vec![
+        with(&["-F", "title=:t", "--placeholder"], vec![&defined]),
+        with(&["-F", "description=see :t here"], vec![&paired]),
+        with(&["--field", "title=:t", "--placeholder"], vec![&defined]),
+        // In a JSON value, each string and key is filled after decoding.
+        with(&["-F", r#"labels=[":t"]"#, "--placeholder"], vec![&defined]),
+        with(
+            &["-F", r#"position={":t":"1"}"#, "--placeholder"],
+            vec![&defined],
+        ),
+    ];
+    let forms: Vec<Vec<&str>> = forms
+        .iter()
+        .map(|form| form.iter().map(String::as_str).collect())
+        .collect();
+    refuses_each(&root, &forms, "glab ran:");
+    // A raw field is sent as written, and so is `:t` with nothing defined.
+    for form in [
+        vec![
+            "glab",
+            "api",
+            "-X",
+            "POST",
+            "projects/1/issues",
+            "-f",
+            "title=:t",
+            "--placeholder",
+            &defined,
+        ],
+        vec![
+            "glab",
+            "api",
+            "-X",
+            "POST",
+            "projects/1/issues",
+            "-F",
+            "title=:t",
+        ],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 0, "{form:?}: {}", stderr(&output));
+        assert!(stdout(&output).contains("glab ran:"), "{form:?}");
+    }
+}
+
+#[test]
+fn a_json_field_glab_decodes_is_judged_by_the_strings_it_decodes_to() {
+    // A JSON escape for U+200B is six ASCII characters on the command line,
+    // and the character itself in what `glab` sends.
+    let escaped = format!("a{}u200bb", '\\');
+    let labels = format!("labels=[\"{escaped}\"]");
+    let described = format!("description={{\"x\":\"{escaped}\"}}");
+    let root = own_glab_workspace();
+    refuses_each(
+        &root,
+        &[
+            vec![
+                "glab",
+                "api",
+                "-X",
+                "POST",
+                "projects/1/issues",
+                "-F",
+                &labels,
+            ],
+            vec![
+                "glab",
+                "api",
+                "-X",
+                "POST",
+                "projects/1/issues",
+                "-F",
+                &described,
+            ],
+        ],
+        "glab ran:",
+    );
+}
+
+#[test]
+fn the_current_branch_a_placeholder_puts_in_is_judged() {
+    let zw = "x\u{200B}y";
+    let head = format!("refs/heads/{zw}");
+    let root = own_glab_workspace();
+    support::git(&root, &["symbolic-ref", "HEAD", &head]);
+    refuses_each(
+        &root,
+        &[
+            vec![
+                "glab",
+                "api",
+                "-X",
+                "POST",
+                "projects/1/issues",
+                "-F",
+                "title=:branch",
+            ],
+            vec![
+                "glab",
+                "api",
+                "-X",
+                "POST",
+                "projects/1/issues",
+                "-F",
+                "description=on :branch",
+            ],
+        ],
+        "glab ran:",
+    );
+    let root = own_gh_workspace();
+    support::git(&root, &["symbolic-ref", "HEAD", &head]);
+    refuses_each(
+        &root,
+        &[
+            vec![
+                "gh",
+                "api",
+                "-X",
+                "POST",
+                "repos/o/r/issues",
+                "-F",
+                "title={branch}",
+            ],
+            vec![
+                "gh",
+                "api",
+                "-X",
+                "POST",
+                "repos/o/r/issues",
+                "-F",
+                "body=on :branch",
+            ],
+        ],
+        "gh ran:",
+    );
+    // A raw field is sent as written.
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/o/r/issues",
+            "-f",
+            "title={branch}",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    // With no branch checked out there is nothing to read, and the command
+    // cannot read one either: exit 2, never a pass.
+    std::fs::write(root.join("f.txt"), "x").unwrap();
+    support::git(&root, &["checkout", "-q", "-b", "main"]);
+    support::git(&root, &["add", "f.txt"]);
+    support::git(
+        &root,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.test",
+            "commit",
+            "-q",
+            "-m",
+            "x",
+        ],
+    );
+    support::git(&root, &["checkout", "-q", "--detach"]);
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/o/r/issues",
+            "-F",
+            "title={branch}",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no branch is checked out"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn the_repository_names_a_placeholder_puts_in_are_judged_for_every_remote() {
+    let zw = "x\u{200B}y";
+    let root = own_gh_workspace();
+    // No remote: nothing names the current repository, and exit 2.
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/o/r/issues",
+            "-F",
+            "body=see {owner}/{repo}",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no remote here names a repository"),
+        "{}",
+        stderr(&output)
+    );
+    support::git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/o/r/issues",
+            "-F",
+            "body=see {owner}/{repo}",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    // A second remote the command may take for the current repository is
+    // read too.
+    let url = format!("https://github.com/acme/{zw}.git");
+    support::git(&root, &["remote", "add", "upstream", &url]);
+    refuses_each(
+        &root,
+        &[vec![
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/o/r/issues",
+            "-F",
+            "body=see {owner}/{repo}",
+        ]],
+        "gh ran:",
+    );
+    let root = own_glab_workspace();
+    let url = format!("git@gitlab.com:group/{zw}/widget.git");
+    support::git(&root, &["remote", "add", "origin", &url]);
+    refuses_each(
+        &root,
+        &[
+            vec![
+                "glab",
+                "api",
+                "-X",
+                "POST",
+                "projects/1/issues",
+                "-F",
+                "description=:fullpath",
+            ],
+            vec![
+                "glab",
+                "api",
+                "graphql",
+                "-F",
+                r#"input={"projectPath":":namespace/:repo"}"#,
+            ],
+        ],
+        "glab ran:",
+    );
+}
+
+#[test]
+fn the_alt_text_and_name_an_attachment_publishes_are_judged() {
+    // A comment that attaches a file needs no body; the alt text `gh` writes
+    // for the image was the whole of what it published.
+    let zw = "x\u{200B}y";
+    let alt = format!("./a.png#{zw}");
+    let named = format!("./{zw}.png");
+    let root = own_gh_workspace();
+    refuses_each(
+        &root,
+        &[
+            vec!["gh", "issue", "comment", "12", "--attach", &alt],
+            vec!["gh", "issue", "comment", "12", &format!("--attach={alt}")],
+            vec![
+                "gh", "pr", "create", "-t", "ok", "-b", "ok", "--attach", &named,
+            ],
+            vec!["gh", "pr", "comment", "1", "-b", "ok", "--attach", &alt],
+            vec!["gh", "issue", "edit", "3", "--attach", &alt],
+        ],
+        "gh ran:",
+    );
+    // A file whose name holds a `#` is that file, and the alt follows it.
+    std::fs::write(root.join("a#b.png"), "x").unwrap();
+    let output = shim(
+        &root,
+        &[
+            "gh", "issue", "comment", "12", "-b", "ok", "--attach", "a#b.png",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    refuses_each(
+        &root,
+        &[vec![
+            "gh",
+            "issue",
+            "comment",
+            "12",
+            "-b",
+            "ok",
+            "--attach",
+            &format!("a#b.png#{zw}"),
+        ]],
+        "gh ran:",
+    );
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "issue",
+            "comment",
+            "12",
+            "-b",
+            "ok",
+            "--attach",
+            "./a.png#A chart",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+
+    // `glab` uploads the file under its name, which GitLab writes into the
+    // reference.
+    let root = own_glab_workspace();
+    refuses_each(
+        &root,
+        &[
+            vec![
+                "glab", "mr", "note", "create", "1", "-m", "ok", "--attach", &named,
+            ],
+            vec!["glab", "issue", "note", "1", "-m", "ok", "--attach", &named],
+            vec![
+                "glab", "mr", "create", "-t", "ok", "-d", "ok", "--attach", &named,
+            ],
+        ],
+        "glab ran:",
+    );
+    let output = shim(
+        &root,
+        &["glab", "issue", "note", "1", "-m", "ok", "--attach", "-"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn the_label_and_name_a_release_asset_publishes_are_judged() {
+    let zw = "x\u{200B}y";
+    let root = own_gh_workspace();
+    let labelled = format!("./dist.zip#{zw}");
+    let named = format!("./{zw}.zip");
+    refuses_each(
+        &root,
+        &[
+            vec!["gh", "release", "create", "v1.0.0", "-n", "ok", &labelled],
+            vec![
+                "gh", "release", "create", "v1.0.0", "-n", "ok", "./a.zip", &named,
+            ],
+            vec![
+                "gh", "release", "create", "-n", "ok", "v1.0.0", "--", &named,
+            ],
+        ],
+        "gh ran:",
+    );
+    // The tag is no asset, and a label in plain words is published fine.
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "release",
+            "create",
+            "v1.0.0",
+            "-n",
+            "ok",
+            "./dist.zip#Linux build",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    // A pattern `gh` expands itself names files the command line does not.
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "release",
+            "create",
+            "v1.0.0",
+            "-n",
+            "ok",
+            "dist/*.zip",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("let the shell expand the pattern"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+/// Run each form, and require it exit 2 with `says` on stderr and the stub
+/// never reached.
+fn unreadable_each(root: &Path, forms: &[Vec<&str>], says: &str, ran: &str) {
+    for form in forms {
+        let output = shim(root, form);
+        assert_eq!(code(&output), 2, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains(says),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains(ran), "{form:?}");
+    }
+}
+
+#[test]
+fn a_json_value_this_shim_cannot_decode_is_exit_2_and_never_judged_as_written() {
+    // `glab` and the forge decode what serde refuses: a lone surrogate, a
+    // number past a double, nesting 128 deep. Judged as written, the U+200B
+    // escape beside one of them was six ASCII characters, and it ran.
+    let escape = |code: &str| format!("{}u{code}", '\\');
+    let zw = format!("\"a{}b\"", escape("200b"));
+    let surrogate = format!("[{zw},\"{}\"]", escape("d800"));
+    let huge = format!("[{zw},1e999]");
+    let deep = format!("{}{zw}{}", "[".repeat(128), "]".repeat(128));
+    let root = own_glab_workspace();
+    let fields: Vec<String> = [&surrogate, &huge, &deep]
+        .iter()
+        .map(|value| format!("labels={value}"))
+        .collect();
+    let forms: Vec<Vec<&str>> = fields
+        .iter()
+        .map(|field| {
+            vec![
+                "glab",
+                "api",
+                "-X",
+                "POST",
+                "projects/1/issues",
+                "-F",
+                field,
+            ]
+        })
+        .collect();
+    unreadable_each(
+        &root,
+        &forms,
+        "`-F labels=...` is read as JSON",
+        "glab ran:",
+    );
+    // `glab` sends every `--input` body as JSON, so one that is not is exit 2.
+    std::fs::write(root.join("body.txt"), "plain words").unwrap();
+    unreadable_each(
+        &root,
+        &[vec![
+            "glab",
+            "api",
+            "-X",
+            "POST",
+            "projects/1/issues",
+            "--input",
+            "body.txt",
+        ]],
+        "is sent as a JSON body",
+        "glab ran:",
+    );
+
+    let root = own_gh_workspace();
+    for (name, value) in [("surrogate", &surrogate), ("huge", &huge), ("deep", &deep)] {
+        std::fs::write(
+            root.join(format!("{name}.json")),
+            format!("{{\"body\":{value}}}"),
+        )
+        .unwrap();
+    }
+    unreadable_each(
+        &root,
+        &[
+            vec![
+                "gh",
+                "api",
+                "-X",
+                "POST",
+                "repos/o/r/issues",
+                "--input",
+                "surrogate.json",
+            ],
+            vec![
+                "gh",
+                "api",
+                "-X",
+                "POST",
+                "repos/o/r/issues",
+                "--input",
+                "huge.json",
+            ],
+            vec![
+                "gh",
+                "api",
+                "-X",
+                "POST",
+                "repos/o/r/issues",
+                "--input",
+                "deep.json",
+            ],
+        ],
+        "is read as JSON by the forge",
+        "gh ran:",
+    );
+    // A `gh` body that is not JSON at all is still judged whole, as before.
+    std::fs::write(root.join("notes.md"), "plain words").unwrap();
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "markdown/raw",
+            "--input",
+            "notes.md",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_repository_placeholder_is_judged_against_every_source_the_command_may_read() {
+    // Which remote `gh` or `glab` takes, and how it reads its url, is the
+    // command's own rule. Every source is judged, so a reading that decoded
+    // no escape, cut a url at a `:`, ignored a saved resolution or skipped
+    // a remote with no repository in its fetch url let the name through.
+    let zw = "x\u{200B}y";
+    let body = [
+        "gh",
+        "api",
+        "-X",
+        "POST",
+        "repos/o/r/issues",
+        "-F",
+        "title={repo}",
+    ];
+    let fresh_gh = |remotes: &[(&str, &str)], config: &[(&str, &str)]| {
+        let root = own_gh_workspace();
+        for (name, url) in remotes {
+            support::git(&root, &["remote", "add", name, url]);
+        }
+        for (key, value) in config {
+            support::git(&root, &["config", key, value]);
+        }
+        root
+    };
+    for root in [
+        fresh_gh(
+            &[("origin", "https://github.com/acme/%E2%80%8Bwidget.git")],
+            &[],
+        ),
+        fresh_gh(
+            &[("origin", "git@github.com:%E2%80%8Bacme/widget.git")],
+            &[],
+        ),
+        fresh_gh(
+            &[(
+                "origin",
+                &format!("https://github.com/a{zw}:acme/widget.git"),
+            )],
+            &[],
+        ),
+        fresh_gh(
+            &[
+                ("upstream", "/srv/mirror.git"),
+                ("origin", "https://github.com/acme/widget.git"),
+            ],
+            &[(
+                "remote.upstream.pushurl",
+                &format!("https://github.com/acme/{zw}.git"),
+            )],
+        ),
+        fresh_gh(
+            &[("origin", "https://github.com/acme/widget.git")],
+            &[("remote.origin.gh-resolved", &format!("acme/{zw}"))],
+        ),
+    ] {
+        refuses_each(&root, &[body.to_vec()], "gh ran:");
+    }
+    // `GH_REPO`, spelt as a url with an escape in it.
+    let root = fresh_gh(&[("origin", "https://github.com/acme/widget.git")], &[]);
+    let output = shim_with(
+        &root,
+        &body,
+        &[("GH_REPO", "https://github.com/acme/%E2%80%8Bwidget")],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("U+200B"), "{}", stderr(&output));
+    // A clean remote, and the documented GraphQL spelling, still run.
+    for form in [
+        body.to_vec(),
+        vec![
+            "gh",
+            "api",
+            "graphql",
+            "-F",
+            "owner={owner}",
+            "-F",
+            "name={repo}",
+            "-f",
+            "query=q",
+        ],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 0, "{form:?}: {}", stderr(&output));
+    }
+
+    let post = [
+        "glab",
+        "api",
+        "-X",
+        "POST",
+        "projects/1/issues",
+        "-F",
+        "title=:repo",
+    ];
+    let fresh_glab = |url: &str, config: &[(&str, &str)]| {
+        let root = own_glab_workspace();
+        support::git(&root, &["remote", "add", "origin", url]);
+        for (key, value) in config {
+            support::git(&root, &["config", key, value]);
+        }
+        root
+    };
+    for root in [
+        fresh_glab("https://gitlab.com/acme/%E2%80%8Bwidget.git", &[]),
+        fresh_glab(&format!("https://gitlab.com/a{zw}:grp/sub/widget.git"), &[]),
+        fresh_glab(
+            "https://gitlab.com/acme/widget.git",
+            &[(
+                "remote.origin.glab-resolved-base",
+                &format!("base:acme/{zw}"),
+            )],
+        ),
+        fresh_glab(
+            "https://gitlab.com/acme/widget.git",
+            &[("remote.origin.glab-resolved", &format!("base:acme/{zw}"))],
+        ),
+    ] {
+        refuses_each(&root, &[post.to_vec()], "glab ran:");
+    }
+    // `glab api` reads no `GITLAB_REPO`, so with no remote there is nothing
+    // to read the name from, whatever it says.
+    let root = own_glab_workspace();
+    let output = shim_with(&root, &post, &[("GITLAB_REPO", "acme/widget")]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no remote here names a repository"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn an_alt_text_or_asset_label_of_unicode_blanks_alone_is_judged() {
+    // Rust's `trim` strips U+0085 and U+000B, so text made of nothing else
+    // read as empty and was never handed to the rule. `gh` publishes it.
+    let root = own_gh_workspace();
+    for blank in ['\u{85}', '\u{b}'] {
+        let alt = format!("./a.png#{blank}");
+        let label = format!("./dist.zip#{blank}");
+        let name = format!("U+{:04X}", u32::from(blank));
+        for form in [
+            vec!["gh", "issue", "comment", "12", "-b", "ok", "--attach", &alt],
+            vec!["gh", "release", "create", "v1.0.0", "-n", "ok", &label],
+        ] {
+            let output = shim(&root, &form);
+            assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+            assert!(
+                stderr(&output).contains(&name),
+                "{form:?}: {}",
+                stderr(&output)
+            );
+            assert!(!stdout(&output).contains("gh ran:"), "{form:?}");
+        }
+    }
+}
+
+#[test]
+fn the_endpoints_query_string_is_judged_as_published_text() {
+    // `glab` fills `:t` in the endpoint, query string included, and a forge
+    // reads a query parameter as it reads a field.
+    let zw = "a\u{200B}b";
+    let literal = format!("projects/1/issues?title={zw}");
+    let defined = format!("t={zw}");
+    let root = own_glab_workspace();
+    refuses_each(
+        &root,
+        &[
+            vec![
+                "glab",
+                "api",
+                "-X",
+                "POST",
+                "projects/1/issues?title=:t",
+                "--placeholder",
+                &defined,
+            ],
+            vec!["glab", "api", "-X", "POST", &literal],
+            vec![
+                "glab",
+                "api",
+                "-X",
+                "POST",
+                "projects/1/issues?title=a%E2%80%8Bb",
+            ],
+        ],
+        "glab ran:",
+    );
+    let output = shim(
+        &root,
+        &[
+            "glab",
+            "api",
+            "-X",
+            "POST",
+            "projects/1/issues?title=plain+words",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("glab ran:"), "{}", stdout(&output));
+
+    let root = own_gh_workspace();
+    let literal = format!("repos/o/r/issues?title={zw}");
+    refuses_each(
+        &root,
+        &[
+            vec!["gh", "api", "-X", "POST", &literal],
+            vec![
+                "gh",
+                "api",
+                "-X",
+                "POST",
+                "repos/o/r/issues?title=a%E2%80%8Bb",
+                "-f",
+                "body=ok",
+            ],
+        ],
+        "gh ran:",
+    );
+    support::git(
+        &root,
+        &["symbolic-ref", "HEAD", &format!("refs/heads/{zw}")],
+    );
+    refuses_each(
+        &root,
+        &[vec![
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/o/r/issues?title={branch}",
+        ]],
+        "gh ran:",
+    );
+}
+
+#[test]
+fn a_switch_that_publishes_text_from_outside_the_command_line_is_exit_2() {
+    let root = own_gh_workspace();
+    unreadable_each(
+        &root,
+        &[vec![
+            "gh",
+            "release",
+            "create",
+            "v1.0.0",
+            "--notes-from-tag",
+        ]],
+        "pass the text with `--notes`/`-n` instead",
+        "gh ran:",
+    );
+    // Notes GitHub composes are not text from a source on this machine.
+    let output = shim(
+        &root,
+        &["gh", "release", "create", "v1.0.0", "--generate-notes"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+
+    let root = own_glab_workspace();
+    unreadable_each(
+        &root,
+        &[
+            vec!["glab", "mr", "create", "--recover", "-t", "ok", "-d", "ok"],
+            vec![
+                "glab",
+                "issue",
+                "create",
+                "-t",
+                "ok",
+                "-d",
+                "ok",
+                "--recover=true",
+            ],
+        ],
+        "`--description`/`-d` instead",
+        "glab ran:",
+    );
 }
 
 #[test]
