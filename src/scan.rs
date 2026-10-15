@@ -1917,18 +1917,16 @@ fn below_floor_failure(rule: &Rule, selected: usize) -> Option<Failure> {
 /// not code, and a line-by-line count read it as code -- closing a test module
 /// early (reporting test hits) or never closing it (hiding every hit after it).
 ///
-/// An attribute counts when its text matches the pattern the line reader used,
-/// `#[cfg(` with `test` as a word before the first `)`, so `cfg(test)` and
-/// `cfg(all(test, unix))` count exactly as they did before.
+/// An attribute counts when its `cfg` predicate is true under `test`: `test`
+/// alone or as an operand of `all` or `any`, never beneath `not`, and never a
+/// `key = "value"` pair such as `feature = "test"`. An inner `#![cfg(test)]`
+/// marks the item that holds it, a whole file when it opens the file.
 ///
 /// A file that does not parse excludes nothing. Error recovery can stretch or
 /// shrink an item around the broken region, and a wrong extent here hides a
 /// real hit; reporting a test-only hit in a broken file is the cheaper mistake
 /// for a scanner to make.
 fn cfg_test_lines(path: &Path) -> BTreeSet<u64> {
-    static CFG_TEST: OnceLock<Regex> = OnceLock::new();
-    let cfg_test = CFG_TEST.get_or_init(|| engine::literal_pattern(r"^#\[cfg\([^)]*\btest\b"));
-
     let mut test_lines = BTreeSet::new();
     let Ok(text) = std::fs::read_to_string(path) else {
         return test_lines;
@@ -1950,12 +1948,23 @@ fn cfg_test_lines(path: &Path) -> BTreeSet<u64> {
     let mut cursor = tree.walk();
     let mut pending = vec![tree.root_node()];
     while let Some(node) = pending.pop() {
-        let attribute = node.kind() == "attribute_item"
-            && text
-                .get(node.byte_range())
-                .is_some_and(|source| cfg_test.is_match(source));
-        if !attribute {
+        let kind = node.kind();
+        let is_cfg_test = (kind == "attribute_item" || kind == "inner_attribute_item")
+            && attribute_is_cfg_test(node, &text);
+        if !is_cfg_test {
             pending.extend(node.named_children(&mut cursor));
+            continue;
+        }
+        if kind == "inner_attribute_item" {
+            // An inner attribute belongs to the item around it. A module's
+            // body is a `declaration_list`; the module is the item.
+            let mut owner = node.parent().unwrap_or(node);
+            if owner.kind() == "declaration_list" {
+                owner = owner.parent().unwrap_or(owner);
+            }
+            for row in owner.start_position().row..=owner.end_position().row {
+                test_lines.insert(u64::try_from(row).unwrap_or(u64::MAX).saturating_add(1));
+            }
             continue;
         }
         // The attributed item is the next named sibling that is neither a
@@ -1973,6 +1982,73 @@ fn cfg_test_lines(path: &Path) -> BTreeSet<u64> {
         }
     }
     test_lines
+}
+
+/// Whether an `attribute_item` or `inner_attribute_item` is `cfg(<predicate>)`
+/// with a predicate that is true when the crate is built for its tests.
+fn attribute_is_cfg_test(node: tree_sitter::Node<'_>, text: &str) -> bool {
+    let mut cursor = node.walk();
+    let Some(attribute) = node
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+    let mut path_cursor = attribute.walk();
+    let named: Vec<_> = attribute.named_children(&mut path_cursor).collect();
+    let is_cfg = named.first().is_some_and(|path| {
+        path.kind() == "identifier" && text.get(path.byte_range()) == Some("cfg")
+    });
+    let Some(arguments) = attribute.child_by_field_name("arguments") else {
+        return false;
+    };
+    is_cfg && predicate_holds_under_test(&token_tree_operands(arguments), text)
+}
+
+/// The tokens between a token tree's brackets, split at its top-level commas.
+fn token_tree_operands(tree: tree_sitter::Node<'_>) -> Vec<Vec<tree_sitter::Node<'_>>> {
+    let mut cursor = tree.walk();
+    let mut operands: Vec<Vec<tree_sitter::Node<'_>>> = vec![Vec::new()];
+    let children: Vec<_> = tree.children(&mut cursor).collect();
+    let inner = children
+        .get(1..children.len().saturating_sub(1))
+        .unwrap_or_default();
+    for child in inner {
+        if child.kind() == "," {
+            operands.push(Vec::new());
+        } else if let Some(last) = operands.last_mut() {
+            last.push(*child);
+        }
+    }
+    operands.retain(|operand| !operand.is_empty());
+    operands
+}
+
+/// A `cfg` predicate is true under `test` when it is `test`, or an `all` or
+/// `any` with an operand that is. `not` is never counted: code behind
+/// `not(test)` is the code that runs outside tests, and hiding it hides real
+/// hits. A `key = "value"` pair is a feature or target, not the harness.
+fn predicate_holds_under_test(operands: &[Vec<tree_sitter::Node<'_>>], text: &str) -> bool {
+    let [single] = operands else {
+        return false;
+    };
+    let name = |node: &tree_sitter::Node<'_>| text.get(node.byte_range()).unwrap_or_default();
+    match single.as_slice() {
+        [ident] => ident.kind() == "identifier" && name(ident) == "test",
+        [ident, args] if ident.kind() == "identifier" && args.kind() == "token_tree" => {
+            let inner = token_tree_operands(*args);
+            let holds = |operand: &Vec<tree_sitter::Node<'_>>| {
+                predicate_holds_under_test(std::slice::from_ref(operand), text)
+            };
+            match name(ident) {
+                // `all(test, unix)` is a test-only item on the platform the
+                // tests run on, so a sibling predicate does not undo `test`.
+                "all" | "any" => inner.iter().any(holds),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 /// `(line_number, target)` for every resolvable link in a Markdown document.
