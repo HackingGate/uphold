@@ -91,6 +91,52 @@ fn code(output: &Output) -> Option<i32> {
 
 // --- the repository boundary ------------------------------------------------
 
+#[test]
+fn a_legacy_policy_refuses_every_loader_seam_until_it_is_renamed() {
+    let root = workspace();
+    mark_repository(&root);
+    write(&root, "policy/rg-policy.toml", POLICY);
+    write(
+        &root,
+        "inside.txt",
+        "TODO: must still be checked after migration\n",
+    );
+
+    for arguments in [
+        vec!["scan"],
+        vec!["scan", "--policy", "policy/rg-policy.toml"],
+        vec!["guard", "--stage", "pre-commit"],
+        vec!["check"],
+        vec!["audit", "--for-publication"],
+    ] {
+        let output = uphold(&root, &arguments);
+        assert_eq!(code(&output), Some(2), "{arguments:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("Rename this file"),
+            "{}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("`principles.toml`"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
+    std::fs::rename(
+        root.join("policy/rg-policy.toml"),
+        root.join("policy/principles.toml"),
+    )
+    .unwrap();
+    let output = uphold(&root, &["scan"]);
+    assert_eq!(code(&output), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("inside.txt"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 /// The live failure: a repository with no policy of its own, inside one that
 /// has a policy.
 ///

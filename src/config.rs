@@ -1796,6 +1796,16 @@ pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
 /// [`load`] over text already in hand. `policy_path` names it in every
 /// refusal; a path outside `root` is never read back.
 pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<Policy> {
+    if policy_path
+        .file_name()
+        .is_some_and(|name| name == "rg-policy.toml")
+    {
+        return Err(Fatal::at(
+            policy_path,
+            "the legacy policy filename is no longer supported. Rename this file to \
+             `principles.toml` in the same directory and update references to it",
+        ));
+    }
     let file = parse(policy_path, text)?;
     refuse_set_header(policy_path, &file)?;
     refuse_two_statements_of_one_fact(policy_path, &file)?;
@@ -2868,7 +2878,7 @@ mod tests {
     fn policy_from(text: &str) -> Result<Policy> {
         let dir = crate::fixture::scratch("config");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("rg-policy.toml");
+        let path = dir.join("principles.toml");
         std::fs::write(&path, text).unwrap();
         load(&dir, &path)
     }
@@ -3416,7 +3426,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let path = dir.join("rg-policy.toml");
+        let path = dir.join("principles.toml");
         std::fs::write(
             &path,
             r#"
@@ -4672,7 +4682,7 @@ mod tests {
         // requirement whose pattern is nowhere in its own section has nothing
         // to exempt.
         policy_from(
-            "[rule.every-file]\nrequire_regexp = 'Copyright'\nmessage = \"m\"\n[rule.every-file.files]\ninclude = [\".\"]\nexclude = [\"**/rg-policy.toml\"]\n",
+            "[rule.every-file]\nrequire_regexp = 'Copyright'\nmessage = \"m\"\n[rule.every-file.files]\ninclude = [\".\"]\nexclude = [\"**/principles.toml\"]\n",
         )
         .unwrap();
     }
@@ -4700,7 +4710,7 @@ mod tests {
         for narrowing in [
             "[rule.narrow.files]\ninclude = [\"src\"]\n",
             "[rule.narrow.files]\ninclude = [\".\"]\nglob = [\"*.go\"]\n",
-            "[rule.narrow.files]\ninclude = [\".\"]\nexclude = [\"**/rg-policy.toml\"]\n",
+            "[rule.narrow.files]\ninclude = [\".\"]\nexclude = [\"**/principles.toml\"]\n",
         ] {
             let text = format!("[rule.narrow]\nregexp = 'YubiKey'\nmessage = \"m\"\n{narrowing}");
             let outcome = policy_from(&text);
@@ -5143,7 +5153,7 @@ sets = [\"invented\"]
              [rule.names.git]\nhooks = [\"commit-msg\"]\n",
         )
         .unwrap();
-        let path = dir.join("rg-policy.toml");
+        let path = dir.join("principles.toml");
         std::fs::write(
             &path,
             "visibility = \"public\"\n\n[inherit]\npaths = [\"policy/shared.toml\"]\n",

@@ -4,6 +4,10 @@ Everything below lives in one file, `policy/principles.toml`, in one flat id
 namespace — that is what lets a claim in
 [`policy/upheld.toml`](../policy/upheld.toml) name a rule by id alone.
 
+The retired `policy/rg-policy.toml` filename is detected and refused with exit
+2. Rename it to `policy/principles.toml` and update its references; it is never
+silently treated as a repository with no policy.
+
 - [Rule shape](#rule-shape)
 - [`uphold scan` — the content policy](#uphold-scan--the-content-policy)
 - [`uphold guard` — the guards](#uphold-guard--the-guards)

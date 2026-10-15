@@ -62,6 +62,11 @@ sets supply, and the `.pre-commit-config.yaml` below at this binary's version
 has a policy, and leaves an existing hook config as it is, printing the block to
 add. The owner and the visibility are stated, never read from `origin`.
 
+Existing policies use `policy/principles.toml`. Rename a legacy
+`policy/rg-policy.toml` to that name and update references to it; loading the
+retired filename exits 2 with that remedy. The Python `--init` starter is
+retired; `uphold init` writes the policy and claims together.
+
 **pre-commit / prek** — one manifest serves both, and no Rust toolchain is
 needed (`language: rust` bootstraps it).
 
@@ -250,7 +255,6 @@ uphold probe                        # can each declared hook actually refuse
 
 uphold_check.py --explain ID    # one record in full; also accepts a name
 uphold_check.py --list          # every id in the catalog
-uphold_check.py --init          # a starter declaration
 uphold_check.py --oscal         # OSCAL component-definition JSON
 uphold_check.py --review        # what routes to the review tier
 ```
@@ -417,7 +421,7 @@ QUICK_REFERENCE.md      generated human index
 REVIEW.md, AGENTS.md    generated review tier: the judgment no rule decides
 review-controls.json    generated: the change each controlled record must be found by
 name-index.json         generated lookup index: every name -> a record id
-uphold_check.py         catalog prose: --explain, --list, --review, --oscal, --init
+uphold_check.py         catalog prose: --explain, --list, --review, --oscal
 scripts/                analysis, catalog loading, validation, generation
 ```
 

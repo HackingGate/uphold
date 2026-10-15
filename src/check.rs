@@ -716,8 +716,9 @@ pub(crate) fn run(root: &Path, policy: &Policy, coverage: bool) -> Result<Exit> 
     let path = root.join(DECLARATION);
     if !path.is_file() {
         return Err(Fatal::new(format!(
-            "{DECLARATION} not found under {}. Create one with: \
-             uphold_check.py --init > {DECLARATION}",
+            "{DECLARATION} not found under {}. Add it with [[enforce]] entries naming \
+             rules that already run. For a new repository, use \
+             `uphold init --owner OWNER --visibility public|private|internal`.",
             root.display()
         )));
     }

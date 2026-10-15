@@ -167,12 +167,8 @@ exit codes:
 UPHOLD_ALLOW=<id>,<id> bypasses named guards for one invocation.
 ";
 
-/// The policy file, newest name first.
-///
-/// `rg-policy.toml` is still read because a repository's policy file is not
-/// this tool's to rename on its behalf: the file is checked in, referenced in
-/// documentation, and a hard cut would break every consumer on the day the
-/// binary shipped rather than on the day they chose.
+/// The policy filename and the retired filename detected for a migration error.
+/// The loader refuses the retired name instead of silently skipping its rules.
 const POLICY_NAMES: [&str; 2] = ["principles.toml", "rg-policy.toml"];
 
 /// Whether this directory is where a repository begins.

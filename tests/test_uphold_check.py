@@ -433,6 +433,16 @@ class AnUnreadableDeclaration(unittest.TestCase):
         result = run(self.tmp, "--oscal")
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertEqual(result.stdout.strip(), "")
+        self.assertIn("[[enforce]]", result.stderr)
+        self.assertNotIn("uphold_check.py --init", result.stderr)
+
+    def test_the_retired_initializer_names_the_binary_and_writes_nothing(self):
+        result = run(self.tmp, "--init")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("uphold init --owner OWNER", result.stderr)
+        self.assertIn("For an existing policy", result.stderr)
+        self.assertFalse((self.tmp / "policy/upheld.toml").exists())
 
 
 def explained(**enforcement: object) -> dict:
