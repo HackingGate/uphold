@@ -1559,7 +1559,8 @@ on a merge, and the subject GitHub composes for `gh pr merge --squash` or
 the rest, prose. An `--input` JSON document is read by those same keys, the
 reader the harness hook uses: a `title`, `commit_title` or `subject` value is a
 subject, a `squash_commit_message` or `merge_commit_message` value is a subject
-then prose, and every other value is prose. The harness hook reads a tool call's arguments by the same keys: a
+then prose, and every other value is prose. The harness hook reads a tool
+call's arguments by the same keys: a
 string under `title`, `commit_title` or `subject` is a subject, and one under
 `squash_commit_message` or `merge_commit_message` is a message, so an MCP
 merge's commit title gets the check `gh pr merge --subject` gets. The keys are read in

@@ -398,32 +398,66 @@ pub(crate) fn judged(
 /// One refusal per rule, from the several parts of a call a rule was run over.
 ///
 /// A rule that fires on a title and again on a body is one finding about one
-/// call, and printing its block twice reads as two. The reports are kept, each
-/// already naming the part it was found in, in the order the parts were judged.
+/// call, and printing its block twice reads as two. A report is paragraphs: what
+/// was found in which part, then what to do about it. A paragraph every report
+/// of the rule shares is the rule's own advice and is printed once, after the
+/// findings; the rest are kept in the order the parts were judged, each already
+/// naming the part it was found in.
 fn merged_by_rule(refusals: Vec<crate::guard::Refusal>) -> Vec<crate::guard::Refusal> {
-    let mut merged: Vec<crate::guard::Refusal> = Vec::new();
+    let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
     for refusal in refusals {
-        match merged.iter_mut().find(|seen| seen.id == refusal.id) {
-            Some(seen) => {
-                seen.report.push_str("\n\n");
-                seen.report.push_str(refusal.report.trim_end());
-            }
-            None => merged.push(refusal),
+        match grouped.iter_mut().find(|(id, _)| *id == refusal.id) {
+            Some((_, reports)) => reports.push(refusal.report),
+            None => grouped.push((refusal.id, vec![refusal.report])),
         }
     }
-    merged
+    grouped
+        .into_iter()
+        .map(|(id, reports)| {
+            if let [report] = reports.as_slice() {
+                return crate::guard::Refusal {
+                    id,
+                    report: report.clone(),
+                };
+            }
+            let paragraphs: Vec<Vec<&str>> = reports
+                .iter()
+                .map(|report| report.trim_end().split("\n\n").collect())
+                .collect();
+            let shared = |paragraph: &str| paragraphs.iter().all(|each| each.contains(&paragraph));
+            let mut found: Vec<&str> = Vec::new();
+            for paragraph in paragraphs.iter().flatten() {
+                if !shared(paragraph) && !found.contains(paragraph) {
+                    found.push(paragraph);
+                }
+            }
+            let advice = paragraphs
+                .first()
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|paragraph| shared(paragraph));
+            let mut report = found
+                .into_iter()
+                .chain(advice)
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            report.push('\n');
+            crate::guard::Refusal { id, report }
+        })
+        .collect()
 }
 
 /// The pattern rules a seam runs over published text, each asked about the
 /// subjects its `subjects` selects.
 ///
 /// Three kinds of subject at the hook: the call's text, as kind `text`, each
-/// headline the call carried, as kind `title` under the key it was found at, and what the call
-/// is called, as kind `tool`. A title-scoped rule means the same here as at the
-/// shim, where `--title` is kind `title`; every headline key is that one kind,
-/// a commit subject under `commit_title` included, because the shim does not
-/// tell a pull-request title from a commit subject either. The tool name is the hook's nearest thing to a
-/// command line -- `mcp__github__create_release` is to an MCP server what
+/// headline the call carried, as kind `title` under the key it was found at,
+/// and what the call is called, as kind `tool`. A title-scoped rule means the
+/// same here as at the shim, where `--title` is kind `title`; every headline
+/// key is that one kind, a commit subject under `commit_title` included,
+/// because the shim does not tell a pull-request title from a commit subject
+/// either. The tool name is the hook's nearest thing to a command line -- `mcp__github__create_release` is to an MCP server what
 /// `release create` is to `gh` -- and handing it over as a kind of its own lets
 /// a rule refuse the call by name without also refusing every body that
 /// mentions it. Which tool names mean which command is the rule's to say, in its

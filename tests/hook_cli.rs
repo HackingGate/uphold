@@ -785,6 +785,8 @@ fn a_rule_firing_on_two_parts_of_a_call_prints_one_block_naming_both() {
         reason.contains("mcp__github__create_pull_request carries"),
         "{reason}"
     );
+    // The rule's advice is one paragraph both parts share, and it reads once.
+    assert_eq!(reason.matches("Remove the marker").count(), 1, "{reason}");
 }
 
 const TITLE_POLICY: &str = "\
