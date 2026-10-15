@@ -61,7 +61,8 @@ match = [
   "release:create", "release:edit", "gist:create",
   "api:*",
 ]
-text_flags = ["-t", "--title", "-b", "--body", "-n", "--notes"]
+text_flags = ["-b", "--body", "-n", "--notes"]
+title_flags = ["-t", "--title"]
 file_flags = ["-F", "--body-file", "--notes-file"]
 target_flags = ["-R", "--repo"]
 skip_flags = ["--fill", "--fill-first", "--fill-verbose"]
@@ -73,6 +74,12 @@ scope = "public-target"
   [[shim.verbs]]
   match = ["issue:close", "pr:close", "issue:reopen", "pr:reopen"]
   text_flags = ["-c", "--comment"]
+  editor = "never"
+
+  [[shim.verbs]]
+  match = ["gist:create"]
+  text_flags = ["-d", "--desc"]
+  web_flags = ["-w", "--web"]
   editor = "never"
 
   [[shim.verbs]]
@@ -89,7 +96,7 @@ scope = "public-target"
 /// reading stands in front of `gh` alone.
 const GIT_SHIM: &str = r#"[[shim]]
 command = "git"
-match = ["push:*"]
+match = ["push:*", "send-pack:*"]
 collect = "git-refs"
 target = "git-remote"
 scope = "public-target"
@@ -266,6 +273,125 @@ pub(crate) fn run(root: &Path, owner: &str, visibility: &str, runner: Runner) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Compare the whole table, including fields added in the future. Match
+    /// order is immaterial, but per-verb entries keep their order: when their
+    /// patterns overlap, `Shim::for_verb` selects the first match.
+    fn normalized_table(mut table: toml::Value) -> toml::Value {
+        let fields = table.as_table_mut().unwrap();
+        if let Some(matches) = fields.get_mut("match") {
+            matches
+                .as_array_mut()
+                .unwrap()
+                .sort_by_key(ToString::to_string);
+        }
+        if let Some(verbs) = fields.get_mut("verbs") {
+            let entries = verbs.as_array_mut().unwrap();
+            for entry in entries.iter_mut() {
+                *entry = normalized_table(entry.clone());
+            }
+        }
+        table
+    }
+
+    fn shim_table(text: &str, command: &str) -> toml::Value {
+        let document: toml::Value = toml::from_str(text).unwrap();
+        document["shim"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|table| table["command"].as_str() == Some(command))
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn the_shipped_shim_tables_match_the_repository_policy() {
+        // Both files now understand the same editor fields. No release-lag
+        // exception is needed: an extra field on either side is drift too.
+        for (command, shipped) in [("gh", GH_SHIM), ("git", GIT_SHIM)] {
+            assert_eq!(
+                normalized_table(shim_table(shipped, command)),
+                normalized_table(shim_table(
+                    include_str!("../policy/principles.toml"),
+                    command
+                )),
+                "{command}: the shipped table and repository policy have drifted"
+            );
+        }
+    }
+
+    #[test]
+    fn table_comparison_ignores_match_order_but_detects_changed_flags_and_fields() {
+        let original = shim_table(GH_SHIM, "gh");
+        let expected = normalized_table(original.clone());
+        let mut reordered = original.clone();
+        reordered["match"].as_array_mut().unwrap().reverse();
+        let verbs = reordered["verbs"].as_array_mut().unwrap();
+        for verb in verbs {
+            verb["match"].as_array_mut().unwrap().reverse();
+        }
+        assert_eq!(normalized_table(reordered), expected);
+
+        let mut reversed_verbs = original.clone();
+        reversed_verbs["verbs"].as_array_mut().unwrap().reverse();
+        assert_ne!(
+            normalized_table(reversed_verbs),
+            expected,
+            "changed precedence"
+        );
+
+        for field in ["text_flags", "title_flags"] {
+            let mut changed = original.clone();
+            changed[field].as_array_mut().unwrap().pop();
+            assert_ne!(normalized_table(changed), expected, "removed {field}");
+        }
+        let mut changed = original.clone();
+        changed["verbs"][0]["text_flags"]
+            .as_array_mut()
+            .unwrap()
+            .push(toml::Value::String("--unexpected".into()));
+        assert_ne!(normalized_table(changed), expected, "added per-verb flag");
+
+        let mut missing_editor = original;
+        missing_editor["verbs"][0]
+            .as_table_mut()
+            .unwrap()
+            .remove("editor");
+        assert_ne!(
+            normalized_table(missing_editor),
+            expected,
+            "removed editor field"
+        );
+    }
+
+    #[test]
+    fn the_gh_table_keeps_a_title_from_closing_the_body_checkpoint() {
+        let root = Path::new(".");
+        let policy = crate::config::load_text(
+            root,
+            Path::new("GH_SHIM"),
+            &format!("{GH_SHIM}\n[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\ncommand.scope = \"always\"\n"),
+        )
+        .unwrap();
+        for form in [
+            vec!["issue", "create", "-t", "a title"],
+            vec!["issue", "create", "--title=a title"],
+        ] {
+            let argv: Vec<String> = form.iter().map(|word| (*word).to_owned()).collect();
+            let collected = policy.shims[0].collect(root, &argv).unwrap();
+            assert_eq!(
+                collected
+                    .subjects
+                    .iter()
+                    .map(|subject| (subject.kind, subject.value.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![("title", "a title")],
+                "{form:?}"
+            );
+            assert!(!collected.body_given, "{form:?}");
+        }
+    }
 
     #[test]
     fn the_hook_config_pins_the_ids_the_manifest_publishes() {
