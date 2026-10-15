@@ -2475,6 +2475,17 @@ headline for an empty subject and GitHub composes it; a `--body ""` is the
 body, because `gh` sends a body whenever the flag is given, empty or not. `gh pr merge --help`
 and `gh pr merge --disable-auto` merge nothing, so neither is said.
 
+**A `glab` note given no message is read off stdin.** `glab mr note`, `glab
+mr note create|update` and `glab mr note draft create|update` take the note
+from stdin where no `-m`/`--message` holds anything but white space and stdin
+is not a terminal, and open the editor where it is one. The shim does the same:
+off a terminal it reads stdin as the note, judges it, and hands the same bytes
+to the command; on a terminal it stands in as the editor. A blank `-m` counts
+as no message there, as each verb trims it. `--attach` keeps the note off
+stdin on the verbs that take it, and so does a `--resolve` or `--unresolve` of
+a thread other than `0` on `glab mr note`, which then writes no note. Stdin
+that is not UTF-8 is exit `2`.
+
 The re-entry is routed by a WORD on the command line. The editor variable is set
 to `<this binary> shim --as-editor <command>`, and `--as-editor` is what tells
 the re-entered process that it is the editor. Two environment variables carry

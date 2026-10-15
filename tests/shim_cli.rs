@@ -3887,6 +3887,94 @@ fn an_alias_is_read_with_the_arguments_it_puts_into_its_expansion() {
     assert!(stdout(&output).contains("glab ran:"), "{}", stdout(&output));
 }
 
+/// `shim`, with `input` on its stdin -- a file, which is not a terminal.
+fn shim_fed(root: &Path, args: &[&str], input: &str) -> Output {
+    let fed = root.join("stdin.txt");
+    std::fs::write(&fed, input).unwrap();
+    let path = format!(
+        "{}:{}",
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .arg("shim")
+        .args(args)
+        .current_dir(root)
+        .env("PATH", path)
+        .env_remove("UPHOLD_ALLOW")
+        .env_remove("UPHOLD_SHIM_INNER")
+        .stdin(Stdio::from(std::fs::File::open(&fed).unwrap()))
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn a_note_given_no_message_is_read_off_stdin_as_glab_reads_it() {
+    // `glab`'s `NoteBodyFromStdinOrEditor`: with no message, or one that is
+    // only white space, and stdin not a terminal, the note is what is on
+    // stdin. The shim saw no body flag, stood in as an editor that never
+    // opened, and the note went out unread.
+    let zw = "x\u{200B}y";
+    let root = own_glab_workspace();
+    stub(
+        &root,
+        "glab",
+        "#!/bin/sh\necho \"glab ran: $* stdin=[$(cat)]\"\n",
+    );
+    for form in [
+        vec!["glab", "mr", "note", "1"],
+        vec!["glab", "mr", "comment", "1"],
+        vec!["glab", "mr", "note", "create", "1"],
+        vec!["glab", "mr", "note", "update", "1", "2"],
+        vec!["glab", "mr", "note", "draft", "create", "1"],
+        vec!["glab", "mr", "note", "draft", "update", "1", "2"],
+        // A blank message is no message: each verb trims it.
+        vec!["glab", "mr", "note", "draft", "create", "1", "-m", " "],
+        vec!["glab", "mr", "note", "1", "--message=\t"],
+        // The last `-m` is the one the verb reads.
+        vec!["glab", "mr", "note", "create", "1", "-m", "ok", "-m", ""],
+        // `--resolve 0x0` resolves nothing, and the note is written.
+        vec!["glab", "mr", "note", "1", "--resolve", "0x0"],
+    ] {
+        let output = shim_fed(&root, &form, &format!("{zw}\n"));
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+200B"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("glab ran:"), "{form:?}");
+    }
+    // A clean body is handed to the command whole, and no editor is offered.
+    let output = shim_fed(
+        &root,
+        &["glab", "mr", "note", "draft", "create", "1"],
+        "fine\n",
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("stdin=[fine]"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(!stderr(&output).contains("editor"), "{}", stderr(&output));
+    // A message given, `--attach`, or a thread resolved keeps the verb off
+    // stdin, so the shim leaves it for the command.
+    for form in [
+        vec!["glab", "mr", "note", "1", "-m", "ok"],
+        vec!["glab", "mr", "note", "create", "1", "--attach", "a.png"],
+        vec!["glab", "mr", "note", "1", "--resolve", "12"],
+    ] {
+        let output = shim_fed(&root, &form, &format!("{zw}\n"));
+        assert_eq!(code(&output), 0, "{form:?}: {}", stderr(&output));
+        assert!(
+            stdout(&output).contains(&format!("stdin=[{zw}]")),
+            "{form:?}: {}",
+            stdout(&output)
+        );
+    }
+}
+
 #[test]
 fn a_glab_merge_says_which_commit_message_the_forge_composes_unread() {
     let root = own_glab_workspace();

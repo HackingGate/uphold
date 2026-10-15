@@ -202,6 +202,39 @@ const fn editor_path(editor: Editor, collected: &Collected, interactive: bool) -
     }
 }
 
+/// Read this process's stdin as the body the command will publish, and keep
+/// the bytes to hand back.
+///
+/// Reading stdin here means the real command can no longer read it, so the
+/// bytes are kept whole and handed back on the way through -- see `replayed`,
+/// which is where they become a descriptor the command inherits. A guard that
+/// silently eats the body it approved is worse than no guard: the invocation
+/// still runs, and what it publishes is empty. `why` says what sent the body
+/// there, for the refusal below.
+fn read_stdin_body(collected: &mut Collected, why: &str) -> Result<()> {
+    let mut buffer = Vec::new();
+    std::io::stdin().read_to_end(&mut buffer)?;
+    // Not text is not a pass. A checker reads a subject as text, so bytes that
+    // are not text cannot be checked, and saying so is the only honest answer
+    // available here.
+    let text = std::str::from_utf8(&buffer)
+        .map_err(|error| {
+            Fatal::new(format!(
+                "{why}, which is not UTF-8 text ({error}), so no checker could read what \
+                 would be published"
+            ))
+        })?
+        .to_owned();
+    collected.subjects.push(Subject {
+        kind: "text",
+        value: text,
+        added: None,
+    });
+    collected.body_given = true;
+    collected.stdin = Some(buffer);
+    Ok(())
+}
+
 /// Whether the command this process hands off to can prompt.
 ///
 /// `gh`'s own test: stdin and stdout both a terminal. A body read off stdin
@@ -1609,6 +1642,9 @@ impl Shim {
     fn collect_by_grammar(&self, argv: &[String], grammar: &Grammar) -> Result<Collected> {
         let mut collected = Collected::default();
         let on = || format!("{} {}", self.command, grammar.verb.replace(':', " "));
+        // Each value-taking option as given, for a verb whose body hangs on
+        // which were.
+        let mut given = Vec::new();
         let mut index = 0;
         while let Some(argument) = argv.get(index) {
             index += 1;
@@ -1654,9 +1690,55 @@ impl Shim {
                 index += 1;
                 next
             });
+            given.push((flag.clone(), value.clone()));
             self.read_option(&mut collected, &flag, value, paired)?;
         }
+        if let Some(body) = grammar.stdin_body {
+            self.stdin_body(&mut collected, &given, body, &on)?;
+        }
         Ok(collected)
+    }
+
+    /// The body a note verb takes off stdin, read where the verb would read
+    /// it: no message but white space, nothing that keeps it off stdin, and
+    /// stdin not a terminal (`glab`'s `IsInTTY`). On a terminal the verb opens
+    /// the editor instead, and a blank message no longer closes the editor
+    /// path the shim stands in on.
+    fn stdin_body(
+        &self,
+        collected: &mut Collected,
+        given: &[(String, String)],
+        body: StdinBody,
+        on: &impl Fn() -> String,
+    ) -> Result<()> {
+        // pflag keeps the last of a repeated option, and the verb trims it.
+        let message = given
+            .iter()
+            .rev()
+            .find(|(flag, _)| GLAB_NOTE_MESSAGE.contains(&flag.as_str()));
+        if message.is_some_and(|(_, value)| !value.trim().is_empty()) {
+            return Ok(());
+        }
+        collected.body_given = false;
+        let kept_off = given.iter().any(|(flag, value)| {
+            body.unless_given.contains(&flag.as_str())
+                // A number pflag reads as anything but zero has a digit other
+                // than `0` in it; one that does not parse stops the command
+                // before it writes. `0x0` is zero, and the body is read then.
+                || (body.unless_nonzero.contains(&flag.as_str())
+                    && value.bytes().any(|byte| matches!(byte, b'1'..=b'9')))
+        });
+        if kept_off || collected.stdin.is_some() || std::io::stdin().is_terminal() {
+            return Ok(());
+        }
+        read_stdin_body(
+            collected,
+            &format!(
+                "{}: with no message, `{}` reads its body off stdin",
+                self.command,
+                on()
+            ),
+        )
     }
 
     /// Whether this table can read a value-taking option at all: it names the
@@ -1865,32 +1947,7 @@ impl Shim {
         } else if in_list(&self.file_flags, flag) {
             collected.body_given = true;
             if value == "-" {
-                // Reading stdin here means the real command can no longer
-                // read it, so the bytes are kept whole and handed back on
-                // the way through -- see `replayed`, which is where they
-                // become a descriptor the command inherits. A guard that
-                // silently eats the body it approved is worse than no
-                // guard: the invocation still runs, and what it publishes
-                // is empty.
-                let mut buffer = Vec::new();
-                std::io::stdin().read_to_end(&mut buffer)?;
-                // Not text is not a pass. A checker reads a subject as
-                // text, so bytes that are not text cannot be checked, and
-                // saying so is the only honest answer available here.
-                let text = std::str::from_utf8(&buffer)
-                    .map_err(|error| {
-                        Fatal::new(format!(
-                            "{flag} named stdin, which is not UTF-8 text ({error}), so no \
-                             checker could read what would be published"
-                        ))
-                    })?
-                    .to_owned();
-                collected.subjects.push(Subject {
-                    kind: "text",
-                    value: text,
-                    added: None,
-                });
-                collected.stdin = Some(buffer);
+                read_stdin_body(collected, &format!("{flag} named stdin"))?;
             } else if Path::new(&value).is_file() {
                 collected.subjects.push(Subject {
                     kind: "text",
@@ -2822,7 +2879,40 @@ struct Grammar {
     aliases: &'static [&'static str],
     /// What the forge holds of this verb's text, where it holds any.
     held: Option<Held>,
+    /// Where the verb takes its body off stdin when no message was given.
+    stdin_body: Option<StdinBody>,
 }
+
+/// A verb that reads its body off stdin when stdin is not a terminal and no
+/// message was given: `glab`'s `NoteBodyFromStdinOrEditor`, which `mr note`,
+/// `mr note create|update` and `mr note draft create|update` call.
+///
+/// A message is given only where the last `-m`/`--message` holds something
+/// other than white space: each caller trims it, and a blank one goes to
+/// stdin or the editor as no message does. `printf X | glab mr note draft
+/// create 1` published `X` while the shim, seeing no body flag, stood in as
+/// an editor that never opened; with `-m ' '` it closed the path as well.
+#[derive(Debug, Clone, Copy)]
+struct StdinBody {
+    /// Options that, given at all, keep the body off stdin: `--attach`, whose
+    /// file may itself be what is on stdin.
+    unless_given: &'static [&'static str],
+    /// Options that keep it off stdin when their value is a number other than
+    /// zero: `glab mr note --resolve 12` resolves a thread and writes no note.
+    unless_nonzero: &'static [&'static str],
+}
+
+/// The note verbs that read their body off stdin, and what keeps them from it.
+const GLAB_NOTE_BODY: StdinBody = StdinBody {
+    unless_given: &["--attach"],
+    unless_nonzero: &[],
+};
+const GLAB_MR_NOTE_BODY: StdinBody = StdinBody {
+    unless_given: &[],
+    unless_nonzero: &["--resolve", "--unresolve"],
+};
+/// The option a note's message is given with, on every verb above.
+const GLAB_NOTE_MESSAGE: &[&str] = &["-m", "--message"];
 
 /// The options both forge CLIs take on every verb: `-h`/`--help` everywhere,
 /// and `-R`/`--repo` wherever [`Grammar::repo`] says.
@@ -2849,6 +2939,7 @@ const fn grammar(
         subcommands: &[],
         aliases: &[],
         held: None,
+        stdin_body: None,
     }
 }
 
@@ -3263,6 +3354,7 @@ const FORGE_GRAMMAR: &[Grammar] = &[
             "create", "delete", "draft", "list", "reopen", "resolve", "update",
         ],
         aliases: &["comment"],
+        stdin_body: Some(GLAB_MR_NOTE_BODY),
         ..grammar(
             "glab",
             "mr:note",
@@ -3270,26 +3362,32 @@ const FORGE_GRAMMAR: &[Grammar] = &[
             &["-m", "--message", "--resolve", "--unresolve"],
         )
     },
-    grammar(
-        "glab",
-        "mr:note:create",
-        &["--internal", "--resolvable", "--unique"],
-        &[
-            "--attach",
-            "--file",
-            "--line",
-            "-m",
-            "--message",
-            "--old-line",
-            "--reply",
-        ],
-    ),
-    grammar(
-        "glab",
-        "mr:note:update",
-        &[],
-        &["--attach", "-m", "--message"],
-    ),
+    Grammar {
+        stdin_body: Some(GLAB_NOTE_BODY),
+        ..grammar(
+            "glab",
+            "mr:note:create",
+            &["--internal", "--resolvable", "--unique"],
+            &[
+                "--attach",
+                "--file",
+                "--line",
+                "-m",
+                "--message",
+                "--old-line",
+                "--reply",
+            ],
+        )
+    },
+    Grammar {
+        stdin_body: Some(GLAB_NOTE_BODY),
+        ..grammar(
+            "glab",
+            "mr:note:update",
+            &[],
+            &["--attach", "-m", "--message"],
+        )
+    },
     grammar("glab", "mr:note:delete", &["-y", "--yes"], &[]),
     grammar(
         "glab",
@@ -3307,26 +3405,32 @@ const FORGE_GRAMMAR: &[Grammar] = &[
         subcommands: &["create", "delete", "list", "publish", "update"],
         ..grammar("glab", "mr:note:draft", &[], &[])
     },
-    grammar(
-        "glab",
-        "mr:note:draft:create",
-        &[],
-        &[
-            "--attach",
-            "--file",
-            "--line",
-            "-m",
-            "--message",
-            "--old-line",
-            "--reply",
-        ],
-    ),
-    grammar(
-        "glab",
-        "mr:note:draft:update",
-        &[],
-        &["--attach", "-m", "--message"],
-    ),
+    Grammar {
+        stdin_body: Some(GLAB_NOTE_BODY),
+        ..grammar(
+            "glab",
+            "mr:note:draft:create",
+            &[],
+            &[
+                "--attach",
+                "--file",
+                "--line",
+                "-m",
+                "--message",
+                "--old-line",
+                "--reply",
+            ],
+        )
+    },
+    Grammar {
+        stdin_body: Some(GLAB_NOTE_BODY),
+        ..grammar(
+            "glab",
+            "mr:note:draft:update",
+            &[],
+            &["--attach", "-m", "--message"],
+        )
+    },
     grammar("glab", "mr:note:draft:delete", &["-y", "--yes"], &[]),
     grammar(
         "glab",
