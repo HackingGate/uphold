@@ -141,6 +141,88 @@ fn a_foreign_core_hookspath_is_refused_rather_than_repointed() {
 }
 
 #[test]
+#[cfg(unix)]
+fn active_default_hooks_are_preserved_in_repositories_and_linked_worktrees() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    for linked in [false, true] {
+        let main = repository();
+        support::git(&main, &["config", "user.name", "Test"]);
+        support::git(&main, &["config", "user.email", "test@example.test"]);
+        support::git(&main, &["add", "-A"]);
+        support::git(&main, &["commit", "-qm", "fixture"]);
+        let root = if linked {
+            let worktree = support::scratch("hooks-install-worktree");
+            support::git(
+                &main,
+                &[
+                    "worktree",
+                    "add",
+                    "-qb",
+                    "linked",
+                    worktree.to_str().unwrap(),
+                ],
+            );
+            assert!(worktree.join(".git").is_file());
+            worktree
+        } else {
+            main.clone()
+        };
+        for stage in ["pre-commit", "post-commit"] {
+            let hook = main.join(".git/hooks").join(stage);
+            std::fs::write(&hook, format!("#!/bin/sh\necho ran >> {stage}-ran\n")).unwrap();
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        support::git(&root, &["commit", "--allow-empty", "-qm", "before"]);
+
+        let stub = stub_runner("prek");
+        let output = install(&root, &[], &stub);
+        assert_eq!(code(&output), 2, "{}", text(&output));
+        let report = text(&output);
+        for stage in ["pre-commit", "post-commit"] {
+            assert!(
+                report.contains(&main.join(".git/hooks").join(stage).display().to_string()),
+                "{report}"
+            );
+        }
+        assert!(report.contains("Migrate their behavior"), "{report}");
+        assert!(report.contains("Nothing was written"), "{report}");
+        assert!(!root.join(".githooks").exists());
+        assert_eq!(hooks_path(&root), "");
+        support::git(&root, &["commit", "--allow-empty", "-qm", "after"]);
+        for stage in ["pre-commit", "post-commit"] {
+            assert_eq!(
+                std::fs::read_to_string(root.join(format!("{stage}-ran"))).unwrap(),
+                "ran\nran\n"
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn inert_default_hooks_and_executable_samples_do_not_prevent_installation() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = repository();
+    let stub = stub_runner("prek");
+    let inert = root.join(".git/hooks/post-commit");
+    std::fs::write(&inert, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&inert, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let sample = root.join(".git/hooks/pre-commit.sample");
+    std::fs::write(&sample, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&sample, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = install(&root, &[], &stub);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert_eq!(hooks_path(&root), ".githooks");
+    assert_eq!(
+        std::fs::read_to_string(inert).unwrap(),
+        "#!/bin/sh\nexit 0\n"
+    );
+}
+
+#[test]
 fn a_hook_type_outside_the_four_is_refused_rather_than_switched_off() {
     let root = repository();
     std::fs::write(
@@ -549,6 +631,55 @@ fn check_refuses_hooks_git_ignores_without_changing_their_permissions() {
         let restored = install(&root, &["--check"], &stub);
         assert_eq!(code(&restored), 0, "{}", text(&restored));
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn check_uses_the_owners_execute_access_instead_of_another_permission_class() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = repository();
+    let stub = stub_runner("prek");
+    let installed = install(&root, &[], &stub);
+    assert_eq!(code(&installed), 0, "{}", text(&installed));
+    let hook = root.join(".githooks/pre-commit");
+    for mode in [0o645, 0o654] {
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(mode)).unwrap();
+        // Root can execute when ANY class permits it, so this fixture cannot
+        // reproduce the owner's denied access there. Ordinary Unix CI users
+        // exercise both permission classes against Git itself below.
+        if rustix::fs::access(&hook, rustix::fs::Access::EXEC_OK).is_ok() {
+            return;
+        }
+        let git = support::git_command(&root)
+            .args(["hook", "run", "--ignore-missing", "pre-commit"])
+            .env("PATH", &stub)
+            .output()
+            .unwrap();
+        assert!(git.status.success(), "{}", text(&git));
+        assert!(
+            text(&git).contains("not set as executable"),
+            "{}",
+            text(&git)
+        );
+        assert!(!text(&git).contains("runner ran"), "{}", text(&git));
+
+        let checked = install(&root, &["--check"], &stub);
+        assert_eq!(code(&checked), 1, "{}", text(&checked));
+        assert!(
+            text(&checked).contains("pre-commit: not executable, so git ignores it"),
+            "{}",
+            text(&checked)
+        );
+        assert_eq!(
+            std::fs::metadata(&hook).unwrap().permissions().mode() & 0o777,
+            mode
+        );
+    }
+    let repaired = install(&root, &[], &stub);
+    assert_eq!(code(&repaired), 0, "{}", text(&repaired));
+    let checked = install(&root, &["--check"], &stub);
+    assert_eq!(code(&checked), 0, "{}", text(&checked));
 }
 
 #[test]

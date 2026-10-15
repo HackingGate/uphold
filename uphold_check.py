@@ -280,6 +280,11 @@ def engine_suppliers(root: Path, *, strict: bool = True) -> dict[str, list[str]]
     answered = engine(root, "check")
     if answered.returncode == 2:
         raise CouldNotLook(answered.stderr.strip() or "uphold check could not look")
+    if answered.returncode not in (0, 1):
+        raise CouldNotLook(
+            f"uphold check exited unexpectedly with status {answered.returncode}: "
+            f"{answered.stderr.strip() or 'no diagnostic was reported'}"
+        )
     if answered.returncode != 0 and strict:
         raise Refused(
             "the enforcement claims do not reconcile, so there is nothing "

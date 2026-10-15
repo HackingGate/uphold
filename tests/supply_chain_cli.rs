@@ -192,13 +192,26 @@ fn journal(root: &Path) -> String {
 /// answers `exit 0` no longer models the tool -- a clean run PRINTS a report
 /// whose `risks` list is empty, and printing nothing is a run that did not
 /// report, which is could-not-look.
-const GUARDDOG_CLEAN: &str = "echo '[{\"dependency\":\"six\",\"result\":\
+const GUARDDOG_CLEAN: &str = "echo '[{\"dependency\":\"cookie\",\"result\":\
     {\"errors\":{},\"issues\":0,\"results\":{},\"risks\":[]}}]'\nexit 0";
 
 /// The same report with one risk in it, which is a finding at exit 0.
 const GUARDDOG_RISK: &str = "echo '[{\"dependency\":\"reqests\",\"result\":\
     {\"errors\":{},\"issues\":1,\"results\":{},\"risks\":\
     [{\"name\":\"typosquatting\",\"severity\":\"high\"}]}}]'\nexit 0";
+
+fn clean_dependencies(names: &[&str]) -> String {
+    let entries: Vec<serde_json::Value> = names
+        .iter()
+        .map(|name| {
+            serde_json::json!({
+                "dependency": name,
+                "result": {"errors": {}, "results": {}, "risks": []}
+            })
+        })
+        .collect();
+    format!("echo '{}'\nexit 0", serde_json::json!(entries))
+}
 
 fn recording(answer: &str) -> String {
     format!("echo \"$(basename \"$0\") [$PWD] $*\" >> \"$STUB_LOG\"\n{answer}")
@@ -728,7 +741,7 @@ fn dev_dependencies_are_sent_to_guarddog_where_it_is_told_to_read_them() {
     .unwrap();
     let tools = stubs(&[
         ("osv-scanner", "exit 0"),
-        ("guarddog", &recording(GUARDDOG_CLEAN)),
+        ("guarddog", &recording(&clean_dependencies(&["jose"]))),
     ]);
     let output = supply_with(
         &root,
@@ -909,7 +922,7 @@ fn all_scans_every_manifest_even_where_the_range_holds_none_of_them() {
         ("osv-scanner", &recording("exit 0")),
         ("zizmor", &recording("exit 0")),
         ("uv", &recording("echo 'requests==2.0.0'")),
-        ("guarddog", &recording(GUARDDOG_CLEAN)),
+        ("guarddog", &recording(&clean_dependencies(&["requests"]))),
     ]);
     let output = supply(&root, Some(&tools));
     assert_eq!(code(&output), 0, "{}", text(&output));
@@ -935,7 +948,7 @@ fn a_changed_python_lock_runs_guarddog_in_that_directory_and_not_the_others() {
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
         ("uv", &recording("echo 'requests==2.0.0'")),
-        ("guarddog", &recording(GUARDDOG_CLEAN)),
+        ("guarddog", &recording(&clean_dependencies(&["requests"]))),
     ]);
     let output = pushed(&root, &tools, &before, &after);
     assert_eq!(code(&output), 0, "{}", text(&output));
@@ -1070,7 +1083,7 @@ fn a_bumped_submodule_pointer_expands_into_the_members_own_manifests() {
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
         ("uv", &recording("echo 'requests==2.0.0'")),
-        ("guarddog", &recording(GUARDDOG_CLEAN)),
+        ("guarddog", &recording(&clean_dependencies(&["requests"]))),
     ]);
     let output = pushed(&root, &tools, &before, &after);
     assert_eq!(code(&output), 0, "{}", text(&output));
@@ -1104,7 +1117,7 @@ fn a_submodule_commit_the_store_does_not_have_widens_to_every_manifest_under_it(
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
         ("uv", &recording("echo 'requests==2.0.0'")),
-        ("guarddog", &recording(GUARDDOG_CLEAN)),
+        ("guarddog", &recording(&clean_dependencies(&["requests"]))),
     ]);
     let output = pushed(&root, &tools, &before, &after);
     assert_eq!(code(&output), 0, "{}", text(&output));
@@ -1173,7 +1186,7 @@ fn a_push_from_a_linked_worktree_reads_the_members_range_in_the_member() {
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
         ("uv", &recording("echo 'requests==2.0.0'")),
-        ("guarddog", &recording(GUARDDOG_CLEAN)),
+        ("guarddog", &recording(&clean_dependencies(&["requests"]))),
     ]);
     let mut path = tools.as_os_str().to_owned();
     path.push(":/usr/bin:/bin");
@@ -1462,7 +1475,7 @@ fn guarddog_issues_without_risks_are_not_a_finding() {
     std::fs::create_dir_all(root.join("web")).unwrap();
     std::fs::write(
         root.join("web/package.json"),
-        "{\"name\": \"web\", \"dependencies\": {\"cookie\": \"^1.1.1\"}}\n",
+        "{\"name\": \"web\", \"dependencies\": {\"six\": \"^1.1.1\"}}\n",
     )
     .unwrap();
     let tools = stubs(&[
@@ -1480,6 +1493,136 @@ fn guarddog_issues_without_risks_are_not_a_finding() {
         "{}",
         text(&output)
     );
+}
+
+/// npm skips a dependency whose selector has no matching release. Neither a
+/// duplicate entry nor an unrelated package can make up for the missing name.
+#[test]
+fn guarddog_must_report_every_submitted_npm_dependency() {
+    let root = repository();
+    write(
+        &root,
+        "package.json",
+        r#"{"dependencies":{"cookie":"1.0.0","missing-package":"1.0.0"}}"#,
+    );
+    for names in [
+        vec![],
+        vec!["cookie"],
+        vec!["cookie", "cookie"],
+        vec!["cookie", "unrelated"],
+    ] {
+        let tools = stubs(&[
+            ("osv-scanner", "exit 0"),
+            ("guarddog", &clean_dependencies(&names)),
+        ]);
+        let output = supply(&root, Some(&tools));
+        let said = text(&output);
+        assert_eq!(code(&output), 2, "{names:?}: {said}");
+        assert!(said.contains("guarddog omitted"), "{said}");
+        assert!(said.contains("missing-package"), "{said}");
+        assert!(said.contains(&root.display().to_string()), "{said}");
+        assert!(!said.contains("all checks passed"), "{said}");
+    }
+}
+
+/// `PyPI`'s parser can return the packages before a failed registry request,
+/// dropping both the failed dependency and everything after it.
+#[test]
+fn guarddog_partial_pypi_reports_name_every_omitted_dependency() {
+    let root = repository();
+    write(&root, "uv.lock", "version = 1\n");
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        (
+            "uv",
+            "printf '%s\\n' 'requests==2.0.0' 'registry-failed==1.0' 'after-failure==1.0'",
+        ),
+        ("guarddog", &clean_dependencies(&["requests"])),
+    ]);
+    let output = supply(&root, Some(&tools));
+    let said = text(&output);
+    assert_eq!(code(&output), 2, "{said}");
+    assert!(
+        said.contains("guarddog omitted after-failure, registry-failed"),
+        "{said}"
+    );
+    assert!(said.contains("submitted pypi dependency"), "{said}");
+    assert!(!said.contains("all checks passed"), "{said}");
+}
+
+/// Alias keys are not the names guarddog reports, and several selectors can
+/// merge into one real npm package, including across dependency groups.
+#[test]
+fn guarddog_coverage_uses_real_npm_alias_names() {
+    let root = repository();
+    write(
+        &root,
+        "package.json",
+        r#"{"dependencies":{"cookie":"1.0.0","renamed":"npm:cookie@1.0.0","scoped":"npm:@scope/package@^2","latest":"npm:@scope/package"},"devDependencies":{"development":"npm:cookie@^1"}}"#,
+    );
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        (
+            "guarddog",
+            &clean_dependencies(&["cookie", "@scope/package"]),
+        ),
+    ]);
+    let output = supply_with(
+        &root,
+        &tools,
+        &[(
+            "GUARDDOG_NPM_INCLUDE_DEV_DEPENDENCIES",
+            String::from("true"),
+        )],
+    );
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains("all checks passed"),
+        "{}",
+        text(&output)
+    );
+}
+
+/// Extras, markers and repeated punctuation do not change a `PyPI` identity.
+/// Local project lines and comments remain outside the expected registry set.
+#[test]
+fn guarddog_coverage_normalises_pypi_names_and_ignores_local_requirements() {
+    let root = repository();
+    write(&root, "uv.lock", "version = 1\n");
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        (
+            "uv",
+            "printf '%s\\n' '# exported' '-e .' 'Example__Package.Name[extra]==1.0 ; python_version >= \"3.9\"' 'example-package-name==1.0'",
+        ),
+        ("guarddog", &clean_dependencies(&["EXAMPLE-package_NAME"])),
+    ]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains("all checks passed"),
+        "{}",
+        text(&output)
+    );
+}
+
+/// A reported risk stays a finding even when another dependency was omitted;
+/// the output must also disclose the gap.
+#[test]
+fn guarddog_risks_survive_a_partial_report() {
+    let root = repository();
+    write(
+        &root,
+        "package.json",
+        r#"{"dependencies":{"reqests":"2.0.0","missing-package":"1.0.0"}}"#,
+    );
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_RISK)]);
+    let output = supply(&root, Some(&tools));
+    let said = text(&output);
+    assert_eq!(code(&output), 1, "{said}");
+    assert!(said.contains("objected to reqests"), "{said}");
+    assert!(said.contains("guarddog omitted missing-package"), "{said}");
+    assert!(!said.contains("all checks passed"), "{said}");
 }
 
 /// A report must carry both the checks guarddog ran and its risk list. A
@@ -1970,7 +2113,7 @@ fn a_waived_guarddog_finding_is_printed_and_not_held_against_the_run() {
     std::fs::create_dir_all(root.join("web")).unwrap();
     std::fs::write(
         root.join("web/package.json"),
-        "{\"name\": \"web\", \"dependencies\": {\"cookie\": \"^1.1.1\"}}\n",
+        "{\"name\": \"web\", \"dependencies\": {\"swagger-ui-express\": \"5.0.1\"}}\n",
     )
     .unwrap();
     let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_MISMATCH)]);
@@ -2006,7 +2149,7 @@ fn a_waiver_for_another_version_does_not_apply_and_is_reported_stale() {
     std::fs::create_dir_all(root.join("web")).unwrap();
     std::fs::write(
         root.join("web/package.json"),
-        "{\"name\": \"web\", \"dependencies\": {\"cookie\": \"^1.1.1\"}}\n",
+        "{\"name\": \"web\", \"dependencies\": {\"swagger-ui-express\": \"5.0.1\"}}\n",
     )
     .unwrap();
     let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_MISMATCH)]);
@@ -2203,7 +2346,8 @@ fn exporting(root: &Path, lines: &[&str]) -> PathBuf {
             &recording(&format!(
                 "grep -q ' @ ' \"$5\" && {{ echo '[{{\"dependency\":\"example-kit\",\
                  \"result\":{{\"errors\":{{\"download-package\":\"Received status code: 404 \
-                 from PyPI\"}},\"issues\":0}}}}]'; exit 0; }}\n{GUARDDOG_CLEAN}"
+                 from PyPI\"}},\"issues\":0}}}}]'; exit 0; }}\n{}",
+                clean_dependencies(&["requests"])
             )),
         ),
     ])

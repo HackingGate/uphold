@@ -1476,8 +1476,8 @@ fn rules_that_did_not_run(output: &str) -> Option<String> {
 
 /// What one `guarddog verify` run established.
 enum Read {
-    /// guarddog objected to something, described.
-    Risks(String),
+    /// guarddog objected to something, with any missing coverage described.
+    Risks(String, Option<String>),
     /// guarddog did not answer, described.
     Unread(String),
     /// guarddog ran and objected to nothing.
@@ -1509,9 +1509,14 @@ enum Read {
 /// is not held against the run; the index of each waiver that matched is
 /// recorded in the ledger, with every package a report named, so the section
 /// can report the waivers that did not.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "scan inputs and subprocess output meet at this reader"
+)]
 fn guarddog_read(
     at: &str,
     ecosystem: &str,
+    expected: &BTreeSet<String>,
     waivers: &[Waiver],
     ledger: &mut Ledger,
     code: Option<i32>,
@@ -1535,17 +1540,23 @@ fn guarddog_read(
             "guarddog printed no report this could read at {at}"
         ));
     };
-    // A bare `[]` against a manifest that had dependencies is what a total
-    // network failure looks like here, and it is not a clean bill of health.
-    if entries.is_empty() {
+    // Where the input could not be read, even an empty expected set cannot
+    // establish coverage. Known inputs are reconciled below, including `[]`.
+    if entries.is_empty() && expected.is_empty() {
         return Read::Unread(format!("guarddog reported on no dependency at all at {at}"));
     }
     let mut objected: Vec<String> = Vec::new();
+    let mut observed = BTreeSet::new();
     for entry in &entries {
         let name = entry
             .get("dependency")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("a dependency it did not name");
+        observed.insert(if ecosystem == "pypi" {
+            references::normalise(name)
+        } else {
+            name.to_owned()
+        });
         let Some(result) = entry.get("result") else {
             return Read::Unread(format!("guarddog said nothing about {name} at {at}"));
         };
@@ -1637,13 +1648,22 @@ fn guarddog_read(
             objected.push(format!("{name}{at_version} ({risks} risk(s))"));
         }
     }
-    if objected.is_empty() {
-        Read::Clean
+    let missing: Vec<&str> = expected.difference(&observed).map(String::as_str).collect();
+    let unread = (!missing.is_empty()).then(|| {
+        format!(
+            "guarddog omitted {} at {at}: no report for submitted {ecosystem} dependency(s)",
+            missing.join(", ")
+        )
+    });
+    if !objected.is_empty() {
+        Read::Risks(
+            format!("{at}: guarddog objected to {}", objected.join(", ")),
+            unread,
+        )
+    } else if let Some(reason) = unread {
+        Read::Unread(reason)
     } else {
-        Read::Risks(format!(
-            "{at}: guarddog objected to {}",
-            objected.join(", ")
-        ))
+        Read::Clean
     }
 }
 
@@ -1791,6 +1811,7 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
         match guarddog_read(
             &at,
             "pypi",
+            &sorted.expected,
             waivers,
             &mut ledger,
             status.status.code(),
@@ -1800,8 +1821,11 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
             Read::Clean => {
                 ledger.read.insert("pypi");
             }
-            Read::Risks(said) => {
-                ledger.read.insert("pypi");
+            Read::Risks(said, unread) => {
+                if unread.is_none() {
+                    ledger.read.insert("pypi");
+                }
+                unrun = unrun.or(unread);
                 println!("   FAILED: guarddog pypi: {said}");
                 refused = true;
             }
@@ -1865,6 +1889,7 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
         match guarddog_read(
             &at,
             "npm",
+            &sorted.expected,
             waivers,
             &mut ledger,
             status.status.code(),
@@ -1874,8 +1899,11 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
             Read::Clean => {
                 ledger.read.insert("npm");
             }
-            Read::Risks(said) => {
-                ledger.read.insert("npm");
+            Read::Risks(said, unread) => {
+                if unread.is_none() {
+                    ledger.read.insert("npm");
+                }
+                unrun = unrun.or(unread);
                 println!("   FAILED: guarddog npm: {said}");
                 refused = true;
             }
@@ -2181,13 +2209,13 @@ mod tempfile_guard {
 
 #[cfg(test)]
 mod tests {
+    use super::{BTreeSet, Ledger, Read, guarddog_read, tolerated};
     use super::{
         DENY_FLOOR, Floor, GITLEAKS_DEFAULT, GITLEAKS_FOUND, GITLEAKS_VERSION, GUARDDOG_FLOOR,
         OSV_FLOOR, PRUNE, Scope, VET_FLOOR, Version, ZIZMOR_FLOOR, against_floor, find_named,
         find_workflow_dirs, gitleaks_could_not_look, guarddog_unpacks_under, interesting,
         parse_version, unscanned_ci,
     };
-    use super::{Ledger, Read, guarddog_read, tolerated};
 
     /// guarddog 3.2.0's reports, recorded against the public registries with
     /// only the unpack path rewritten: react-dom 19.2.0, whose registry
@@ -2221,6 +2249,7 @@ mod tests {
         let read = guarddog_read(
             "web",
             ecosystem,
+            &BTreeSet::new(),
             &[],
             &mut Ledger::default(),
             Some(0),
@@ -2228,7 +2257,7 @@ mod tests {
             "",
         );
         match read {
-            Read::Risks(_) => Ok(true),
+            Read::Risks(..) => Ok(true),
             Read::Clean => Ok(false),
             Read::Unread(said) => Err(said),
         }

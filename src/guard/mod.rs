@@ -310,6 +310,7 @@ pub(crate) fn target_refusal(
     rule: &Rule,
     target: Option<&str>,
     forge: Option<crate::shim::Forge>,
+    hostname: Option<&str>,
     asked: &mut BTreeMap<String, push::Owned>,
 ) -> Result<Option<Refusal>> {
     let Some(builtin) = rule.builtin() else {
@@ -328,6 +329,16 @@ pub(crate) fn target_refusal(
     // `git::owner_repo` is the one parser, so `--repo owner/name`, a full forge
     // url and the remote all become the same pair. A value it cannot split is
     // not a destination this guard can judge.
+    if let Some(named) = target
+        && crate::shim::repository_placeholder("gh", named)?
+    {
+        return Err(Fatal::new(format!(
+            "rule {:?}: this API destination contains repository placeholders whose effective \
+             identity could not be established for ownership checks. Nothing was published; \
+             name the destination repository directly in the API endpoint",
+            rule.id
+        )));
+    }
     let Some((owner, repo)) = target.and_then(crate::git::owner_repo) else {
         return Err(Fatal::new(format!(
             "rule {:?}: this invocation publishes to a repository and nothing here says \
@@ -344,7 +355,7 @@ pub(crate) fn target_refusal(
             root,
             policy,
             rule,
-            (&owner, &repo),
+            (&owner, &repo, hostname),
             forge,
             asked,
             push::Seam::Command,

@@ -630,6 +630,10 @@ pub(crate) fn install(
         )));
     }
 
+    if existing.is_none() {
+        refuse_displaced_hooks(root, directory)?;
+    }
+
     // Every file is judged before any is written. Stopping at the first that
     // differs left the ones before it rewritten with the marker and the rest as
     // they were: a directory neither `--install` nor `--check` describes,
@@ -734,6 +738,76 @@ pub(crate) fn install(
     Ok(Exit::Clean)
 }
 
+/// Ask Git rather than assuming `.git` is a directory: linked worktrees use
+/// the common repository's hooks, and `GIT_COMMON_DIR` can relocate them.
+fn refuse_displaced_hooks(root: &Path, directory: &str) -> Result<()> {
+    let output = crate::shim::inner_tool("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-path", "hooks"])
+        .current_dir(root)
+        .output()
+        .map_err(|error| Fatal::new(format!("could not locate git's hooks: {error}")))?;
+    if !output.status.success() {
+        return Err(Fatal::new(format!(
+            "could not locate git's hooks: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let location = String::from_utf8(output.stdout)
+        .map_err(|error| Fatal::new(format!("git's hooks path is not UTF-8: {error}")))?;
+    let active = Path::new(location.trim_end_matches('\n'));
+    if let (Ok(active), Ok(target)) = (
+        std::fs::canonicalize(active),
+        std::fs::canonicalize(root.join(directory)),
+    ) && active == target
+    {
+        return Ok(());
+    }
+    let entries = match std::fs::read_dir(active) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(Fatal::at(active, error)),
+    };
+    let mut displaced = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| Fatal::at(active, error))?;
+        let path = entry.path();
+        // Git's generated samples are inert, even when marked executable.
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "sample")
+        {
+            continue;
+        }
+        if path.is_file() && executable(&path) {
+            displaced.push(path.display().to_string());
+        }
+    }
+    if displaced.is_empty() {
+        return Ok(());
+    }
+    displaced.sort();
+    Err(Fatal::new(format!(
+        "setting core.hooksPath to {directory:?} would stop git running these existing \
+         executable hooks:\n  {}\nNothing was written. Migrate their behavior into the \
+         runner's config or the target hook directory, then move the old hooks aside \
+         and rerun `hooks --install`",
+        displaced.join("\n  ")
+    )))
+}
+
+/// Git uses `access(X_OK)` to discover hooks. Any execute bit is insufficient:
+/// an owner cannot borrow a group's or other's execute permission, and ACLs
+/// and directory permissions also affect access.
+#[cfg(unix)]
+fn executable(path: &Path) -> bool {
+    rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok()
+}
+
+#[cfg(not(unix))]
+fn executable(path: &Path) -> bool {
+    path.is_file()
+}
+
 /// `uphold hooks --install --check`: what is in the directory, against what
 /// this binary would write there, and whether git runs any of it.
 ///
@@ -751,17 +825,12 @@ fn check(root: &Path, runner: &str, directory: &str, hooks_path: Option<&str>) -
             println!("  {directory}/{stage}: absent");
             continue;
         };
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let metadata = std::fs::metadata(&path).map_err(|error| Fatal::at(&path, error))?;
-            if metadata.permissions().mode() & 0o111 == 0 {
-                wrong += 1;
-                println!(
-                    "  {directory}/{stage}: not executable, so git ignores it. \
+        if !executable(&path) {
+            wrong += 1;
+            println!(
+                "  {directory}/{stage}: not executable, so git ignores it. \
                      Rerunning `hooks --install` restores its executable permissions"
-                );
-            }
+            );
         }
         let theirs = effective_lines(&current);
         let ours = effective_lines(&written(runner, directory, stage));

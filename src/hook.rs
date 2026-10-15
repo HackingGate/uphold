@@ -162,11 +162,8 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
         ))
     })?;
 
-    // The label is what the report calls this call, and nothing else conditions
-    // on it. An event that does not carry one is checked exactly as thoroughly
-    // with the harness name in its place: refusing over a field that only
-    // decides a word in a message would be a gate firing on work it had no
-    // finding about, which is how a gate on a hot path gets deleted.
+    // The label names the call in reports and is its `tool` subject. A missing
+    // name retains the harness fallback; supplied argument text is still read.
     let label = event
         .pointer(shape.label)
         .and_then(Value::as_str)
@@ -180,8 +177,8 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
     // event that is not JSON exits 2 rather than passing.
     //
     // What is NOT this case: a subject that is present and holds no strings. A
-    // call carrying only numbers and flags publishes no text there is a rule
-    // about, it was read, and it passed. Nor is a subject that is a bare string
+    // call carrying only numbers and flags still has a tool name to judge.
+    // Nor is a subject that is a bare string
     // rather than an object -- that is text, and it is checked as text. The
     // question here is whether the subject was found, never what shape the
     // harness chose for it.
@@ -215,10 +212,7 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
 
     let mut collected = Walked::default();
     walk_strings(subject, None, &mut collected);
-    // Read, and carrying no text this binary has a rule about.
-    if collected.prose.is_empty() && collected.headlines.is_empty() {
-        return Ok(Exit::Clean);
-    }
+    let has_text = !collected.prose.is_empty() || !collected.headlines.is_empty();
     let text = collected.prose.join("\n");
     let headlines: Vec<text::Headline> = collected
         .headlines
@@ -231,7 +225,14 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
 
     let mut report = String::new();
 
-    for verdict in text::judged(text::Seam::Hook, &root, &policy, label, &text, &headlines)? {
+    for verdict in text::judged(
+        text::Seam::Hook,
+        &root,
+        &policy,
+        label,
+        has_text.then_some(text.as_str()),
+        &headlines,
+    )? {
         match verdict {
             // The message as well as the finding. At the shim and at `--text`
             // the message is what tells the author what to do instead; here the

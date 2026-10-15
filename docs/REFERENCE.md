@@ -2179,11 +2179,21 @@ be in scope, for a question that is none of the other three (the doubly nested
 form is the enum's own spelling). `collect = "git-refs"` replaces the argv walk
 for `git`, whose published text is positional.
 
+For `gh`, an explicit repository flag takes precedence over `GH_REPO`, which
+takes precedence over the current origin. An environment-selected destination
+is checked for ownership and visibility as its own repository. Host-qualified
+GitHub destinations bind visibility and ownership probes to that host;
+unsupported enterprise hosts are refused. An explicit host takes precedence
+over `GH_HOST`. Repository placeholders in API endpoints can still be expanded
+by `gh` for visibility and text checks, but an ownership rule requires a
+concrete destination and refuses unresolved placeholders.
+
 **`public-target` asks this repository before it asks anybody else.** Where the
 policy declares a top-level `visibility`, it settles the question offline:
 `public` is in scope, `private` and `internal` are out of it, and nothing is
 spawned. A declaration is about one repository, so it is read only where no
-`target_flags` value is present and the destination came from `origin`. A named
+`target_flags` value is present and the destination came from `origin`; for
+`gh`, neither `GH_REPO` nor `GH_HOST` may override the local context. A named
 destination always goes to the forge, including `gh -R this-owner/this-repo`,
 because the name carries no host and `--hostname` or `GH_HOST` can make
 `owner/repo` a repository on a different forge. A tree whose `origin` cannot be
@@ -2792,6 +2802,9 @@ characters, so it is compared as a string and matches no tool.
 **Which calls arrive is the harness's decision, not this binary's.** Re-deciding
 it here would be a second matcher free to disagree with the first, and an
 operator would have to hold both. What arrives is checked.
+Tool-name rules also run when arguments contain only numbers, booleans, nulls,
+or empty containers. Such calls have no argument-text subject; an explicitly
+supplied empty string still has one.
 
 ### What runs where there is no policy
 
@@ -3244,6 +3257,10 @@ A report also needs a `results` object and a `risks` array; missing or mistyped
 fields are unread, never an empty risk list. npm tolerance requires the
 underlying `results.metadata_mismatch` and the risk's `threat_description` to
 agree exactly before their differences are accepted.
+Each submitted registry dependency must appear in the report: npm aliases are
+resolved to their package names and PyPI names are normalized. Missing names
+are reported as unread even when other entries are clean. A reported risk
+still refuses the run, with any missing coverage printed alongside it.
 Its older admission, "Some rules failed to run while scanning \<package\>" at
 exit 0 — the two email-domain rules time out routinely — is still read, and
 still names the packages and how many rules. None of that is a finding: it is
@@ -3582,7 +3599,11 @@ refused, never repointed; and a `default_install_hook_types` naming a hook
 type outside the four is refused, because that type would otherwise stop
 firing while the install read as one that worked. lefthook is refused by name:
 it installs and owns its own hooks, and a `core.hooksPath` written here would
-displace them.
+displace them. When no `core.hooksPath` is set, installation also checks the
+default hooks directory Git resolves, including the shared directory of linked
+worktrees. Existing executable hooks there are named and refused before any
+files or configuration change; migrate their behavior before retrying.
+Executable `.sample` files and non-executable files are inert.
 
 **`--adopt`** is the one exception to "never replaced", and it replaces only
 the comments. A file in the directory without this command's marker is
@@ -3607,6 +3628,9 @@ command and **not** matching (an older install, or edited since — rerunning
 and different — with the diff wherever the lines differ — and whether
 `core.hooksPath` actually points git at the directory. Exit `0` only when all
 four match and git runs them; `1` otherwise.
+On Unix, executable access is checked for the invoking user, including the
+applicable permission class and ACLs. An execute bit for another class alone
+does not establish that Git can run the hook.
 
 ## `uphold probe` — can each hook refuse?
 

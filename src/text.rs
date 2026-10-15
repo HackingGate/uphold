@@ -300,20 +300,23 @@ pub(crate) struct Headline {
 /// Everything a piece of published text is judged by, at one seam.
 ///
 /// The single assembly. `label` is what the subject is called in a report --
-/// the tool name at the hook, the source at `--text` -- and is reported rather
-/// than matched on. `text` is the prose; `headlines` are the subjects the seam
-/// could tell apart from it, which only the harness hook can, by a tool call's
+/// the tool name at the hook, the source at `--text` -- and is also matched as
+/// the hook's `tool` subject. `text` is the prose; `headlines` are the subjects
+/// the seam could tell apart from it, which only the harness hook can, by a tool call's
 /// argument names. Every checker but the guards reads the two joined, as it
-/// always has; the guards are handed each headline as one, so the lookalike
-/// pass a title gets at the shim is the pass it gets here.
+/// always has; `None` means the call has no argument text, while its tool name
+/// remains a subject. The guards are handed each headline as one, so the
+/// lookalike pass a title gets at the shim is the pass it gets here.
 pub(crate) fn judged(
     seam: Seam,
     root: &std::path::Path,
     policy: &Policy,
     label: &str,
-    text: &str,
+    text: Option<&str>,
     headlines: &[Headline],
 ) -> Result<Vec<Verdict>> {
+    let has_text = text.is_some() || !headlines.is_empty();
+    let text = text.unwrap_or_default();
     let joined;
     let whole = if headlines.is_empty() {
         text
@@ -326,6 +329,9 @@ pub(crate) fn judged(
         joined.as_str()
     };
     over_kinds(seam, |kind| {
+        if !has_text && kind != Judged::Patterns {
+            return Ok(Vec::new());
+        }
         Ok(match kind {
             Judged::Literals => failures_in(root, policy, whole)?
                 .into_iter()
@@ -383,10 +389,12 @@ pub(crate) fn judged(
                 .collect(),
             // Only the hook consults these here, and only the rules whose
             // `seams` names it -- see `Seam::runs_by_default`.
-            Judged::Patterns => patterns_over(policy, seam, label, whole, headlines)?
-                .into_iter()
-                .map(Verdict::Rule)
-                .collect(),
+            Judged::Patterns => {
+                patterns_over(policy, seam, label, has_text.then_some(whole), headlines)?
+                    .into_iter()
+                    .map(Verdict::Rule)
+                    .collect()
+            }
             // The shim's, and the shim does not arrive here: it holds a subject
             // and a per-rule scope this function is not given, so it dispatches
             // rule by rule through `Judged::of` instead.
@@ -467,7 +475,7 @@ fn patterns_over(
     policy: &Policy,
     seam: Seam,
     label: &str,
-    text: &str,
+    text: Option<&str>,
     headlines: &[Headline],
 ) -> Result<Vec<Failure>> {
     // The shim runs its pattern rules itself, over the subjects it collected,
@@ -478,24 +486,25 @@ fn patterns_over(
     }
     // Each with the label a report names it by: the kind alone for the call's
     // own two, the key for a headline, so a finding says which field it was in.
-    let mut subjects = vec![
-        (
+    let mut subjects = Vec::new();
+    if let Some(text) = text {
+        subjects.push((
             None,
             crate::shim::Subject {
                 kind: "text",
                 value: text.to_owned(),
                 added: None,
             },
-        ),
-        (
-            None,
-            crate::shim::Subject {
-                kind: "tool",
-                value: label.to_owned(),
-                added: None,
-            },
-        ),
-    ];
+        ));
+    }
+    subjects.push((
+        None,
+        crate::shim::Subject {
+            kind: "tool",
+            value: label.to_owned(),
+            added: None,
+        },
+    ));
     subjects.extend(headlines.iter().map(|headline| {
         (
             Some(headline.label.as_str()),
@@ -545,7 +554,7 @@ fn patterns_over(
 pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<Exit> {
     let text = read(source)?;
     let (root, policy) = load_for(found)?;
-    let verdicts = judged(Seam::Scan, &root, &policy, source, &text, &[])?;
+    let verdicts = judged(Seam::Scan, &root, &policy, source, Some(&text), &[])?;
 
     for verdict in &verdicts {
         match verdict {
