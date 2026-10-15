@@ -167,8 +167,12 @@ exit codes:
 UPHOLD_ALLOW=<id>,<id> bypasses named guards for one invocation.
 ";
 
-/// The policy filename and the retired filename detected for a migration error.
-/// The loader refuses the retired name instead of silently skipping its rules.
+/// The policy file, newest name first.
+///
+/// `rg-policy.toml` is still read because a repository's policy file is not
+/// this tool's to rename on its behalf: the file is checked in, referenced in
+/// documentation, and a hard cut would break every consumer on the day the
+/// binary shipped rather than on the day they chose.
 const POLICY_NAMES: [&str; 2] = ["principles.toml", "rg-policy.toml"];
 
 /// Whether this directory is where a repository begins.
@@ -983,8 +987,8 @@ struct EffectiveRule<'rule> {
 /// `inherit.paths` merges, minus `inherit.disabled_rules`, with its own rules
 /// shadowing an inherited id -- five interacting fields, and every second
 /// reader of them is a reader free to disagree with the engine about which
-/// rules run. The Python reconciler was that second reader; it now asks the
-/// binary instead, so one loader answers every caller.
+/// rules run. The reconciler in `uphold_check.py` is that second reader today,
+/// and this is what ends it: one loader answers, and everything else asks.
 ///
 /// `--json` because the caller is a program. The human form is the same answer
 /// for a person standing in a repository asking what it is holding itself to.

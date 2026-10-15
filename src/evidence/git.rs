@@ -256,8 +256,8 @@ mod tests {
 
     #[test]
     fn a_stage_with_no_message_is_unavailable_and_not_an_empty_answer() {
-        // The provider's own answer to ADR 0005's third question. An empty
-        // `Found` here would let a policy conclude the message names nothing
+        // A stage with no message is `Unavailable`, not an empty `Found`;
+        // the latter would let a policy conclude the message names nothing
         // because nothing was removed, over a message nobody read.
         let observed = Messages.observe(&context(None));
         assert!(matches!(observed, Observation::Unavailable { .. }));

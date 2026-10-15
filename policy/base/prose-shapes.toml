@@ -21,8 +21,7 @@
 # put a program in front of `gh` and `git` is refused at load, with the table to
 # write named in the refusal. That is the same design `published-text` records
 # and for the same reason: acquiring a program in front of `git` on the strength
-# of a version bump is a thing no line in the inheriting tree asked for. See
-# ADR 0006.
+# of a version bump is a thing no line in the inheriting tree asked for.
 #
 # WHY THESE FOUR AND NOT THE OTHERS. Each of the four can be recognized without
 # understanding the sentence. "As we will see" is that shape wherever it appears;

@@ -13,8 +13,8 @@ from catalog import load_catalog, name_entries
 ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 # What an entry IS, from a closed list. Where it is used is `domains`, and how a
 # check sees it is `enforcement.rung`: three questions and three fields, so none
-# of them is made to answer another (ADR 0011). principles/SCHEMA.md carries
-# the meaning of each; a test holds the two lists equal.
+# of them is made to answer another. principles/SCHEMA.md carries the meaning
+# of each; a test holds the two lists equal.
 KINDS = {
     "law",
     "theorem",

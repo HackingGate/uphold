@@ -16,18 +16,16 @@
 //! again from a model asserting it. [`Strength`] is that ordering, and the
 //! rules in [`Body`] are what it buys: weaker evidence may add a refusal and
 //! may never supply a clean verdict where a stronger provider could not look,
-//! and may never cancel a stronger provider's refusal. ADR 0003 and ADR 0004
-//! measured the failure this refuses at three tiers -- a clean run over a
-//! source the analyzer could not read is byte-identical to a clean run over a
-//! source that complies -- and [`Observation::Unavailable`] is the provider
-//! saying so itself, which ADR 0005 names as the property worth preferring a
-//! provider for.
+//! and may never cancel a stronger provider's refusal. The fail-closed contract
+//! matters at every tier: a clean run over a source the analyzer could not read
+//! is byte-identical to a clean run over a compliant source, so
+//! [`Observation::Unavailable`] is the provider saying so itself and lets
+//! callers distinguish an unread source from a clean one.
 //!
-//! What this is not, and each is a decision already recorded: not a rule DSL
-//! over tree-sitter (ADR 0003), not a plugin API (ADR 0005). A provider is a
-//! Rust type compiled into this binary, and a policy is a Rust predicate over
-//! a [`Body`]. The trait is the shape of an answer to ADR 0005's third
-//! question, and nothing more.
+//! Providers are Rust types compiled into this binary, and policies are Rust
+//! predicates over a [`Body`]. Keeping the seam typed and compiled in lets
+//! policies consume normalized facts without depending on the provider that
+//! read them. The evidence section of `docs/DESIGN.md` describes this boundary.
 
 pub(crate) mod diff;
 pub(crate) mod git;
@@ -444,8 +442,8 @@ mod tests {
 
     #[test]
     fn a_provider_that_could_not_look_is_never_an_empty_found() {
-        // The failure ADR 0003 measured: silence over an unread source reads
-        // as compliance. The variant is what keeps the two apart, and a body
+        // Silence over an unread source must not read as compliance. The
+        // variant keeps the two apart, and a body
         // keeps the reason rather than dropping it into an empty list.
         let unread = Scripted(
             PARSER,

@@ -4,10 +4,6 @@ Everything below lives in one file, `policy/principles.toml`, in one flat id
 namespace — that is what lets a claim in
 [`policy/upheld.toml`](../policy/upheld.toml) name a rule by id alone.
 
-The retired `policy/rg-policy.toml` filename is detected and refused with exit
-2. Rename it to `policy/principles.toml` and update its references; it is never
-silently treated as a repository with no policy.
-
 - [Rule shape](#rule-shape)
 - [`uphold scan` — the content policy](#uphold-scan--the-content-policy)
 - [`uphold guard` — the guards](#uphold-guard--the-guards)
@@ -591,7 +587,7 @@ it refuses** so the name predicts the rule list:
 | `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |
 | `private-names` | a private organization or repository named in a commit message, a staged diff, or the tracked tree of a **public** repository — **installs five stages**, and refuses to run until the repository says whether it is published |
 | `stale-visibility` | a policy declaring `private` over a repository the forge serves as **public** — **installs `pre-push` and `manual`**, and reaches the network. Refuses that one direction only; it can never confirm privacy |
-| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push — and, as `unowned-forge-target`, a `gh` invocation bound for a repository this workspace does not own, which refuses to run until the repository says who it is. **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [ADR 0006](adr/0006-what-a-bundled-set-may-attach-to-a-command.md) |
+| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push — and, as `unowned-forge-target`, a `gh` invocation bound for a repository this workspace does not own, which refuses to run until the repository says who it is. **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [the set's command ceiling](#what-a-bundled-set-may-install) |
 | `prose-shapes` | four sentence shapes that carry nothing — a sentence announcing what the next one will say, a clause behind a dash restating the one in front of it, a hedge admitting no uncertainty, an objection nobody raised being answered. **Installs no git hook**: its rules run in `uphold scan` and at the shim seam (`gh`, `git push`), and like `published-text` it refuses to load until the repository has declared the `[[shim]]` tables itself. `UPHOLD_ALLOW=<rule-id>` is the waiver for the sentence a rule is wrong about |
 
 The nine sets from `commit-message-residue` through `stale-visibility` install
@@ -810,7 +806,9 @@ The same document is committed here as
 refuses a tree where it has drifted from what the binary would install — so a
 change to a bundled set is a reviewable diff in the repository that owns it.
 
-**What a set may install is declared in the set**, and it is a ceiling rather
+### What a bundled set may install
+
+What a set may install is declared in the set, and it is a ceiling rather
 than a description:
 
 ```toml
@@ -832,8 +830,7 @@ what it may do. What the ceiling does not grant is a shim: a set declaring
 `[[shim]]` is refused outright, and a repository inheriting a set whose rules
 name a command it has no `[[shim]]` for is refused at load with the table to
 write, because a program in front of a real command is a decision the
-repository makes visibly or not at all
-([ADR 0006](adr/0006-what-a-bundled-set-may-attach-to-a-command.md)).
+repository makes visibly or not at all.
 The constraint it makes mechanical is *a new guard gets a new set name rather
 than joining an existing one*: a content rule arriving with a version bump is a
 finding somebody argues about, and a guard arriving the same way is a commit
@@ -1477,7 +1474,7 @@ stamped on it, the range about to be pushed.
 | `no-stale-hook-pins` | a pin naming no ref, or a branch — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree — and a lefthook ref left behind its upstream. Whether a pre-commit `rev:` is the newest tag is `prek update --check`'s, run as the consumer's own `prek-pins-current` hook; a pin it **could not check** is exit `2` |
 | `no-hand-copied-base-rule` | a rule this policy writes out by hand under an id a bundled set already ships, from a set it does not inherit. Reads the **policy**, not the tree. At `pre-commit` only what the change adds; at `manual` the whole sweep |
 | `no-stale-visibility` | a declared `private` the forge no longer serves. Reads the **declaration** and the forge, not the tree; a forge that did not answer is exit `2` and never "confirmed private", and it says which silence it met — a 404 reads differently from a rate limit |
-| `removed-function-named` | a commit that removes a function — a Rust `fn`, a Python `def`, a Go `func` or method — whose message does not name it. Reads no artifact itself: it judges **evidence** from the compiled-in providers (the parser over `HEAD` and the index, a pattern over the staged diff, the message), and the refusal names the file, the function and which provider saw it go. A staged file the parser could not read is exit `2` unless the diff pattern found a removal in it, and two parsers disagreeing about one function is a refusal naming both. See [ADR 0008](adr/0008-evidence-and-what-a-policy-may-consume.md) |
+| `removed-function-named` | a commit that removes a function — a Rust `fn`, a Python `def`, a Go `func` or method — whose message does not name it. Reads no artifact itself: it judges **evidence** from the compiled-in providers (the parser over `HEAD` and the index, a pattern over the staged diff, the message), and the refusal names the file, the function and which provider saw it go. A staged file the parser could not read is exit `2` unless the diff pattern found a removal in it, and two parsers disagreeing about one function is a refusal naming both. See [the evidence layer](DESIGN.md#evidence-what-a-provider-reports-and-what-a-policy-may-read) |
 
 Declared like any other rule, in the same file and the same id namespace.
 **`git.hooks` is the whole registration.**
@@ -1940,10 +1937,8 @@ follows the upstream's default branch. A lefthook ref is also asked whether it
 is the newest tag; a pre-commit `rev:` is not, because `prek update --check`
 answers that and the README carries the `prek-pins-current` hook that runs it.
 The run prints how many pre-commit pins it checked for existence only, so its
-pass is not read as theirs being current. [ADR
-0010](adr/0010-who-asks-whether-a-hook-pin-is-current.md) has the probes,
-including what prek gets wrong. `lefthook.toml`, `lefthook.json` and the
-`-local` overlay files are **not** read, so a pin written in one of those is
+pass is not read as theirs being current. `lefthook.toml`, `lefthook.json` and
+the `-local` overlay files are **not** read, so a pin written in one of those is
 watched by nothing here.
 
 Three trees that look alike from the outside and are three different answers:
@@ -2008,9 +2003,9 @@ and they live **together** so that the whole seam is one PATH entry to add,
 inspect or drop and `ls` answers "what am I standing in front of". With no
 names, `--install` links the commands this repository's `[[shim]]` tables
 declare; it never overwrites a file it did not write, and `--uninstall` removes
-only links that land on this binary. Why the reach is shaped this way, and what
-was deliberately not built:
-[ADR 0002](adr/0002-the-reach-of-a-command-shim.md).
+only links that land on this binary. Link installation is machine-wide, while
+the policy discovered from the working directory determines each invocation's
+behavior.
 
 **Installed and reached are different facts.** Both `--install` and `--status`
 end by walking PATH for each name and exit `1` when the shell would reach

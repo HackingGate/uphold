@@ -92,10 +92,10 @@ const TRACKER_ALLOWS: &[&str] = &[
 
 /// What a set needs written beside `[inherit]` before it will load.
 ///
-/// A set that supplies checkers and never shims is refused in a repository that
-/// has not declared the `[[shim]]` tables itself -- which is the design (ADR
-/// 0006) and not a gap, so the corpus writes the tables a consuming repository
-/// writes. Keyed by set name rather than carried on every `Case`, because it is
+/// A set that supplies checkers but no shims is refused unless the repository
+/// declares the `[[shim]]` tables a checker needs before it can run a command.
+/// The corpus writes the tables a consuming repository writes. Keyed by set
+/// name rather than carried on every `Case`, because it is
 /// a fact about the SET: every rule in one needs the same tables, and a
 /// per-case field would be the same two tables transcribed once per rule.
 const PRELUDE: &[(&str, &str)] = &[(

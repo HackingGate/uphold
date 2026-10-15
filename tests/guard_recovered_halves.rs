@@ -305,10 +305,10 @@ fn a_declared_host_quiets_the_owner_it_carries() {
 ///
 /// A DOI, a licence URL and an encyclopaedia article all have the shape of a
 /// repository name and are not one. Reporting each as could-not-look would make
-/// the cure "enumerate every host you cite" in every consuming repository, which
-/// is the enumeration ADR 0001 refuses, moved out of the binary and into eighty
-/// policy files. It is reported and it is exit 0, and `refuse_unknown` is how a
-/// repository says otherwise.
+/// the cure "enumerate every host you cite" in every consuming repository,
+/// which would move one engine behavior into every consumer's policy file. It
+/// is reported and it is exit 0, and `refuse_unknown` is how a repository says
+/// otherwise.
 #[test]
 fn a_citation_on_an_unaskable_host_is_reported_and_is_not_exit_2() {
     let root = repository(

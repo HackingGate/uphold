@@ -112,12 +112,6 @@ fn a_missing_declaration_is_two_not_zero() {
         "{}",
         stderr(&output)
     );
-    assert!(
-        stderr(&output).contains("[[enforce]]"),
-        "{}",
-        stderr(&output)
-    );
-    assert!(!stderr(&output).contains("uphold_check.py --init"));
 }
 
 #[test]
@@ -995,6 +989,27 @@ fn it_counts_records_against_what_can_be_claimed() {
 fn this_repository_reconciles() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let output = check(root, &[]);
+    assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+}
+
+#[test]
+fn the_starter_declaration_is_valid_and_enforces_nothing() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", GUARD_POLICY);
+    write(&root, ".pre-commit-config.yaml", PRE_COMMIT);
+    let starter = Command::new("python3")
+        .args([
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("uphold_check.py")
+                .to_str()
+                .unwrap(),
+            "--init",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(starter.status.code().unwrap(), 0);
+    write(&root, "policy/upheld.toml", &stdout(&starter));
+    let output = check(&root, &[]);
     assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
 }
 

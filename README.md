@@ -62,11 +62,6 @@ sets supply, and the `.pre-commit-config.yaml` below at this binary's version
 has a policy, and leaves an existing hook config as it is, printing the block to
 add. The owner and the visibility are stated, never read from `origin`.
 
-Existing policies use `policy/principles.toml`. Rename a legacy
-`policy/rg-policy.toml` to that name and update references to it; loading the
-retired filename exits 2 with that remedy. The Python `--init` starter is
-retired; `uphold init` writes the policy and claims together.
-
 **pre-commit / prek** — one manifest serves both, and no Rust toolchain is
 needed (`language: rust` bootstraps it).
 
@@ -145,9 +140,8 @@ stale; you are not handed the bump. It reads `lefthook.yml`, `lefthook.yaml`,
 is not watched.
 
 For pre-commit `rev:` pins the guard checks only that the tag exists. Whether
-it is the newest is answered by `prek update --check`
-([ADR 0010](docs/adr/0010-who-asks-whether-a-hook-pin-is-current.md)); add it
-to your `.pre-commit-config.yaml`:
+it is the newest is answered by `prek update --check`; add it to your
+`.pre-commit-config.yaml`:
 
 ```yaml
   - repo: local
@@ -163,6 +157,8 @@ to your `.pre-commit-config.yaml`:
 
 prek exits 1 both for a pin that would move and for a remote it could not
 reach; its output distinguishes them (`would update rev` or `update failed`).
+Review proposed tag changes rather than assuming that "newest" means the
+highest semantic version.
 
 **Go repositories** — uphold ships no Go toolchain hooks. Declare a Go gate in
 your own config as `repo: local` hooks with `language: system`, so they use the
@@ -255,6 +251,7 @@ uphold probe                        # can each declared hook actually refuse
 
 uphold_check.py --explain ID    # one record in full; also accepts a name
 uphold_check.py --list          # every id in the catalog
+uphold_check.py --init          # a starter declaration
 uphold_check.py --oscal         # OSCAL component-definition JSON
 uphold_check.py --review        # what routes to the review tier
 ```
@@ -296,8 +293,9 @@ declares, in one directory (`~/.local/uphold/shims`) the operator adds to PATH;
 `uphold shim --hook bash|zsh|fish` is the alternative: the same links, on PATH
 only inside a tree that declares a policy, in the way `direnv` works. Either
 way, the behavior is per repository: where no policy applies, the shim execs the
-real command and prints nothing. The reasoning, and what was deliberately not
-built: [ADR 0002](docs/adr/0002-the-reach-of-a-command-shim.md).
+real command and prints nothing. See the
+[shim reference](docs/REFERENCE.md#uphold-shim--the-shims) for installation and
+policy discovery.
 
 **`uphold hook <harness>`** covers a caller that spawns no process. An agent
 reaching a forge through an MCP server posts a pull-request body over HTTPS from
@@ -421,7 +419,7 @@ QUICK_REFERENCE.md      generated human index
 REVIEW.md, AGENTS.md    generated review tier: the judgment no rule decides
 review-controls.json    generated: the change each controlled record must be found by
 name-index.json         generated lookup index: every name -> a record id
-uphold_check.py         catalog prose: --explain, --list, --review, --oscal
+uphold_check.py         catalog prose: --explain, --list, --review, --oscal, --init
 scripts/                analysis, catalog loading, validation, generation
 ```
 

@@ -28,6 +28,7 @@ Usage::
     uphold_check.py --list          # list catalog ids
     uphold_check.py --review        # what routes to a rule and what to a reviewer
     uphold_check.py --review --emit # write the compiled review document
+    uphold_check.py --init          # print a starter declaration
     uphold_check.py --oscal         # emit the claims as OSCAL component-definition
     uphold_check.py --self-check    # validate the bundled catalog itself
 
@@ -517,6 +518,26 @@ def build_oscal(root: Path, declaration: dict, records: dict[str, dict]) -> dict
     }
 
 
+STARTER = """\
+# What enforces which principle in this repository.
+# https://github.com/HackingGate/uphold
+#
+# One entry per rule that already fires. `rule` is the rule's own id, resolved
+# against every seam this repository runs -- the content policy, git-guards,
+# cmd-shims, and local hooks. A rule enforced at more than one seam is normal
+# and every seam is reported. The entry is checked against this repo's
+# configuration, so it goes stale loudly when the rule is removed or disabled.
+#
+# A principle with no rule yet does not belong in this file. Build the rule
+# first -- `uphold_check.py --explain <id>` is the design input -- or leave
+# the principle in prose, where a reader can weigh it.
+
+# [[enforce]]
+# principle = "least-privilege"
+# rule = "prevent-public-push"
+"""
+
+
 def review_settings(declaration: dict) -> dict:
     """Read `[review]`, refusing a field whose type the rest of the mode assumes.
 
@@ -806,15 +827,8 @@ def main(argv: list[str]) -> int:
         return 0
 
     if argv[:1] == ["--init"]:
-        print(
-            "uphold_check.py --init was removed. Use "
-            "`uphold init --owner OWNER --visibility public|private|internal` "
-            "for a first policy, claims and hook config. For an existing policy, "
-            "add policy/upheld.toml with [[enforce]] entries naming rules that "
-            "already run.",
-            file=sys.stderr,
-        )
-        return 2
+        print(STARTER, end="")
+        return 0
 
     if argv[:1] == ["--explain"]:
         if len(argv) != 2:
@@ -864,7 +878,7 @@ def main(argv: list[str]) -> int:
         # re-implemented `config::load` to answer them; the loader answers now.
         print(
             "usage: uphold_check.py "
-            "[--explain ID|NAME | --list | --oscal | --review "
+            "[--explain ID|NAME | --list | --init | --oscal | --review "
             "| --self-check]\n"
             "\n"
             "To reconcile this repository's enforcement claims:\n"
@@ -880,9 +894,7 @@ def main(argv: list[str]) -> int:
         print(
             f"uphold check could not look: {declaration_path} not found "
             f"(searched upward from {Path.cwd().resolve()}).\n"
-            f"Add {DECLARATION_RELPATH} with [[enforce]] entries naming rules that "
-            "already run. For a new repository, use "
-            "`uphold init --owner OWNER --visibility public|private|internal`.",
+            f"Create one with: uphold_check.py --init > {DECLARATION_RELPATH}",
             file=sys.stderr,
         )
         return 2

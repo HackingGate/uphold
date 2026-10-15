@@ -273,12 +273,13 @@ const SERDE_FACING: &[&str] = &[
 /// surface the tool offers a stranger, and it had a hole of exactly one field.
 /// `redact_matches` was accepted by the deserializer, read in three places, and
 /// written in no document -- so the only way to find out it existed was to read
-/// `src/config.rs`, which is the thing ADR 0001 says no field may require.
+/// `src/config.rs`, an internal implementation file rather than the user-facing
+/// contract.
 ///
 /// A doc comment on the field is not enough and is checked by nothing here: a
 /// comment is read by somebody who already found the field. What the acceptance
-/// test in ADR 0001 asks -- browse the repository for one minute and predict
-/// what a rule does -- is answered out of REFERENCE.md or not at all.
+/// test asks -- browse the repository for one minute and predict what a rule
+/// does -- is answered out of REFERENCE.md or not at all.
 ///
 /// The name must appear inside a code span, because a field named only in prose
 /// is a field named by accident: `word` and `visibility` are ordinary English,

@@ -411,15 +411,14 @@ jobs:
       - run: cargo build --release
 
       # A hook is only proven by the path a consumer takes: a repository that
-      # is not this one, initializing its policy and running the binary.
+      # is not this one, declaring a profile, running the released entry point.
       - name: A consuming repository's declaration
         run: |
           set -euo pipefail
-          mkdir -p /tmp/consumer
-          git -C /tmp/consumer init -q -b main
-          cd /tmp/consumer
-          "$GITHUB_WORKSPACE/target/release/uphold" init --owner example-owner --visibility public
-          "$GITHUB_WORKSPACE/target/release/uphold" check
+          mkdir -p /tmp/consumer/policy
+          ./uphold_check.py --init > /tmp/consumer/policy/upheld.toml
+          cp -r policy/principles.toml /tmp/consumer/policy/principles.toml
+          cd /tmp/consumer && "$GITHUB_WORKSPACE/target/release/uphold" check
 
       - name: A declaration that cannot be read is not a pass
         run: |

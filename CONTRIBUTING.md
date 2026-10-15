@@ -83,23 +83,14 @@ one ruling label. The template files it with `ruling:pending`, and the ruling
 is recorded by replacing that label with `ruling:accepted`, `ruling:rejected`
 or `ruling:deferred`.
 
-The scheduled, read-only Design record workflow checks that each open Design
-record has exactly one recognized ruling label and flags records left at
-`ruling:pending` past the configured window. Run `python3 scripts/design_age.py`
-with `GITHUB_REPOSITORY` and `GH_TOKEN` set to perform the same check manually.
-Rule a pending record or mark it `ruling:deferred` to record that a ruling is
-intentionally postponed.
-
 The repository receives only what runs, plus
 [REFERENCE.md](docs/REFERENCE.md), which stays the normative statement of what
 uphold does now. Tracked files carry no issue numbers, dates or status lines;
 those stay in the Design record that rules the change.
 
-The records under `docs/adr/` stay as history and are cited as they are. No new
-one is added: the `adr-freeze` rule in `policy/principles.toml` refuses any
-other file under that directory, and its message names the remedy.
-[ADR 0012](docs/adr/0012-a-rule-may-reach-the-content-its-repository-pins.md)
-is Accepted and implemented as `files.reach`.
+Decisions live in Design record issues. [DESIGN.md](docs/DESIGN.md) explains
+the current architecture; [REFERENCE.md](docs/REFERENCE.md) defines its
+behavior. Retired decision files remain available in Git history.
 
 ## Working on the engine
 

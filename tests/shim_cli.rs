@@ -7313,8 +7313,8 @@ fn the_inherited_destination_guard_refuses_to_guess_who_this_repository_is() {
 
 #[test]
 fn inheriting_the_destination_guard_without_a_gh_shim_is_refused_at_load() {
-    // ADR 0006: the set supplies the checker and never the shim, and a
-    // repository that inherits it without the `gh` table is refused before
+    // The set supplies the checker and never the shim. A repository that
+    // inherits it without the `gh` table is refused before
     // anything runs, with the cure that is actually available to it -- there
     // is no `command.before` entry in this file to drop.
     let root = workspace(

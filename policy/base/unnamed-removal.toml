@@ -23,7 +23,7 @@
 # the tree at HEAD with the tree in the index, and a pattern over the removed
 # lines of the staged diff -- and the message is read as a third fact. The rule
 # judges the facts and never the readers, which is what lets a reader be
-# replaced without the rule changing; see ADR 0008.
+# replaced without the rule changing.
 #
 # WHAT IT DOES WHEN IT CANNOT LOOK. A file the parser could not read -- a
 # staged side with a syntax error in it -- is not a file with no removals in

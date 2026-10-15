@@ -85,7 +85,7 @@
 #   inheriting a set is not a thing to do quietly. That seam has a set of its
 #   own now -- `published-text`, which supplies the checkers and still refuses
 #   to run until the repository has declared the shim tables itself, where the
-#   decision is visible. See ADR 0006.
+#   decision is visible.
 #
 # * `refuse_unknown`. This is the sharpest choice in the file and it is made
 #   deliberately, so read it before assuming the default is an oversight. With
