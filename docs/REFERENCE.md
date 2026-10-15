@@ -1707,8 +1707,11 @@ the falsifier never does.
 
 The same refusal applies to check-specific fields outside this table:
 `exclude_cfg_test` is read only by the content searches (`regexp`, `values` —
-it drops a matched *line* inside a `#[cfg(test)]` block, and no other check has
-one), `require_any_link` / `allow_outside_repo` only by `links-resolve`,
+it drops a matched *line* inside an item whose `cfg` predicate implies `test`
+— `test` alone, an `all` with an operand that implies it, an `any` whose every
+operand does, or an inner `#![cfg(test)]` for the item around it; never
+`any(unix, test)`, `not(test)` or `feature = "test"` — and no
+other check has one), `require_any_link` / `allow_outside_repo` only by `links-resolve`,
 `require_any_anchor` only by `anchors-resolve`, and `command_sources` only by
 `commands-resolve`. `files.min_selected` goes the other way: every check whose
 selection the scan builds reads it, and it is refused only on a guard built-in

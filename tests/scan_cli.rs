@@ -1597,6 +1597,42 @@ fn a_brace_inside_a_test_literal_does_not_hide_the_code_after_it() {
     );
 }
 
+/// Only a predicate that implies `test` marks test code. `any(unix, test)` is
+/// compiled into a production build on unix, `not(test)` is the production
+/// build and `feature = "test"` is a feature flag; hiding any of them hides
+/// real hits.
+#[test]
+fn only_a_cfg_predicate_that_implies_test_hides_a_hit() {
+    let hidden = [
+        "#[cfg(test)]\nmod m {\n    const H: &str = \"/home/someone\";\n}\n",
+        "#[cfg(all(test, unix))]\nmod m {\n    const H: &str = \"/home/someone\";\n}\n",
+        "#[cfg(any(test, all(test, unix)))]\nmod m {\n    const H: &str = \"/home/someone\";\n}\n",
+        "#![cfg(test)]\nconst H: &str = \"/home/someone\";\n",
+        "mod m {\n    #![cfg(test)]\n    const H: &str = \"/home/someone\";\n}\n",
+    ];
+    for source in hidden {
+        let root = workspace();
+        write(&root, "policy/principles.toml", HOME_PATHS_OUTSIDE_TESTS);
+        write(&root, "src/lib.rs", source);
+        let output = scan(&root);
+        assert_eq!(code(&output), 0, "{source}\n{}", stderr(&output));
+    }
+    let reported = [
+        "#[cfg(any(unix, test))]\nmod m {\n    const H: &str = \"/home/someone\";\n}\n",
+        "#[cfg(not(test))]\nmod m {\n    const H: &str = \"/home/someone\";\n}\n",
+        "#[cfg(all(not(test), unix))]\nmod m {\n    const H: &str = \"/home/someone\";\n}\n",
+        "#[cfg(feature = \"test\")]\nmod m {\n    const H: &str = \"/home/someone\";\n}\n",
+        "#![cfg(not(test))]\nconst H: &str = \"/home/someone\";\n",
+    ];
+    for source in reported {
+        let root = workspace();
+        write(&root, "policy/principles.toml", HOME_PATHS_OUTSIDE_TESTS);
+        write(&root, "src/lib.rs", source);
+        let output = scan(&root);
+        assert_eq!(code(&output), 1, "{source}\n{}", stderr(&output));
+    }
+}
+
 /// A file the grammar cannot read reports its hits rather than hiding them: an
 /// item's extent is not trustworthy in a tree that has an error in it.
 #[test]
