@@ -235,7 +235,7 @@ three closed values:
 |---|---|---|
 | `without-body` (default) | whenever no body flag and no `--web` was given — `pr create` | — |
 | `never` | never — `pr close`, `issue reopen` | nothing is composed; nothing is said |
-| `forge` | never — `glab mr merge` | the forge composes the text from its own template, and the shim says on stderr that it was not checked |
+| `forge` | never — `glab mr merge` | the forge composes the text from its own template, and the shim says on stderr that it was not checked. On `glab mr merge`, where one message was given and not the other — `--squash` with no `--squash-message`, or no `-m` for the merge commit — it says which |
 | `interactive` | only from the command's prompt: stdin and stdout are terminals, no body was read off stdin, and no flag in `editor_unless` was given. A body flag does not close it, because the prompt still offers to edit the body | the forge composes the text. On `gh pr merge --squash` and `--merge` the shim asks the forge for it and judges it (below); anywhere else it says on stderr that it was not checked |
 
 `editor_unless` lists the flags that skip the prompt. `--squash=false` is the
@@ -2066,26 +2066,41 @@ it is the commit subject, the rest as a body, and the flag counts as the body
 given.
 
 A flag is read where a word is the flag a list names, or `--flag=value` for
-one. On `gh issue edit`, `gh pr edit` and `gh pr merge`, whose whole option
-grammar (from `gh` 2.102) the shim carries, a short option the table does not
-name whole is also read letter by letter, as `gh` reads it: `-st X` is `-s` and
-then `-t X`. The value follows pflag, which `gh` parses with, at whichever
-letter takes it: `=` plus at least one character gives what follows the `=`
-(`-b=Text` and `-st=Text` are `Text`), anything else after the letter is the
-value whole (`-bText`; `-b=` alone is the value `=`), and nothing after it
-takes the next word. A letter in neither the table nor that grammar is exit
-`2`, and so is an unknown option wherever the shim must ask the forge about
-the issue or pull request. On those three verbs an option the table does not
-name is read with the arity `gh` gives it, so `gh pr merge -A -b -t X` is an
-author email `-b` and the subject `X`.
+one. On every verb the shipped tables match, the shim carries the verb's whole
+option grammar and reads each option word as the command's own parser does:
+`gh pr create|edit|comment|review|merge|close|reopen`, `gh issue
+create|edit|comment|close|reopen`, `gh release create|edit`, `gh gist create`
+and `gh api` from `gh` 2.102, and `glab mr create|update|note|merge`, `glab
+issue create|update|note` and `glab api` from `glab` 1.123.0, with each `glab mr
+note` subcommand but `draft` read with its own. So `-st X` is `-s` and then `-t
+X`, and `-iF k=v` is `-i` and `-F k=v`. The value follows pflag, which both
+parse with, at whichever letter takes it: `=` plus at least one character gives
+what follows the `=` (`-b=Text` and `-st=Text` are `Text`), anything else after
+the letter is the value whole (`-bText`, `-ftitle=X`; `-b=` alone is the value
+`=`), and nothing after it takes the next word. An option the table does not
+name is read with the arity the command gives it, so `-Bmain` and `-lwip` are
+one option each, `gh pr merge -A -b -t X` is an author email `-b` and the
+subject `X`, and `gh issue create -l -b -t X` is a label `-b` and the title `X`.
 
-On every other verb, `gh api` and `glab api` included, a word the table does
-not name whole is skipped whole, never split. That reads `-Bmain`, `-lbug` and
-`-Hfeat` as the single options they are, so the text after them is read. It
-also means a short-option cluster or an attached value is **not read** there:
-`-st X`, `-bText`, `-b=Text`, `-ftitle=X`, `-iF=k=@f` and their like are
-passed to the command unchecked. This is a known gap; spell each option as a
-word of its own.
+A letter or an option the verb's grammar does not have is exit `2`, naming it:
+a letter nothing here knows cannot be told from a value, so where the options
+in its word end, and which word after it is text, is not known. A `gh` or
+`glab` that grows an option is refused on it until this tool's grammar learns
+it; a test compares each grammar with the help pages checked in under
+`tests/fixtures/forge-help`, whose directory names carry the version they were
+taken from. The grammar alone decides where an option ends; the table decides
+only what a value it names is. A table or a `[[shim.verbs]]` entry naming an
+option with the other arity — `-c` as text on `gh pr review`, where it is a
+switch — is exit `2` wherever the option is used.
+
+On a verb with no grammar — one a table matches beyond those above, such as
+`pr:*`, and `glab mr note draft` — a word the table does not name whole is
+skipped whole, never split. That reads `-Bmain`, `-lbug` and `-Hfeat` as the
+single options they are, so the text after them is read. It also means a
+short-option cluster or an attached value is **not read** there: `-st X`,
+`-bText`, `-b=Text` and their like are passed to the command unchecked, and an
+unnamed option that takes a value shifts the reading of the words after it.
+This is a known gap; spell each option as a word of its own there.
 
 `target` is `forge-repo` or `git-remote`, both built-in resolvers. `scope` is
 `public-target | public-registry | always`, with

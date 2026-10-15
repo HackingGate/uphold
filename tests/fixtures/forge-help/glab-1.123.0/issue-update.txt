@@ -1,0 +1,30 @@
+## Options
+
+```plaintext
+  -a, --assignee strings          Assign users by username. Prefix with '!' or '-' to remove from existing assignees, or '+' to add new. Otherwise, replace existing assignees with these users. Multiple usernames can be comma-separated or specified by repeating the flag.
+      --attach stringArray        (EXPERIMENTAL) Upload a file and reference it at the end of the description. Use "-" to read the file from standard input. Repeat the flag to attach multiple files.
+  -c, --confidential              Make issue confidential.
+  -d, --description string        Issue description. Set to "-" to open an editor.
+      --description-file string   Read the issue description from a file. Use "-" to read from standard input.
+      --due-date string           A date in 'YYYY-MM-DD' format.
+      --estimate string           Set the time estimate for the issue, for example '2d' or '3h30m'.
+  -l, --label strings             Add labels.
+      --lock-discussion           Lock discussion on issue.
+  -m, --milestone string          Title of the milestone to assign Set to "" or 0 to unassign.
+  -p, --public                    Make issue public.
+      --remove-estimate           Remove the time estimate from the issue.
+      --remove-time-spent         Remove all time spent from the issue.
+      --spend string              Add time spent on the issue, for example '1h30m'.
+  -t, --title string              Title of issue.
+      --unassign                  Unassign all users.
+  -u, --unlabel strings           Remove labels.
+      --unlock-discussion         Unlock discussion on issue.
+  -w, --weight int                Set weight of the issue.
+```
+
+## Options inherited from parent commands
+
+```plaintext
+  -h, --help          Show help for this command.
+  -R, --repo string   Select another repository. You can use either OWNER/REPO or GROUP/NAMESPACE/REPO. The full URL or Git URL is also accepted.
+```
