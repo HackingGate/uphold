@@ -385,6 +385,59 @@ class TheTwoReadersOfOneReport(unittest.TestCase):
         self.assertEqual(stdout.getvalue().strip(), "")
 
 
+class AnUnavailableEngine(unittest.TestCase):
+    def test_unavailable_engine_prevents_review_emission_and_oscal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "policy").mkdir()
+            exemptions = [
+                f'{key} = "No subject in this scratch repository."'
+                for key, record in uphold_check.load_records().items()
+                if record["enforcement"]["automatable"] == "yes"
+            ]
+            (root / "policy/upheld.toml").write_text(
+                "[review]\nmax_lines = 10000\n[review.no_subject_here]\n"
+                + "\n".join(exemptions)
+                + "\n",
+                encoding="utf-8",
+            )
+            for status in (2, 101, -11):
+                for args in (["--review", "--emit"], ["--oscal"]):
+                    with self.subTest(status=status, args=args):
+                        failed = subprocess.CompletedProcess(
+                            ["uphold", "check"], status, "", "engine unavailable"
+                        )
+                        output, errors = io.StringIO(), io.StringIO()
+                        with (
+                            contextlib.chdir(root),
+                            mock.patch.object(
+                                uphold_check, "engine", return_value=failed
+                            ),
+                            contextlib.redirect_stdout(output),
+                            contextlib.redirect_stderr(errors),
+                        ):
+                            code = uphold_check.main(args)
+                        self.assertEqual(code, 2)
+                        self.assertEqual(output.getvalue(), "")
+                        self.assertIn("engine unavailable", errors.getvalue())
+                        self.assertFalse((root / "REVIEW.md").exists())
+
+    def test_evaluated_refusal_remains_available_to_review_only(self):
+        refused = subprocess.CompletedProcess(["uphold", "check"], 1, "", "bad claim")
+        with mock.patch.object(uphold_check, "engine", return_value=refused):
+            self.assertEqual(uphold_check.engine_suppliers(ROOT, strict=False), {})
+            with self.assertRaises(uphold_check.Refused):
+                uphold_check.engine_suppliers(ROOT)
+
+    def test_unexpected_status_without_diagnostic_is_identified(self):
+        failed = subprocess.CompletedProcess(["uphold", "check"], -9, "", "")
+        with (
+            mock.patch.object(uphold_check, "engine", return_value=failed),
+            self.assertRaisesRegex(uphold_check.CouldNotLook, "status -9"),
+        ):
+            uphold_check.engine_suppliers(ROOT, strict=False)
+
+
 class AnUnreadableDeclaration(unittest.TestCase):
     """`explicit-unknown`, claimed by `catalog-tests` in policy/upheld.toml.
 

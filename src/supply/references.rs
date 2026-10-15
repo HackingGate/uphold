@@ -23,7 +23,7 @@
 //! [`crate::config::PolicyFile::owner`] gives: a first-party set read off the
 //! remote is repointed by the same command that repoints the remote.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Stdio;
 
@@ -56,6 +56,8 @@ pub(super) struct Sorted {
     /// How many of the kept lines are requirements an index resolves, which is
     /// what guarddog can look up. Zero is a run with nothing to ask it.
     pub indexed: usize,
+    /// Canonical index package names that guarddog must report on.
+    pub expected: BTreeSet<String>,
     /// Git sources, for the owner check and the remote.
     pub git: Vec<GitPin>,
     /// Direct references refused as they stand, each a line naming it.
@@ -84,6 +86,13 @@ pub(super) fn sort(export: &str, directory: &Path, root: &Path, lock: Option<&st
             by_reference(name, reference, directory, root, &tags, &mut sorted)
         } else {
             sorted.indexed += 1;
+            let name = trimmed
+                .split(|character: char| {
+                    !character.is_ascii_alphanumeric() && !matches!(character, '-' | '_' | '.')
+                })
+                .next()
+                .unwrap_or(trimmed);
+            sorted.expected.insert(normalise(name));
             true
         };
         if keep {
@@ -191,7 +200,7 @@ fn split_git(url: &str) -> Option<(String, String)> {
 }
 
 /// PEP 503's normalised name, which is how the lock and the export agree.
-fn normalise(name: &str) -> String {
+pub(super) fn normalise(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut run = false;
     for character in name.chars() {
@@ -258,6 +267,8 @@ pub(super) struct NpmSorted {
     pub kept: Option<String>,
     /// How many dependencies are left for npm to resolve.
     pub indexed: usize,
+    /// Real npm package names, with aliases merged as guarddog merges them.
+    pub expected: BTreeSet<String>,
     /// Whether the manifest parsed as a JSON object, so that `indexed` counts
     /// its `dependencies` -- none at all, or only `devDependencies`, being
     /// zero -- rather than a file nobody could read.
@@ -323,11 +334,41 @@ pub(super) fn sort_npm(manifest: &str, locks: &[String], include_dev: bool) -> N
             false
         });
         sorted.indexed += dependencies.len();
+        for (name, spec) in dependencies.iter() {
+            sorted
+                .expected
+                .insert(npm_identity(name, spec.as_str()).to_owned());
+        }
     }
     if taken {
         sorted.kept = serde_json::to_string(&parsed).ok();
     }
     sorted
+}
+
+/// The package guarddog 3.2.0's `resolve_npm_alias` asks the registry for.
+/// Invalid alias spellings stay under their manifest name, as they do there.
+fn npm_identity<'a>(name: &'a str, spec: Option<&'a str>) -> &'a str {
+    let Some(alias) = spec.and_then(|spec| spec.strip_prefix("npm:")) else {
+        return name;
+    };
+    let after_scope = alias.strip_prefix('@').unwrap_or(alias);
+    let package_end = after_scope.find('@').map_or(alias.len(), |index| {
+        index + usize::from(alias.starts_with('@'))
+    });
+    let Some(package) = alias.get(..package_end) else {
+        return name;
+    };
+    let valid = !package.is_empty()
+        && !package.chars().any(char::is_whitespace)
+        && (!alias.starts_with('@')
+            || package.strip_prefix('@').is_some_and(|scoped| {
+                scoped.split_once('/').is_some_and(|(scope, scoped_name)| {
+                    !scope.is_empty() && !scoped_name.is_empty() && !scope.contains('/')
+                })
+            }))
+        && alias.get(package_end..) != Some("@");
+    if valid { package } else { name }
 }
 
 /// The remote and the `#` fragment of an npm git dependency, or `None` for

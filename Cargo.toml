@@ -113,6 +113,11 @@ tree-sitter-go = "0.25"
 # disagree, `expand_alias` says which case and how it is closed.
 shell-words = "1"
 
+[target.'cfg(unix)'.dependencies]
+# Git discovers hooks with access(X_OK), which checks the caller's permission
+# class and ACLs. Use the same OS check through a safe API.
+rustix = { version = "1", features = ["fs"] }
+
 # `strip` is deliberately absent: stripping is a packaging step, and a stripped
 # binary with no build-id cannot be symbolicated from a core. `debug = 1` keeps
 # the line tables so a crash names the line it happened on.

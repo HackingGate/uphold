@@ -950,6 +950,12 @@ impl ApiCall {
     }
 }
 
+/// Whether a repository identity still depends on the command's API
+/// placeholders. Resolution and ownership checks must use the same parser.
+pub(crate) fn repository_placeholder(command: &str, text: &str) -> Result<bool> {
+    Ok(Placeholders::of(command, &[])?.asks_for_repository(text))
+}
+
 /// `OWNER/REPO` out of a forge API path, in either forge's spelling.
 ///
 /// GitHub puts it in the path (`repos/OWNER/REPO/pulls/1`); GitLab addresses a
@@ -3252,7 +3258,7 @@ impl Shim {
                 // with no `origin` has no destination for a declaration to be
                 // about, and that is the resolver's answer above rather than
                 // this one's.
-                if let Some(standing) = declared_standing(root, policy, collected)? {
+                if let Some(standing) = declared_standing(root, policy, collected, self)? {
                     return Ok(standing);
                 }
                 match self.visibility(root, &target).as_deref() {
@@ -3344,11 +3350,19 @@ impl Shim {
             )));
         };
         match forge {
-            Forge::GitHub => forge_field(
-                "gh",
-                &["api", &format!("repos/{target}"), "--jq", ".visibility"],
-                None,
-            ),
+            Forge::GitHub => {
+                let name = git::owner_repo(target).map_or_else(
+                    || target.to_owned(),
+                    |(owner, repo)| format!("{owner}/{repo}"),
+                );
+                let endpoint = format!("repos/{name}");
+                let mut args = vec!["api", endpoint.as_str(), "--jq", ".visibility"];
+                let host = git::host(target);
+                if let Some(host) = host.as_deref() {
+                    args.extend(["--hostname", host]);
+                }
+                forge_field("gh", &args, None)
+            }
             // Deliberately not `--jq`: `glab api` is not `gh api`, and a shim
             // that is inert the day one flag differs is the defect this arm
             // exists to end. The project id is a path, so its separators are
@@ -3362,10 +3376,39 @@ impl Shim {
     }
 
     fn resolve_target(&self, root: &Path, collected: &Collected) -> Result<Option<String>> {
-        if let Some(explicit) = collected.target.as_deref()
-            && !explicit.is_empty()
-        {
-            return Ok(Some(explicit.to_owned()));
+        let explicit = collected
+            .target
+            .as_deref()
+            .filter(|target| !target.is_empty());
+        // `gh`'s repo override is command line first, then GH_REPO. In
+        // particular an environment-selected repository is never `origin`,
+        // even when its owner/name happen to match the checkout.
+        let gh_repo = self.command == "gh" && self.target != Target::None;
+        let environment = gh_repo
+            .then(|| {
+                std::env::var("GH_REPO")
+                    .ok()
+                    .filter(|value| !value.is_empty())
+            })
+            .flatten();
+        if let Some(named) = explicit.or(environment.as_deref()) {
+            if gh_repo && repository_placeholder("gh", named)? {
+                // API placeholders are expanded by gh's own remote/default
+                // resolution, which is not established by an origin guess.
+                // Visibility can ask gh to expand these same placeholders;
+                // the ownership guard separately refuses unresolved names.
+                return Ok(Some(named.to_owned()));
+            }
+            return if gh_repo {
+                gh_repository_target(named).map(Some)
+            } else {
+                Ok(Some(named.to_owned()))
+            };
+        }
+        if gh_repo {
+            return git::remote_url(root, "origin")
+                .map(|url| gh_repository_target(&url))
+                .transpose();
         }
         Ok(match self.target {
             Target::None => None,
@@ -3382,6 +3425,60 @@ impl Shim {
             }
         })
     }
+}
+
+/// Resolve the host-bearing spellings accepted by `gh` without treating an
+/// enterprise repository as its same-named github.com counterpart. Enterprise
+/// support is deliberately absent here, as it is in `Forge::of_url`.
+fn gh_repository_target(named: &str) -> Result<String> {
+    let parts: Vec<_> = named.split('/').collect();
+    let host = if named.contains("://") || named.contains(':') {
+        git::host(named)
+    } else if parts.len() == 3 {
+        parts.first().map(|hostname| hostname.to_lowercase())
+    } else {
+        None
+    };
+    let environment_host = std::env::var("GH_HOST")
+        .ok()
+        .filter(|configured| !configured.is_empty());
+    if let Some(hostname) = host.as_ref().or(environment_host.as_ref())
+        && !matches!(
+            hostname.to_lowercase().as_str(),
+            "github.com" | "www.github.com"
+        )
+    {
+        return Err(Fatal::new(format!(
+            "gh: destination {named:?} uses host {hostname:?}, whose repository authority \
+             cannot be verified by this shim. Nothing was published; use a supported \
+             GitHub destination with a matching GH_HOST"
+        )));
+    }
+    let path = if named.contains("://") || named.contains(':') {
+        git::owner_repo(named).map(|(owner, repo)| format!("{owner}/{repo}"))
+    } else {
+        match parts.as_slice() {
+            [owner, repo] | [_, owner, repo] => Some(format!("{owner}/{repo}")),
+            _ => None,
+        }
+    };
+    let Some(path) = path.filter(|path| {
+        path.split('/').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+        })
+    }) else {
+        return Err(Fatal::new(format!(
+            "gh: destination {named:?} could not be resolved as [HOST/]OWNER/REPO. \
+             Nothing was published"
+        )));
+    };
+    Ok(match host {
+        Some(hostname) => format!("https://{hostname}/{path}"),
+        None => path,
+    })
 }
 
 /// What one invocation is about to publish.
@@ -3458,7 +3555,8 @@ impl Forge {
 /// is the destination it will read the declaration for. A declaration is about
 /// ONE repository, so this reads it only where the destination is the one
 /// [`Shim::resolve_target`] took from `origin` -- which is to say where nothing
-/// on the command line named a destination at all. A `target_flags` value is a
+/// on the command line or in `GH_REPO` named a destination, and `GH_HOST`
+/// did not change the host context. A `target_flags` value is a
 /// destination somebody typed, and a typed `owner/repo` carries no host: `-R
 /// acme/widget` under a `--hostname` or a `GH_HOST` is a repository on another
 /// forge that happens to share a name with this one, and there is nothing in
@@ -3470,7 +3568,14 @@ fn declared_standing(
     root: &Path,
     policy: &Policy,
     collected: &Collected,
+    shim: &Shim,
 ) -> Result<Option<Standing>> {
+    if shim.command == "gh"
+        && (std::env::var("GH_REPO").is_ok_and(|repo| !repo.is_empty())
+            || std::env::var("GH_HOST").is_ok_and(|host| !host.is_empty()))
+    {
+        return Ok(None);
+    }
     if collected
         .target
         .as_deref()
@@ -6647,8 +6752,8 @@ pub(crate) fn run(
         //
         // Resolved ONCE, before the loop, and only where some rule judges a
         // destination. `resolve_target` reads `--repo`/`-R` off argv and
-        // otherwise `git remote get-url origin`; it asks no forge. An ordinary
-        // invocation still pays no round trip: `Scope::PublicTarget`'s
+        // otherwise `GH_REPO` for gh, then `git remote get-url origin`; it
+        // asks no forge. An ordinary invocation still pays no round trip: `Scope::PublicTarget`'s
         // `visibility()` is not called from here at all, and the forge question
         // inside `target_refusal` is reached only for a destination the
         // allow-list has ALREADY refused -- a call that was about to be stopped
@@ -6665,6 +6770,9 @@ pub(crate) fn run(
                 .is_some_and(|builtin| crate::guard::TARGET_GUARDS.contains(&builtin))
         }) {
             let target = shim.resolve_target(root, &collected)?;
+            // A qualified override or origin carries its own host, which
+            // takes precedence over gh's ambient default for both probes.
+            let hostname = target.as_deref().and_then(git::host);
             let forge = shim.forge(root);
             let mut asked = BTreeMap::new();
             for rule in &checkers {
@@ -6690,6 +6798,7 @@ pub(crate) fn run(
                     rule,
                     target.as_deref(),
                     forge,
+                    hostname.as_deref(),
                     &mut asked,
                 )? {
                     destination_refusals += 1;

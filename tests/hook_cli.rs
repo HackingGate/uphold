@@ -495,9 +495,9 @@ fn a_string_under_an_unknown_field_name_is_still_read() {
     );
 }
 
-/// A call carrying no text at all publishes nothing there is a rule about.
+/// A call carrying no argument text is allowed when no rule refuses its tool.
 #[test]
-fn a_call_with_no_strings_is_allowed_without_looking_further() {
+fn a_call_with_no_strings_is_allowed_when_its_tool_is_allowed() {
     let root = workspace("hook-no-strings", Some(POLICY));
     let output = hook(
         &root,
@@ -624,6 +624,54 @@ fn a_regexp_rule_naming_the_hook_refuses_the_tool_call_by_its_name() {
         );
         assert_eq!(code(&clean), 0, "{}", stderr(&clean));
         assert_eq!(stdout(&clean), "", "{}", stdout(&clean));
+    }
+}
+
+/// Tool names remain subjects when the argument tree contains no strings.
+#[test]
+fn string_free_calls_still_judge_the_tool_without_inventing_argument_text() {
+    let policy = format!(
+        "{RELEASE_POLICY}\n\
+         [rule.require-argument-text]\n\
+         message = \"Supply nonempty text.\"\n\
+         require_regexp = '.'\n\
+         files.exclude = [\"policy/**\"]\n\
+         subjects = [\"text\"]\n\
+         seams = [\"hook\"]\n\
+         command.before = [\"gh\"]\n"
+    );
+    for harness in ["claude-code", "codex"] {
+        let root = workspace("hook-string-free-tool", Some(&policy));
+        for input in [
+            serde_json::json!({}),
+            serde_json::json!({"id": 7, "draft": false}),
+            serde_json::json!({"nested": [null, 7, {}]}),
+            Value::Null,
+        ] {
+            for tool in ["mcp__github__create_release", "mcp__github__get_release"] {
+                let event = serde_json::json!({"tool_name": tool, "tool_input": input});
+                let output = hook(&root, harness, &event.to_string());
+                assert_eq!(code(&output), 0, "{}", stderr(&output));
+                if tool == "mcp__github__create_release" {
+                    let explanation = reason(&output);
+                    assert!(explanation.contains("no-release-by-hand"), "{explanation}");
+                    assert!(
+                        !explanation.contains("require-argument-text"),
+                        "{explanation}"
+                    );
+                    let response: Value = serde_json::from_str(&stdout(&output)).unwrap();
+                    assert_eq!(
+                        response.pointer("/hookSpecificOutput/permissionDecision"),
+                        Some(&Value::String("deny".to_owned()))
+                    );
+                } else {
+                    assert_eq!(stdout(&output), "", "{}", stderr(&output));
+                }
+            }
+        }
+        // An explicitly supplied empty string is still a text subject.
+        let output = hook(&root, harness, &event("mcp__github__get_release", ""));
+        assert!(reason(&output).contains("require-argument-text"));
     }
 }
 

@@ -151,23 +151,35 @@ pub(crate) enum Owned {
 ///
 /// Spawned through [`crate::shim::inner_tool`] and never `Command::new`: the
 /// `gh` on PATH is this binary, and an unmarked probe re-enters the shim it is
-/// standing behind.
-pub(crate) fn forge_owns(cache: &mut BTreeMap<String, Owned>, owner: &str, repo: &str) -> Owned {
+/// standing behind. `hostname`, where known, binds both probes and the cache
+/// entry to that server rather than gh's ambient default host.
+pub(crate) fn forge_owns(
+    cache: &mut BTreeMap<String, Owned>,
+    owner: &str,
+    repo: &str,
+    hostname: Option<&str>,
+) -> Owned {
     let key = format!("{owner}/{repo}");
-    if let Some(known) = cache.get(&key) {
+    let cache_key = hostname.map_or_else(|| key.clone(), |host| format!("{host}/{key}"));
+    if let Some(known) = cache.get(&cache_key) {
         return known.clone();
     }
-    let answer = ask_forge(owner, &key);
-    cache.insert(key, answer.clone());
+    let answer = ask_forge(owner, &key, hostname);
+    cache.insert(cache_key, answer.clone());
     answer
 }
 
 /// The two requests, without the cache in front of them.
-fn ask_forge(owner: &str, key: &str) -> Owned {
-    let login = match crate::shim::inner_tool("gh")
-        .args(["api", "user", "--jq", ".login"])
-        .output()
-    {
+fn ask_forge(owner: &str, key: &str, hostname: Option<&str>) -> Owned {
+    let probe = |endpoint: &str, field: &str| {
+        let mut command = crate::shim::inner_tool("gh");
+        command.args(["api", endpoint, "--jq", field]);
+        if let Some(host) = hostname {
+            command.args(["--hostname", host]);
+        }
+        command.output()
+    };
+    let login = match probe("user", ".login") {
         Ok(output) if output.status.success() => {
             String::from_utf8_lossy(&output.stdout).trim().to_owned()
         }
@@ -185,10 +197,7 @@ fn ask_forge(owner: &str, key: &str) -> Owned {
     if login.eq_ignore_ascii_case(owner) {
         return Owned::Yes;
     }
-    match crate::shim::inner_tool("gh")
-        .args(["api", &format!("repos/{key}"), "--jq", ".permissions.admin"])
-        .output()
-    {
+    match probe(&format!("repos/{key}"), ".permissions.admin") {
         Ok(output) if output.status.success() => {
             match String::from_utf8_lossy(&output.stdout).trim() {
                 "true" => Owned::Yes,
@@ -240,12 +249,12 @@ pub(crate) fn unowned(
     root: &Path,
     policy: &Policy,
     rule: &Rule,
-    destination: (&str, &str),
+    destination: (&str, &str, Option<&str>),
     forge: Option<Forge>,
     asked: &mut BTreeMap<String, Owned>,
     seam: Seam,
 ) -> Result<Option<Refusal>> {
-    let (owner, repo) = destination;
+    let (owner, repo, hostname) = destination;
     let name = format!("{owner}/{repo}");
 
     let (workspace, pinned) = workspace_owner(root, policy, rule)?;
@@ -352,7 +361,7 @@ pub(crate) fn unowned(
     // host neither client answers for, gets exactly the answer it got before
     // this branch existed rather than an invented one.
     let verdict = match forge {
-        Some(Forge::GitHub) => Some(forge_owns(asked, owner, repo)),
+        Some(Forge::GitHub) => Some(forge_owns(asked, owner, repo, hostname)),
         Some(Forge::GitLab) | None => None,
     };
     if verdict == Some(Owned::Yes) {
@@ -470,7 +479,7 @@ pub(crate) fn prevent_public_push(request: &Request<'_>) -> Result<Option<Refusa
         request.root,
         request.policy,
         request.rule,
-        (&owner, &repo),
+        (&owner, &repo, None),
         forge,
         &mut asked,
         Seam::Push,
@@ -528,7 +537,7 @@ mod tests {
             &root,
             &policy,
             rule,
-            destination,
+            (destination.0, destination.1, None),
             None,
             &mut BTreeMap::new(),
             seam,

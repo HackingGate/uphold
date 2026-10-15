@@ -92,6 +92,7 @@ fn shim_with(root: &Path, args: &[&str], variables: &[(&str, &str)]) -> Output {
         .env_remove("UPHOLD_ALLOW")
         .env_remove("UPHOLD_SHIM_INNER")
         .env_remove("GH_REPO")
+        .env_remove("GH_HOST")
         .env_remove("GITLAB_GROUP")
         .envs(variables.iter().copied())
         .output()
@@ -1088,7 +1089,7 @@ fn gh_without_policy(root: &Path) -> (PathBuf, String) {
         "gh",
         "#!/bin/sh\n\
          case \"$*\" in\n\
-         'api repos/example-user/public-widget --jq .visibility') echo public ;;\n\
+         'api repos/example-user/public-widget --jq .visibility' | 'api repos/example-user/public-widget --jq .visibility --hostname github.com') echo public ;;\n\
          'api repos/'*) echo private ;;\n\
          *) echo \"gh ran: $*\" ;;\n\
          esac\n",
@@ -1220,6 +1221,7 @@ fn with_no_policy_a_gist_description_cannot_publish_a_declared_private_name() {
             .env_remove("UPHOLD_SHIM_INNER")
             .env_remove("GH_EDITOR")
             .env_remove("GH_REPO")
+            .env_remove("GH_HOST")
             .output()
             .unwrap();
         assert_eq!(code(&output), 1, "{flag}: {}", stderr(&output));
@@ -6173,6 +6175,187 @@ fn a_destination_this_workspace_does_not_own_is_refused_and_the_command_never_ru
     );
 }
 
+/// The real `gh` repository override, rather than a fixture command that
+/// does not interpret `GH_REPO`.
+fn gh_target_workspace() -> PathBuf {
+    let root = workspace(&TARGET_POLICY.replace("faux", "gh"));
+    support::git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example-user/widget.git",
+        ],
+    );
+    stub_gh_says_no(&root);
+    root
+}
+
+#[test]
+fn gh_repo_selects_the_destination_before_the_checkout_origin() {
+    let root = gh_target_workspace();
+    for (repository, expected) in [
+        ("other-owner/their-repo", 1),
+        ("github.com/other-owner/their-repo", 1),
+        ("https://github.com/other-owner/their-repo", 1),
+        ("example-user/widget", 0),
+        ("github.com/example-user/widget", 0),
+    ] {
+        let output = shim_with(
+            &root,
+            &["gh", "issue", "create", "-b", "Ordinary body"],
+            &[("GH_REPO", repository)],
+        );
+        assert_eq!(code(&output), expected, "{repository}: {}", stderr(&output));
+        assert_eq!(stdout(&output).contains("gh ran:"), expected == 0);
+        if expected == 1 {
+            assert!(
+                stderr(&output).contains("other-owner/their-repo"),
+                "{}",
+                stderr(&output)
+            );
+        }
+    }
+}
+
+#[test]
+fn an_explicit_gh_repository_takes_precedence_over_gh_repo() {
+    let root = gh_target_workspace();
+    for (arguments, environment, expected) in [
+        (
+            vec!["--repo", "example-user/widget"],
+            "other-owner/their-repo",
+            0,
+        ),
+        (
+            vec!["--repo", "example-user/widget"],
+            "github.enterprise.example/other-owner/their-repo",
+            0,
+        ),
+        (vec!["-Rexample-user/widget"], "other-owner/their-repo", 0),
+        (
+            vec!["--repo=other-owner/their-repo"],
+            "example-user/widget",
+            1,
+        ),
+        (
+            vec!["-R", "other-owner/their-repo"],
+            "example-user/widget",
+            1,
+        ),
+    ] {
+        let mut args = vec!["gh", "issue", "create", "-b", "Ordinary body"];
+        args.extend(arguments);
+        let output = shim_with(&root, &args, &[("GH_REPO", environment)]);
+        assert_eq!(code(&output), expected, "{}", stderr(&output));
+        assert_eq!(stdout(&output).contains("gh ran:"), expected == 0);
+    }
+}
+
+#[test]
+fn gh_repository_hosts_are_verified_before_an_owner_allowance() {
+    let root = gh_target_workspace();
+    // The owner is allowed. A host dropped during resolution would therefore
+    // pass without a probe, even though it is another server's repository.
+    for variables in [
+        vec![("GH_REPO", "github.enterprise.example/example-user/widget")],
+        vec![(
+            "GH_REPO",
+            "https://github.enterprise.example/example-user/widget",
+        )],
+        vec![
+            ("GH_REPO", "example-user/widget"),
+            ("GH_HOST", "github.enterprise.example"),
+        ],
+    ] {
+        let output = shim_with(
+            &root,
+            &["gh", "issue", "create", "-b", "Ordinary body"],
+            &variables,
+        );
+        assert_eq!(code(&output), 2, "{}", stderr(&output));
+        assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+        assert!(
+            stderr(&output).contains("github.enterprise.example"),
+            "{}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("Nothing was published"),
+            "{}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn gh_ownership_probes_follow_the_effective_repository_host() {
+    for (repository, explicit, ambient_host, expected_hostname) in [
+        (Some("other-owner/their-repo"), None, "github.com", ""),
+        (
+            Some("github.com/other-owner/their-repo"),
+            None,
+            "github.enterprise.example",
+            " --hostname github.com",
+        ),
+        (
+            Some("https://github.com/other-owner/their-repo"),
+            None,
+            "github.enterprise.example",
+            " --hostname github.com",
+        ),
+        (
+            Some("github.enterprise.example/ignored/repo"),
+            Some("github.com/other-owner/their-repo"),
+            "github.enterprise.example",
+            " --hostname github.com",
+        ),
+        (None, None, "", " --hostname github.com"),
+        (
+            None,
+            None,
+            "github.enterprise.example",
+            " --hostname github.com",
+        ),
+    ] {
+        let root = gh_target_workspace();
+        support::git(
+            &root,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "https://github.com/other-owner/their-repo.git",
+            ],
+        );
+        stub(
+            &root,
+            "gh",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/../gh.asked\"\ncase \"$*\" in\n'api user --jq .login'*) echo not-the-owner ;;\n'api repos/other-owner/their-repo --jq .permissions.admin'*) echo true ;;\n*) echo \"gh ran: $*\" ;;\nesac\n",
+        );
+        let mut arguments = vec!["gh", "issue", "create", "-b", "Ordinary body"];
+        if let Some(named) = explicit {
+            arguments.extend(["--repo", named]);
+        }
+        let mut variables = vec![("GH_HOST", ambient_host)];
+        if let Some(named) = repository {
+            variables.push(("GH_REPO", named));
+        }
+        let output = shim_with(&root, &arguments, &variables);
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+        let queries = std::fs::read_to_string(root.join("gh.asked")).unwrap();
+        for query in [
+            "api user --jq .login",
+            "api repos/other-owner/their-repo --jq .permissions.admin",
+        ] {
+            let expected = format!("{query}{expected_hostname}");
+            assert!(queries.lines().any(|line| line == expected), "{queries}");
+        }
+    }
+}
+
 #[test]
 fn a_destination_under_this_workspaces_own_owner_passes_and_the_command_runs() {
     // The half that is easy to lose: a destination guard that refuses
@@ -6968,8 +7151,8 @@ fn stub_gh_says_no(root: &Path) {
         "gh",
         "#!/bin/sh\n\
          case \"$*\" in\n\
-         'api user --jq .login') echo not-the-owner ;;\n\
-         'api repos/'*' --jq .permissions.admin') echo false ;;\n\
+         'api user --jq .login'*) echo not-the-owner ;;\n\
+         'api repos/'*' --jq .permissions.admin'*) echo false ;;\n\
          *) echo \"gh ran: $*\" ;;\n\
          esac\n",
     );
@@ -6989,6 +7172,86 @@ target_flags = ["-R", "--repo"]
 target = "forge-repo"
 scope = "always"
 "#;
+
+#[test]
+fn an_api_repository_template_retains_text_checks_without_inventing_a_destination() {
+    for endpoint in ["repos/{owner}/{repo}/issues", "repos/:owner/:repo/issues"] {
+        for (policy, expected) in [(API_POLICY, 0), (API_TARGET_POLICY, 2)] {
+            let root = workspace(policy);
+            stub_gh_says_no(&root);
+            support::git(
+                &root,
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/example-user/widget.git",
+                ],
+            );
+            let output = shim(
+                &root,
+                &["gh", "api", "-X", "POST", endpoint, "-f", "title=Ordinary"],
+            );
+            assert_eq!(code(&output), expected, "{}", stderr(&output));
+            assert_eq!(stdout(&output).contains("gh ran:"), expected == 0);
+            if expected == 2 {
+                assert!(
+                    stderr(&output).contains("repository placeholders"),
+                    "{}",
+                    stderr(&output)
+                );
+                assert!(
+                    stderr(&output).contains("Nothing was published"),
+                    "{}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn an_api_repository_template_keeps_public_target_visibility_checks() {
+    let root = workspace(&API_POLICY.replace("scope = \"always\"", "scope = \"public-target\""));
+    support::git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example-user/widget.git",
+        ],
+    );
+    stub(
+        &root,
+        "gh",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/../gh.asked\"\ncase \"$*\" in\n'api repos/{owner}/{repo} --jq .visibility' | 'api repos/:owner/:repo --jq .visibility') echo public ;;\n*) echo \"gh ran: $*\" ;;\nesac\n",
+    );
+    for repository in ["{owner}/{repo}", ":owner/:repo"] {
+        let endpoint = format!("repos/{repository}/issues");
+        for (title, expected) in [("Ordinary", 0), ("Generated with Claude Code", 1)] {
+            let output = shim(
+                &root,
+                &[
+                    "gh",
+                    "api",
+                    "-X",
+                    "POST",
+                    &endpoint,
+                    "-f",
+                    &format!("title={title}"),
+                ],
+            );
+            assert_eq!(code(&output), expected, "{}", stderr(&output));
+            assert_eq!(stdout(&output).contains("gh ran:"), expected == 0);
+        }
+        let queries = std::fs::read_to_string(root.join("gh.asked")).unwrap();
+        assert!(
+            queries.contains(&format!("api repos/{repository} --jq .visibility")),
+            "{queries}"
+        );
+    }
+}
 
 #[test]
 fn a_body_bound_for_a_repository_this_workspace_does_not_own_is_refused() {
@@ -7088,7 +7351,7 @@ fn a_destination_the_forge_says_the_operator_owns_is_published_to() {
         "gh",
         "#!/bin/sh\n\
          case \"$*\" in\n\
-         'api user --jq .login') echo not-the-owner ;;\n\
+         'api user --jq .login'*) echo not-the-owner ;;\n\
          'api repos/'*' --jq .permissions.admin') echo true ;;\n\
          *) echo \"gh ran: $*\" ;;\n\
          esac\n",
@@ -7210,8 +7473,8 @@ fn stub_gh_says_private_and_no(root: &Path) {
         "gh",
         "#!/bin/sh\n\
          case \"$*\" in\n\
-         'api user --jq .login') echo not-the-owner ;;\n\
-         'api repos/'*' --jq .permissions.admin') echo false ;;\n\
+         'api user --jq .login'*) echo not-the-owner ;;\n\
+         'api repos/'*' --jq .permissions.admin'*) echo false ;;\n\
          'api repos/'*' --jq .visibility') echo private ;;\n\
          *) echo \"gh ran: $*\" ;;\n\
          esac\n",
@@ -7477,6 +7740,47 @@ fn a_declaration_about_this_repository_is_not_read_at_somebody_elses() {
         forge_was_asked(&root),
         "a foreign destination was answered out of this repository's own declaration"
     );
+}
+
+#[test]
+fn a_private_declaration_does_not_answer_for_the_gh_repo_destination() {
+    let root = declared_workspace(
+        &DECLARED_POLICY
+            .replace("faux", "gh")
+            .replace("git-remote", "forge-repo"),
+        "https://github.com/acme/widget.git",
+    );
+    stub(
+        &root,
+        "gh",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/../gh.asked\"\ncase \"$*\" in\n'api repos/other-owner/public-widget --jq .visibility'*) echo public ;;\n*) echo \"gh ran: $*\" ;;\nesac\n",
+    );
+    for (repository, ambient_host) in [
+        ("other-owner/public-widget", "github.com"),
+        (
+            "github.com/other-owner/public-widget",
+            "github.enterprise.example",
+        ),
+    ] {
+        let output = shim_with(
+            &root,
+            &["gh", "pr", "create", "-t", "Generated with Claude Code"],
+            &[("GH_REPO", repository), ("GH_HOST", ambient_host)],
+        );
+        assert_eq!(code(&output), 1, "{}", stderr(&output));
+        assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    }
+    let queries = std::fs::read_to_string(root.join("gh.asked")).unwrap();
+    assert!(
+        queries.contains("api repos/other-owner/public-widget --jq .visibility\n"),
+        "{queries}"
+    );
+    assert!(
+        queries
+            .contains("api repos/other-owner/public-widget --jq .visibility --hostname github.com"),
+        "{queries}"
+    );
+    assert!(!queries.contains("repos/acme/widget"), "{queries}");
 }
 
 #[test]
