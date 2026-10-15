@@ -5127,7 +5127,7 @@ fn a_release_upload_judges_asset_labels_and_file_names() {
 }
 
 #[test]
-fn a_release_create_judges_the_tag_separately_from_its_title() {
+fn a_release_judges_a_new_tag_separately_from_its_title() {
     let root = own_gh_workspace();
     let tag = "v1\u{200B}";
     refuses_each(
@@ -5145,10 +5145,49 @@ fn a_release_create_judges_the_tag_separately_from_its_title() {
                 tag,
             ],
             vec!["gh", "release", "create", "--verify-tag", tag, "-n", "ok"],
+            vec!["gh", "release", "edit", "v1", "--tag", tag, "-n", "ok"],
+            vec![
+                "gh",
+                "release",
+                "edit",
+                "v1",
+                "--tag=v2\u{200B}",
+                "-n",
+                "ok",
+            ],
         ],
         "gh ran:",
     );
     let output = shim(&root, &["gh", "release", "create", "v1", "-n", "ok"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+
+    let policy = root.join("policy/principles.toml");
+    let mut text = std::fs::read_to_string(&policy).unwrap();
+    text.push_str(
+        r#"
+[rule.title-shape]
+message = "use the release title"
+require_regexp = '^Release title$'
+subjects = ["title"]
+command.before = ["gh"]
+command.scope = "always"
+"#,
+    );
+    std::fs::write(policy, text).unwrap();
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "release",
+            "create",
+            "v1",
+            "-t",
+            "Release title",
+            "-n",
+            "ok",
+        ],
+    );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
 }
@@ -5165,6 +5204,7 @@ fn an_alt_text_or_asset_label_of_unicode_blanks_alone_is_judged() {
         for form in [
             vec!["gh", "issue", "comment", "12", "-b", "ok", "--attach", &alt],
             vec!["gh", "release", "create", "v1.0.0", "-n", "ok", &label],
+            vec!["gh", "release", "upload", "v1.0.0", &label],
         ] {
             let output = shim(&root, &form);
             assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));

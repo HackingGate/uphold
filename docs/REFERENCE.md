@@ -2082,7 +2082,7 @@ A flag is read where a word is the flag a list names, or `--flag=value` for
 one. On every verb the shipped tables match, the shim carries the verb's whole
 option grammar and reads each option word as the command's own parser does:
 `gh pr create|edit|comment|review|merge|close|reopen`, `gh issue
-create|edit|comment|close|reopen`, `gh release create|edit`, `gh gist create`
+create|edit|comment|close|reopen`, `gh release create|edit|upload`, `gh gist create`
 and `gh api` from `gh` 2.102, and `glab mr create|update|note|merge`, `glab
 issue create|update|note` and `glab api` from `glab` 1.123.0, with each `glab mr
 note` subcommand, and each `glab mr note draft` subcommand below it, read with
@@ -2149,16 +2149,17 @@ with a grammar both are read whatever the table names:
   own name, which GitLab writes into the reference (`-` is uploaded as
   `upload`). The alt and the file's name are judged as prose on both.
 - **Release assets.** On `gh release create` and `gh release upload`, each
-  operand after the tag is a
-  file it uploads. An operand holding a `#` is `file#label`, split at the first
+  operand after the tag is a file it uploads. An operand holding a `#` is `file#label`, split at the first
   `#` past its start. The label and the file's name, which the release lists
   the asset by, are judged as prose. Any other operand is a pattern `gh`
   expands itself. One holding `*`, `?`, `[` or `\` names files the command
   line does not, so it is exit `2`; let the shell expand it.
 
-The tag operand of `gh release create` is also judged as prose, because the
-command can create that tag on the server. It is separate from the release
-title, so a rule limited to titles does not read it.
+The tag operand of `gh release create` and the `--tag` value of `gh release
+edit` are also judged as prose, because they can publish a new tag name. They
+are separate from the release title, so a rule limited to titles does not
+read them. The existing tag operand of `edit` or `upload` selects a release;
+it is not a new tag name.
 
 An alt text or a label is judged whenever it is not empty, including one made
 only of characters Rust's `trim` removes (U+000B, U+0085), because `gh`

@@ -2309,6 +2309,16 @@ impl Shim {
                     .subjects
                     .extend(attached_subjects(&self.command, &value));
             }
+            // Editing can publish a new tag name through an option rather
+            // than the creation operand. The current tag operand only selects
+            // the release being edited.
+            if self.command == "gh" && grammar.verb == "release:edit" && flag == "--tag" {
+                collected.subjects.push(Subject {
+                    kind: "text",
+                    value: value.clone(),
+                    added: None,
+                });
+            }
             self.read_option(&mut collected, &flag, value, paired)?;
         }
         if let Some(body) = grammar.stdin_body {
