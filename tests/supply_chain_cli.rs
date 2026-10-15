@@ -130,6 +130,9 @@ fn invoke(root: &Path, path: &std::ffi::OsStr, args: &[&str], push: &[(&str, &st
         .env("PATH", path)
         // Where each stub records that it ran, and with what.
         .env("STUB_LOG", root.join("stub.log"))
+        // Where guarddog unpacks: beside the fixture, so a suite run does not
+        // write under the developer's own cache directory.
+        .env("XDG_CACHE_HOME", cache_of(root))
         .current_dir(root)
         .stdin(Stdio::null());
     // The binary asks git about the fixture's ranges, and a hook's GIT_DIR
@@ -152,6 +155,11 @@ fn invoke(root: &Path, path: &std::ffi::OsStr, args: &[&str], push: &[(&str, &st
         command.env(name, value);
     }
     command.output().unwrap()
+}
+
+/// The cache directory a run against `root` is handed, beside the fixture.
+fn cache_of(root: &Path) -> PathBuf {
+    root.with_extension("cache")
 }
 
 /// The scoped form, driven the way prek drives it: the range in the two
@@ -605,6 +613,54 @@ fn an_npm_manifest_is_scanned_where_it_lives_and_a_clean_one_is_a_pass() {
     assert!(said.contains("1 Python/npm manifest(s) checked"), "{said}");
     assert!(said.contains("all checks passed"), "{said}");
     assert!(!said.contains("wrong directory"), "{said}");
+}
+
+/// guarddog unpacks under the cache directory whatever `TMPDIR` the run was
+/// handed.
+///
+/// guarddog's `metadata_mismatch` rule picks a wheel's root by `os.listdir`
+/// order, which is the filesystem's, so a guarddog that inherited `TMPDIR`
+/// passed pandas 3.0.3 with it on btrfs and failed it with it on tmpfs. Two
+/// runs with two `TMPDIR`s must hand guarddog the same directory, and it must
+/// exist for guarddog's `tempfile` to use.
+#[test]
+fn guarddog_unpacks_in_the_same_directory_whatever_tmpdir_says() {
+    let root = repository();
+    std::fs::create_dir_all(root.join("web")).unwrap();
+    std::fs::write(
+        root.join("web/package.json"),
+        "{\"name\": \"web\", \"dependencies\": {\"cookie\": \"^1.1.1\"}}\n",
+    )
+    .unwrap();
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        (
+            "guarddog",
+            &format!(
+                "[ -d \"$TMPDIR\" ] || {{ echo \"no directory at $TMPDIR\"; exit 1; }}\n\
+                 echo \"TMPDIR=$TMPDIR\" >> \"$STUB_LOG\"\n{GUARDDOG_CLEAN}"
+            ),
+        ),
+    ]);
+    let mut path = tools.as_os_str().to_owned();
+    path.push(":/usr/bin:/bin");
+    let expected = format!(
+        "TMPDIR={}",
+        cache_of(&root).join("uphold/guarddog").display()
+    );
+    for kind in ["supply-chain-tmpfs", "supply-chain-btrfs"] {
+        let tmpdir = support::scratch(kind);
+        std::fs::create_dir_all(&tmpdir).unwrap();
+        let _ = std::fs::remove_file(root.join("stub.log"));
+        let output = invoke(
+            &root,
+            &path,
+            &["--all"],
+            &[("TMPDIR", tmpdir.to_str().unwrap())],
+        );
+        assert_eq!(code(&output), 0, "{}", text(&output));
+        assert_eq!(journal(&root).trim(), expected, "{}", text(&output));
+    }
 }
 
 /// A refusing npm scan is a failure, named by the directory it came from.
@@ -1935,6 +1991,39 @@ fn a_waiver_for_another_version_does_not_apply_and_is_reported_stale() {
         ),
         "{said}"
     );
+}
+
+/// A pypi `metadata_mismatch` waiver that matched nothing is not called
+/// removable, because whether guarddog reaches the release's manifest at all is
+/// the unpacking filesystem's: pandas 3.0.3 is reported on one host and not on
+/// another, and the advice to delete the row on the second breaks the first.
+#[test]
+fn an_unmatched_pypi_metadata_mismatch_waiver_is_not_called_removable() {
+    let root = repository();
+    std::fs::create_dir_all(root.join("service")).unwrap();
+    std::fs::write(root.join("service/uv.lock"), "version = 1\n").unwrap();
+    let clean = "echo '[{\"dependency\":\"pandas\",\"result\":{\"errors\":{},\"issues\":0,\
+                 \"results\":{\"metadata_mismatch\":null},\"package_version\":\"3.0.3\",\
+                 \"risks\":[]}}]'\nexit 0";
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        ("uv", "echo 'pandas==3.0.3'"),
+        ("guarddog", clean),
+    ]);
+    waiving(&root, "pypi:pandas@3.0.3");
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let said = text(&output);
+    let line = said
+        .lines()
+        .find(|line| line.contains("waiver matched nothing in this run"))
+        .unwrap_or_default();
+    assert!(
+        line.contains("metadata_mismatch on pypi:pandas@3.0.3"),
+        "{said}"
+    );
+    assert!(line.contains("another host may still need it"), "{line}");
+    assert!(!line.contains("remove it"), "{line}");
 }
 
 /// A waiver with no reason, or no version, is refused at load: exit 2 before

@@ -3044,6 +3044,30 @@ exit 0 — the two email-domain rules time out routinely — is still read, and
 still names the packages and how many rules. None of that is a finding: it is
 the record that the question was asked and nobody answered.
 
+### Where guarddog unpacks
+
+guarddog is run with `TMPDIR` set to `$XDG_CACHE_HOME/uphold/guarddog`, else
+`$HOME/.cache/uphold/guarddog`, created owner-only if missing. The caller's
+`TMPDIR` is not passed on, because guarddog's `metadata_mismatch` verdict on
+a PyPI wheel depends on the filesystem it unpacks on.
+
+guarddog 3.2.0 takes the first `os.listdir` entry under the unpacked release
+whose name starts with the package's as the package root. A wheel such as
+pandas 3.0.3 holds two such entries, `pandas/` (which carries a
+`pyproject.toml`) and `pandas-3.0.3.dist-info/` (which carries none), and the
+filesystem decides their order: tmpfs lists the newest first, btrfs in creation
+order, ext4 by a hash seeded per filesystem. The order that reaches the
+manifest reports a mismatch and the other reports nothing, so with `TMPDIR` on
+tmpfs the same lock failed that passed with it on btrfs.
+
+Fixing the directory makes one host give one verdict. It does not make two
+hosts agree when their cache directories are on different filesystems. That
+needs guarddog to choose the package root deterministically, which nothing
+outside its process can do. A relative or empty `XDG_CACHE_HOME` is ignored.
+Where neither variable names an absolute directory, or the directory cannot
+be created, guarddog inherits `TMPDIR` as before and the section prints a line
+saying its verdict may differ with that filesystem.
+
 ### What guarddog is not handed: git sources, URLs and paths
 
 `guarddog pypi verify` looks every requirement up on PyPI by name. A PEP 508
@@ -3134,7 +3158,10 @@ reason = "compares optional extras against the required dependencies"
 - **A waiver that matched nothing is reported**, where the run could have
   matched it: the package appeared in a report, or `--all` read its ecosystem.
   A range scan reads only the manifests that moved, so a waiver about one that
-  did not move is not called stale.
+  did not move is not called stale. A `pypi` waiver for `metadata_mismatch` is
+  reported without the advice to remove it, because whether that check reaches
+  the release's manifest depends on the host's filesystem
+  ([above](#where-guarddog-unpacks)); another host may still need it.
 - `scanner` is `guarddog` alone. The other scanners carry their own
   suppression in their own configuration (`osv-scanner.toml`, `deny.toml`,
   zizmor's config, cargo-vet's audits), and a second list here would be two
