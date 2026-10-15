@@ -3245,6 +3245,10 @@ tolerated rather than counted
 The same report carries the could-not-look. A dependency guarddog could not
 download populates `errors` and drops `results` while still exiting 0, and a
 total network failure returns a bare `[]`; both are unread rather than clean.
+A report also needs a `results` object and a `risks` array; missing or mistyped
+fields are unread, never an empty risk list. npm tolerance requires the
+underlying `results.metadata_mismatch` and the risk's `threat_description` to
+agree exactly before their differences are accepted.
 Its older admission, "Some rules failed to run while scanning \<package\>" at
 exit 0 — the two email-domain rules time out routinely — is still read, and
 still names the packages and how many rules. None of that is a finding: it is

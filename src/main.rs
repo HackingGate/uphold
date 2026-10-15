@@ -983,8 +983,8 @@ struct EffectiveRule<'rule> {
 /// `inherit.paths` merges, minus `inherit.disabled_rules`, with its own rules
 /// shadowing an inherited id -- five interacting fields, and every second
 /// reader of them is a reader free to disagree with the engine about which
-/// rules run. The reconciler in `uphold_check.py` is that second reader today,
-/// and this is what ends it: one loader answers, and everything else asks.
+/// rules run. The Python reconciler was that second reader; it now asks the
+/// binary instead, so one loader answers every caller.
 ///
 /// `--json` because the caller is a program. The human form is the same answer
 /// for a person standing in a repository asking what it is holding itself to.
