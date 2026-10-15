@@ -177,6 +177,26 @@ pub(crate) fn text_matches(text: &str, query: &Query, label: &str) -> Result<boo
     Ok(hit_found)
 }
 
+/// The text of every match inside one hit's line, in order.
+///
+/// A hit is a line, and a line can hold a match a baseline excuses beside one
+/// it does not, so an entry naming matched text is compared against each match
+/// and not against the line. Same matcher as the search, so the spans are the
+/// ones that made the line a hit.
+pub(crate) fn match_texts(text: &str, query: &Query, label: &str) -> Result<Vec<String>> {
+    use grep_matcher::Matcher;
+
+    let matcher = query.matcher(label)?;
+    let mut spans = Vec::new();
+    matcher
+        .find_iter(text.as_bytes(), |found| {
+            spans.push(text[found].to_owned());
+            true
+        })
+        .map_err(|error| Fatal::new(format!("{label}: {error}")))?;
+    Ok(spans)
+}
+
 /// Search text that never becomes a file: a commit message, a release note, a
 /// pull-request body. Same engine and same flags as the file path, so the two
 /// cannot disagree about what counts as a match.

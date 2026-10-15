@@ -31,7 +31,7 @@ struct CommandSources {
 /// Separate from the rule's own message, which explains the prohibition -- a
 /// stale entry is a different problem, and telling someone the prohibition again
 /// does not help them fix it.
-const STALE_BASELINE: &str = "This rule's baseline lists paths that no longer match it. Delete \
+const STALE_BASELINE: &str = "This rule's baseline lists entries that no longer match it. Delete \
 them: an entry that no longer describes the tree is the rule switched off for that path, and it \
 will stay off if the file ever regains a match.";
 
@@ -497,19 +497,48 @@ impl<'a> Scan<'a> {
         }
 
         let mut failures = Vec::new();
-        let baseline = self.load_path_baseline(rule.files().baseline.as_deref())?;
+        let baseline = self.load_path_baseline(rule.files().baseline.as_deref(), true)?;
         if !baseline.is_empty() {
-            let seen: BTreeSet<String> = hits
-                .iter()
-                .map(|hit| normalize_rel(&hit.path).to_owned())
-                .filter(|path| baseline.contains(path))
-                .collect();
-            hits.retain(|hit| !baseline.contains(normalize_rel(&hit.path)));
-            failures.extend(baseline.unsigned_failure(rule, self.policy.baselines_signed));
+            // A path entry excuses every hit in the path. A matched-text entry
+            // excuses a hit only when every match on its line is one the
+            // baseline names for that path, so a second match beside an
+            // excused one still fails -- the case the entry exists for.
+            let mut seen: BTreeSet<Entry> = BTreeSet::new();
+            let mut kept = Vec::new();
+            for hit in hits {
+                let path = normalize_rel(&hit.path);
+                if baseline.contains(path) {
+                    seen.insert((path.to_owned(), None));
+                    continue;
+                }
+                if baseline.names_matches_in(path) {
+                    let spans = engine::match_texts(&hit.text, &query, &rule.id)?;
+                    let mut excused = !spans.is_empty();
+                    for span in spans {
+                        let entry = (path.to_owned(), Some(span));
+                        if baseline.entries.contains(&entry) {
+                            seen.insert(entry);
+                        } else {
+                            excused = false;
+                        }
+                    }
+                    if excused {
+                        continue;
+                    }
+                }
+                kept.push(hit);
+            }
+            hits = kept;
+            failures.extend(baseline.unsigned_failure(
+                rule,
+                self.policy.baselines_signed,
+                self.redact(),
+            ));
             failures.extend(stale_baseline_failure(
                 rule,
-                &baseline.paths,
+                &baseline.entries,
                 &seen,
+                |entry| entry_label(entry, self.redact()),
                 STALE_BASELINE,
             ));
         }
@@ -780,6 +809,7 @@ impl<'a> Scan<'a> {
                 rule,
                 &listed,
                 &baselined_seen,
+                String::clone,
                 STALE_BASELINE,
             ));
         }
@@ -818,19 +848,24 @@ impl<'a> Scan<'a> {
         // a check that is too loud in the way they chase one that is wrong.
         let mut failures = Vec::new();
         let mut hits = hits;
-        let baseline = self.load_path_baseline(rule.files().baseline.as_deref())?;
+        let baseline = self.load_path_baseline(rule.files().baseline.as_deref(), false)?;
         if !baseline.is_empty() {
-            let seen: BTreeSet<String> = hits
+            let seen: BTreeSet<Entry> = hits
                 .iter()
-                .map(|hit| normalize_rel(&hit.path).to_owned())
-                .filter(|path| baseline.contains(path))
+                .map(|hit| (normalize_rel(&hit.path).to_owned(), None))
+                .filter(|entry| baseline.entries.contains(entry))
                 .collect();
             hits.retain(|hit| !baseline.contains(normalize_rel(&hit.path)));
-            failures.extend(baseline.unsigned_failure(rule, self.policy.baselines_signed));
+            failures.extend(baseline.unsigned_failure(
+                rule,
+                self.policy.baselines_signed,
+                self.redact(),
+            ));
             failures.extend(stale_baseline_failure(
                 rule,
-                &baseline.paths,
+                &baseline.entries,
                 &seen,
+                |entry| entry_label(entry, false),
                 STALE_BASELINE,
             ));
         }
@@ -878,17 +913,22 @@ impl<'a> Scan<'a> {
         }
 
         let mut failures = Vec::new();
-        let baseline = self.load_path_baseline(rule.files().baseline.as_deref())?;
+        let baseline = self.load_path_baseline(rule.files().baseline.as_deref(), false)?;
         if !baseline.is_empty() {
-            let still_missing: BTreeSet<String> = missing
+            let still_missing: BTreeSet<Entry> = missing
                 .iter()
-                .map(|path| normalize_rel(path).to_owned())
+                .map(|path| (normalize_rel(path).to_owned(), None))
                 .collect();
-            failures.extend(baseline.unsigned_failure(rule, self.policy.baselines_signed));
+            failures.extend(baseline.unsigned_failure(
+                rule,
+                self.policy.baselines_signed,
+                self.redact(),
+            ));
             failures.extend(stale_baseline_failure(
                 rule,
-                &baseline.paths,
+                &baseline.entries,
                 &still_missing,
+                |entry| entry_label(entry, false),
                 STALE_REQUIRE_BASELINE,
             ));
             missing.retain(|path| !baseline.contains(normalize_rel(path)));
@@ -1541,41 +1581,104 @@ impl<'a> Scan<'a> {
     /// size baseline's separator and a path may hold it; `#` at line start
     /// already means a comment and overloading it would change what an existing
     /// file means.
-    fn load_path_baseline(&self, relative: Option<&str>) -> Result<Baseline> {
+    ///
+    /// A double-quoted field after the path narrows the entry from the path to
+    /// one matched text in it:
+    ///
+    /// ```text
+    /// src/registry.rs | "secret_hash: String" | alice | a digest, not a credential
+    /// ```
+    ///
+    /// The path stays checked, so a second match in the same file still fails.
+    /// A literal rather than a second pattern, because a pattern can excuse
+    /// what nobody has written yet and a literal excuses only what it names.
+    /// Quoted because matched text may hold `|`, and only `\"` and `\\` are
+    /// escapes. `reads_matches` is false for the kinds whose hits carry no
+    /// matched text -- a path rule's hit is the path and a require rule's is
+    /// an absence -- where such an entry is refused rather than ignored.
+    fn load_path_baseline(&self, relative: Option<&str>, reads_matches: bool) -> Result<Baseline> {
         let Some(relative) = relative else {
             return Ok(Baseline::default());
         };
-        let text = crate::error::read_to_string(&self.root.join(relative))?;
+        let file = self.root.join(relative);
+        let text = crate::error::read_to_string(&file)?;
         let mut baseline = Baseline {
             file: relative.to_owned(),
             ..Baseline::default()
         };
+        let mut match_lines: Vec<(usize, Entry)> = Vec::new();
         for (index, line) in text.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let mut parts = line.split('|').map(str::trim);
-            let raw = parts.next().unwrap_or_default();
+            let malformed = |what: &str| {
+                Fatal::at(
+                    &file,
+                    format!(
+                        "line {}: {what}\n  {line}\n\nA baseline entry is `<path>`, \
+                         `<path> | <owner> | <reason>`, or either with a quoted matched text \
+                         after the path: `<path> | \"<match>\" | <owner> | <reason>`.",
+                        index + 1
+                    ),
+                )
+            };
+            let (raw, rest) = line
+                .split_once('|')
+                .map_or((line, ""), |(raw, rest)| (raw.trim(), rest.trim()));
             if raw.is_empty() {
                 // A signature with nothing to sign. Same class as a malformed
                 // size entry: it reads as an entry and excuses no path.
-                return Err(Fatal::at(
-                    &self.root.join(relative),
-                    format!(
-                        "line {}: no path before the signature\n  {line}\n\nA baseline entry \
-                         is `<path>` or `<path> | <owner> | <reason>`.",
-                        index + 1
-                    ),
-                ));
+                return Err(malformed("no path before the signature"));
             }
             let path = normalize_rel(raw).to_owned();
+            let (matched, signature) = if rest.starts_with('"') {
+                if !reads_matches {
+                    return Err(malformed(
+                        "a matched text on a rule whose hits have none; this kind of rule \
+                         reports a path, so excuse the path",
+                    ));
+                }
+                let (matched, after) = unquote(rest).map_err(|what| malformed(&what))?;
+                let signature = match after.trim() {
+                    "" => "",
+                    after => after
+                        .strip_prefix('|')
+                        .ok_or_else(|| malformed("text after the closing quote"))?,
+                };
+                (Some(matched), signature)
+            } else {
+                (None, rest)
+            };
+            let mut parts = signature.split('|').map(str::trim);
             let owner = parts.next().unwrap_or_default();
             let reason = parts.next().unwrap_or_default();
+            let entry = (path.clone(), matched);
             if owner.is_empty() || reason.is_empty() {
-                baseline.unsigned.push(path.clone());
+                baseline.unsigned.push(entry.clone());
             }
-            baseline.paths.insert(path);
+            if entry.1.is_some() {
+                match_lines.push((index, entry.clone()));
+            } else {
+                baseline.paths.insert(path);
+            }
+            baseline.entries.insert(entry);
+        }
+        // A path excused whole leaves a matched-text entry in it nothing to
+        // excuse, and it would be reported stale while the text is still
+        // there. Refused instead, naming the line to delete.
+        if let Some((index, (path, _))) = match_lines
+            .iter()
+            .find(|(_, (path, _))| baseline.paths.contains(path))
+        {
+            return Err(Fatal::at(
+                &file,
+                format!(
+                    "line {}: {path} is excused whole by another entry, so this matched-text \
+                     entry excuses nothing. Keep one of the two.",
+                    index + 1
+                ),
+            ));
         }
         Ok(baseline)
     }
@@ -1640,7 +1743,11 @@ impl<'a> Scan<'a> {
     }
 }
 
-/// One rule's baseline: the paths it excuses, and which of them are unsigned.
+/// One path-baseline entry: the path, and the matched text in it when the
+/// entry excuses one match rather than the whole path.
+type Entry = (String, Option<String>);
+
+/// One rule's baseline: the entries it excuses, and which of them are unsigned.
 ///
 /// `file` is carried so a finding can name the file to edit. A report that says
 /// "three entries are unsigned" and not where they are is a report whose reader
@@ -1648,17 +1755,28 @@ impl<'a> Scan<'a> {
 #[derive(Debug, Default)]
 struct Baseline {
     file: String,
+    /// Every entry, path and matched-text alike.
+    entries: BTreeSet<Entry>,
+    /// The paths excused whole.
     paths: BTreeSet<String>,
-    unsigned: Vec<String>,
+    unsigned: Vec<Entry>,
 }
 
 impl Baseline {
     fn is_empty(&self) -> bool {
-        self.paths.is_empty()
+        self.entries.is_empty()
     }
 
     fn contains(&self, path: &str) -> bool {
         self.paths.contains(path)
+    }
+
+    /// Whether any entry excuses a matched text in this path.
+    fn names_matches_in(&self, path: &str) -> bool {
+        self.entries
+            .range((path.to_owned(), Some(String::new()))..)
+            .next()
+            .is_some_and(|(listed, _)| listed == path)
     }
 
     /// The entries carrying no owner and reason, when the policy asks for them.
@@ -1668,14 +1786,14 @@ impl Baseline {
     /// tree, and neither exists as text the loader has seen. It sits at the
     /// same tier as a stale entry for the same reason -- both are a baseline
     /// that has stopped describing a decision somebody made.
-    fn unsigned_failure(&self, rule: &Rule, required: bool) -> Vec<Failure> {
+    fn unsigned_failure(&self, rule: &Rule, required: bool, redact: bool) -> Vec<Failure> {
         if !required || self.unsigned.is_empty() {
             return Vec::new();
         }
         let body = self
             .unsigned
             .iter()
-            .map(|path| format!("{path}: no owner and reason"))
+            .map(|entry| format!("{}: no owner and reason", entry_label(entry, redact)))
             .collect::<Vec<String>>()
             .join("\n");
         vec![Failure::new(
@@ -1693,13 +1811,49 @@ impl Baseline {
     }
 }
 
-fn stale_baseline_failure(
+/// A baseline entry as the baseline file spells it, with the matched text
+/// withheld where the policy redacts matches.
+fn entry_label((path, matched): &Entry, redact: bool) -> String {
+    match matched {
+        None => path.clone(),
+        Some(_) if redact => format!("{path} | \"[REDACTED_MATCH]\""),
+        Some(text) => format!(
+            "{path} | \"{}\"",
+            text.replace('\\', "\\\\").replace('"', "\\\"")
+        ),
+    }
+}
+
+/// The quoted matched text at the start of `field`, and what follows it.
+fn unquote(field: &str) -> std::result::Result<(String, &str), String> {
+    let mut text = String::new();
+    let mut chars = field.char_indices().skip(1);
+    while let Some((at, character)) = chars.next() {
+        match character {
+            '"' if text.is_empty() => return Err(String::from("an empty matched text")),
+            '"' => return Ok((text, &field[at + 1..])),
+            '\\' => match chars.next() {
+                Some((_, escaped @ ('"' | '\\'))) => text.push(escaped),
+                _ => {
+                    return Err(String::from(
+                        "an escape other than \\\" or \\\\ in the matched text",
+                    ));
+                }
+            },
+            other => text.push(other),
+        }
+    }
+    Err(String::from("no closing quote after the matched text"))
+}
+
+fn stale_baseline_failure<T: Ord>(
     rule: &Rule,
-    baseline: &BTreeSet<String>,
-    seen: &BTreeSet<String>,
+    baseline: &BTreeSet<T>,
+    seen: &BTreeSet<T>,
+    label: impl Fn(&T) -> String,
     message: &str,
 ) -> Vec<Failure> {
-    let stale: Vec<&String> = baseline.difference(seen).collect();
+    let stale: Vec<&T> = baseline.difference(seen).collect();
     if stale.is_empty() {
         return Vec::new();
     }
@@ -1710,7 +1864,7 @@ fn stale_baseline_failure(
     };
     let body = stale
         .iter()
-        .map(|path| format!("{path}: {suffix}"))
+        .map(|entry| format!("{}: {suffix}", label(entry)))
         .collect::<Vec<String>>()
         .join("\n");
     vec![Failure::new(

@@ -830,6 +830,187 @@ fn a_signed_entry_still_goes_stale_when_it_stops_describing_the_tree() {
     assert!(!text.contains("unsigned baseline"), "{text}");
 }
 
+/// The policy for the matched-text entries below: a credential held as a plain
+/// string, the rule #349 was written about.
+const CREDENTIAL_RULE: &str = r#"
+        [rule.no-plain-credential-string]
+        message = "hold a credential in a secret type"
+        regexp = '(?i)\b\w*(token|secret|password|api_key)\w*\s*:\s*(String|&str)'
+
+        [rule.no-plain-credential-string.files]
+        glob = ["src/**"]
+        baseline = "policy/credential-baseline.txt"
+"#;
+
+#[test]
+fn a_matched_text_entry_excuses_that_match_and_not_a_new_one_in_the_same_file() {
+    // A path entry excuses every hit in the path, so a real credential added
+    // next to the digest the entry was written for passed unseen.
+    let root = workspace();
+    write(&root, "policy/principles.toml", CREDENTIAL_RULE);
+    write(
+        &root,
+        "policy/credential-baseline.txt",
+        "src/registry.rs | \"secret_hash: String\" | alice | a SHA-256 digest, not a credential\n",
+    );
+    write(
+        &root,
+        "src/registry.rs",
+        "struct Entry {\n    secret_hash: String,\n}\n",
+    );
+    let excused = scan(&root);
+    assert_eq!(code(&excused), 0, "{}", stderr(&excused));
+
+    write(
+        &root,
+        "src/registry.rs",
+        "struct Entry {\n    secret_hash: String,\n    api_token: String,\n}\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("src/registry.rs:3"), "{text}");
+    assert!(!text.contains("src/registry.rs:2"), "{text}");
+    assert!(!text.contains("stale baseline"), "{text}");
+}
+
+#[test]
+fn a_line_holding_an_excused_match_and_another_still_fails() {
+    // A hit is a line. The entry names one match, and a second match on the
+    // same line is not the one it names.
+    let root = workspace();
+    write(&root, "policy/principles.toml", CREDENTIAL_RULE);
+    write(
+        &root,
+        "policy/credential-baseline.txt",
+        "src/registry.rs | \"secret_hash: String\"\n",
+    );
+    write(
+        &root,
+        "src/registry.rs",
+        "fn f(secret_hash: String, api_token: String) {}\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("src/registry.rs:1"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_matched_text_entry_that_no_longer_matches_is_stale() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", CREDENTIAL_RULE);
+    write(
+        &root,
+        "policy/credential-baseline.txt",
+        "src/registry.rs | \"secret_hash: String\" | alice | a digest\n",
+    );
+    write(
+        &root,
+        "src/registry.rs",
+        "struct Entry {\n    digest: [u8; 32],\n}\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(
+        text.contains("no-plain-credential-string (stale baseline)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("src/registry.rs | \"secret_hash: String\": no longer matches"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_matched_text_entry_is_redacted_where_the_policy_redacts_matches() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        &format!("redact_matches = true\n{CREDENTIAL_RULE}"),
+    );
+    write(
+        &root,
+        "policy/credential-baseline.txt",
+        "src/registry.rs | \"secret_hash: String\"\n",
+    );
+    write(&root, "src/registry.rs", "fn f() {}\n");
+    let output = scan(&root);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(
+        text.contains("src/registry.rs | \"[REDACTED_MATCH]\""),
+        "{text}"
+    );
+    assert!(!text.contains("secret_hash"), "{text}");
+}
+
+#[test]
+fn a_malformed_matched_text_entry_is_refused() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", CREDENTIAL_RULE);
+    write(&root, "src/registry.rs", "secret_hash: String\n");
+    for (entry, says) in [
+        (
+            "src/registry.rs | \"secret_hash: String\n",
+            "no closing quote",
+        ),
+        ("src/registry.rs | \"\"\n", "an empty matched text"),
+        ("src/registry.rs | \"a\\tb\"\n", "an escape other than"),
+        (
+            "src/registry.rs | \"secret_hash: String\" alice\n",
+            "text after the closing quote",
+        ),
+        (
+            "src/registry.rs\nsrc/registry.rs | \"secret_hash: String\"\n",
+            "is excused whole by another entry",
+        ),
+    ] {
+        write(&root, "policy/credential-baseline.txt", entry);
+        let output = scan(&root);
+        assert_eq!(code(&output), 2, "{entry}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains(says),
+            "{entry}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn a_matched_text_entry_on_a_path_rule_is_refused() {
+    // A path rule's hit is the path, so there is no matched text to compare an
+    // entry to, and ignoring the entry would leave the path failing for a
+    // reason its baseline appears to answer.
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        r#"
+        [rule.no-env-file]
+        message = "no .env files"
+        path_regexp = '\.env$'
+
+        [rule.no-env-file.files]
+        baseline = "policy/env-baseline.txt"
+"#,
+    );
+    write(&root, "policy/env-baseline.txt", "app/.env | \".env\"\n");
+    write(&root, "app/.env", "X=1\n");
+    let output = scan(&root);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("a matched text on a rule whose hits have none"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn a_baseline_entry_that_no_longer_matches_is_reported_as_stale() {
     let root = workspace();

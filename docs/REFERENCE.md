@@ -324,6 +324,31 @@ A signature is an addition to the record and not a way out of it. A reason says
 why an entry is there; it says nothing about whether it still needs to be, so a
 signed entry still goes stale.
 
+### A baseline entry may excuse one match and keep the file checked
+
+A path entry excuses every hit in the path, so the file stops being checked at
+all: excuse `secret_hash: String`, a digest, and an `api_token: String` added
+beside it next month passes unseen. A `regexp` rule's entry may instead name the
+matched text, double-quoted, after the path:
+
+```text
+src/registry.rs | "secret_hash: String" | alice | a SHA-256 digest, not a credential
+```
+
+The entry excuses a hit only when every match on the hit's line is text the
+baseline names for that path, so a second match in the same file, or on the
+same line, still fails. It goes stale when no match in the path is that text,
+and it is signed and held to `baselines_signed` like a path entry.
+
+A literal and not a second pattern: the pattern language has no lookaround,
+and an exception written as a pattern could excuse matches nobody has written
+yet, where a literal excuses only the text it names. Inside the quotes `\"` and
+`\\` are the only escapes, and `|` is text. A match spanning lines cannot be
+named this way; excuse its path. The entry is refused on a `path_regexp` or
+`require_regexp` rule, whose hits carry no matched text, and beside a path entry
+for the same path, which already excuses it. Under `redact_matches` a report
+prints the entry's text as `[REDACTED_MATCH]`.
+
 ### A rule may declare a floor under what it selects
 
 `files.min_selected = N` fails the rule when its selection comes in under `N`
