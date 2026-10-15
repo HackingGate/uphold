@@ -552,6 +552,10 @@ fn in_list(list: &[String], needle: &str) -> bool {
 /// config, and no policy author should have to write it there to be guarded.
 const ALIAS_COMMANDS: &[&str] = &["git", "gh", "glab"];
 
+/// How many `gh` aliases one invocation is followed through: one alias may
+/// expand to another, and `gh` runs that one too.
+const ALIAS_DEPTH: usize = 8;
+
 /// Commands whose `api` verb is the whole forge behind one word.
 ///
 /// Grammar rather than policy, beside [`ALIAS_COMMANDS`] and for the same
@@ -873,17 +877,37 @@ fn command_line_alias(argv: &[String], word: &str) -> Option<String> {
     None
 }
 
-/// One alias out of what `gh alias list` or `glab alias list` printed.
+/// One alias out of what `glab alias list` printed.
 ///
-/// Both print one alias per line as a name and an expansion, and neither
-/// promises which separator: `co: pr checkout`, `co\tpr checkout` and
-/// `co=pr checkout` have all been shipped. Splitting on the first of the three
-/// reads every one of them, and a line that carries none is not an alias.
+/// It prints one alias per line as a name and an expansion, and promises no
+/// separator: `co: pr checkout`, `co\tpr checkout` and `co=pr checkout` have
+/// all been shipped by one forge CLI or the other. Splitting on the first of
+/// the three reads every one of them, and a line that carries none is not an
+/// alias. `gh` prints YAML, and is read by [`Shim::gh_alias`].
 fn alias_in_list(text: &str, word: &str) -> Option<String> {
     text.lines().find_map(|line| {
         let (name, expansion) = line.split_once([':', '\t', '='])?;
         (name.trim() == word).then(|| expansion.trim().to_owned())
     })
+}
+
+/// An alias one invocation names, as the command's alias list holds it.
+#[derive(Debug)]
+struct Alias {
+    /// The indices in argv of the words naming it: one, or two for a `gh`
+    /// alias nested under a command group.
+    at: Vec<usize>,
+    /// Its name, as the list spells it.
+    name: String,
+    /// What it stands for, before any argument is put in.
+    expansion: String,
+}
+
+/// argv with one alias expanded, and the name of the alias that was.
+#[derive(Debug)]
+pub(crate) struct Expanded {
+    pub name: String,
+    pub argv: Vec<String>,
 }
 
 /// A `gh` or `glab` alias's expansion with the arguments it was given put in,
@@ -905,6 +929,83 @@ fn alias_arguments(expansion: &str, arguments: Vec<String>) -> (String, Vec<Stri
         }
     }
     (expansion, extra)
+}
+
+/// Where [`shlex_split`] is in a word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lexing {
+    /// Between words.
+    Between,
+    /// In a word, outside quotes.
+    Word,
+    /// After a backslash outside quotes.
+    Escaped,
+    /// After a backslash inside double quotes.
+    EscapedQuoted,
+    /// Inside double quotes.
+    Double,
+    /// Inside single quotes.
+    Single,
+    /// In a comment, which runs to the end of the line.
+    Comment,
+}
+
+/// Words as `github.com/google/shlex`'s `Split` reads them, which is the
+/// splitter `gh` and `glab` both run on an alias's expansion once its
+/// arguments are in.
+///
+/// Its state machine, state for state, so the reading is the command's and
+/// not a neighbour's: space, tab, CR and LF separate words; a `#` that opens a
+/// word comments out the rest of its line, while one inside a word is a
+/// letter; a backslash takes the next character as a letter, inside double
+/// quotes too, so `"a\b"` is `ab`; single quotes take everything up to the
+/// next one; and a quoted empty word is a word. `None` where `Split` returns
+/// an error: an unclosed quote, or a backslash at the end.
+///
+/// A POSIX splitter differs in two of those places. It kept `#c` as a word, so
+/// with `hash` set to `pr comment $1`, `gh hash '5 #c -R' -b X` was read as `-R
+/// -b` and the body `X` as an operand, while `gh` ran `pr comment 5 -b X`.
+fn shlex_split(text: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut state = Lexing::Between;
+    for letter in text.chars() {
+        let space = matches!(letter, ' ' | '\t' | '\r' | '\n');
+        state = match (state, letter) {
+            (Lexing::Between, _) if space => Lexing::Between,
+            (Lexing::Word, _) if space => {
+                words.push(std::mem::take(&mut word));
+                Lexing::Between
+            }
+            (Lexing::Between | Lexing::Word, '"') => Lexing::Double,
+            (Lexing::Between | Lexing::Word, '\'') => Lexing::Single,
+            (Lexing::Between | Lexing::Word, '\\') => Lexing::Escaped,
+            (Lexing::Double, '"') | (Lexing::Single, '\'') => Lexing::Word,
+            (Lexing::Double, '\\') => Lexing::EscapedQuoted,
+            (Lexing::Comment, '\n') => Lexing::Between,
+            (Lexing::Between, '#') | (Lexing::Comment, _) => Lexing::Comment,
+            (Lexing::EscapedQuoted | Lexing::Double, _) => {
+                word.push(letter);
+                Lexing::Double
+            }
+            (Lexing::Single, _) => {
+                word.push(letter);
+                Lexing::Single
+            }
+            (Lexing::Between | Lexing::Word | Lexing::Escaped, _) => {
+                word.push(letter);
+                Lexing::Word
+            }
+        };
+    }
+    match state {
+        Lexing::Between | Lexing::Comment => Some(words),
+        Lexing::Word => {
+            words.push(word);
+            Some(words)
+        }
+        Lexing::Escaped | Lexing::EscapedQuoted | Lexing::Double | Lexing::Single => None,
+    }
 }
 
 /// Whether an expansion still holds a `$` before a digit once the arguments
@@ -1352,7 +1453,7 @@ impl Shim {
     /// process for it, and the expansion is asked of the REAL command rather
     /// than of whatever PATH resolves: the shim is what PATH resolves, and
     /// asking it would be this function calling itself without bound.
-    fn expand_alias(&self, root: &Path, argv: &[String]) -> Result<Option<Vec<String>>> {
+    fn expand_alias(&self, root: &Path, argv: &[String]) -> Result<Option<Expanded>> {
         if !ALIAS_COMMANDS.contains(&self.command.as_str()) {
             return Ok(None);
         }
@@ -1369,7 +1470,12 @@ impl Shim {
         else {
             return Ok(None);
         };
-        let Some(expansion) = self.alias_expansion(root, argv, word)? else {
+        let Some(Alias {
+            at,
+            name,
+            expansion,
+        }) = self.alias_expansion(root, argv, index, word)?
+        else {
             return Ok(None);
         };
         // `glab` expands an alias only where it is the first word
@@ -1388,7 +1494,7 @@ impl Shim {
         // well be a push. Naming it as unreadable is the only honest answer.
         if expansion.starts_with('!') {
             return Err(Fatal::new(format!(
-                "{}: {word:?} is an alias for a shell command ({expansion:?}), and what a shell \
+                "{}: {name:?} is an alias for a shell command ({expansion:?}), and what a shell \
                  runs is not an invocation this shim can read. Nothing was published; run the \
                  command the alias stands for, or take the alias off",
                 self.command
@@ -1399,9 +1505,12 @@ impl Shim {
         // `git` keeps its global options in front of the expansion and puts
         // no argument into it.
         if self.command == "git" {
-            let expanded = self.split_alias(word, &expansion)?;
-            self.expands_to_something(word, &expanded)?;
-            return Ok(Some(before.chain(expanded).chain(after).collect()));
+            let expanded = self.split_alias(&name, &expansion)?;
+            self.expands_to_something(&name, &expanded)?;
+            return Ok(Some(Expanded {
+                name,
+                argv: before.chain(expanded).chain(after).collect(),
+            }));
         }
         // `gh` hands the alias every other word, those before it included
         // (`NewCmdAlias`, with flag parsing off), and `glab` the words after
@@ -1409,18 +1518,167 @@ impl Shim {
         // and runs the rest after it -- so `pc` for `pr comment $1 -b "$2"`
         // makes `gh pc 5 X` the comment `X`, and reading the expansion as
         // written judged the literal `$2` while `X` was published.
-        let (expansion, extra) = alias_arguments(&expansion, before.chain(after).collect());
+        // Every word but the alias's name: cobra takes the words of the path
+        // out (`argsMinusFirstX`), so a nested alias such as `pr say` hands
+        // in what stands around both of its words.
+        let arguments = argv
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| !at.contains(position))
+            .map(|(_, argument)| argument.clone())
+            .collect();
+        let (expansion, extra) = alias_arguments(&expansion, arguments);
         if lingering_argument(&expansion) {
             return Err(Fatal::new(format!(
-                "{}: {word:?} is an alias whose expansion still asks for an argument after \
+                "{}: {name:?} is an alias whose expansion still asks for an argument after \
                  those given were put in ({expansion:?}), which the command refuses, so which \
                  invocation this is could not be established. Nothing was published",
                 self.command
             )));
         }
-        let expanded = self.split_alias(word, &expansion)?;
-        self.expands_to_something(word, &expanded)?;
-        Ok(Some(expanded.into_iter().chain(extra).collect()))
+        let expanded = self.split_alias(&name, &expansion)?;
+        self.expands_to_something(&name, &expanded)?;
+        Ok(Some(Expanded {
+            name,
+            argv: expanded.into_iter().chain(extra).collect(),
+        }))
+    }
+
+    /// The `gh` alias this argv invokes, out of what `gh alias list` printed.
+    ///
+    /// `gh` prints its aliases as the YAML its config holds them in, and a
+    /// line reader read that YAML as text: `note2: 'pr comment $1 --body
+    /// "Note: $2"'` split at its first colon kept the quotes, a block scalar
+    /// (`ml: |-`) was the expansion `|-`, and `sh1: '!echo hi'` never began
+    /// with the `!` that refuses a shell alias. Each was a body published with
+    /// nothing reading it. Decoded as YAML here, by the reader this tool
+    /// already carries, and output that is not a map of names to expansions
+    /// is exit 2 rather than read some other way.
+    ///
+    /// An alias's name is split into words as `gh` splits it, and the words
+    /// are found where cobra finds them: `gh alias set 'pr say' ...` puts
+    /// `say` under `pr`, so `gh pr say 5 X` runs it. Two words is as deep as
+    /// the path here goes, so a name of three whose first two match is exit
+    /// 2, and so is an argv two names match.
+    fn gh_alias(&self, text: &str, argv: &[String]) -> Result<Option<Alias>> {
+        let aliases: BTreeMap<String, String> = if text.trim().is_empty() {
+            BTreeMap::new()
+        } else {
+            serde_saphyr::from_str(text).map_err(|error| {
+                Fatal::new(format!(
+                    "gh: `gh alias list` printed something that is not the YAML map of names \
+                     to expansions gh 2 prints ({error}), so whether this invocation is an \
+                     alias could not be established. Nothing was published"
+                ))
+            })?
+        };
+        let path = self.forge_path(argv).unwrap_or_default();
+        let words: Vec<&str> = path
+            .iter()
+            .filter_map(|index| argv.get(*index).map(String::as_str))
+            .collect();
+        let mut found = Vec::new();
+        for (key, expansion) in aliases {
+            // gh registers no alias whose name does not split.
+            let Some(name) = shlex_split(&key) else {
+                continue;
+            };
+            let matched = name
+                .iter()
+                .zip(&words)
+                .take_while(|(said, typed)| said == *typed)
+                .count();
+            if matched == 0 || matched < name.len().min(2) {
+                continue;
+            }
+            if name.len() > 2 {
+                return Err(Fatal::new(format!(
+                    "gh: {key:?} is an alias of more than two words that this invocation may \
+                     name, and the shim reads an alias's name only as deep as two words, so \
+                     which invocation this is could not be established. Nothing was published"
+                )));
+            }
+            found.push(Alias {
+                at: path.get(..name.len()).unwrap_or_default().to_vec(),
+                name: key,
+                expansion,
+            });
+        }
+        if found.len() > 1 {
+            return Err(Fatal::new(format!(
+                "gh: this invocation names more than one alias ({}), so which one gh runs could \
+                 not be established. Nothing was published",
+                found
+                    .iter()
+                    .map(|alias| format!("{:?}", alias.name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        Ok(found.pop())
+    }
+
+    /// argv with the aliases it names expanded, as the command expands them.
+    ///
+    /// An alias is a word the command expands before it decides anything, so
+    /// a shim that reads argv without expanding it is reading a different
+    /// command line from the one that runs. Asked only where nothing matched:
+    /// a `match` hit is already the answer, and the lookup is a process.
+    ///
+    /// A forge CLI's reading is Unclear where the table cannot classify the
+    /// options before the verb, but its parser's own reading is not: `gh
+    /// --attach a.png --edit-last 5 pc` runs the alias `pc` wherever `pc`
+    /// names one, so the alias is asked about there too. What it expands to
+    /// may spell a verb by a built-in alias in turn.
+    ///
+    /// `gh` runs an alias by handing its expansion back to its own root
+    /// command (`root.SetArgs`, `root.Execute`), so an expansion that names
+    /// another alias runs that one in turn: with `a2` set to `pr comment 5 -b`
+    /// and `a1` to `a2 $1`, `gh a1 X` comments `X`, and one expansion read `a2
+    /// X`, which no table matched. So a `gh` expansion is expanded again until
+    /// it names no alias. An alias met twice on the way is a loop, and a chain
+    /// longer than [`ALIAS_DEPTH`] is not followed further; both are exit 2.
+    /// `glab` expands once, before cobra runs, and an expansion that names
+    /// another alias is no command there; `git` is expanded once here.
+    fn expand_aliases(&self, root: &Path, mut words: Vec<String>) -> Result<Vec<String>> {
+        let mut seen: Vec<String> = Vec::new();
+        loop {
+            let expanded = match self.reading(&words) {
+                Reading::Absent => self.expand_alias(root, &words)?,
+                Reading::Unclear(_) if self.forge_path(&words).is_some() => {
+                    self.expand_alias(root, &words)?
+                }
+                Reading::Named | Reading::Unclear(_) => None,
+            };
+            let Some(Expanded { name, argv: next }) = expanded else {
+                return Ok(words);
+            };
+            if seen.contains(&name) {
+                return Err(Fatal::new(format!(
+                    "{}: the alias {name:?} expands, through {}, to itself, so which invocation \
+                     this is could not be established. Nothing was published",
+                    self.command,
+                    seen.iter()
+                        .map(|alias| format!("{alias:?}"))
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                )));
+            }
+            if seen.len() == ALIAS_DEPTH {
+                return Err(Fatal::new(format!(
+                    "{}: the alias {:?} expands to an alias more than {ALIAS_DEPTH} deep, which \
+                     the shim does not follow, so which invocation this is could not be \
+                     established. Nothing was published",
+                    self.command,
+                    seen.first().map_or("", String::as_str)
+                )));
+            }
+            seen.push(name);
+            words = self.canonical(&next);
+            if self.command != "gh" {
+                return Ok(words);
+            }
+        }
     }
 
     /// Refuse an alias that expands to no word at all.
@@ -1453,13 +1711,30 @@ impl Shim {
     /// - A `#` that opens a word, which a shell reads as a comment and git as a
     ///   letter, so `push origin #acme` lost its refspec. It is stood in for
     ///   by NUL, which the splitter treats as a letter and which neither argv
-    ///   nor a config value can carry, and put back after. gh and glab are
-    ///   read the same way: a word too many is read rather than one too few.
+    ///   nor a config value can carry, and put back after.
     ///
     /// The first two are refused with NUL, the stand-in, rather than
-    /// reimplemented. They are rare in an alias, and a second splitter written
-    /// here to cover them is a second thing to keep in step with git.
+    /// reimplemented. They are rare in a git alias, and a second splitter
+    /// written here to cover them is a second thing to keep in step with git.
+    ///
+    /// `gh` and `glab` split with `google/shlex`, which is not git's splitter
+    /// and not a shell's either: it reads a word-initial `#` as a comment, as
+    /// a shell does, and takes a backslash inside double quotes as an escape,
+    /// as git does. That one is [`shlex_split`], whole, because the text it
+    /// splits holds the arguments put into the expansion -- argv, which a
+    /// person writes on every call, not a config value written once.
     fn split_alias(&self, word: &str, expansion: &str) -> Result<Vec<String>> {
+        if self.command != "git" {
+            return shlex_split(expansion).ok_or_else(|| {
+                Fatal::new(format!(
+                    "{}: {word:?} is an alias whose expansion, with its arguments put in, has an \
+                     unclosed quote or ends in a backslash ({expansion:?}), which the command \
+                     refuses, so which invocation this is could not be established. Nothing \
+                     was published",
+                    self.command
+                ))
+            });
+        }
         if expansion.contains(['\\', '\r', '\0']) {
             return Err(Fatal::new(format!(
                 "{}: {word:?} is an alias whose expansion ({expansion:?}) carries a backslash \
@@ -1484,14 +1759,25 @@ impl Shim {
     }
 
     /// What this command says one word expands to, asked of the real command.
-    fn alias_expansion(&self, root: &Path, argv: &[String], word: &str) -> Result<Option<String>> {
+    fn alias_expansion(
+        &self,
+        root: &Path,
+        argv: &[String],
+        index: usize,
+        word: &str,
+    ) -> Result<Option<Alias>> {
+        let one = |expansion: String| Alias {
+            at: vec![index],
+            name: word.to_owned(),
+            expansion,
+        };
         // A `-c alias.p=push` on the command line outranks the config file,
         // and reading it costs no process. The persisted alias below is the
         // case that needs one.
         if self.command == "git"
             && let Some(value) = command_line_alias(argv, word)
         {
-            return Ok(Some(value));
+            return Ok(Some(one(value)));
         }
         let own = std::env::current_exe().ok();
         let Some(real) = real_command(&self.command, own.as_deref()) else {
@@ -1529,7 +1815,7 @@ impl Shim {
             // `--get` exits 1 for a key that is not set, which is an answer:
             // this word is not an alias. Anything else is git failing to look.
             return match output.status.code() {
-                Some(0) => Ok(Some(text.trim().to_owned())),
+                Some(0) => Ok(Some(one(text.trim().to_owned()))),
                 Some(1) => Ok(None),
                 _ => Err(Fatal::new(format!(
                     "{}: `git config --get alias.{word}` failed, so whether {word:?} is an alias \
@@ -1546,7 +1832,10 @@ impl Shim {
                 self.command
             )));
         }
-        Ok(alias_in_list(&text, word))
+        if self.command == "gh" {
+            return self.gh_alias(&text, argv);
+        }
+        Ok(alias_in_list(&text, word).map(one))
     }
 
     /// This table, with the flag lists of whichever `[[shim.verbs]]` entry
@@ -5460,25 +5749,7 @@ pub(crate) fn run(
 
     // A verb the parser runs by a built-in alias is the verb it stands for,
     // to every reader below: `gh pr new` is `gh pr create`.
-    let words = shim.canonical(&words);
-    // An alias is a word the command expands before it decides anything, so a
-    // shim that reads argv without expanding it is reading a different command
-    // line from the one that runs. Asked only where nothing matched: a `match`
-    // hit is already the answer, and the lookup is a process.
-    //
-    // A forge CLI's reading is Unclear where the table cannot classify the
-    // options before the verb, but its parser's own reading is not: `gh
-    // --attach a.png --edit-last 5 pc` runs the alias `pc` wherever `pc`
-    // names one, so the alias is asked about there too. What it expands to
-    // may spell a verb by a built-in alias in turn.
-    let words = match shim.reading(&words) {
-        Reading::Absent => shim.expand_alias(root, &words)?,
-        Reading::Unclear(_) if shim.forge_path(&words).is_some() => {
-            shim.expand_alias(root, &words)?
-        }
-        Reading::Named | Reading::Unclear(_) => None,
-    }
-    .map_or(words, |expanded| shim.canonical(&expanded));
+    let words = shim.expand_aliases(root, shim.canonical(&words))?;
 
     // Only the rules that name THIS command line. Selecting a checker by
     // anything coarser -- a `kind` saying it stands in front of some command,
@@ -7572,7 +7843,47 @@ mod tests {
             want.extend(expected.map(str::to_owned));
             want.push(String::from("x"));
             let words = git_push().expand_alias(Path::new("."), &line).unwrap();
-            assert_eq!(words, Some(want), "{value}");
+            assert_eq!(words.map(|expanded| expanded.argv), Some(want), "{value}");
+        }
+    }
+
+    #[test]
+    fn a_forge_alias_is_split_as_google_shlex_splits_it() {
+        // `google/shlex`'s own test string, and the words its test expects.
+        let words = shlex_split(
+            "one two \"three four\" \"five \\\"six\\\"\" seven#eight # nine # ten\n eleven \
+             'twelve\\' thirteen=13 fourteen/14",
+        );
+        let expected = [
+            "one",
+            "two",
+            "three four",
+            "five \"six\"",
+            "seven#eight",
+            "eleven",
+            "twelve\\",
+            "thirteen=13",
+            "fourteen/14",
+        ];
+        assert_eq!(words, Some(expected.map(str::to_owned).to_vec()));
+        for (text, split) in [
+            // A `#` that opens a word comments out the rest of its line.
+            ("pr comment 5 #c -R -b X", vec!["pr", "comment", "5"]),
+            ("a #b\nc", vec!["a", "c"]),
+            // A backslash escapes the next character inside double quotes too.
+            ("-b \"a\\b\"", vec!["-b", "ab"]),
+            ("a\\ b", vec!["a b"]),
+            ("'' \"\"", vec!["", ""]),
+            ("a\r\tb", vec!["a", "b"]),
+        ] {
+            assert_eq!(
+                shlex_split(text),
+                Some(split.into_iter().map(str::to_owned).collect()),
+                "{text:?}"
+            );
+        }
+        for text in ["\"a", "'a", "a\\", "\"a\\"] {
+            assert_eq!(shlex_split(text), None, "{text:?}");
         }
     }
 

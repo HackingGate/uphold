@@ -3975,6 +3975,154 @@ fn a_note_given_no_message_is_read_off_stdin_as_glab_reads_it() {
     }
 }
 
+/// A `gh` workspace whose `gh alias list` prints `aliases`, as gh 2 prints
+/// them: the YAML its config holds them in.
+fn gh_with_aliases(aliases: &str) -> PathBuf {
+    let root = own_gh_workspace();
+    std::fs::write(root.join("aliases.yml"), aliases).unwrap();
+    stub(
+        &root,
+        "gh",
+        "#!/bin/sh\n\
+         if [ \"$1 $2\" = \"alias list\" ]; then cat \"$(dirname \"$0\")/../aliases.yml\"; exit 0; fi\n\
+         echo \"gh ran: $*\"\n",
+    );
+    root
+}
+
+#[test]
+fn a_gh_alias_list_is_read_as_the_yaml_gh_prints() {
+    // Read as lines, `note2` kept its quotes, `ml` was the expansion `|-`,
+    // and `sh1` did not start with the `!` that refuses a shell alias.
+    let zw = "x\u{200B}y";
+    let root = gh_with_aliases(
+        "'a:b': pr comment $1 -b $2\n\
+         ml: |-\n    pr comment $1\n    -b $2\n\
+         note2: 'pr comment $1 --body \"Note: $2\"'\n\
+         q: 'pr comment 5 --body \"x: y\"'\n\
+         sh1: '!echo hi'\n",
+    );
+    for form in [
+        vec!["gh", "note2", "5", zw],
+        vec!["gh", "q", "-b", zw],
+        vec!["gh", "ml", "5", zw],
+        vec!["gh", "a:b", "5", zw],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+200B"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("gh ran:"), "{form:?}");
+    }
+    let output = shim(&root, &["gh", "sh1"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("shell command"),
+        "{}",
+        stderr(&output)
+    );
+    let output = shim(&root, &["gh", "note2", "5", "fine"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran: note2 5 fine"));
+
+    // Output that is not a map of names to expansions is not read some other
+    // way.
+    let root = gh_with_aliases("co\tpr checkout\n");
+    let output = shim(&root, &["gh", "co", "5"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("not the YAML map"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("gh ran:"));
+}
+
+#[test]
+fn a_gh_alias_nested_under_a_command_group_is_read() {
+    // `gh alias set 'pr say' 'pr comment $1 -b $2'` puts `say` under `pr`.
+    let zw = "x\u{200B}y";
+    let root = gh_with_aliases("pr say: pr comment $1 -b $2\nrepo a b: repo view\n");
+    let output = shim(&root, &["gh", "pr", "say", "5", zw]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("U+200B"), "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"));
+    let output = shim(&root, &["gh", "pr", "say", "5", "fine"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran: pr say 5 fine"));
+    // A name of three words is deeper than the shim reads.
+    let output = shim(&root, &["gh", "repo", "a", "b"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("more than two words"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_gh_alias_that_names_another_alias_is_followed() {
+    // `gh` runs an expansion through its root command again, so `a1` runs
+    // `a2`, which comments.
+    let zw = "x\u{200B}y";
+    let chain = (0..9)
+        .map(|depth| format!("d{depth}: d{} $1", depth + 1))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let root = gh_with_aliases(&format!(
+        "a1: a2 $1\na2: pr comment 5 -b\n{chain}\nd9: pr comment 5 -b\nl1: l2\nl2: l1\n"
+    ));
+    let output = shim(&root, &["gh", "a1", zw]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("U+200B"), "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"));
+    let output = shim(&root, &["gh", "a1", "fine"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran: a1 fine"));
+    // A loop, and a chain longer than the shim follows, are exit 2.
+    let output = shim(&root, &["gh", "l1"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(stderr(&output).contains("to itself"), "{}", stderr(&output));
+    let output = shim(&root, &["gh", "d0", "fine"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(stderr(&output).contains("deep"), "{}", stderr(&output));
+    let output = shim(&root, &["gh", "d2", zw]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+}
+
+#[test]
+fn an_alias_argument_is_split_as_gh_splits_it() {
+    // `google/shlex` reads a `#` that opens a word as a comment to the end of
+    // the line, so `gh hash '5 #c -R' -b X` runs `pr comment 5 -b X`. Kept as
+    // a word, `-R` took `-b` and `X` was read as an operand.
+    let zw = "x\u{200B}y";
+    let root = gh_with_aliases("hash: pr comment $1\npc: pr comment $1 -b \"$2\"\n");
+    let output = shim(&root, &["gh", "hash", "5 #c -R", "-b", zw]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("U+200B"), "{}", stderr(&output));
+    // A `#` inside a word, or inside quotes, is a letter.
+    let output = shim(&root, &["gh", "pc", "5", &format!("see #12 {zw}")]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let output = shim(&root, &["gh", "pc", "5", "see #12"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    // A backslash escapes the character after it, in double quotes too, and
+    // is read as gh reads it rather than refused.
+    let output = shim(&root, &["gh", "pc", "5", "a\\b"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran: pc 5 a\\b"));
+    // One that leaves the quote open is refused by gh, and here.
+    let output = shim(&root, &["gh", "pc", "5", "a\\"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("unclosed quote or ends in a backslash"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn a_glab_merge_says_which_commit_message_the_forge_composes_unread() {
     let root = own_glab_workspace();

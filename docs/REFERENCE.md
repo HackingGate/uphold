@@ -2195,7 +2195,35 @@ replaced by that argument before the text is split into words, and once the
 expansion holds no `$` the remaining arguments follow it. So with `pc` set to
 `pr comment $1 -b "$2"`, `gh pc 5 X` is read as a comment whose body is `X`. An
 expansion that still asks for an argument after that is refused by the command,
-and is exit `2` here. A **shell alias** (`!…`) and a lookup that failed are
+and is exit `2` here. The text is then split into words as both commands split
+it, by `google/shlex`'s rules: a `#` that opens a word comments out the rest of
+its line, so with `hash` set to `pr comment $1`, `gh hash '5 #c -R' -b X` is
+read as `pr comment 5 -b X`, as `gh` runs it; a `#` inside a word or inside
+quotes is a letter; and a backslash takes the next character as a letter,
+inside double quotes too. A backslash in an argument is read that way, not
+refused. An unclosed quote, or a backslash at the end of the text, is refused
+by the command, and is exit `2` here. `git`'s aliases take no arguments and are
+split as git splits them, and one holding a backslash or a carriage return,
+where git's splitter and this one differ, is exit `2`.
+
+`gh alias list` prints the YAML its config holds the aliases in, and it is
+decoded as YAML: a quoted expansion (`note2: 'pr comment $1 --body "Note:
+$2"'`), a block scalar (`ml: |-` and the indented lines under it) and a quoted
+name are each read as `gh` reads them. Output that is not a map of names to
+expansions is exit `2`. `glab alias list` prints a table, read a line at a
+time. An alias's name is split into words as `gh` splits it, so one set with
+`gh alias set 'pr say' …` is found where `gh` runs it, at `gh pr say`, and its
+arguments are the words around both. A name of three words or more whose first
+two the invocation spells is exit `2`, and so is an invocation two aliases
+name. `gh` runs an expansion through its own root command again, so an
+expansion that names another alias runs that one too: with `a2` set to `pr
+comment 5 -b` and `a1` to `a2 $1`, `gh a1 X` comments `X`. A `gh` expansion is
+expanded again until it names no alias. An alias met twice on the way is a
+loop, and a chain more than eight aliases long is not followed; both are exit
+`2`. `glab` and `git` are expanded once here. `glab` runs an expansion that
+names another alias as no command.
+
+A **shell alias** (`!…`) and a lookup that failed are
 could-not-looks, not absences: exit `2`, since what a shell runs is not an
 invocation any table can read and it may well be a push. An ordinary `git push`
 pays no process for this — a `match` hit is already the answer.
