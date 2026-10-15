@@ -3503,6 +3503,9 @@ fn an_alias_is_found_where_the_command_finds_it() {
         vec!["gh", "--edit-last", "5", "pc", &glued],
         vec!["gh", "--edit-last", "5", "pc", "-b", zw],
         vec!["gh", "pc", "5", "-b", zw],
+        // Two options before the verb leave the table's own reading unclear;
+        // the parser's is not, and `pc` is the alias it runs.
+        vec!["gh", "--attach", "a.png", "--edit-last", "5", "pc", &glued],
     ] {
         let output = shim(&root, &form);
         assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
@@ -3515,6 +3518,7 @@ fn an_alias_is_found_where_the_command_finds_it() {
     }
     for form in [
         vec!["gh", "pc", "-b", "ok"],
+        vec!["gh", "pc", "5", "-b", "ok"],
         vec!["gh", "--edit-last", "5", "pc", "-b", "ok"],
     ] {
         let output = shim(&root, &form);

@@ -5139,9 +5139,17 @@ pub(crate) fn run(
     // shim that reads argv without expanding it is reading a different command
     // line from the one that runs. Asked only where nothing matched: a `match`
     // hit is already the answer, and the lookup is a process.
+    //
+    // A forge CLI's reading is Unclear where the table cannot classify the
+    // options before the verb, but its parser's own reading is not: `gh
+    // --attach a.png --edit-last 5 pc` runs the alias `pc` wherever `pc`
+    // names one, so the alias is asked about there too.
     let words = match shim.reading(&words) {
         Reading::Absent => shim.expand_alias(root, &words)?.unwrap_or(words),
-        _ => words,
+        Reading::Unclear(_) if shim.forge_path(&words).is_some() => {
+            shim.expand_alias(root, &words)?.unwrap_or(words)
+        }
+        Reading::Named | Reading::Unclear(_) => words,
     };
 
     // Only the rules that name THIS command line. Selecting a checker by
