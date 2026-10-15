@@ -1,3 +1,9 @@
+## Aliases
+
+```plaintext
+comment
+```
+
 ## Options
 
 ```plaintext

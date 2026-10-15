@@ -2042,7 +2042,8 @@ bodyless `gh api` GET), a destination the forge calls private, and every
 command other than `gh`. A destination that cannot be resolved or asked about
 runs, with a line on stderr saying it is not a pass. An alias for a publishing
 verb is not expanded here, since expanding one costs a process on every `gh`
-call on the machine.
+call on the machine. A built-in alias such as `gh pr new` is read as the verb
+it stands for, as it is everywhere, because that costs no process.
 
 ```toml
 [[shim]]
@@ -2075,7 +2076,8 @@ option grammar and reads each option word as the command's own parser does:
 create|edit|comment|close|reopen`, `gh release create|edit`, `gh gist create`
 and `gh api` from `gh` 2.102, and `glab mr create|update|note|merge`, `glab
 issue create|update|note` and `glab api` from `glab` 1.123.0, with each `glab mr
-note` subcommand but `draft` read with its own. So `-st X` is `-s` and then `-t
+note` subcommand, and each `glab mr note draft` subcommand below it, read with
+its own. So `-st X` is `-s` and then `-t
 X`, and `-iF k=v` is `-i` and `-F k=v`. The value follows pflag, which both
 parse with, at whichever letter takes it: `=` plus at least one character gives
 what follows the `=` (`-b=Text` and `-st=Text` are `Text`), anything else after
@@ -2100,11 +2102,20 @@ for what it is. The other way round, a value-taking option the table names as a
 switch (a web, skip or inert flag), would leave the value unread, and is exit
 `2` wherever the option is used.
 
-The verb, the noun and a subcommand are found where the command's parser finds
-them (cobra's `stripFlags`): an option the level above does not know as a
+The verb, the noun and each subcommand are found where the command's parser
+finds them (cobra's `stripFlags`): an option the level above does not know as a
 switch takes the word after it. So `gh pr -d 1 close -c X` is `pr close`, read
 with that verb's grammar, its `[[shim.verbs]]` entry and what the forge holds of
 it, and `1` is its selector.
+
+A word of that path the parser takes as a built-in alias is read as the verb it
+stands for before anything is matched: `gh pr new`, `gh issue new`, `gh release
+new` and `gh gist new` are `create`, `glab mr new` and `glab issue new` are
+`create`, `glab mr comment` and `glab issue comment` are `note`, and `glab mr
+accept` is `merge`. The `match` list, a `[[shim.verbs]]` entry, a rule's
+`command.before` and the grammar all see the verb's own name, so none of them
+has to list its aliases. The command is handed the words it was given. The
+aliases are part of each grammar and are compared with the same help pages.
 
 On a verb with no grammar — one a table matches beyond those above, such as a
 consumer's `repo:create` — a word the table does not name whole is skipped
@@ -2113,11 +2124,10 @@ options they are, so the text after them is read. It also means a short-option
 cluster or an attached value is **not read** there: `-st X`, `-bText`,
 `-b=Text` and their like are passed to the command unchecked, and an unnamed
 option that takes a value shifts the reading of the words after it. This is a
-known gap; spell each option as a word of its own there. Two more are known
-limits: `glab mr note draft …` has no grammar and is read that way, and a verb
-the command spells by a built-in alias — `gh pr new`, `glab mr accept`, `glab
-mr comment` — is not matched by a table that names `pr:create`, `mr:merge` or
-`mr:note`, so it is not checked at all unless the table names the alias too.
+known gap; spell each option as a word of its own there. One more is a known
+limit: the built-in aliases are read only for a verb with a grammar, so a verb
+with none is matched by the names its table writes, and an alias the table
+does not name is not checked.
 
 `target` is `forge-repo` or `git-remote`, both built-in resolvers. `scope` is
 `public-target | public-registry | always`, with
@@ -2179,8 +2189,14 @@ push`, `gh alias set` and `glab alias set` all present a verb no list contains.
 Where — and only where — nothing matched, the shim asks the
 real command what the word expands to (`git config --get alias.<word>`,
 `<command> alias list`) and matches again against the expansion, with the global
-options left in front of it. A **shell alias** (`!…`) and a lookup that failed
-are could-not-looks, not absences: exit `2`, since what a shell runs is not an
+options left in front of it. A `gh` or `glab` alias is read with its arguments
+put in, as each command does it: every `$1`, `$2`, … in the expansion's text is
+replaced by that argument before the text is split into words, and once the
+expansion holds no `$` the remaining arguments follow it. So with `pc` set to
+`pr comment $1 -b "$2"`, `gh pc 5 X` is read as a comment whose body is `X`. An
+expansion that still asks for an argument after that is refused by the command,
+and is exit `2` here. A **shell alias** (`!…`) and a lookup that failed are
+could-not-looks, not absences: exit `2`, since what a shell runs is not an
 invocation any table can read and it may well be a push. An ordinary `git push`
 pays no process for this — a `match` hit is already the answer.
 

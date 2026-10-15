@@ -1,3 +1,6 @@
+ALIASES
+  gh gist new
+
 FLAGS
   -d, --desc string       A description for this gist
   -f, --filename string   Provide a filename to be used when reading from standard input

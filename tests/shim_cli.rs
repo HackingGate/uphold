@@ -3609,6 +3609,285 @@ fn an_alias_is_found_where_the_command_finds_it() {
 }
 
 #[test]
+fn a_verb_spelt_by_its_built_in_alias_is_read_as_the_verb_it_stands_for() {
+    // `cobra` runs `gh pr create` as `gh pr new` too, and no table named
+    // `pr:new`, so the title went out with nothing reading it.
+    let zw = "x\u{200B}y";
+    let glued = format!("-m{zw}");
+    let root = own_gh_workspace();
+    for form in [
+        vec!["gh", "pr", "new", "-t", zw, "-b", "ok"],
+        vec!["gh", "pr", "new", "-t", "ok", "-b", zw],
+        vec!["gh", "-R", "o/r", "pr", "new", "-t", zw, "-b", "ok"],
+        vec!["gh", "issue", "new", "-t", zw, "-b", "ok"],
+        vec!["gh", "release", "new", "v1", "-n", zw],
+        // The `[[shim.verbs]]` entry for `gist:create` reads `-d` there.
+        vec!["gh", "gist", "new", "f.txt", "-d", zw],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+200B"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("gh ran:"), "{form:?}");
+    }
+    // Read with the grammar of the verb it stands for, so an option that
+    // verb lacks is refused and named on it.
+    let output = shim(&root, &["gh", "pr", "new", "-Z", "-t", "ok"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("\"-Z\", an option this shim does not know on `gh pr create`"),
+        "{}",
+        stderr(&output)
+    );
+    // And the command is handed the words it was given.
+    let output = shim(&root, &["gh", "pr", "new", "-t", "ok", "-b", "ok"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("gh ran: pr new -t ok -b ok"),
+        "{}",
+        stdout(&output)
+    );
+
+    let root = own_glab_workspace();
+    for form in [
+        vec!["glab", "mr", "comment", "1", "-m", zw],
+        vec!["glab", "mr", "comment", "1", &glued],
+        vec!["glab", "mr", "comment", "create", "1", "-m", zw],
+        // `mr:merge`'s entry reads `-m` as a whole commit message.
+        vec!["glab", "mr", "accept", "1", "-m", zw],
+        vec!["glab", "mr", "new", "-t", zw, "-d", "ok"],
+        vec!["glab", "issue", "new", "-t", zw, "-d", "ok"],
+        vec!["glab", "issue", "comment", "1", "-m", zw],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+200B"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("glab ran:"), "{form:?}");
+    }
+    let output = shim(&root, &["glab", "mr", "accept", "1", "-m", "ok"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("glab ran: mr accept 1 -m ok"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_rule_before_a_verb_stands_before_its_alias() {
+    // `command.before` names the verb; the alias is the same verb.
+    let root = gh_stub_workspace(
+        r#"
+[rule.release-title-is-the-tag]
+message = "title a release by its tag"
+require_regexp = '^v[0-9]+\.[0-9]+\.[0-9]+$'
+subjects = ["title"]
+command.before = ["gh release create"]
+
+[[shim]]
+command = "gh"
+match = ["release:create"]
+title_flags = ["-t", "--title"]
+text_flags = ["-n", "--notes"]
+scope = "always"
+"#,
+    );
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "release",
+            "new",
+            "v1.0.0",
+            "-t",
+            "a sentence",
+            "-n",
+            "x",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("release-title-is-the-tag"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn with_no_policy_in_reach_a_verb_spelt_by_its_alias_is_judged() {
+    let root = workspace(POLICY);
+    let config = user_config(&root, Some("acme-private\n"));
+    let output = run_gh(
+        &root,
+        &config,
+        &[
+            "issue",
+            "new",
+            "--repo",
+            "example-user/public-widget",
+            "-t",
+            "ok",
+            "--body",
+            "this fixes acme-private/thing",
+        ],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_pending_review_comment_is_read_under_its_own_grammar() {
+    // `glab mr note draft create` writes a comment `draft publish` later
+    // publishes, and it was read with no grammar, so `-mZ` was skipped whole.
+    let zw = "x\u{200B}y";
+    let glued = format!("-m{zw}");
+    let root = own_glab_workspace();
+    for form in [
+        vec!["glab", "mr", "note", "draft", "create", "1", &glued],
+        vec!["glab", "mr", "note", "draft", "create", "1", "-m", zw],
+        vec![
+            "glab",
+            "mr",
+            "note",
+            "draft",
+            "create",
+            "1",
+            "--message",
+            zw,
+        ],
+        vec![
+            "glab", "mr", "note", "draft", "create", "1", "--file", "a.rs", "--line", "3", "-m", zw,
+        ],
+        vec!["glab", "mr", "note", "draft", "update", "1", "2", &glued],
+        // The summary note a publish adds is published with it.
+        vec!["glab", "mr", "note", "draft", "publish", "1", "-m", zw],
+        vec![
+            "glab",
+            "mr",
+            "note",
+            "draft",
+            "publish",
+            "1",
+            "--internal",
+            "-m",
+            zw,
+        ],
+        // Found where cobra finds it, past an option the level above takes.
+        vec![
+            "glab", "mr", "note", "-R", "o/r", "draft", "create", "1", "-m", zw,
+        ],
+        vec!["glab", "mr", "comment", "draft", "create", "1", "-m", zw],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+200B"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("glab ran:"), "{form:?}");
+    }
+    let output = shim(
+        &root,
+        &["glab", "mr", "note", "draft", "create", "1", "-Zm", "x"],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output)
+            .contains("\"-Z\", an option this shim does not know on `glab mr note draft create`"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stdout(&output).contains("glab ran:"),
+        "{}",
+        stdout(&output)
+    );
+    for form in [
+        vec!["glab", "mr", "note", "draft", "create", "1", "-m", "ok"],
+        vec!["glab", "mr", "note", "draft", "list", "1", "-F", "json"],
+        vec!["glab", "mr", "note", "draft", "delete", "1", "2", "-y"],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 0, "{form:?}: {}", stderr(&output));
+        assert!(stdout(&output).contains("glab ran:"), "{form:?}");
+    }
+}
+
+#[test]
+fn an_alias_is_read_with_the_arguments_it_puts_into_its_expansion() {
+    // `pc` for `pr comment $1 -b "$2"`: `gh pc 5 Z` publishes `Z`, and the
+    // expansion read as written judged the literal `$2`.
+    let zw = "x\u{200B}y";
+    let root = own_gh_workspace();
+    stub(
+        &root,
+        "gh",
+        "#!/bin/sh\n\
+         if [ \"$1 $2\" = \"alias list\" ]; then\n\
+         printf '%s\\n' 'pc: pr comment $1 -b \"$2\"' 'pv: pr comment $1'\n\
+         exit 0\n\
+         fi\n\
+         echo \"gh ran: $*\"\n",
+    );
+    for form in [
+        vec!["gh", "pc", "5", zw],
+        // Put into the text before it is split, as gh does.
+        vec!["gh", "pc", "5", &format!("a {zw}")],
+        // Once the expansion holds no `$`, the rest runs after it.
+        vec!["gh", "pv", "5", "-b", zw],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+200B"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("gh ran:"), "{form:?}");
+    }
+    // Too few arguments is refused by gh, and not read past here.
+    let output = shim(&root, &["gh", "pc", "5"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("still asks for an argument"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    let output = shim(&root, &["gh", "pc", "5", "a b"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("gh ran: pc 5 a b"),
+        "{}",
+        stdout(&output)
+    );
+
+    let root = own_glab_workspace();
+    stub(
+        &root,
+        "glab",
+        "#!/bin/sh\n\
+         if [ \"$1 $2\" = \"alias list\" ]; then echo 'mc: mr note $1 -m \"$2\"'; exit 0; fi\n\
+         echo \"glab ran: $*\"\n",
+    );
+    let output = shim(&root, &["glab", "mc", "5", zw]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("U+200B"), "{}", stderr(&output));
+    let output = shim(&root, &["glab", "mc", "5", "ok"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("glab ran:"), "{}", stdout(&output));
+}
+
+#[test]
 fn a_glab_merge_says_which_commit_message_the_forge_composes_unread() {
     let root = own_glab_workspace();
     // `-mWIP` is a message given: it is read, and nothing is said about one

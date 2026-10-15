@@ -853,6 +853,36 @@ fn alias_in_list(text: &str, word: &str) -> Option<String> {
     })
 }
 
+/// A `gh` or `glab` alias's expansion with the arguments it was given put in,
+/// and the arguments it runs after it: their `expandAlias`, step for step.
+///
+/// Each argument in turn replaces every `$N` that is its position, in the
+/// expansion's TEXT, before that text is split into words -- so an argument
+/// holding a space or a quote is split with the rest, as it is there. An
+/// argument is put after the expansion instead, whole, once the expansion
+/// holds no `$` at all; one that never held any runs every argument after it.
+fn alias_arguments(expansion: &str, arguments: Vec<String>) -> (String, Vec<String>) {
+    let mut expansion = expansion.to_owned();
+    let mut extra = Vec::new();
+    for (position, argument) in arguments.into_iter().enumerate() {
+        if expansion.contains('$') {
+            expansion = expansion.replace(&format!("${}", position + 1), &argument);
+        } else {
+            extra.push(argument);
+        }
+    }
+    (expansion, extra)
+}
+
+/// Whether an expansion still holds a `$` before a digit once the arguments
+/// were put in, which both commands refuse as "not enough arguments".
+fn lingering_argument(expansion: &str) -> bool {
+    expansion
+        .as_bytes()
+        .windows(2)
+        .any(|pair| pair.first() == Some(&b'$') && pair.get(1).is_some_and(u8::is_ascii_digit))
+}
+
 /// A ref as a person reads it: `refs/heads/` off, and nothing where the name
 /// was empty.
 fn shortened(refname: &str) -> Option<&str> {
@@ -1331,7 +1361,37 @@ impl Shim {
                 self.command
             )));
         }
+        let before = argv.get(..index).unwrap_or_default().iter().cloned();
+        let after = argv.get(index + 1..).unwrap_or_default().iter().cloned();
+        // `git` keeps its global options in front of the expansion and puts
+        // no argument into it.
+        if self.command == "git" {
+            let expanded = self.split_alias(word, &expansion)?;
+            self.expands_to_something(word, &expanded)?;
+            return Ok(Some(before.chain(expanded).chain(after).collect()));
+        }
+        // `gh` hands the alias every other word, those before it included
+        // (`NewCmdAlias`, with flag parsing off), and `glab` the words after
+        // it. Each puts them into the expansion where it says `$1`, `$2`, ...
+        // and runs the rest after it -- so `pc` for `pr comment $1 -b "$2"`
+        // makes `gh pc 5 X` the comment `X`, and reading the expansion as
+        // written judged the literal `$2` while `X` was published.
+        let (expansion, extra) = alias_arguments(&expansion, before.chain(after).collect());
+        if lingering_argument(&expansion) {
+            return Err(Fatal::new(format!(
+                "{}: {word:?} is an alias whose expansion still asks for an argument after \
+                 those given were put in ({expansion:?}), which the command refuses, so which \
+                 invocation this is could not be established. Nothing was published",
+                self.command
+            )));
+        }
         let expanded = self.split_alias(word, &expansion)?;
+        self.expands_to_something(word, &expanded)?;
+        Ok(Some(expanded.into_iter().chain(extra).collect()))
+    }
+
+    /// Refuse an alias that expands to no word at all.
+    fn expands_to_something(&self, word: &str, expanded: &[String]) -> Result<()> {
         if expanded.is_empty() {
             return Err(Fatal::new(format!(
                 "{}: {word:?} is an alias for nothing, so which invocation this is could not be \
@@ -1339,18 +1399,7 @@ impl Shim {
                 self.command
             )));
         }
-        let before = argv.get(..index).unwrap_or_default().iter().cloned();
-        let after = argv.get(index + 1..).unwrap_or_default().iter().cloned();
-        // `git` keeps its global options in front of the expansion. `gh` runs
-        // the expansion followed by every other word, those before the alias
-        // included (`NewCmdAlias`, with flag parsing off); the cobra reading
-        // of either order is the same command.
-        let words: Vec<String> = if self.command == "gh" {
-            expanded.into_iter().chain(before).chain(after).collect()
-        } else {
-            before.chain(expanded).chain(after).collect()
-        };
-        Ok(Some(words))
+        Ok(())
     }
 
     /// An alias's expansion as the words the command will run.
@@ -1640,38 +1689,68 @@ impl Shim {
     }
 
     /// That grammar, and the indices in argv of the words naming it: the verb,
-    /// the noun, and the subcommand where there is one.
+    /// the noun, and each subcommand below them.
     ///
-    /// The subcommand is found as `cobra` finds it, by `stripFlags` under the
-    /// parent's own options with the verb and the noun taken out, so `glab mr
-    /// note create` is read with `create`'s options. One the parent lists with
-    /// no grammar of its own leaves the invocation read without one.
+    /// Each subcommand is found as `cobra` finds it, by `stripFlags` under the
+    /// level above's own options with the words above it taken out, so `glab
+    /// mr note create` is read with `create`'s options and `glab mr note draft
+    /// create` with that one's. A word is the verb it names or one of its
+    /// aliases, as `cobra` matches either. One a level lists with no grammar
+    /// of its own leaves the invocation read without one.
     fn grammar_at(&self, argv: &[String]) -> Option<(&'static Grammar, Vec<usize>)> {
         let mut path = self.forge_path(argv)?;
         let words = self.verb_words(argv);
-        let verb = if words.verb == "api" {
-            words.verb
+        let mut grammar = if words.verb == "api" {
+            Grammar::of(&self.command, "api")?
         } else {
-            format!("{}:{}", words.verb, words.noun)
+            Grammar::under(&self.command, &words.verb, &words.noun)?
         };
-        let parent = Grammar::of(&self.command, &verb)?;
-        if parent.subcommands.is_empty() {
-            return Some((parent, path));
+        while !grammar.subcommands.is_empty() {
+            let first = strip_flags(argv, |flag| grammar.arity(flag) == Some(false), &path)
+                .first()
+                .copied();
+            let Some(word) = first.and_then(|index| argv.get(index)) else {
+                break;
+            };
+            let Some(sub) = Grammar::under(&self.command, grammar.verb, word) else {
+                // An operand, which the level reads with its own grammar --
+                // or a subcommand it lists and nothing here has written down.
+                if grammar.subcommands.contains(&word.as_str()) {
+                    return None;
+                }
+                break;
+            };
+            path.extend(first);
+            grammar = sub;
         }
-        let first = strip_flags(argv, |flag| parent.arity(flag) == Some(false), &path)
-            .first()
-            .copied();
-        let Some(sub) = first
-            .and_then(|index| argv.get(index))
-            .filter(|word| parent.subcommands.contains(&word.as_str()))
-        else {
-            return Some((parent, path));
-        };
-        path.extend(first);
-        Some((
-            Grammar::of(&self.command, &format!("{}:{sub}", parent.verb))?,
-            path,
-        ))
+        Some((grammar, path))
+    }
+
+    /// argv with each word of the command path that the parser reads by an
+    /// alias written as the name it stands for: `gh pr new` is `gh pr
+    /// create`, and `glab mr comment draft create` is `glab mr note draft
+    /// create`.
+    ///
+    /// `cobra` runs a verb by any of its names, and a `match` list, a
+    /// `[[shim.verbs]]` entry and a rule's `command.before` each name one: `gh
+    /// pr new -t X` matched none of them, and the title went out with nothing
+    /// reading it. Rewriting the words once, before anything is matched, puts
+    /// every one of those readers in front of the alias without each having to
+    /// learn it. Only the words this process reads are rewritten; the command
+    /// is handed the argv it was given.
+    ///
+    /// Only where a grammar is written down, because the aliases are part of
+    /// it. A verb with none keeps the reading `match` gives it.
+    fn canonical(&self, argv: &[String]) -> Vec<String> {
+        let mut words = argv.to_vec();
+        if let Some((grammar, path)) = self.grammar_at(argv) {
+            for (index, name) in path.iter().zip(grammar.verb.split(':')) {
+                if let Some(word) = words.get_mut(*index) {
+                    name.clone_into(word);
+                }
+            }
+        }
+        words
     }
 
     /// Where the verb and the noun are, for a command whose grammar is written
@@ -2734,6 +2813,13 @@ struct Grammar {
     /// options. One listed with no grammar of its own leaves the invocation
     /// read without one.
     subcommands: &'static [&'static str],
+    /// The other names the command's parser takes for this verb's last word:
+    /// `cobra`'s `Aliases`, so `gh pr new` is `gh pr create` and `glab mr
+    /// accept` is `glab mr merge`. An alias is written back as the name it
+    /// stands for before any table is matched (see [`Shim::canonical`]), so a
+    /// `match` entry, a `[[shim.verbs]]` entry and a rule's `command.before`
+    /// that name the verb name its alias too.
+    aliases: &'static [&'static str],
     /// What the forge holds of this verb's text, where it holds any.
     held: Option<Held>,
 }
@@ -2761,6 +2847,7 @@ const fn grammar(
         values,
         repo: true,
         subcommands: &[],
+        aliases: &[],
         held: None,
     }
 }
@@ -2780,50 +2867,53 @@ const GH_COMMENT_VALUES: &[&str] = &["--attach", "-b", "--body", "-F", "--body-f
 
 /// Every verb the shipped tables match, each with its whole grammar.
 const FORGE_GRAMMAR: &[Grammar] = &[
-    grammar(
-        "gh",
-        "pr:create",
-        &[
-            "-d",
-            "--draft",
-            "--dry-run",
-            "-e",
-            "--editor",
-            "-f",
-            "--fill",
-            "--fill-first",
-            "--fill-verbose",
-            "--no-maintainer-edit",
-            "-w",
-            "--web",
-        ],
-        &[
-            "-a",
-            "--assignee",
-            "--attach",
-            "-B",
-            "--base",
-            "-b",
-            "--body",
-            "-F",
-            "--body-file",
-            "-H",
-            "--head",
-            "-l",
-            "--label",
-            "-m",
-            "--milestone",
-            "-p",
-            "--project",
-            "--recover",
-            "-r",
-            "--reviewer",
-            "-T",
-            "--template",
-            "-t",
-            "--title",
-        ],
-    ),
+    Grammar {
+        aliases: &["new"],
+        ..grammar(
+            "gh",
+            "pr:create",
+            &[
+                "-d",
+                "--draft",
+                "--dry-run",
+                "-e",
+                "--editor",
+                "-f",
+                "--fill",
+                "--fill-first",
+                "--fill-verbose",
+                "--no-maintainer-edit",
+                "-w",
+                "--web",
+            ],
+            &[
+                "-a",
+                "--assignee",
+                "--attach",
+                "-B",
+                "--base",
+                "-b",
+                "--body",
+                "-F",
+                "--body-file",
+                "-H",
+                "--head",
+                "-l",
+                "--label",
+                "-m",
+                "--milestone",
+                "-p",
+                "--project",
+                "--recover",
+                "-r",
+                "--reviewer",
+                "-T",
+                "--template",
+                "-t",
+                "--title",
+            ],
+        )
+    },
     Grammar {
         held: Some(Held::StoredBody),
         ..grammar(
@@ -2905,35 +2995,38 @@ const FORGE_GRAMMAR: &[Grammar] = &[
         &["-c", "--comment"],
     ),
     grammar("gh", "pr:reopen", &[], &["-c", "--comment"]),
-    grammar(
-        "gh",
-        "issue:create",
-        &["-e", "--editor", "-w", "--web"],
-        &[
-            "-a",
-            "--assignee",
-            "--attach",
-            "--blocked-by",
-            "--blocking",
-            "-b",
-            "--body",
-            "-F",
-            "--body-file",
-            "-l",
-            "--label",
-            "-m",
-            "--milestone",
-            "--parent",
-            "-p",
-            "--project",
-            "--recover",
-            "-T",
-            "--template",
-            "-t",
-            "--title",
-            "--type",
-        ],
-    ),
+    Grammar {
+        aliases: &["new"],
+        ..grammar(
+            "gh",
+            "issue:create",
+            &["-e", "--editor", "-w", "--web"],
+            &[
+                "-a",
+                "--assignee",
+                "--attach",
+                "--blocked-by",
+                "--blocking",
+                "-b",
+                "--body",
+                "-F",
+                "--body-file",
+                "-l",
+                "--label",
+                "-m",
+                "--milestone",
+                "--parent",
+                "-p",
+                "--project",
+                "--recover",
+                "-T",
+                "--template",
+                "-t",
+                "--title",
+                "--type",
+            ],
+        )
+    },
     Grammar {
         held: Some(Held::StoredBody),
         ..grammar(
@@ -2980,32 +3073,35 @@ const FORGE_GRAMMAR: &[Grammar] = &[
         &["-c", "--comment", "--duplicate-of", "-r", "--reason"],
     ),
     grammar("gh", "issue:reopen", &[], &["-c", "--comment"]),
-    grammar(
-        "gh",
-        "release:create",
-        &[
-            "-d",
-            "--draft",
-            "--fail-on-no-commits",
-            "--generate-notes",
-            "--latest",
-            "--notes-from-tag",
-            "-p",
-            "--prerelease",
-            "--verify-tag",
-        ],
-        &[
-            "--discussion-category",
-            "-n",
-            "--notes",
-            "-F",
-            "--notes-file",
-            "--notes-start-tag",
-            "--target",
-            "-t",
-            "--title",
-        ],
-    ),
+    Grammar {
+        aliases: &["new"],
+        ..grammar(
+            "gh",
+            "release:create",
+            &[
+                "-d",
+                "--draft",
+                "--fail-on-no-commits",
+                "--generate-notes",
+                "--latest",
+                "--notes-from-tag",
+                "-p",
+                "--prerelease",
+                "--verify-tag",
+            ],
+            &[
+                "--discussion-category",
+                "-n",
+                "--notes",
+                "-F",
+                "--notes-file",
+                "--notes-start-tag",
+                "--target",
+                "-t",
+                "--title",
+            ],
+        )
+    },
     grammar(
         "gh",
         "release:edit",
@@ -3024,6 +3120,7 @@ const FORGE_GRAMMAR: &[Grammar] = &[
     ),
     Grammar {
         repo: false,
+        aliases: &["new"],
         ..grammar(
             "gh",
             "gist:create",
@@ -3066,57 +3163,60 @@ const FORGE_GRAMMAR: &[Grammar] = &[
             ],
         )
     },
-    grammar(
-        "glab",
-        "mr:create",
-        &[
-            "--allow-collaboration",
-            "--auto-merge",
-            "--copy-issue-labels",
-            "--create-source-branch",
-            "--draft",
-            "-f",
-            "--fill",
-            "--fill-commit-body",
-            "--no-editor",
-            "--push",
-            "--recover",
-            "--remove-source-branch",
-            "--signoff",
-            "--squash-before-merge",
-            "-w",
-            "--web",
-            "--wip",
-            "-y",
-            "--yes",
-        ],
-        &[
-            "-a",
-            "--assignee",
-            "--attach",
-            "-d",
-            "--description",
-            "--description-file",
-            "-H",
-            "--head",
-            "-l",
-            "--label",
-            "-m",
-            "--milestone",
-            "-i",
-            "--related-issue",
-            "--reviewer",
-            "-s",
-            "--source-branch",
-            "-b",
-            "--target-branch",
-            // Hidden and deprecated in favour of `--repo`, and still read.
-            "--target-project",
-            "--template",
-            "-t",
-            "--title",
-        ],
-    ),
+    Grammar {
+        aliases: &["new"],
+        ..grammar(
+            "glab",
+            "mr:create",
+            &[
+                "--allow-collaboration",
+                "--auto-merge",
+                "--copy-issue-labels",
+                "--create-source-branch",
+                "--draft",
+                "-f",
+                "--fill",
+                "--fill-commit-body",
+                "--no-editor",
+                "--push",
+                "--recover",
+                "--remove-source-branch",
+                "--signoff",
+                "--squash-before-merge",
+                "-w",
+                "--web",
+                "--wip",
+                "-y",
+                "--yes",
+            ],
+            &[
+                "-a",
+                "--assignee",
+                "--attach",
+                "-d",
+                "--description",
+                "--description-file",
+                "-H",
+                "--head",
+                "-l",
+                "--label",
+                "-m",
+                "--milestone",
+                "-i",
+                "--related-issue",
+                "--reviewer",
+                "-s",
+                "--source-branch",
+                "-b",
+                "--target-branch",
+                // Hidden and deprecated in favour of `--repo`, and still read.
+                "--target-project",
+                "--template",
+                "-t",
+                "--title",
+            ],
+        )
+    },
     grammar(
         "glab",
         "mr:update",
@@ -3162,6 +3262,7 @@ const FORGE_GRAMMAR: &[Grammar] = &[
         subcommands: &[
             "create", "delete", "draft", "list", "reopen", "resolve", "update",
         ],
+        aliases: &["comment"],
         ..grammar(
             "glab",
             "mr:note",
@@ -3200,8 +3301,48 @@ const FORGE_GRAMMAR: &[Grammar] = &[
     ),
     grammar("glab", "mr:note:reopen", &[], &[]),
     grammar("glab", "mr:note:resolve", &[], &[]),
+    // A pending review comment: written now, published by `draft publish`
+    // with whatever summary note that carries.
+    Grammar {
+        subcommands: &["create", "delete", "list", "publish", "update"],
+        ..grammar("glab", "mr:note:draft", &[], &[])
+    },
+    grammar(
+        "glab",
+        "mr:note:draft:create",
+        &[],
+        &[
+            "--attach",
+            "--file",
+            "--line",
+            "-m",
+            "--message",
+            "--old-line",
+            "--reply",
+        ],
+    ),
+    grammar(
+        "glab",
+        "mr:note:draft:update",
+        &[],
+        &["--attach", "-m", "--message"],
+    ),
+    grammar("glab", "mr:note:draft:delete", &["-y", "--yes"], &[]),
+    grammar(
+        "glab",
+        "mr:note:draft:list",
+        &[],
+        &["--file", "--jq", "-F", "--output"],
+    ),
+    grammar(
+        "glab",
+        "mr:note:draft:publish",
+        &["--internal", "-y", "--yes"],
+        &["-m", "--message", "--reviewer-state"],
+    ),
     Grammar {
         held: Some(Held::ComposedSquash),
+        aliases: &["accept"],
         ..grammar(
             "glab",
             "mr:merge",
@@ -3221,45 +3362,48 @@ const FORGE_GRAMMAR: &[Grammar] = &[
             &["-m", "--message", "--sha", "--squash-message"],
         )
     },
-    grammar(
-        "glab",
-        "issue:create",
-        &[
-            "-c",
-            "--confidential",
-            "--no-editor",
-            "--recover",
-            "--web",
-            "-y",
-            "--yes",
-        ],
-        &[
-            "-a",
-            "--assignee",
-            "--attach",
-            "-d",
-            "--description",
-            "--description-file",
-            "--due-date",
-            "--epic",
-            "-l",
-            "--label",
-            "--link-type",
-            "--linked-issues",
-            "--linked-mr",
-            "-m",
-            "--milestone",
-            "--template",
-            "-e",
-            "--time-estimate",
-            "-s",
-            "--time-spent",
-            "-t",
-            "--title",
-            "-w",
-            "--weight",
-        ],
-    ),
+    Grammar {
+        aliases: &["new"],
+        ..grammar(
+            "glab",
+            "issue:create",
+            &[
+                "-c",
+                "--confidential",
+                "--no-editor",
+                "--recover",
+                "--web",
+                "-y",
+                "--yes",
+            ],
+            &[
+                "-a",
+                "--assignee",
+                "--attach",
+                "-d",
+                "--description",
+                "--description-file",
+                "--due-date",
+                "--epic",
+                "-l",
+                "--label",
+                "--link-type",
+                "--linked-issues",
+                "--linked-mr",
+                "-m",
+                "--milestone",
+                "--template",
+                "-e",
+                "--time-estimate",
+                "-s",
+                "--time-spent",
+                "-t",
+                "--title",
+                "-w",
+                "--weight",
+            ],
+        )
+    },
     grammar(
         "glab",
         "issue:update",
@@ -3296,7 +3440,10 @@ const FORGE_GRAMMAR: &[Grammar] = &[
             "--weight",
         ],
     ),
-    grammar("glab", "issue:note", &[], &["--attach", "-m", "--message"]),
+    Grammar {
+        aliases: &["comment"],
+        ..grammar("glab", "issue:note", &[], &["--attach", "-m", "--message"])
+    },
     Grammar {
         repo: false,
         ..grammar(
@@ -3328,6 +3475,17 @@ impl Grammar {
         FORGE_GRAMMAR
             .iter()
             .find(|grammar| grammar.command == command && grammar.verb == verb)
+    }
+
+    /// The grammar of the verb one level below `parent` that `word` names, by
+    /// its name or by one of its aliases, as `cobra` finds a subcommand.
+    fn under(command: &str, parent: &str, word: &str) -> Option<&'static Self> {
+        FORGE_GRAMMAR.iter().find(|grammar| {
+            grammar.command == command
+                && grammar.verb.rsplit_once(':').is_some_and(|(above, name)| {
+                    above == parent && (name == word || grammar.aliases.contains(&word))
+                })
+        })
     }
 
     /// Whether an option takes a value: `Some(false)` a switch, `Some(true)`
@@ -4495,6 +4653,7 @@ pub(crate) fn run_without_policy(root: &Path, name: &str, argv: &[OsString]) -> 
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect();
     let publishes = policy.shims.iter().any(|shim| {
+        let words = shim.canonical(&words);
         shim.command == name
             && matches!(shim.reading(&words), Reading::Named)
             && shim.carries_a_body(&words)
@@ -5195,6 +5354,9 @@ pub(crate) fn run(
         };
     };
 
+    // A verb the parser runs by a built-in alias is the verb it stands for,
+    // to every reader below: `gh pr new` is `gh pr create`.
+    let words = shim.canonical(&words);
     // An alias is a word the command expands before it decides anything, so a
     // shim that reads argv without expanding it is reading a different command
     // line from the one that runs. Asked only where nothing matched: a `match`
@@ -5203,14 +5365,16 @@ pub(crate) fn run(
     // A forge CLI's reading is Unclear where the table cannot classify the
     // options before the verb, but its parser's own reading is not: `gh
     // --attach a.png --edit-last 5 pc` runs the alias `pc` wherever `pc`
-    // names one, so the alias is asked about there too.
+    // names one, so the alias is asked about there too. What it expands to
+    // may spell a verb by a built-in alias in turn.
     let words = match shim.reading(&words) {
-        Reading::Absent => shim.expand_alias(root, &words)?.unwrap_or(words),
+        Reading::Absent => shim.expand_alias(root, &words)?,
         Reading::Unclear(_) if shim.forge_path(&words).is_some() => {
-            shim.expand_alias(root, &words)?.unwrap_or(words)
+            shim.expand_alias(root, &words)?
         }
-        Reading::Named | Reading::Unclear(_) => words,
-    };
+        Reading::Named | Reading::Unclear(_) => None,
+    }
+    .map_or(words, |expanded| shim.canonical(&expanded));
 
     // Only the rules that name THIS command line. Selecting a checker by
     // anything coarser -- a `kind` saying it stands in front of some command,
@@ -7365,14 +7529,40 @@ mod tests {
         listed
     }
 
+    /// Every alias one help page lists: `gh`'s `ALIASES` section, whose lines
+    /// are the whole command path (`gh pr new`), and the `## Aliases` block
+    /// `glab` generates, one bare name a line.
+    fn listed_aliases(page: &str) -> Vec<String> {
+        let mut listed = Vec::new();
+        let mut inside = false;
+        for line in page.lines() {
+            if line == "ALIASES" || line == "## Aliases" {
+                inside = true;
+                continue;
+            }
+            if !inside || line.starts_with("```") || line.trim().is_empty() {
+                continue;
+            }
+            if !line.starts_with(' ') && line.chars().next().is_some_and(char::is_uppercase)
+                || line.starts_with("## ")
+            {
+                break;
+            }
+            if let Some(name) = line.split_whitespace().last() {
+                listed.push(name.to_owned());
+            }
+        }
+        listed
+    }
+
     /// The pages under `tests/fixtures/forge-help`, one directory per command
     /// and version, and one file per verb: `gh <verb> --help` cut to its
-    /// `FLAGS` and `INHERITED FLAGS`, and the `## Options` sections of `glab`'s
-    /// `docs/source/<verb>.md` at the release tag, which `make gen-docs`
-    /// writes from the same flag set the binary parses -- its `--help` lists
-    /// the same names and no placeholder at all. Regenerated by hand when the
-    /// version a fleet runs moves, and then this test names every option the
-    /// grammar has to learn.
+    /// `ALIASES`, `FLAGS` and `INHERITED FLAGS`, and the `## Aliases` and
+    /// `## Options` sections of `glab`'s `docs/source/<verb>.md` at the release
+    /// tag, which `make gen-docs` writes from the same flag set the binary
+    /// parses -- its `--help` lists the same names and no placeholder at all.
+    /// Regenerated by hand when the version a fleet runs moves, and then this
+    /// test names every option and alias the grammar has to learn.
     const FORGE_HELP: &[(&str, &str)] = &[("gh", "gh-2.102.0"), ("glab", "glab-1.123.0")];
 
     #[test]
@@ -7412,7 +7602,16 @@ mod tests {
                 );
                 let grammar = grammar.unwrap();
                 pages += 1;
-                let listed = listed_options(&std::fs::read_to_string(&page).unwrap());
+                let text = std::fs::read_to_string(&page).unwrap();
+                // The other names the parser runs the verb by, none missed
+                // and none invented: an alias a grammar lacks is a verb no
+                // table matches.
+                assert_eq!(
+                    grammar.aliases,
+                    listed_aliases(&text).as_slice(),
+                    "`{command} {verb}`: the grammar's aliases are not the page's"
+                );
+                let listed = listed_options(&text);
                 assert!(!listed.is_empty(), "{}", page.display());
                 for (option, valued) in &listed {
                     let switch = quoted_switches.contains(&(*command, verb.as_str(), option));
@@ -7478,10 +7677,15 @@ mod tests {
                     let Some(parent) = effective.grammar_of(&words) else {
                         continue;
                     };
+                    // The verb, and every subcommand below it at any depth.
                     let mut grammars = vec![parent];
-                    grammars.extend(parent.subcommands.iter().filter_map(|sub| {
-                        Grammar::of(&shim.command, &format!("{}:{sub}", parent.verb))
-                    }));
+                    let mut next = 0;
+                    while let Some(level) = grammars.get(next).copied() {
+                        next += 1;
+                        grammars.extend(level.subcommands.iter().filter_map(|sub| {
+                            Grammar::of(&shim.command, &format!("{}:{sub}", level.verb))
+                        }));
+                    }
                     let flags = [
                         &effective.target_flags,
                         &effective.text_flags,
