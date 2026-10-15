@@ -1725,7 +1725,11 @@ fn a_git_global_option_before_the_subcommand_does_not_switch_the_shim_off() {
     // `match` entry contains that, so a push to a public forge exec'd
     // unexamined, silently and with an exit code of 0.
     let root = workspace(GIT_POLICY);
-    stub(&root, "git", "#!/bin/sh\necho \"git ran: $*\"\n");
+    stub(
+        &root,
+        "git",
+        "#!/bin/sh\nfor word in \"$@\"; do\n  [ \"$word\" = config ] && exit 1\ndone\necho \"git ran: $*\"\n",
+    );
     for form in [
         vec![
             "git",
@@ -6273,8 +6277,8 @@ fn plumbing_git(root: &Path) {
         root,
         "git",
         &format!(
-            "#!/bin/sh\ncase \"$1\" in\n  config|for-each-ref|symbolic-ref|rev-parse) exec {} \
-             \"$@\" ;;\nesac\necho \"git ran: $*\"\n",
+            "#!/bin/sh\nfor word in \"$@\"; do\n  case \"$word\" in\n  config|for-each-ref|symbolic-ref|rev-parse) exec {} \
+             \"$@\" ;;\nesac\ndone\necho \"git ran: $*\"\n",
             support::real_git().display()
         ),
     );
@@ -6314,6 +6318,118 @@ fn an_alias_for_a_push_is_expanded_before_the_match_list_is_read() {
     let clean = shim(&root, &["git", "p", "origin", "fix/ordinary"]);
     assert_eq!(code(&clean), 0, "{}", stderr(&clean));
     assert!(stdout(&clean).contains("git ran: p"), "{}", stdout(&clean));
+}
+
+#[test]
+fn a_git_alias_chain_is_read_with_its_globals_and_overrides() {
+    let root = workspace(GIT_REFS_POLICY);
+    plumbing_git(&root);
+    support::git(&root, &["config", "alias.deploy", "publish"]);
+    support::git(&root, &["config", "alias.publish", "push -o 'ci skip'"]);
+
+    for form in [
+        vec!["git", "deploy", "origin", "fix/acme-outage"],
+        vec![
+            "git",
+            "-c",
+            "alias.start=deploy",
+            "start",
+            "origin",
+            "fix/acme-outage",
+        ],
+        vec![
+            "git",
+            "-c",
+            "alias.deploy=status",
+            "-c",
+            "alias.deploy=publish",
+            "deploy",
+            "origin",
+            "fix/acme-outage",
+        ],
+        vec![
+            "git",
+            "-c",
+            "alias.start=deploy",
+            "-c",
+            "alias.deploy=status",
+            "-c",
+            "alias.deploy=publish",
+            "start",
+            "origin",
+            "fix/acme-outage",
+        ],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("git ran:"), "{form:?}");
+    }
+
+    // Each lookup must use the repository designated by the retained -C.
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    support::git(&nested, &["init", "--quiet"]);
+    support::git(&nested, &["config", "alias.deploy", "publish"]);
+    support::git(&nested, &["config", "alias.publish", "push"]);
+    support::git(&root, &["config", "alias.deploy", "status"]);
+    let output = shim(
+        &root,
+        &["git", "-C", "nested", "deploy", "origin", "fix/acme-outage"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("git ran:"));
+
+    support::git(&root, &["config", "alias.deploy", "publish"]);
+    let clean = shim(&root, &["git", "deploy", "origin", "fix/ordinary"]);
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert!(stdout(&clean).contains("git ran: deploy origin fix/ordinary"));
+
+    support::git(&root, &["config", "alias.publish", "status"]);
+    let harmless = shim(&root, &["git", "deploy"]);
+    assert_eq!(code(&harmless), 0, "{}", stderr(&harmless));
+    assert!(stdout(&harmless).contains("git ran: deploy"));
+}
+
+#[test]
+fn a_git_alias_chain_cannot_hide_a_shell_alias_loop_or_excessive_depth() {
+    let root = workspace(GIT_REFS_POLICY);
+    plumbing_git(&root);
+    support::git(&root, &["config", "alias.deploy", "publish"]);
+    for (expansion, evidence) in [
+        ("!echo deploying", "shell command"),
+        ("deploy", "to itself"),
+    ] {
+        support::git(&root, &["config", "alias.publish", expansion]);
+        let output = shim(&root, &["git", "deploy"]);
+        assert_eq!(code(&output), 2, "{}", stderr(&output));
+        assert!(stderr(&output).contains(evidence), "{}", stderr(&output));
+        assert!(!stdout(&output).contains("git ran:"));
+    }
+
+    for index in 1..=8 {
+        support::git(
+            &root,
+            &[
+                "config",
+                &format!("alias.chain{index}"),
+                &format!("chain{}", index + 1),
+            ],
+        );
+    }
+    support::git(&root, &["config", "alias.chain9", "status"]);
+    let output = shim(&root, &["git", "chain1"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("more than 8 deep"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("git ran:"));
+
+    // Exactly eight links remain usable.
+    let output = shim(&root, &["git", "chain2"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("git ran: chain2"));
 }
 
 #[test]

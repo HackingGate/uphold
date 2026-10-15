@@ -552,8 +552,8 @@ fn in_list(list: &[String], needle: &str) -> bool {
 /// config, and no policy author should have to write it there to be guarded.
 const ALIAS_COMMANDS: &[&str] = &["git", "gh", "glab"];
 
-/// How many `gh` aliases one invocation is followed through: one alias may
-/// expand to another, and `gh` runs that one too.
+/// How many `git` or `gh` aliases one invocation is followed through: one
+/// alias may expand to another, and these commands run that one too.
 const ALIAS_DEPTH: usize = 8;
 
 /// Commands whose `api` verb is the whole forge behind one word.
@@ -1130,6 +1130,7 @@ fn json_strings(text: &str) -> std::result::Result<Option<Walked>, serde_json::E
 fn command_line_alias(argv: &[String], word: &str) -> Option<String> {
     let wanted = format!("alias.{word}=");
     let mut index = 0;
+    let mut value = None;
     while let Some(argument) = argv.get(index) {
         index += 1;
         // `-c` takes the word after it. `git` accepts no `-c=<setting>`, so
@@ -1139,12 +1140,12 @@ fn command_line_alias(argv: &[String], word: &str) -> Option<String> {
         }
         if let Some(setting) = argv.get(index) {
             index += 1;
-            if let Some(value) = setting.strip_prefix(&wanted) {
-                return Some(value.to_owned());
+            if let Some(found) = setting.strip_prefix(&wanted) {
+                value = Some(found.to_owned());
             }
         }
     }
-    None
+    value
 }
 
 /// One alias out of what `glab alias list` printed.
@@ -1905,11 +1906,12 @@ impl Shim {
     /// command (`root.SetArgs`, `root.Execute`), so an expansion that names
     /// another alias runs that one in turn: with `a2` set to `pr comment 5 -b`
     /// and `a1` to `a2 $1`, `gh a1 X` comments `X`, and one expansion read `a2
-    /// X`, which no table matched. So a `gh` expansion is expanded again until
-    /// it names no alias. An alias met twice on the way is a loop, and a chain
-    /// longer than [`ALIAS_DEPTH`] is not followed further; both are exit 2.
+    /// X`, which no table matched. `git` also follows chains of aliases. So a
+    /// `git` or `gh` expansion is expanded again until it names no alias. An
+    /// alias met twice on the way is a loop, and a chain longer than
+    /// [`ALIAS_DEPTH`] is not followed further; both are exit 2.
     /// `glab` expands once, before cobra runs, and an expansion that names
-    /// another alias is no command there; `git` is expanded once here.
+    /// another alias is no command there.
     fn expand_aliases(&self, root: &Path, mut words: Vec<String>) -> Result<Vec<String>> {
         let mut seen: Vec<String> = Vec::new();
         loop {
@@ -1945,7 +1947,7 @@ impl Shim {
             }
             seen.push(name);
             words = self.canonical(&next);
-            if self.command != "gh" {
+            if self.command == "glab" {
                 return Ok(words);
             }
         }
@@ -2045,7 +2047,7 @@ impl Shim {
         // and reading it costs no process. The persisted alias below is the
         // case that needs one.
         if self.command == "git"
-            && let Some(value) = command_line_alias(argv, word)
+            && let Some(value) = command_line_alias(argv.get(..index).unwrap_or_default(), word)
         {
             return Ok(Some(one(value)));
         }
@@ -2070,6 +2072,11 @@ impl Shim {
         // question, and the twenty-nine thousand `gh alias list` processes
         // `HANDED` describes were this line.
         let mut command = inner_tool(&real);
+        if self.command == "git" {
+            // Resolve every link in the same repository and configuration as
+            // the invocation, including globals retained by earlier links.
+            command.args(argv.get(..index).unwrap_or_default());
+        }
         command.args(query).current_dir(root);
         if self.command == "git" {
             command.arg(format!("alias.{word}"));

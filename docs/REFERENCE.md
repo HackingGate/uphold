@@ -2253,10 +2253,11 @@ two the invocation spells is exit `2`, and so is an invocation two aliases
 name. `gh` runs an expansion through its own root command again, so an
 expansion that names another alias runs that one too: with `a2` set to `pr
 comment 5 -b` and `a1` to `a2 $1`, `gh a1 X` comments `X`. A `gh` expansion is
-expanded again until it names no alias. An alias met twice on the way is a
-loop, and a chain more than eight aliases long is not followed; both are exit
-`2`. `glab` and `git` are expanded once here. `glab` runs an expansion that
-names another alias as no command.
+expanded again until it names no alias. `git` also follows chains of aliases,
+keeping global options and command-line configuration overrides at every link.
+For either command, an alias met twice on the way is a loop, and a chain more
+than eight aliases long is not followed; both are exit `2`. `glab` is expanded
+once here; it runs an expansion that names another alias as no command.
 
 A **shell alias** (`!…`) and a lookup that failed are
 could-not-looks, not absences: exit `2`, since what a shell runs is not an
