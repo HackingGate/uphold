@@ -1742,6 +1742,51 @@ pub(crate) fn visibility_is_public(value: &str) -> Option<bool> {
     }
 }
 
+/// One `inherit.paths` entry as the file it names, refused where it leaves the
+/// repository.
+///
+/// A repository's policy is its own, and a member does not borrow upward from
+/// what encloses it: `discover` stops at the repository boundary for the same
+/// reason. `Path::join` replaces the base for an absolute argument and `..`
+/// walks out, so the entry is read by component first -- which answers a path
+/// that does not exist, where a clone without the enclosing tree would
+/// otherwise report a missing file instead of the rule -- and then resolved,
+/// which answers a symlink out.
+fn inherited_path(root: &Path, policy_path: &Path, relative: &str) -> Result<PathBuf> {
+    let refuse = |why: &str| {
+        Fatal::at(
+            policy_path,
+            format!(
+                "`inherit.paths` names {relative:?}, which {why}. A repository's policy is \
+                 its own: a path names a file inside this repository, relative to its \
+                 root, and a member does not borrow upward from what encloses it"
+            ),
+        )
+    };
+    let mut depth = 0_usize;
+    for part in Path::new(relative).components() {
+        match part {
+            std::path::Component::Normal(_) => depth += 1,
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| refuse("climbs out of the repository with `..`"))?;
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err(refuse("is an absolute path"));
+            }
+        }
+    }
+    let path = root.join(relative);
+    if let (Ok(resolved), Ok(base)) = (path.canonicalize(), root.canonicalize())
+        && !resolved.starts_with(&base)
+    {
+        return Err(refuse("resolves outside the repository through a symlink"));
+    }
+    Ok(path)
+}
+
 /// Load a policy file, resolving `[inherit]` and validating the result.
 pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     let text = read_to_string(policy_path)?;
@@ -1823,7 +1868,7 @@ pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<P
     }
 
     for relative in &inherit.paths {
-        let path = root.join(relative);
+        let path = inherited_path(root, policy_path, relative)?;
         let extended = read_to_string(&path)?;
         let parsed = parse(&path, &extended)?;
         refuse_set_header(&path, &parsed)?;
@@ -1999,7 +2044,7 @@ pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<P
             }
         }
         for relative in &inherit.paths {
-            let path = root.join(relative);
+            let path = inherited_path(root, policy_path, relative)?;
             let extended = read_to_string(&path)?;
             names.extend(parse(&path, &extended)?.rules.into_keys());
         }

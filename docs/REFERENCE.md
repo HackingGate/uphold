@@ -840,7 +840,13 @@ nothing there has the problem the ceiling exists for.
 
 `inherit.disabled_rules` drops an inherited rule, and naming an id nothing
 inherited defines is an error. `inherit.paths` merges extra policy files,
-repository-relative, after the bundled sets.
+repository-relative, after the bundled sets. A path must stay inside the
+repository: an absolute path, one that climbs out with `..`, and one that
+resolves outside through a symlink are each refused at load with exit 2. A
+repository's policy is its own, and a member does not borrow upward from what
+encloses it, the same line `discover` holds; a member that inherits
+`../policy/rules.toml` would pass inside its superproject and fail in a
+standalone clone.
 
 A repository's own rule of the same `id` replaces the inherited one **whole**,
 so it is the spelling for a rule that checks something different. To adjust an
