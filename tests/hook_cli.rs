@@ -755,3 +755,96 @@ fn an_invisible_character_is_refused_under_any_key() {
         assert!(reason.contains("U+202E"), "{key}: {reason}");
     }
 }
+
+// -- one refusal per rule, and title-scoped patterns -----------------------
+
+/// A rule that fires on a title and on a body is one finding about one call,
+/// and its block is printed once, naming both parts.
+#[test]
+fn a_rule_firing_on_two_parts_of_a_call_prints_one_block_naming_both() {
+    let root = workspace("hook-merged-verdicts", Some(POLICY));
+    let marker = "Co-Authored-By: Claude <noreply@anthropic.com>";
+    let event = serde_json::json!({
+        "tool_name": "mcp__github__create_pull_request",
+        "tool_input": {"title": marker, "body": marker},
+    })
+    .to_string();
+    let output = hook(&root, "claude-code", &event);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let reason = reason(&output);
+    assert_eq!(
+        reason.matches("guard refused: prevent-ai-author").count(),
+        1,
+        "{reason}"
+    );
+    assert!(
+        reason.contains("mcp__github__create_pull_request title"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("mcp__github__create_pull_request carries"),
+        "{reason}"
+    );
+}
+
+const TITLE_POLICY: &str = "\
+[rule.no-draft-title]
+message = \"Name the change, not its state.\"
+regexp = '^Draft'
+subjects = [\"title\"]
+seams = [\"hook\"]
+command.before = [\"gh\"]
+command.scope = \"always\"
+";
+
+/// A `regexp` rule scoped to `title` sees a tool call's title and nothing else.
+#[test]
+fn a_title_scoped_regexp_rule_refuses_a_title_and_passes_a_body() {
+    let root = workspace("hook-title-regexp", Some(TITLE_POLICY));
+    let call = |input: Value| {
+        let event =
+            serde_json::json!({"tool_name": "mcp__github__create_pull_request", "tool_input": input})
+                .to_string();
+        hook(&root, "claude-code", &event)
+    };
+
+    let refused = call(serde_json::json!({"title": "Draft: parser", "body": "ordinary"}));
+    assert_eq!(code(&refused), 0, "{}", stderr(&refused));
+    let reason = reason(&refused);
+    assert!(reason.contains("no-draft-title"), "{reason}");
+    assert!(
+        reason.contains("(in mcp__github__create_pull_request title)"),
+        "{reason}"
+    );
+
+    let passed = call(serde_json::json!({"title": "Fix the parser", "body": "Draft: parser"}));
+    assert_eq!(code(&passed), 0, "{}", stderr(&passed));
+    assert_eq!(stdout(&passed), "", "{}", stdout(&passed));
+}
+
+// -- a commit message under `message` is a known limit ---------------------
+
+/// The GitHub MCP file-commit tools take the commit message under `message`,
+/// a key too generic to read as a subject without knowing the tool. Pinned as
+/// it behaves: prose, so a lookalike passes and an invisible character is
+/// refused. See "Known limit" in the reference.
+#[test]
+fn a_message_key_is_prose_so_a_lookalike_passes_and_an_invisible_character_does_not() {
+    let passed = unicode_call(
+        "hook-message-lookalike",
+        "mcp__github__create_or_update_file",
+        &serde_json::json!({"path": "a.txt", "message": DISGUISED}),
+    );
+    assert_eq!(code(&passed), 0, "{}", stderr(&passed));
+    assert_eq!(stdout(&passed), "", "{}", stdout(&passed));
+
+    let refused = unicode_call(
+        "hook-message-invisible",
+        "mcp__github__create_or_update_file",
+        &serde_json::json!({"path": "a.txt", "message": "Fix the\u{200B}parser"}),
+    );
+    assert_eq!(code(&refused), 0, "{}", stderr(&refused));
+    let reason = reason(&refused);
+    assert!(reason.contains("prevent-unusual-unicode"), "{reason}");
+    assert!(reason.contains("U+200B"), "{reason}");
+}

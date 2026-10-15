@@ -372,7 +372,10 @@ pub(crate) fn judged(
                         &mut |_| Ok(true),
                     )?);
                 }
-                verdicts.into_iter().map(Verdict::Guard).collect()
+                merged_by_rule(verdicts)
+                    .into_iter()
+                    .map(Verdict::Guard)
+                    .collect()
             }
             Judged::Prose => crate::prose::over_text(policy, seam, whole)?
                 .into_iter()
@@ -380,7 +383,7 @@ pub(crate) fn judged(
                 .collect(),
             // Only the hook consults these here, and only the rules whose
             // `seams` names it -- see `Seam::runs_by_default`.
-            Judged::Patterns => patterns_over(policy, seam, label, whole)?
+            Judged::Patterns => patterns_over(policy, seam, label, whole, headlines)?
                 .into_iter()
                 .map(Verdict::Rule)
                 .collect(),
@@ -392,36 +395,83 @@ pub(crate) fn judged(
     })
 }
 
+/// One refusal per rule, from the several parts of a call a rule was run over.
+///
+/// A rule that fires on a title and again on a body is one finding about one
+/// call, and printing its block twice reads as two. The reports are kept, each
+/// already naming the part it was found in, in the order the parts were judged.
+fn merged_by_rule(refusals: Vec<crate::guard::Refusal>) -> Vec<crate::guard::Refusal> {
+    let mut merged: Vec<crate::guard::Refusal> = Vec::new();
+    for refusal in refusals {
+        match merged.iter_mut().find(|seen| seen.id == refusal.id) {
+            Some(seen) => {
+                seen.report.push_str("\n\n");
+                seen.report.push_str(refusal.report.trim_end());
+            }
+            None => merged.push(refusal),
+        }
+    }
+    merged
+}
+
 /// The pattern rules a seam runs over published text, each asked about the
 /// subjects its `subjects` selects.
 ///
-/// Two subjects at the hook: the call's text, as kind `text`, and what the call
-/// is called, as kind `tool`. The tool name is the hook's nearest thing to a
+/// Three kinds of subject at the hook: the call's text, as kind `text`, each
+/// headline the call carried, as kind `title` under the key it was found at, and what the call
+/// is called, as kind `tool`. A title-scoped rule means the same here as at the
+/// shim, where `--title` is kind `title`; every headline key is that one kind,
+/// a commit subject under `commit_title` included, because the shim does not
+/// tell a pull-request title from a commit subject either. The tool name is the hook's nearest thing to a
 /// command line -- `mcp__github__create_release` is to an MCP server what
 /// `release create` is to `gh` -- and handing it over as a kind of its own lets
 /// a rule refuse the call by name without also refusing every body that
 /// mentions it. Which tool names mean which command is the rule's to say, in its
 /// own pattern: a table of MCP names per shim verb would be a list that is
 /// missing the tool a server added last week.
-fn patterns_over(policy: &Policy, seam: Seam, label: &str, text: &str) -> Result<Vec<Failure>> {
+fn patterns_over(
+    policy: &Policy,
+    seam: Seam,
+    label: &str,
+    text: &str,
+    headlines: &[Headline],
+) -> Result<Vec<Failure>> {
     // The shim runs its pattern rules itself, over the subjects it collected,
     // and never through this function; were it ever handed here, running its
     // rules over one pathless blob is the guess this module exists to refuse.
     if seam != Seam::Hook {
         return Ok(Vec::new());
     }
-    let subjects = [
-        crate::shim::Subject {
-            kind: "text",
-            value: text.to_owned(),
-            added: None,
-        },
-        crate::shim::Subject {
-            kind: "tool",
-            value: label.to_owned(),
-            added: None,
-        },
+    // Each with the label a report names it by: the kind alone for the call's
+    // own two, the key for a headline, so a finding says which field it was in.
+    let mut subjects = vec![
+        (
+            None,
+            crate::shim::Subject {
+                kind: "text",
+                value: text.to_owned(),
+                added: None,
+            },
+        ),
+        (
+            None,
+            crate::shim::Subject {
+                kind: "tool",
+                value: label.to_owned(),
+                added: None,
+            },
+        ),
     ];
+    subjects.extend(headlines.iter().map(|headline| {
+        (
+            Some(headline.label.as_str()),
+            crate::shim::Subject {
+                kind: crate::shim::Subject::HEADLINE,
+                value: headline.text.clone(),
+                added: None,
+            },
+        )
+    }));
     let mut failures = Vec::new();
     for rule in &policy.rules {
         if !matches!(rule.kind(), CheckKind::Regexp | CheckKind::RequireRegexp)
@@ -435,18 +485,19 @@ fn patterns_over(policy: &Policy, seam: Seam, label: &str, text: &str) -> Result
             continue;
         }
         let mut found = Vec::new();
-        for subject in subjects
+        for (named, subject) in subjects
             .iter()
-            .filter(|subject| rule.selects_subject(subject.kind))
+            .filter(|(_, subject)| rule.selects_subject(subject.kind))
         {
             if let Some(finding) = crate::shim::pattern_finding(rule, subject)? {
+                let at = named.map_or_else(String::new, |name| format!(" (in {name})"));
                 found.push(if policy.redact_matches {
                     format!(
-                        "{}: the {} subject: [REDACTED_MATCH]",
+                        "{}: the {} subject{at}: [REDACTED_MATCH]",
                         rule.id, subject.kind
                     )
                 } else {
-                    finding
+                    format!("{finding}{at}")
                 });
             }
         }

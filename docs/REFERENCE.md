@@ -1556,8 +1556,10 @@ on a merge, and the subject GitHub composes for `gh pr merge --squash` or
 `--merge`, which the shim fetches and judges. A whole commit message, such as
 `glab mr merge -m`/`--squash-message` or GitLab's `squash_commit_message` and
 `merge_commit_message` fields, is judged as its first line, a subject, and
-the rest, prose. An `--input` JSON document is prose in every value, `title`
-included. The harness hook reads a tool call's arguments by the same keys: a
+the rest, prose. An `--input` JSON document is read by those same keys, the
+reader the harness hook uses: a `title`, `commit_title` or `subject` value is a
+subject, a `squash_commit_message` or `merge_commit_message` value is a subject
+then prose, and every other value is prose. The harness hook reads a tool call's arguments by the same keys: a
 string under `title`, `commit_title` or `subject` is a subject, and one under
 `squash_commit_message` or `merge_commit_message` is a message, so an MCP
 merge's commit title gets the check `gh pr merge --subject` gets. The keys are read in
@@ -2235,7 +2237,7 @@ in front of its own lookup is a loop.
 | `-F`/`--field` | the value after `key=`, with `@file` read from the file and `@-` from stdin |
 | `-f`/`--raw-field` | the value after `key=` as written, `@` included, because that is what is sent |
 | either, by key | a **title** where the key is `title`, `commit_title` or `subject`; a **message** (first line a title, the rest prose) where it is `squash_commit_message` or `merge_commit_message`; prose otherwise |
-| `--input FILE` | the whole file — each **string value** where it is JSON, the raw text where it is not; every value is prose, a `title` key included |
+| `--input FILE` | the whole file — each **string value** where it is JSON, read by its key as a `--field` is (a `title` is a subject), the raw text where it is not |
 | the endpoint path | `repos/OWNER/REPO/…`, or GitLab's `projects/OWNER%2FREPO`, as the **destination** |
 
 The destination is the same `owner/repo` a `--repo` resolves to on every other
@@ -2532,6 +2534,16 @@ sentence shape refused when a person publishes it and allowed when an agent
 publishes it would be the same rule with two answers. A prose rule that names no
 command is left out, as it is at every `--text` seam — it is scoped by `files.*`
 to particular paths, and a tool call has none.
+
+**Known limit: a commit message under `message`.** The GitHub MCP server's
+`create_or_update_file`, `push_files` and `delete_file` take the commit message
+under `message`, and its first line becomes a commit subject no local
+`commit-msg` hook sees. This seam reads that string as prose, so a lookalike
+letter in it passes while a character that draws nothing is refused. `message`
+is too generic a key to read as a subject: many tools carry an unrelated
+`message`, and telling them apart would take a table of tools, which is the
+list this seam declines to keep. A pushed range checked with `uphold guard`
+still reads the subject after the fact.
 
 ### Configuring it
 
