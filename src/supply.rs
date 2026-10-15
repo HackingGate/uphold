@@ -1256,6 +1256,67 @@ const GUARDDOG_FLOOR: Floor = Floor {
     oldest: Version(3, 2, 0),
 };
 
+/// The directory guarddog unpacks what it downloads under:
+/// `$XDG_CACHE_HOME/uphold/guarddog`, else `$HOME/.cache/uphold/guarddog`, or
+/// `None` where neither names an absolute directory.
+///
+/// GUARDDOG'S `metadata_mismatch` VERDICT ON A PYPI WHEEL DEPENDS ON THE
+/// FILESYSTEM IT UNPACKS ON. guarddog 3.2.0 extracts the release into a fresh
+/// `tempfile.TemporaryDirectory()` and takes the first `os.listdir` entry that
+/// starts with the package name as the package's root. A wheel such as pandas
+/// 3.0.3 holds two, `pandas/` (which carries a `pyproject.toml`) and
+/// `pandas-3.0.3.dist-info/` (which carries none), and the order the two are
+/// listed in is the filesystem's: tmpfs lists the newest first, btrfs in
+/// creation order, ext4 in the order of a hash seeded per filesystem. One
+/// order reaches the manifest and reports a mismatch; the other reaches none
+/// and reports nothing. Inheriting the caller's `TMPDIR` made that the
+/// verdict's input, so one lock passed or failed with where `TMPDIR` pointed.
+///
+/// The defect is guarddog's, and nothing outside its process reorders a
+/// listing. What is fixed here is the input: guarddog is handed this directory
+/// as `TMPDIR`, so the caller's `TMPDIR` no longer decides, and one host gives
+/// one verdict. Two hosts whose cache directories sit on different filesystems
+/// can still disagree, which is why the stale-waiver notice for a `pypi`
+/// `metadata_mismatch` waiver does not advise removing it.
+///
+/// A relative `XDG_CACHE_HOME` is ignored, as the specification says: guarddog
+/// runs in the manifest's directory, so a relative one would unpack downloads
+/// into the tree being checked. The environment is a parameter so a test can
+/// hand in one of its own.
+fn guarddog_unpacks_under(env: impl Fn(&str) -> Option<PathBuf>) -> Option<PathBuf> {
+    let absolute = |name: &str| env(name).filter(|path| path.is_absolute());
+    absolute("XDG_CACHE_HOME")
+        .or_else(|| absolute("HOME").map(|home| home.join(".cache")))
+        .map(|cache| cache.join("uphold").join("guarddog"))
+}
+
+/// [`guarddog_unpacks_under`] on this machine, created; `None`, with the line
+/// saying why, where there is none or it could not be made. guarddog then
+/// inherits `TMPDIR` as before, and the run says its verdict may move with it.
+fn guarddog_unpack_directory() -> Option<PathBuf> {
+    let fallback = "guarddog unpacks under TMPDIR, so its metadata_mismatch verdict may \
+                    differ with the filesystem TMPDIR is on";
+    let Some(directory) = guarddog_unpacks_under(|name| std::env::var_os(name).map(PathBuf::from))
+    else {
+        println!("   {fallback}: neither XDG_CACHE_HOME nor HOME names an absolute directory");
+        return None;
+    };
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    match builder.create(&directory) {
+        Ok(()) => Some(directory),
+        Err(error) => {
+            println!(
+                "   {fallback}: {} could not be created: {error}",
+                directory.display()
+            );
+            None
+        }
+    }
+}
+
 /// guarddog's own report that a rule did not run.
 ///
 /// It prints "Some rules failed to run while scanning <package>:" and a bullet
@@ -1514,6 +1575,9 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
     if let Some(reason) = ready(&GUARDDOG_FLOOR) {
         return Ok(Section::CouldNotLook(reason));
     }
+    // Handed to every guarddog run as `TMPDIR`; see `guarddog_unpacks_under`.
+    let unpack = guarddog_unpack_directory();
+    let unpacks = || unpack.as_deref().map(|directory| ("TMPDIR", directory));
     let mut refused = false;
     let mut unrun: Option<String> = None;
     let mut checked = 0_usize;
@@ -1584,6 +1648,7 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
             .args(["pypi", "verify", "--output-format", "json"])
             .arg(&requirements.path)
             .args(GUARDDOG_RULES)
+            .envs(unpacks())
             .current_dir(directory)
             .output()
             .map_err(|error| Fatal::new(format!("could not run guarddog: {error}")))?;
@@ -1657,6 +1722,7 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
                     .map_or_else(|| Path::new("package.json"), |file| file.path.as_path()),
             )
             .args(GUARDDOG_RULES)
+            .envs(unpacks())
             .current_dir(directory)
             .output()
             .map_err(|error| Fatal::new(format!("could not run guarddog: {error}")))?;
@@ -1697,9 +1763,18 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
             .contains(&(ecosystem.to_owned(), name.to_owned()))
             || (matches!(scope, Scope::Whole) && ledger.read.contains(ecosystem));
         if could && !ledger.matched.contains(&index) {
+            // Except where whether the finding appears is the host's: a pypi
+            // `metadata_mismatch` reaches the release's manifest on some
+            // filesystems and not others (`guarddog_unpacks_under`), so its
+            // absence here is not its absence everywhere.
+            let advice = if ecosystem == "pypi" && waiver.check == "metadata_mismatch" {
+                "guarddog reads a pypi release's manifest for this check on some \
+                 filesystems and not others, so another host may still need it"
+            } else {
+                "remove it if the version moved or the finding is gone"
+            };
             println!(
-                "   waiver matched nothing in this run: {} on {} -- remove it if the \
-                 version moved or the finding is gone",
+                "   waiver matched nothing in this run: {} on {} -- {advice}",
                 waiver.check, waiver.package
             );
         }
@@ -1973,8 +2048,41 @@ mod tests {
     use super::{
         DENY_FLOOR, Floor, GITLEAKS_DEFAULT, GITLEAKS_FOUND, GITLEAKS_VERSION, GUARDDOG_FLOOR,
         OSV_FLOOR, PRUNE, Scope, VET_FLOOR, Version, ZIZMOR_FLOOR, against_floor, find_named,
-        find_workflow_dirs, gitleaks_could_not_look, interesting, parse_version, unscanned_ci,
+        find_workflow_dirs, gitleaks_could_not_look, guarddog_unpacks_under, interesting,
+        parse_version, unscanned_ci,
     };
+
+    /// guarddog unpacks under the cache directory, whatever `TMPDIR` says: the
+    /// order its `metadata_mismatch` rule lists an unpacked wheel in is that
+    /// filesystem's, so `TMPDIR` would otherwise be the verdict's input.
+    #[test]
+    fn guarddog_unpacks_under_the_cache_directory_and_never_under_tmpdir() {
+        let under = |xdg: Option<&str>, home: Option<&str>| {
+            guarddog_unpacks_under(|name| match name {
+                "XDG_CACHE_HOME" => xdg.map(std::path::PathBuf::from),
+                "HOME" => home.map(std::path::PathBuf::from),
+                "TMPDIR" => Some(std::path::PathBuf::from("/tmp/elsewhere")),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            under(Some("/x/cache"), Some("/srv/example/user")).as_deref(),
+            Some(std::path::Path::new("/x/cache/uphold/guarddog"))
+        );
+        // Empty and relative are both "not set": a relative one would unpack
+        // downloads into the manifest's directory, which guarddog runs in.
+        for xdg in [None, Some(""), Some("cache")] {
+            assert_eq!(
+                under(xdg, Some("/srv/example/user")).as_deref(),
+                Some(std::path::Path::new(
+                    "/srv/example/user/.cache/uphold/guarddog"
+                )),
+                "{xdg:?}"
+            );
+        }
+        assert_eq!(under(None, None), None);
+        assert_eq!(under(Some("cache"), Some("home")), None);
+    }
 
     /// Every floor, for the tests that hold them all to one rule.
     const FLOORS: [&Floor; 5] = [
