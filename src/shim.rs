@@ -233,14 +233,15 @@ struct Cluster {
 
 /// Read `-b`, `-bText`, `-b=Text` and a cluster such as `-sd` or `-stX`.
 ///
-/// Used only where the verb's whole option grammar is known -- the
-/// [`FORGE_HELD`] verbs, by both `collect_flags` and `Operands` -- so the two
-/// cannot disagree about one word: the text collector took `-st X` for an
-/// option called `-st`, while `gh` reads `-s` and then `-t X`, so the subject
-/// went out unread. Without that grammar a letter's arity is a guess, and a
-/// guess read `-Bmain`'s `n` as an option that took the next word. `arity` answers `Some(true)`
-/// for a letter that takes a value, `Some(false)` for a switch and `None` for
-/// a letter nothing here knows, which is read past as `unknown`.
+/// Used only where the verb's whole option grammar is known -- a
+/// [`FORGE_GRAMMAR`] verb, by `collect_flags`, `Operands` and `ApiCall` alike,
+/// through [`OptionWord`] -- so no two readers disagree about one word: the
+/// text collector took `-st X` for an option called `-st`, while `gh` reads
+/// `-s` and then `-t X`, so the subject went out unread. Without that grammar
+/// a letter's arity is a guess, and a guess read `-Bmain`'s `n` as an option
+/// that took the next word. `arity` answers `Some(true)` for a letter that
+/// takes a value, `Some(false)` for a switch and `None` for a letter nothing
+/// here knows, which is read past as `unknown`.
 ///
 /// The value rule is pflag's `parseSingleShortArg`, which `gh` and `glab` both
 /// parse with, applied at whichever letter is being read: where what follows
@@ -303,12 +304,6 @@ pub(crate) fn message_subjects(message: String) -> Vec<Subject> {
         });
     }
     subjects
-}
-
-/// Whether a word is a short option or a cluster of them rather than a
-/// single long-or-short option the table can name whole.
-fn is_short_word(argument: &str) -> bool {
-    argument.starts_with('-') && !argument.starts_with("--") && argument.len() > 1
 }
 
 /// How this command's subjects are found.
@@ -549,8 +544,10 @@ const API_METHOD_FLAGS: &[&str] = &["-X", "--method"];
 /// whose `@file` value is that file's contents, and `-f`/`--raw-field` is the
 /// raw one, whose value is sent as written -- `@notes.md` and all. Both are
 /// published, so both are subjects; only the typed one reads a file, because
-/// reading one for a raw field judges text the command never sends.
-const API_FIELD_FLAGS: &[&str] = &["-f", "--raw-field", "-F", "--field"];
+/// reading one for a raw field judges text the command never sends. `glab`'s
+/// `--form` is a multipart field, judged as written: its `@file` is an upload,
+/// which is not text a checker reads.
+const API_FIELD_FLAGS: &[&str] = &["-f", "--raw-field", "-F", "--field", "--form"];
 
 /// The typed field spellings, whose `@file` is read.
 const API_TYPED_FIELD_FLAGS: &[&str] = &["-F", "--field"];
@@ -576,35 +573,8 @@ pub(crate) const API_TITLE_KEYS: &[&str] = &["title", "commit_title", "subject"]
 /// hook too, for the same reason as [`API_TITLE_KEYS`].
 pub(crate) const API_MESSAGE_KEYS: &[&str] = &["squash_commit_message", "merge_commit_message"];
 
-/// Whether an `api` option takes the word after it.
-fn api_takes_value(flag: &str) -> bool {
-    API_METHOD_FLAGS.contains(&flag)
-        || API_FIELD_FLAGS.contains(&flag)
-        || API_INPUT_FLAGS.contains(&flag)
-        || API_OTHER_VALUE_FLAGS.contains(&flag)
-}
-
 /// The `api` option that names a file holding the whole body.
 const API_INPUT_FLAGS: &[&str] = &["--input"];
-
-/// Every other `api` option that takes the word after it.
-///
-/// Listed for the sake of the words they would otherwise leave loose: the
-/// endpoint path is positional, and an option whose value nothing here
-/// classifies would be read as the path -- which is the destination this seam
-/// resolves the repository from.
-const API_OTHER_VALUE_FLAGS: &[&str] = &[
-    "-H",
-    "--header",
-    "-q",
-    "--jq",
-    "-t",
-    "--template",
-    "--cache",
-    "--hostname",
-    "-p",
-    "--preview",
-];
 
 /// One `gh api` or `glab api` invocation, read off the words after the verb.
 ///
@@ -630,8 +600,20 @@ struct ApiCall {
 }
 
 impl ApiCall {
-    /// The words after `api`, read as that verb's grammar.
-    fn of(rest: &[String]) -> Self {
+    /// The words after `api`, read as that verb's grammar in `command`, or
+    /// the option that grammar does not know.
+    ///
+    /// Every option is read under [`FORGE_GRAMMAR`]'s `api` entry, the whole
+    /// of it, so a cluster or an attached value (`-ftitle=X`, `-iF=k=@f`) is
+    /// split as the command splits it, and every other value-taking option
+    /// takes its word: the endpoint path is positional, and an option whose
+    /// value nothing here classifies would leave that value to be read as the
+    /// path -- which is the destination this seam resolves the repository
+    /// from.
+    fn of(command: &str, rest: &[String]) -> std::result::Result<Self, String> {
+        let Some(grammar) = Grammar::of(command, "api") else {
+            return Err(String::from("api"));
+        };
         let mut call = Self::default();
         let mut index = 0;
         while let Some(argument) = rest.get(index) {
@@ -647,23 +629,11 @@ impl ApiCall {
                 call.positional.push(argument.clone());
                 continue;
             }
-            // A short word is read only as the option it names whole. A
-            // cluster or an attached value (`-ftitle=X`, `-iF=k=@f`) is not
-            // split: without the verb's whole option grammar, a letter this
-            // list does not know cannot be told from a value, and reading on
-            // past it read a value's letters as options.
-            let (flag, inline) = match argument.split_once('=') {
-                Some((flag, value)) if argument.starts_with("--") => {
-                    (flag.to_owned(), Some(value.to_owned()))
-                }
-                _ => (argument.clone(), None),
-            };
-            let name = flag.as_str();
-            if !api_takes_value(name) {
-                // `--paginate`, `--silent`, `-i`, `--slurp`: options that take
-                // nothing, and the word after one of them is the next word.
+            // Switches -- `--paginate`, `--silent`, `-i` -- take nothing, and
+            // the word after one of them is the next word.
+            let Some((flag, inline)) = OptionWord::read(argument, grammar)?.valued else {
                 continue;
-            }
+            };
             let Some(value) = inline.or_else(|| {
                 // The word after it, where there is one. An option at the end
                 // of argv took nothing whatever its grammar says.
@@ -673,6 +643,7 @@ impl ApiCall {
             }) else {
                 continue;
             };
+            let name = flag.as_str();
             if API_METHOD_FLAGS.contains(&name) {
                 call.method = Some(value);
             } else if API_FIELD_FLAGS.contains(&name) {
@@ -681,7 +652,7 @@ impl ApiCall {
                 call.input = Some(value);
             }
         }
-        call
+        Ok(call)
     }
 
     /// Whether this call carries a body at all.
@@ -1261,7 +1232,9 @@ impl Shim {
             return Reading::Named;
         }
         let bare = self.words(argv, false);
-        if self.names(&bare) {
+        if self.names(&bare)
+            || (self.forge_path(argv).is_some() && self.names(&self.verb_words(argv)))
+        {
             return Reading::Named;
         }
         // One reading found nothing; the other is what an option that DOES take
@@ -1320,13 +1293,33 @@ impl Shim {
         if !ALIAS_COMMANDS.contains(&self.command.as_str()) {
             return Ok(None);
         }
-        let scanned = self.scan(argv, false, 1);
-        let (Some(index), Some(word)) = (scanned.first, scanned.positional.first().copied()) else {
+        // The word the command would expand, found where it finds it. `gh`
+        // registers each alias as a command of its own, so cobra finds it the
+        // way it finds `pr` -- past `--edit-last 5`, which the root takes for
+        // an option and its value. `git` reads its global options first, which
+        // its own grammar here does.
+        let index = self.forge_path(argv).map_or_else(
+            || self.scan(argv, false, 1).first,
+            |path| path.first().copied(),
+        );
+        let Some((index, word)) = index.and_then(|index| Some((index, argv.get(index)?.as_str())))
+        else {
             return Ok(None);
         };
         let Some(expansion) = self.alias_expansion(root, argv, word)? else {
             return Ok(None);
         };
+        // `glab` expands an alias only where it is the first word
+        // (`expand.ExpandAlias`, `args[1]`), and runs one anywhere else as no
+        // command at all. That is read as unclear rather than as nothing to
+        // check: the answer rests on one version's source.
+        if self.command == "glab" && index != 0 {
+            return Err(Fatal::new(format!(
+                "glab: {word:?} is an alias, and it stands after an option, where glab does not \
+                 expand one, so which invocation this is could not be established. Nothing was \
+                 published; put the alias first, or run the command it stands for"
+            )));
+        }
         // `!` is git's and gh's spelling for "run this through a shell", and
         // what the shell then runs is not a verb any table can match. It may
         // well be a push. Naming it as unreadable is the only honest answer.
@@ -1338,7 +1331,6 @@ impl Shim {
                 self.command
             )));
         }
-        let mut words: Vec<String> = argv.get(..index).unwrap_or_default().to_vec();
         let expanded = self.split_alias(word, &expansion)?;
         if expanded.is_empty() {
             return Err(Fatal::new(format!(
@@ -1347,8 +1339,17 @@ impl Shim {
                 self.command
             )));
         }
-        words.extend(expanded);
-        words.extend(argv.get(index + 1..).unwrap_or_default().iter().cloned());
+        let before = argv.get(..index).unwrap_or_default().iter().cloned();
+        let after = argv.get(index + 1..).unwrap_or_default().iter().cloned();
+        // `git` keeps its global options in front of the expansion. `gh` runs
+        // the expansion followed by every other word, those before the alias
+        // included (`NewCmdAlias`, with flag parsing off); the cobra reading
+        // of either order is the same command.
+        let words: Vec<String> = if self.command == "gh" {
+            expanded.into_iter().chain(before).chain(after).collect()
+        } else {
+            before.chain(expanded).chain(after).collect()
+        };
         Ok(Some(words))
     }
 
@@ -1481,7 +1482,7 @@ impl Shim {
         if self.verbs.is_empty() {
             return std::borrow::Cow::Borrowed(self);
         }
-        let words = self.words(argv, false);
+        let words = self.verb_words(argv);
         let exact = format!("{}:{}", words.verb, words.noun);
         let any = format!("{}:*", words.verb);
         let Some(entry) = self
@@ -1511,62 +1512,22 @@ impl Shim {
     }
 
     /// Walk argv once, reading the flags this table names.
+    ///
+    /// Under the verb's own grammar where [`FORGE_GRAMMAR`] has one, and
+    /// otherwise word by word as the table names them.
     fn collect_flags(&self, argv: &[String]) -> Result<Collected> {
+        if let Some(grammar) = self.grammar_of(argv) {
+            return self.collect_by_grammar(argv, grammar);
+        }
         let mut collected = Collected::default();
-        // Where `gh`'s own grammar for this verb is written down, an option
-        // the table does not name is still read with the arity `gh` gives it:
-        // `-A` on `gh pr merge` takes a value, so in `-A -b -t WIP` the `-b`
-        // is the author email and `WIP` the subject, not `-t` a body.
-        let held = self.held_verb(argv);
-        let held_value = |flag: &str| {
-            !self.names_option(flag) && held.is_some_and(|held| held.arity(flag) == Some(true))
-        };
-
         let mut index = 0;
         while let Some(argument) = argv.get(index) {
-            // On a verb whose whole option grammar is written down, a short
-            // option the table does not name whole is read letter by letter,
-            // the way the command's option parser reads it: `-st X` is `-s`
-            // and `-t X`, and `-bText` is `-b Text`. A letter in neither the
-            // table nor the grammar is exit 2, never read past.
+            // A short option the table does not name whole is not split, and
+            // is skipped whole as any option nothing names is. Splitting needs
+            // to know every letter's arity, and guessing it read `-Bmain` as
+            // `-B`, `-m`, `-a`, `-i` and `-n` -- whose `-n` then took the `-t`
+            // after it for its value, and the title went out unread.
             //
-            // On every other verb it is not split at all, and is skipped whole
-            // as any option nothing names is. Splitting there needs to know
-            // every letter's arity, and guessing it read `-Bmain` as `-B`,
-            // `-m`, `-a`, `-i` and `-n` -- whose `-n` then took the `-t` after
-            // it for its value, and the title went out unread.
-            if let Some(grammar) = held
-                && is_short_word(argument)
-                && !self.names_option(argument)
-            {
-                let cluster = read_cluster(argument, |flag| {
-                    self.short_arity(flag).or_else(|| grammar.arity(flag))
-                });
-                if let Some(unknown) = cluster.unknown.first() {
-                    return Err(Fatal::new(format!(
-                        "{0}: `{argument}` carries {unknown:?}, an option this shim does not know \
-                         on `{0} {1}`, so where the options in that word end could not be read \
-                         and nothing was checked. Spell each option as a word of its \
-                         own, or report the {0} version this is. Nothing was published",
-                        self.command,
-                        grammar.verb.replace(':', " ")
-                    )));
-                }
-                for switch in &cluster.switches {
-                    self.read_option(&mut collected, switch, String::new(), false)?;
-                }
-                let Some((flag, attached)) = cluster.valued else {
-                    index += 1;
-                    continue;
-                };
-                let paired = attached.is_some();
-                let value =
-                    attached.unwrap_or_else(|| argv.get(index + 1).cloned().unwrap_or_default());
-                let took_value =
-                    self.read_option(&mut collected, &flag, value, paired)? || held_value(&flag);
-                index += if paired || !took_value { 1 } else { 2 };
-                continue;
-            }
             // `--flag=value` and `--flag value` are the same flag. Splitting
             // here means every list a table writes is written once, in the
             // spelling a person would use.
@@ -1580,21 +1541,170 @@ impl Shim {
                     false,
                 ),
             };
-            let took_value =
-                self.read_option(&mut collected, &flag, value, paired)? || held_value(&flag);
+            let took_value = self.read_option(&mut collected, &flag, value, paired)?;
             index += if paired || !took_value { 1 } else { 2 };
         }
         Ok(collected)
     }
 
-    /// `gh`'s written-down grammar for the verb this argv invokes, where
-    /// [`FORGE_HELD`] has one.
-    fn held_verb(&self, argv: &[String]) -> Option<&'static HeldVerb> {
-        let words = self.words(argv, false);
-        let verb = format!("{}:{}", words.verb, words.noun);
-        FORGE_HELD
+    /// Walk argv under the verb's whole option grammar, the way the command's
+    /// own option parser reads it.
+    ///
+    /// The grammar decides where each option ends and which word is a value:
+    /// `-st X` is `-s` and `-t X`, `-bText` and `-b=Text` are `-b Text`, and in
+    /// `-l -b -t WIP` on `gh issue create` the `-b` is the label and `WIP` the
+    /// title, whatever the table names. The table decides only what a value
+    /// it names is. An option the grammar does not know is exit 2, never read
+    /// past, and so is one the table reads with the other arity -- a table
+    /// cannot move where the command's options end.
+    fn collect_by_grammar(&self, argv: &[String], grammar: &Grammar) -> Result<Collected> {
+        let mut collected = Collected::default();
+        let on = || format!("{} {}", self.command, grammar.verb.replace(':', " "));
+        let mut index = 0;
+        while let Some(argument) = argv.get(index) {
+            index += 1;
+            // `--` ends the options, and nothing after it is one.
+            if argument == "--" {
+                break;
+            }
+            if !argument.starts_with('-') || argument == "-" {
+                continue;
+            }
+            let word = OptionWord::read(argument, grammar).map_err(|unknown| {
+                Fatal::new(format!(
+                    "{0}: `{argument}` carries {unknown:?}, an option this shim does not know on \
+                     `{1}`, so where the options in that word end could not be read and nothing \
+                     was checked. Check the spelling, or report the {0} version this is. Nothing \
+                     was published",
+                    self.command,
+                    on()
+                ))
+            })?;
+            for (switch, paired) in word.switches {
+                // A table that reads a switch as taking a value -- a
+                // workspace's `-d` for a description, on a verb where `-d` is
+                // `--draft` -- has no value to read here: the command takes
+                // none, so nothing is published through it, and the next word
+                // is read for what it is. Its reading is dropped for this word
+                // on this verb, never applied.
+                if self.takes_value(&switch) {
+                    continue;
+                }
+                let spelt = paired.is_some();
+                self.read_option(&mut collected, &switch, paired.unwrap_or_default(), spelt)?;
+            }
+            let Some((flag, inline)) = word.valued else {
+                continue;
+            };
+            self.agrees(&flag, &on)?;
+            let paired = inline.is_some();
+            let value = inline.unwrap_or_else(|| {
+                // The word after it, whatever it is, as the parser takes it.
+                // At the end of argv there is none, and the command refuses.
+                let next = argv.get(index).cloned().unwrap_or_default();
+                index += 1;
+                next
+            });
+            self.read_option(&mut collected, &flag, value, paired)?;
+        }
+        Ok(collected)
+    }
+
+    /// Whether this table can read a value-taking option at all: it names the
+    /// option as taking a value, or does not name it.
+    ///
+    /// A table that names one as a switch -- a web or skip flag, an inert one
+    /// -- would read no value where the command reads one, and act on a switch
+    /// the command never saw: the value goes out unread. Refused where the
+    /// option is used, because reading it either way is a guess about which of
+    /// the two is wrong. The other disagreement, a switch the table reads as
+    /// taking a value, is no guess: the command sends no value, so there is
+    /// nothing to read, and `collect_by_grammar` drops the table's reading.
+    fn agrees(&self, flag: &str, on: &impl Fn() -> String) -> Result<()> {
+        if self.takes_value(flag) || !self.names_option(flag) {
+            return Ok(());
+        }
+        Err(Fatal::new(format!(
+            "{}: this policy's `[[shim]]` table reads {flag:?} as a switch, and `{}` reads it as \
+             taking a value, so the value would go out unread and nothing was checked. Correct \
+             the table, or a `[[shim.verbs]]` entry for this verb. Nothing was published",
+            self.command,
+            on()
+        )))
+    }
+
+    /// The written-down grammar of the verb this argv invokes, where
+    /// [`FORGE_GRAMMAR`] has one, and of its subcommand where it names one.
+    fn grammar_of(&self, argv: &[String]) -> Option<&'static Grammar> {
+        self.grammar_at(argv).map(|(grammar, _)| grammar)
+    }
+
+    /// That grammar, and the indices in argv of the words naming it: the verb,
+    /// the noun, and the subcommand where there is one.
+    ///
+    /// The subcommand is found as `cobra` finds it, by `stripFlags` under the
+    /// parent's own options with the verb and the noun taken out, so `glab mr
+    /// note create` is read with `create`'s options. One the parent lists with
+    /// no grammar of its own leaves the invocation read without one.
+    fn grammar_at(&self, argv: &[String]) -> Option<(&'static Grammar, Vec<usize>)> {
+        let mut path = self.forge_path(argv)?;
+        let words = self.verb_words(argv);
+        let verb = if words.verb == "api" {
+            words.verb
+        } else {
+            format!("{}:{}", words.verb, words.noun)
+        };
+        let parent = Grammar::of(&self.command, &verb)?;
+        if parent.subcommands.is_empty() {
+            return Some((parent, path));
+        }
+        let first = strip_flags(argv, |flag| parent.arity(flag) == Some(false), &path)
+            .first()
+            .copied();
+        let Some(sub) = first
+            .and_then(|index| argv.get(index))
+            .filter(|word| parent.subcommands.contains(&word.as_str()))
+        else {
+            return Some((parent, path));
+        };
+        path.extend(first);
+        Some((
+            Grammar::of(&self.command, &format!("{}:{sub}", parent.verb))?,
+            path,
+        ))
+    }
+
+    /// Where the verb and the noun are, for a command whose grammar is written
+    /// down here, read with its parser's own rule; `None` for any other.
+    fn forge_path(&self, argv: &[String]) -> Option<Vec<usize>> {
+        FORGE_GRAMMAR
             .iter()
-            .find(|held| held.command == self.command && held.verb == verb)
+            .any(|grammar| grammar.command == self.command)
+            .then(|| forge_path(&self.command, argv))
+    }
+
+    /// The verb and the noun this argv invokes, as the command resolves them:
+    /// by `cobra`'s rule on a forge CLI, and otherwise by the table's bare
+    /// reading. Every step after matching -- the verb's grammar, its
+    /// `[[shim.verbs]]` entry, what the forge holds of its text -- asks this,
+    /// so none of them reads `gh pr -d 1 close` as the verb `pr` and the noun
+    /// `1`.
+    fn verb_words(&self, argv: &[String]) -> Words {
+        let Some(path) = self.forge_path(argv) else {
+            return self.words(argv, false);
+        };
+        let word = |at: usize| {
+            path.get(at)
+                .and_then(|index| argv.get(*index))
+                .cloned()
+                .unwrap_or_default()
+        };
+        Words {
+            verb: word(0),
+            noun: word(1),
+            unclear: None,
+            unclear_count: 0,
+        }
     }
 
     /// Whether any list of this table names the word whole.
@@ -1604,17 +1714,6 @@ impl Shim {
             || in_list(&self.web_flags, word)
             || in_list(&self.editor_unless, word)
             || in_list(&self.inert_flags, word)
-    }
-
-    /// One letter of a short cluster: a value, a switch, or nothing named.
-    fn short_arity(&self, flag: &str) -> Option<bool> {
-        if self.takes_value(flag) {
-            Some(true)
-        } else if self.names_option(flag) {
-            Some(false)
-        } else {
-            None
-        }
     }
 
     /// Read one option and its value into what was collected, answering
@@ -1732,10 +1831,16 @@ impl Shim {
             }
             true
         } else if in_list(&self.skip_flags, flag) {
-            collected.body_given = true;
+            // `--fill=false` fills nothing, and reading it as on would close
+            // the editor over the body the command then opens one for.
+            if switched_on(paired, &value) {
+                collected.body_given = true;
+            }
             false
         } else if in_list(&self.web_flags, flag) {
-            collected.web = true;
+            if switched_on(paired, &value) {
+                collected.web = true;
+            }
             false
         } else if in_list(&self.editor_unless, flag) {
             // `--squash=false` is the flag spelt off, and reading it as
@@ -1876,28 +1981,34 @@ impl Shim {
         Ok(subjects)
     }
 
-    /// The words after the `api` verb, where this invocation is one.
+    /// The words the `api` verb reads, where this invocation is one: argv
+    /// with the verb taken out.
     ///
     /// `None` for every other command and every other verb, which is what makes
     /// the whole of the `api` reading below opt-in on one word.
     ///
-    /// Both readings are tried, the way [`Shim::reading`] tries both: an option
-    /// in front of the verb that nothing here can classify shifts the first
-    /// positional word by one, and a reading that missed `api` under one arity
-    /// would silently hand this invocation back to the flag collector -- whose
-    /// vocabulary means something else on this verb.
-    fn api_rest<'a>(&self, argv: &'a [String]) -> Option<&'a [String]> {
+    /// Found where the command finds it, by [`forge_path`]: `gh --squash api pr
+    /// merge -t X` is `pr merge`, `--squash` having taken `api` for its value
+    /// at the root, and a reading that called it `gh api` read `-t` as
+    /// `--template` and the title went out unread. Every word but the verb is
+    /// kept, because the verb's own parser reads them all: in `gh -f body=X api
+    /// repos/o/r/issues` the root passes `body=X` over with `-f`, and `api`
+    /// then reads it as a field.
+    fn api_rest(&self, argv: &[String]) -> Option<Vec<String>> {
         if !FORGE_API_COMMANDS.contains(&self.command.as_str()) {
             return None;
         }
-        for unknown_takes_value in [false, true] {
-            let scanned = self.scan(argv, unknown_takes_value, 1);
-            if let (Some(index), Some("api")) = (scanned.first, scanned.positional.first().copied())
-            {
-                return argv.get(index + 1..);
-            }
+        let at = self.forge_path(argv)?.first().copied()?;
+        if argv.get(at).is_none_or(|word| word != "api") {
+            return None;
         }
-        None
+        Some(
+            argv.iter()
+                .enumerate()
+                .filter(|(index, _)| *index != at)
+                .map(|(_, word)| word.clone())
+                .collect(),
+        )
     }
 
     /// Whether a matched invocation carries anything to publish at all.
@@ -1906,10 +2017,14 @@ impl Shim {
     /// and the write side of a forge behind a single word, so the `match` list
     /// names the word and this answers which half was typed -- see
     /// [`ApiCall::publishes`]. A GET with no fields is left exactly where it was
-    /// before this existed: unmatched, unexamined, exec'd.
+    /// before this existed: unmatched, unexamined, exec'd. A call carrying an
+    /// option the `api` grammar does not know cannot be told apart from one
+    /// that publishes, so it is read as one, and [`Shim::collect`] names the
+    /// option.
     fn carries_a_body(&self, argv: &[String]) -> bool {
-        self.api_rest(argv)
-            .is_none_or(|rest| ApiCall::of(rest).publishes())
+        self.api_rest(argv).is_none_or(|rest| {
+            ApiCall::of(&self.command, &rest).map_or(true, |call| call.publishes())
+        })
     }
 
     /// One `api` call's subjects and its destination.
@@ -2041,7 +2156,16 @@ impl Shim {
         // INVOCATION and not of the table: one `[[shim]]` stands in front of
         // `gh pr create` and `gh api` both, and only argv says which this is.
         if let Some(rest) = self.api_rest(argv) {
-            return self.collect_api(&ApiCall::of(rest));
+            let call = ApiCall::of(&self.command, &rest).map_err(|unknown| {
+                Fatal::new(format!(
+                    "{0}: `{0} api` was given {unknown:?}, an option this shim does not know on \
+                     that verb, so whether the call publishes, and what, could not be read and \
+                     nothing was checked. Check the spelling, or report the {0} version this is. \
+                     Nothing was published",
+                    self.command
+                ))
+            })?;
+            return self.collect_api(&call);
         }
         // Every arm walks the flags first: the target flag and any stdin the
         // shim consumed belong to the invocation rather than to one collector,
@@ -2565,86 +2689,117 @@ enum Held {
     /// The forge composes whatever part of the merge message was not given;
     /// ask it for that part and judge it.
     ComposedMerge,
+    /// GitLab composes the squash commit of a `--squash` merge from its own
+    /// template wherever `--squash-message` is not given -- `-m` is the merge
+    /// commit's message, not that one. Nothing here can ask it for the text,
+    /// so that it was not checked is said.
+    ComposedSquash,
 }
 
-/// One `gh` verb whose text is partly the forge's, and its whole option
-/// grammar.
+/// One forge verb's whole option grammar, and what the forge holds of its text.
 ///
 /// Grammar rather than policy, beside [`FORGE_API_COMMANDS`] and for the same
-/// reason: that `gh issue edit --body` replaces a stored body, and that `gh pr
-/// merge --squash` publishes a message GitHub composes, are facts about `gh`,
-/// and no repository should have to write them into its table to be guarded.
+/// reason: that `-l` takes a value on `gh issue create`, that `gh issue edit
+/// --body` replaces a stored body, and that `gh pr merge --squash` publishes a
+/// message GitHub composes, are facts about `gh`, and no repository should have
+/// to write them into its table to be guarded.
 ///
 /// Both lists are written out, switches and value-taking options alike, from
-/// `gh` 2.102's own help, and an option in neither is refused rather than
-/// guessed at. Guessing was the defect: an unlisted switch read as taking a
-/// value swallowed the selector after it, so `gh issue edit 5 --remove-type 6
-/// --body ...` asked about issue 5 alone while `gh` wrote the body to 5 and 6.
-/// A `gh` that grows an option this list lacks is exit 2 until the list
-/// learns it, which is a release of this tool and not a body published
-/// unread.
-struct HeldVerb {
+/// `gh` 2.102's own help and the option reference `glab` 1.123.0 generates from
+/// its source, and an option in neither is refused rather than guessed at. The
+/// lists are compared with those pages, checked in under
+/// `tests/fixtures/forge-help`, by a test that fails on an option a list lacks.
+///
+/// Whole, because a partial list cannot tell a letter it lacks from a value.
+/// Splitting `-Bmain` with a list that knew `-n` and not `-B` read `-B`, `-m`,
+/// `-a`, `-i` and `-n`, and the `-n` took the `-t` after it for its value, so
+/// the title went out unread. Guessing an unlisted switch to take a value
+/// swallowed the selector after it, so `gh issue edit 5 --remove-type 6 --body
+/// ...` asked about issue 5 alone while `gh` wrote the body to 5 and 6. A forge
+/// CLI that grows an option a list lacks is exit 2 until the list learns it,
+/// which is a release of this tool and not a body published unread.
+struct Grammar {
     command: &'static str,
+    /// `verb:noun` in the spelling a table's `match` uses; `api` for the verb
+    /// whose second word is an endpoint; `verb:noun:sub` for a subcommand of a
+    /// verb, which [`Grammar::subcommands`] names.
     verb: &'static str,
-    held: Held,
     switches: &'static [&'static str],
     values: &'static [&'static str],
-    /// The options whose value is the body the forge stores. A title on the
-    /// same command line is not that body, whatever the table calls it --
-    /// `uphold init`'s table reads `--title` as text.
-    body_flags: &'static [&'static str],
+    /// Whether the verb inherits `-R`/`--repo`. `gh api` and `gh gist create`
+    /// do not, and `gh` refuses either there.
+    repo: bool,
+    /// The operands that name a subcommand with a grammar of its own, where it
+    /// stands first: `glab mr note create` is not read with `glab mr note`'s
+    /// options. One listed with no grammar of its own leaves the invocation
+    /// read without one.
+    subcommands: &'static [&'static str],
+    /// What the forge holds of this verb's text, where it holds any.
+    held: Option<Held>,
 }
 
-/// The options `gh` takes on every verb.
-const GH_GLOBAL_SWITCHES: &[&str] = &["-h", "--help"];
-const GH_GLOBAL_VALUES: &[&str] = &["-R", "--repo"];
-/// `gh`'s body options, on every verb that stores or merges a body.
+/// The options both forge CLIs take on every verb: `-h`/`--help` everywhere,
+/// and `-R`/`--repo` wherever [`Grammar::repo`] says.
+const FORGE_GLOBAL_SWITCHES: &[&str] = &["-h", "--help"];
+const FORGE_GLOBAL_VALUES: &[&str] = &["-R", "--repo"];
+/// `gh`'s body options on the verbs that store or merge one. A title on the
+/// same command line is not that body, whatever the table calls it -- `uphold
+/// init`'s table reads `--title` as text.
 const GH_BODY_FLAGS: &[&str] = &["-b", "--body", "-F", "--body-file"];
 
-const FORGE_HELD: &[HeldVerb] = &[
-    HeldVerb {
-        command: "gh",
-        verb: "issue:edit",
-        held: Held::StoredBody,
-        body_flags: GH_BODY_FLAGS,
-        switches: &["--remove-milestone", "--remove-parent", "--remove-type"],
-        values: &[
-            "--add-assignee",
-            "--add-blocked-by",
-            "--add-blocking",
-            "--add-label",
-            "--add-project",
-            "--add-sub-issue",
-            "--attach",
-            "-b",
-            "--body",
-            "-F",
-            "--body-file",
-            "-m",
-            "--milestone",
-            "--parent",
-            "--remove-assignee",
-            "--remove-blocked-by",
-            "--remove-blocking",
-            "--remove-label",
-            "--remove-project",
-            "--remove-sub-issue",
-            "-t",
-            "--title",
-            "--type",
+/// A verb's grammar with the defaults most verbs take.
+const fn grammar(
+    command: &'static str,
+    verb: &'static str,
+    switches: &'static [&'static str],
+    values: &'static [&'static str],
+) -> Grammar {
+    Grammar {
+        command,
+        verb,
+        switches,
+        values,
+        repo: true,
+        subcommands: &[],
+        held: None,
+    }
+}
+
+/// `gh pr comment` and `gh issue comment` take the same options.
+const GH_COMMENT_SWITCHES: &[&str] = &[
+    "--create-if-none",
+    "--delete-last",
+    "--edit-last",
+    "-e",
+    "--editor",
+    "-w",
+    "--web",
+    "--yes",
+];
+const GH_COMMENT_VALUES: &[&str] = &["--attach", "-b", "--body", "-F", "--body-file"];
+
+/// Every verb the shipped tables match, each with its whole grammar.
+const FORGE_GRAMMAR: &[Grammar] = &[
+    grammar(
+        "gh",
+        "pr:create",
+        &[
+            "-d",
+            "--draft",
+            "--dry-run",
+            "-e",
+            "--editor",
+            "-f",
+            "--fill",
+            "--fill-first",
+            "--fill-verbose",
+            "--no-maintainer-edit",
+            "-w",
+            "--web",
         ],
-    },
-    HeldVerb {
-        command: "gh",
-        verb: "pr:edit",
-        held: Held::StoredBody,
-        body_flags: GH_BODY_FLAGS,
-        switches: &["--remove-milestone"],
-        values: &[
-            "--add-assignee",
-            "--add-label",
-            "--add-project",
-            "--add-reviewer",
+        &[
+            "-a",
+            "--assignee",
             "--attach",
             "-B",
             "--base",
@@ -2652,59 +2807,645 @@ const FORGE_HELD: &[HeldVerb] = &[
             "--body",
             "-F",
             "--body-file",
+            "-H",
+            "--head",
+            "-l",
+            "--label",
             "-m",
             "--milestone",
-            "--remove-assignee",
-            "--remove-label",
-            "--remove-project",
-            "--remove-reviewer",
+            "-p",
+            "--project",
+            "--recover",
+            "-r",
+            "--reviewer",
+            "-T",
+            "--template",
             "-t",
             "--title",
         ],
+    ),
+    Grammar {
+        held: Some(Held::StoredBody),
+        ..grammar(
+            "gh",
+            "pr:edit",
+            &["--remove-milestone"],
+            &[
+                "--add-assignee",
+                "--add-label",
+                "--add-project",
+                "--add-reviewer",
+                "--attach",
+                "-B",
+                "--base",
+                "-b",
+                "--body",
+                "-F",
+                "--body-file",
+                "-m",
+                "--milestone",
+                "--remove-assignee",
+                "--remove-label",
+                "--remove-project",
+                "--remove-reviewer",
+                "-t",
+                "--title",
+            ],
+        )
     },
-    HeldVerb {
-        command: "gh",
-        verb: "pr:merge",
-        held: Held::ComposedMerge,
-        body_flags: GH_BODY_FLAGS,
-        switches: &[
-            "--admin",
-            "--auto",
-            "-d",
-            "--delete-branch",
-            "--disable-auto",
-            "-m",
-            "--merge",
+    grammar("gh", "pr:comment", GH_COMMENT_SWITCHES, GH_COMMENT_VALUES),
+    grammar(
+        "gh",
+        "pr:review",
+        &[
+            "-a",
+            "--approve",
+            "-c",
+            "--comment",
             "-r",
-            "--rebase",
-            "-s",
-            "--squash",
+            "--request-changes",
         ],
-        values: &[
-            "-A",
-            "--author-email",
+        &["-b", "--body", "-F", "--body-file"],
+    ),
+    Grammar {
+        held: Some(Held::ComposedMerge),
+        ..grammar(
+            "gh",
+            "pr:merge",
+            &[
+                "--admin",
+                "--auto",
+                "-d",
+                "--delete-branch",
+                "--disable-auto",
+                "-m",
+                "--merge",
+                "-r",
+                "--rebase",
+                "-s",
+                "--squash",
+            ],
+            &[
+                "-A",
+                "--author-email",
+                "-b",
+                "--body",
+                "-F",
+                "--body-file",
+                "--match-head-commit",
+                "-t",
+                "--subject",
+            ],
+        )
+    },
+    grammar(
+        "gh",
+        "pr:close",
+        &["-d", "--delete-branch"],
+        &["-c", "--comment"],
+    ),
+    grammar("gh", "pr:reopen", &[], &["-c", "--comment"]),
+    grammar(
+        "gh",
+        "issue:create",
+        &["-e", "--editor", "-w", "--web"],
+        &[
+            "-a",
+            "--assignee",
+            "--attach",
+            "--blocked-by",
+            "--blocking",
             "-b",
             "--body",
             "-F",
             "--body-file",
-            "--match-head-commit",
+            "-l",
+            "--label",
+            "-m",
+            "--milestone",
+            "--parent",
+            "-p",
+            "--project",
+            "--recover",
+            "-T",
+            "--template",
             "-t",
-            "--subject",
+            "--title",
+            "--type",
         ],
+    ),
+    Grammar {
+        held: Some(Held::StoredBody),
+        ..grammar(
+            "gh",
+            "issue:edit",
+            &["--remove-milestone", "--remove-parent", "--remove-type"],
+            &[
+                "--add-assignee",
+                "--add-blocked-by",
+                "--add-blocking",
+                "--add-label",
+                "--add-project",
+                "--add-sub-issue",
+                "--attach",
+                "-b",
+                "--body",
+                "-F",
+                "--body-file",
+                "-m",
+                "--milestone",
+                "--parent",
+                "--remove-assignee",
+                "--remove-blocked-by",
+                "--remove-blocking",
+                "--remove-label",
+                "--remove-project",
+                "--remove-sub-issue",
+                "-t",
+                "--title",
+                "--type",
+            ],
+        )
+    },
+    grammar(
+        "gh",
+        "issue:comment",
+        GH_COMMENT_SWITCHES,
+        GH_COMMENT_VALUES,
+    ),
+    grammar(
+        "gh",
+        "issue:close",
+        &[],
+        &["-c", "--comment", "--duplicate-of", "-r", "--reason"],
+    ),
+    grammar("gh", "issue:reopen", &[], &["-c", "--comment"]),
+    grammar(
+        "gh",
+        "release:create",
+        &[
+            "-d",
+            "--draft",
+            "--fail-on-no-commits",
+            "--generate-notes",
+            "--latest",
+            "--notes-from-tag",
+            "-p",
+            "--prerelease",
+            "--verify-tag",
+        ],
+        &[
+            "--discussion-category",
+            "-n",
+            "--notes",
+            "-F",
+            "--notes-file",
+            "--notes-start-tag",
+            "--target",
+            "-t",
+            "--title",
+        ],
+    ),
+    grammar(
+        "gh",
+        "release:edit",
+        &["--draft", "--latest", "--prerelease", "--verify-tag"],
+        &[
+            "--discussion-category",
+            "-n",
+            "--notes",
+            "-F",
+            "--notes-file",
+            "--tag",
+            "--target",
+            "-t",
+            "--title",
+        ],
+    ),
+    Grammar {
+        repo: false,
+        ..grammar(
+            "gh",
+            "gist:create",
+            &["-p", "--public", "-w", "--web"],
+            &["-d", "--desc", "-f", "--filename"],
+        )
+    },
+    Grammar {
+        repo: false,
+        ..grammar(
+            "gh",
+            "api",
+            &[
+                "--allow-escape-sequences",
+                "-i",
+                "--include",
+                "--paginate",
+                "--silent",
+                "--slurp",
+                "--verbose",
+            ],
+            &[
+                "--cache",
+                "-F",
+                "--field",
+                "-H",
+                "--header",
+                "--hostname",
+                "--input",
+                "-q",
+                "--jq",
+                "-X",
+                "--method",
+                "-p",
+                "--preview",
+                "-f",
+                "--raw-field",
+                "-t",
+                "--template",
+            ],
+        )
+    },
+    grammar(
+        "glab",
+        "mr:create",
+        &[
+            "--allow-collaboration",
+            "--auto-merge",
+            "--copy-issue-labels",
+            "--create-source-branch",
+            "--draft",
+            "-f",
+            "--fill",
+            "--fill-commit-body",
+            "--no-editor",
+            "--push",
+            "--recover",
+            "--remove-source-branch",
+            "--signoff",
+            "--squash-before-merge",
+            "-w",
+            "--web",
+            "--wip",
+            "-y",
+            "--yes",
+        ],
+        &[
+            "-a",
+            "--assignee",
+            "--attach",
+            "-d",
+            "--description",
+            "--description-file",
+            "-H",
+            "--head",
+            "-l",
+            "--label",
+            "-m",
+            "--milestone",
+            "-i",
+            "--related-issue",
+            "--reviewer",
+            "-s",
+            "--source-branch",
+            "-b",
+            "--target-branch",
+            // Hidden and deprecated in favour of `--repo`, and still read.
+            "--target-project",
+            "--template",
+            "-t",
+            "--title",
+        ],
+    ),
+    grammar(
+        "glab",
+        "mr:update",
+        &[
+            "--draft",
+            "-f",
+            "--fill",
+            "--fill-commit-body",
+            "--lock-discussion",
+            "-r",
+            "--ready",
+            "--remove-source-branch",
+            "--squash-before-merge",
+            "--unassign",
+            "--unlock-discussion",
+            "--wip",
+            "-y",
+            "--yes",
+        ],
+        &[
+            "-a",
+            "--assignee",
+            "--attach",
+            "-d",
+            "--description",
+            "--description-file",
+            "-l",
+            "--label",
+            "-m",
+            "--milestone",
+            "--reviewer",
+            "--target-branch",
+            "-t",
+            "--title",
+            "-u",
+            "--unlabel",
+        ],
+    ),
+    // `glab mr note` creates a note itself, through options its help no
+    // longer lists because they are deprecated in favour of `mr note create`
+    // -- and still read.
+    Grammar {
+        subcommands: &[
+            "create", "delete", "draft", "list", "reopen", "resolve", "update",
+        ],
+        ..grammar(
+            "glab",
+            "mr:note",
+            &["--unique"],
+            &["-m", "--message", "--resolve", "--unresolve"],
+        )
+    },
+    grammar(
+        "glab",
+        "mr:note:create",
+        &["--internal", "--resolvable", "--unique"],
+        &[
+            "--attach",
+            "--file",
+            "--line",
+            "-m",
+            "--message",
+            "--old-line",
+            "--reply",
+        ],
+    ),
+    grammar(
+        "glab",
+        "mr:note:update",
+        &[],
+        &["--attach", "-m", "--message"],
+    ),
+    grammar("glab", "mr:note:delete", &["-y", "--yes"], &[]),
+    grammar(
+        "glab",
+        "mr:note:list",
+        &[],
+        &[
+            "--file", "--jq", "-F", "--output", "--state", "-t", "--type",
+        ],
+    ),
+    grammar("glab", "mr:note:reopen", &[], &[]),
+    grammar("glab", "mr:note:resolve", &[], &[]),
+    Grammar {
+        held: Some(Held::ComposedSquash),
+        ..grammar(
+            "glab",
+            "mr:merge",
+            &[
+                "--auto-merge",
+                "-r",
+                "--rebase",
+                "-d",
+                "--remove-source-branch",
+                "-s",
+                "--squash",
+                // Hidden and deprecated in favour of `--auto-merge`.
+                "--when-pipeline-succeeds",
+                "-y",
+                "--yes",
+            ],
+            &["-m", "--message", "--sha", "--squash-message"],
+        )
+    },
+    grammar(
+        "glab",
+        "issue:create",
+        &[
+            "-c",
+            "--confidential",
+            "--no-editor",
+            "--recover",
+            "--web",
+            "-y",
+            "--yes",
+        ],
+        &[
+            "-a",
+            "--assignee",
+            "--attach",
+            "-d",
+            "--description",
+            "--description-file",
+            "--due-date",
+            "--epic",
+            "-l",
+            "--label",
+            "--link-type",
+            "--linked-issues",
+            "--linked-mr",
+            "-m",
+            "--milestone",
+            "--template",
+            "-e",
+            "--time-estimate",
+            "-s",
+            "--time-spent",
+            "-t",
+            "--title",
+            "-w",
+            "--weight",
+        ],
+    ),
+    grammar(
+        "glab",
+        "issue:update",
+        &[
+            "-c",
+            "--confidential",
+            "--lock-discussion",
+            "-p",
+            "--public",
+            "--remove-estimate",
+            "--remove-time-spent",
+            "--unassign",
+            "--unlock-discussion",
+        ],
+        &[
+            "-a",
+            "--assignee",
+            "--attach",
+            "-d",
+            "--description",
+            "--description-file",
+            "--due-date",
+            "--estimate",
+            "-l",
+            "--label",
+            "-m",
+            "--milestone",
+            "--spend",
+            "-t",
+            "--title",
+            "-u",
+            "--unlabel",
+            "-w",
+            "--weight",
+        ],
+    ),
+    grammar("glab", "issue:note", &[], &["--attach", "-m", "--message"]),
+    Grammar {
+        repo: false,
+        ..grammar(
+            "glab",
+            "api",
+            &["-i", "--include", "--paginate", "--silent"],
+            &[
+                "-F",
+                "--field",
+                "--form",
+                "-H",
+                "--header",
+                "--hostname",
+                "--input",
+                "-X",
+                "--method",
+                "--output",
+                "--placeholder",
+                "-f",
+                "--raw-field",
+            ],
+        )
     },
 ];
 
-impl HeldVerb {
+impl Grammar {
+    /// The grammar written down for one command's verb, where there is one.
+    fn of(command: &str, verb: &str) -> Option<&'static Self> {
+        FORGE_GRAMMAR
+            .iter()
+            .find(|grammar| grammar.command == command && grammar.verb == verb)
+    }
+
     /// Whether an option takes a value: `Some(false)` a switch, `Some(true)`
     /// a value, `None` an option this grammar does not know.
     fn arity(&self, flag: &str) -> Option<bool> {
-        if self.switches.contains(&flag) || GH_GLOBAL_SWITCHES.contains(&flag) {
+        if self.switches.contains(&flag) || FORGE_GLOBAL_SWITCHES.contains(&flag) {
             Some(false)
-        } else if self.values.contains(&flag) || GH_GLOBAL_VALUES.contains(&flag) {
+        } else if self.values.contains(&flag) || (self.repo && FORGE_GLOBAL_VALUES.contains(&flag))
+        {
             Some(true)
         } else {
             None
         }
+    }
+}
+
+/// The words `cobra` reads as the command path and its arguments, by index:
+/// its `stripFlags`, which every `gh` and `glab` verb is found with.
+///
+/// An option without `=` -- long, or a two-character short one -- that
+/// `switch` does not name takes the word after it, whether the level knows the
+/// option or not; a cluster, an `=` form, `-` and an empty word take nothing
+/// and are no command. `--` ends the walk. The words at `taken` are the path
+/// levels above this one, which `cobra` removes before it looks
+/// (`argsMinusFirstX`).
+///
+/// It is not pflag's rule, and the difference is a hole: `gh pr -d 1 close`
+/// is `pr close`, because `pr` does not know `-d` and passes `1` over with it,
+/// while a reading that took `-d` for a switch found the pair `pr:1`, matched
+/// no grammar and no `[[shim.verbs]]` entry, and read the comment after it
+/// with neither.
+fn strip_flags(argv: &[String], switch: impl Fn(&str) -> bool, taken: &[usize]) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut index = 0;
+    while let Some(argument) = argv.get(index) {
+        index += 1;
+        if taken.contains(&(index - 1)) {
+            continue;
+        }
+        if argument == "--" {
+            break;
+        }
+        if argument.is_empty() || argument.starts_with('-') {
+            let spelt = argument.starts_with("--") || argument.len() == 2;
+            if spelt && !argument.contains('=') && !switch(argument) {
+                // The next word that is still there, as `cobra` sees the
+                // arguments once the path above has been taken out of them.
+                while taken.contains(&index) {
+                    index += 1;
+                }
+                index += 1;
+            }
+            continue;
+        }
+        found.push(index - 1);
+    }
+    found
+}
+
+/// Where in argv a forge CLI finds its verb and noun: `stripFlags` at the
+/// root, then again at the verb with the verb taken out. Both levels know only
+/// the help and version switches, so every other option there takes a word.
+fn forge_path(command: &str, argv: &[String]) -> Vec<usize> {
+    let switch = |flag: &str| {
+        FORGE_GLOBAL_SWITCHES.contains(&flag)
+            || flag == "--version"
+            || (command == "glab" && flag == "-v")
+    };
+    let mut path = Vec::new();
+    for _ in 0..2 {
+        let Some(next) = strip_flags(argv, switch, &path).first().copied() else {
+            break;
+        };
+        path.push(next);
+    }
+    path
+}
+
+/// One option word, read under a verb's whole grammar: the switches it turns
+/// on, and the one value-taking option it ends with, if any, with its value
+/// where the same word carries it.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct OptionWord {
+    /// Each switch and how it was spelt: `--squash=false` is `--squash` with
+    /// `false` paired to it; a letter of a cluster is never paired, because
+    /// [`read_cluster`] drops one spelt off.
+    switches: Vec<(String, Option<String>)>,
+    valued: Option<(String, Option<String>)>,
+}
+
+impl OptionWord {
+    /// Read one word that starts with `-`, or name the option the grammar does
+    /// not know.
+    fn read(argument: &str, grammar: &Grammar) -> std::result::Result<Self, String> {
+        let mut word = Self::default();
+        if argument.starts_with("--") {
+            let (flag, inline) = match argument.split_once('=') {
+                Some((flag, value)) => (flag.to_owned(), Some(value.to_owned())),
+                None => (argument.to_owned(), None),
+            };
+            match grammar.arity(&flag) {
+                None => return Err(flag),
+                Some(false) => word.switches.push((flag, inline)),
+                Some(true) => word.valued = Some((flag, inline)),
+            }
+            return Ok(word);
+        }
+        let cluster = read_cluster(argument, |flag| grammar.arity(flag));
+        if let Some(unknown) = cluster.unknown.into_iter().next() {
+            return Err(unknown);
+        }
+        word.switches = cluster
+            .switches
+            .into_iter()
+            .map(|switch| (switch, None))
+            .collect();
+        word.valued = cluster.valued;
+        Ok(word)
     }
 }
 
@@ -2737,7 +3478,9 @@ struct Operands {
 impl Operands {
     /// Read argv under one verb's grammar, or name the option it does not
     /// know.
-    fn of(argv: &[String], grammar: &HeldVerb) -> std::result::Result<Self, String> {
+    /// `path` is where the command's own words are -- `pr merge` -- which are
+    /// no selector wherever they stand.
+    fn of(argv: &[String], grammar: &Grammar, path: &[usize]) -> std::result::Result<Self, String> {
         let mut positional = Vec::new();
         let mut operands = Self::default();
         let mut index = 0;
@@ -2748,47 +3491,30 @@ impl Operands {
                 break;
             }
             if !argument.starts_with('-') || argument == "-" {
-                positional.push(argument.clone());
+                if !path.contains(&(index - 1)) {
+                    positional.push(argument.clone());
+                }
                 continue;
             }
-            // The option, and its value where the same word carries it:
-            // `--repo=o/r`, or the rest of a short cluster.
-            let (flag, inline) = if argument.starts_with("--") {
-                match argument.split_once('=') {
-                    Some((flag, value)) => (flag.to_owned(), Some(value.to_owned())),
-                    None => (argument.clone(), None),
-                }
-            } else {
-                let cluster = read_cluster(argument, |flag| grammar.arity(flag));
-                if let Some(unknown) = cluster.unknown.first() {
-                    return Err(unknown.clone());
-                }
-                operands.switches.extend(cluster.switches);
-                let Some(valued) = cluster.valued else {
-                    continue;
-                };
-                valued
-            };
-            match grammar.arity(&flag) {
-                None => return Err(flag),
-                Some(false) => {
-                    if switched_on(inline.is_some(), inline.as_deref().unwrap_or_default()) {
-                        operands.switches.push(flag);
-                    }
-                }
-                Some(true) => {
-                    let value = inline.or_else(|| {
-                        let next = argv.get(index).cloned();
-                        index += usize::from(next.is_some());
-                        next
-                    });
-                    if GH_GLOBAL_VALUES.contains(&flag.as_str()) {
-                        operands.repo = value.filter(|repo| !repo.is_empty());
-                    }
+            let word = OptionWord::read(argument, grammar)?;
+            for (switch, paired) in word.switches {
+                if switched_on(paired.is_some(), paired.as_deref().unwrap_or_default()) {
+                    operands.switches.push(switch);
                 }
             }
+            let Some((flag, inline)) = word.valued else {
+                continue;
+            };
+            let value = inline.or_else(|| {
+                let next = argv.get(index).cloned();
+                index += usize::from(next.is_some());
+                next
+            });
+            if FORGE_GLOBAL_VALUES.contains(&flag.as_str()) {
+                operands.repo = value.filter(|repo| !repo.is_empty());
+            }
         }
-        operands.selectors = positional.into_iter().skip(2).collect();
+        operands.selectors = positional;
         Ok(operands)
     }
 
@@ -2903,35 +3629,39 @@ impl Shim {
         collected: &mut Collected,
         path: EditorPath,
     ) -> Result<bool> {
-        let words = self.words(argv, false);
-        let Some(grammar) = self.held_verb(argv) else {
+        let words = self.verb_words(argv);
+        let Some((grammar, held, at)) = self
+            .grammar_at(argv)
+            .and_then(|(grammar, at)| Some((grammar, grammar.held?, at)))
+        else {
             return Ok(false);
         };
         // Read only once the answer is needed, so an option this grammar does
         // not know refuses only an invocation whose text depends on it.
         let operands = || {
-            Operands::of(argv, grammar).map_err(|flag| {
+            Operands::of(argv, grammar, &at).map_err(|flag| {
                 Fatal::new(format!(
                     "{name}: `{name} {} {}` was given {flag:?}, an option this shim does not know \
                      on that verb, so which {} the forge would be asked about could not be \
                      established and nothing was checked. Nothing was published",
                     words.verb,
                     words.noun,
-                    match grammar.held {
+                    match held {
                         Held::StoredBody => "issue or pull request, and which stored body,",
                         Held::ComposedMerge => "pull request and which merge method",
+                        Held::ComposedSquash => "merge method",
                     }
                 ))
             })
         };
-        match grammar.held {
+        match held {
             Held::StoredBody => {
                 // Only the body an edit resubmits is narrowed, and only a body
                 // flag asks the forge: a title-only edit costs no round trip.
                 let bodies: Vec<usize> = collected
                     .flagged
                     .iter()
-                    .filter(|(_, flag)| grammar.body_flags.contains(&flag.as_str()))
+                    .filter(|(_, flag)| GH_BODY_FLAGS.contains(&flag.as_str()))
                     .map(|(index, _)| *index)
                     .collect();
                 if bodies.is_empty() {
@@ -2966,6 +3696,34 @@ impl Shim {
                     return Ok(false);
                 }
                 Self::read_composed(name, &operands()?, collected, headline, body)
+            }
+            Held::ComposedSquash => {
+                // With no message at all, the notice that the forge composes
+                // the message is the editor path's to give, and it covers both
+                // commits; here one was given and the other was not.
+                if !collected.body_given || collected.withheld == Withheld::Everything {
+                    return Ok(false);
+                }
+                let given = |spellings: &[&str]| {
+                    collected
+                        .flagged
+                        .iter()
+                        .any(|(_, flag)| spellings.contains(&flag.as_str()))
+                };
+                let verb = format!("{name} {} {}", words.verb, words.noun);
+                if operands()?.switched(&["-s", "--squash"]) && !given(&["--squash-message"]) {
+                    eprintln!(
+                        "{name}: `{verb} --squash` was given no `--squash-message`, so the squash \
+                         commit message the forge composes for it was not checked."
+                    );
+                }
+                if !given(&["-m", "--message"]) {
+                    eprintln!(
+                        "{name}: `{verb}` was given no `--message`, so the merge commit message \
+                         the forge composes for it, where it writes one, was not checked."
+                    );
+                }
+                Ok(false)
             }
         }
     }
@@ -4441,9 +5199,17 @@ pub(crate) fn run(
     // shim that reads argv without expanding it is reading a different command
     // line from the one that runs. Asked only where nothing matched: a `match`
     // hit is already the answer, and the lookup is a process.
+    //
+    // A forge CLI's reading is Unclear where the table cannot classify the
+    // options before the verb, but its parser's own reading is not: `gh
+    // --attach a.png --edit-last 5 pc` runs the alias `pc` wherever `pc`
+    // names one, so the alias is asked about there too.
     let words = match shim.reading(&words) {
         Reading::Absent => shim.expand_alias(root, &words)?.unwrap_or(words),
-        _ => words,
+        Reading::Unclear(_) if shim.forge_path(&words).is_some() => {
+            shim.expand_alias(root, &words)?.unwrap_or(words)
+        }
+        Reading::Named | Reading::Unclear(_) => words,
     };
 
     // Only the rules that name THIS command line. Selecting a checker by
@@ -4811,7 +5577,7 @@ pub(crate) fn run(
             // is said, so nobody takes the silence for a pass.
             EditorPath::Forge if composed_read => {}
             EditorPath::Forge => {
-                let verb = shim.words(&words, false);
+                let verb = shim.verb_words(&words);
                 eprintln!(
                     "{name}: no body was given and `{} {}` opens no editor here, so the message \
                      the forge composes for it was not checked.",
@@ -5370,12 +6136,14 @@ mod tests {
         // the kind tells them apart. Nor is a path a body -- marking one
         // `body_given` would close the editor checkpoint over the text the
         // command is about to open an editor for.
+        // A verb `gh` has no `--path` on, so one with no written grammar,
+        // which the table alone reads.
         let mut with_paths = gh();
         with_paths.path_flags = vec!["-p".into(), "--path".into()];
         let collected = with_paths
             .collect(
                 Path::new("."),
-                &argv("pr create -p src/lib.rs --path=README.md"),
+                &argv("pr frob -p src/lib.rs --path=README.md"),
             )
             .unwrap();
         let subjects: Vec<(&str, &str)> = collected
@@ -6185,35 +6953,38 @@ mod tests {
         );
     }
 
-    fn held(verb: &str) -> &'static HeldVerb {
-        FORGE_HELD.iter().find(|held| held.verb == verb).unwrap()
+    /// One line read under a `gh` verb's grammar, with its path where `gh`
+    /// finds it.
+    fn operands(line: &str, grammar: &Grammar) -> std::result::Result<Operands, String> {
+        let words = argv(line);
+        Operands::of(&words, grammar, &forge_path("gh", &words))
+    }
+
+    fn held(verb: &str) -> &'static Grammar {
+        Grammar::of("gh", verb).unwrap()
     }
 
     #[test]
     fn the_operands_of_a_verb_are_read_with_its_own_switches() {
         let merge = held("pr:merge");
-        let merged = Operands::of(&argv("-R o/r pr merge -sd 7 --auto"), merge).unwrap();
+        let merged = operands("-R o/r pr merge -sd 7 --auto", merge).unwrap();
         assert_eq!(merged.selectors, vec![String::from("7")]);
         assert_eq!(merged.repo.as_deref(), Some("o/r"));
         assert!(merged.switched(&["-s"]) && merged.switched(&["-d"]));
         // A value-taking option takes the next word, or the rest of its own.
-        let valued = Operands::of(
-            &argv("pr merge --body x -bz --repo=a/b -Rc/d -st y 9"),
-            merge,
-        )
-        .unwrap();
+        let valued = operands("pr merge --body x -bz --repo=a/b -Rc/d -st y 9", merge).unwrap();
         assert_eq!(valued.selectors, vec![String::from("9")]);
         assert_eq!(valued.repo.as_deref(), Some("c/d"));
         assert!(valued.switched(&["-s"]));
         // Spelt off is not on.
-        let off = Operands::of(&argv("pr merge 1 --squash=false"), merge).unwrap();
+        let off = operands("pr merge 1 --squash=false", merge).unwrap();
         assert!(!off.switched(&["--squash"]));
         // Every switch of `gh issue edit` leaves the selector after it a
         // selector, and a value-taking option takes its value.
         let edit = held("issue:edit");
         for switch in edit.switches {
             let line = format!("issue edit 5 {switch} 6 --add-label bug --type Bug");
-            let read = Operands::of(&argv(&line), edit).unwrap();
+            let read = operands(&line, edit).unwrap();
             assert_eq!(
                 read.selectors,
                 vec![String::from("5"), String::from("6")],
@@ -6222,13 +6993,10 @@ mod tests {
         }
         // An option the grammar does not know is named, not guessed at.
         assert_eq!(
-            Operands::of(&argv("issue edit 5 --remove-everything 6"), edit),
+            operands("issue edit 5 --remove-everything 6", edit),
             Err(String::from("--remove-everything"))
         );
-        assert_eq!(
-            Operands::of(&argv("issue edit 5 -x 6"), edit),
-            Err(String::from("-x"))
-        );
+        assert_eq!(operands("issue edit 5 -x 6", edit), Err(String::from("-x")));
     }
 
     #[test]
@@ -6576,5 +7344,173 @@ mod tests {
         assert!(policy.owners_unreadable.is_some());
 
         assert!(without_policy(Path::new("/"), "git").unwrap().is_none());
+    }
+
+    /// Every option one help page lists, and whether it shows a placeholder
+    /// for a value: `-R, --repo [HOST/]OWNER/REPO` and `--help` alike, in
+    /// `gh`'s `--help` and in the option reference `glab` generates.
+    fn listed_options(page: &str) -> Vec<(String, bool)> {
+        let mut listed = Vec::new();
+        for line in page.lines() {
+            let spec = line.trim_start().split("  ").next().unwrap_or_default();
+            if !spec.starts_with('-') {
+                continue;
+            }
+            let words: Vec<&str> = spec.split_whitespace().collect();
+            let valued = words.iter().any(|word| !word.starts_with('-'));
+            for word in words.iter().filter(|word| word.starts_with('-')) {
+                listed.push((word.trim_end_matches(',').to_owned(), valued));
+            }
+        }
+        listed
+    }
+
+    /// The pages under `tests/fixtures/forge-help`, one directory per command
+    /// and version, and one file per verb: `gh <verb> --help` cut to its
+    /// `FLAGS` and `INHERITED FLAGS`, and the `## Options` sections of `glab`'s
+    /// `docs/source/<verb>.md` at the release tag, which `make gen-docs`
+    /// writes from the same flag set the binary parses -- its `--help` lists
+    /// the same names and no placeholder at all. Regenerated by hand when the
+    /// version a fleet runs moves, and then this test names every option the
+    /// grammar has to learn.
+    const FORGE_HELP: &[(&str, &str)] = &[("gh", "gh-2.102.0"), ("glab", "glab-1.123.0")];
+
+    #[test]
+    fn every_forge_grammar_is_the_option_list_its_command_documents() {
+        // Read by the parser and left off the page: `gh`'s `-h`, which it
+        // lists as `--help` alone, and the flags `glab` hides as deprecated.
+        let unlisted: &[(&str, &str, &str)] = &[
+            ("gh", "*", "-h"),
+            ("glab", "mr:create", "--target-project"),
+            ("glab", "mr:merge", "--when-pipeline-succeeds"),
+            ("glab", "mr:note", "-m"),
+            ("glab", "mr:note", "--message"),
+            ("glab", "mr:note", "--unique"),
+            ("glab", "mr:note", "--resolve"),
+            ("glab", "mr:note", "--unresolve"),
+        ];
+        // Listed with a placeholder that is no value: pflag names one after
+        // a word the usage text puts in backquotes, a boolean's included --
+        // ``Sets `push` to `true` `` on `--fill`.
+        let quoted_switches: &[(&str, &str, &str)] =
+            &[("glab", "mr:create", "-f"), ("glab", "mr:create", "--fill")];
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/forge-help");
+        let mut pages = 0;
+        for (command, directory) in FORGE_HELP {
+            let mut entries: Vec<PathBuf> = std::fs::read_dir(fixtures.join(directory))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect();
+            entries.sort();
+            for page in entries {
+                let stem = page.file_stem().unwrap().to_string_lossy().into_owned();
+                let verb = stem.replace('-', ":");
+                let grammar = Grammar::of(command, &verb);
+                assert!(
+                    grammar.is_some(),
+                    "{command} {verb} has a page and no grammar"
+                );
+                let grammar = grammar.unwrap();
+                pages += 1;
+                let listed = listed_options(&std::fs::read_to_string(&page).unwrap());
+                assert!(!listed.is_empty(), "{}", page.display());
+                for (option, valued) in &listed {
+                    let switch = quoted_switches.contains(&(*command, verb.as_str(), option));
+                    assert_eq!(
+                        grammar.arity(option),
+                        Some(*valued && !switch),
+                        "`{command} {verb}` {option}: the grammar lacks it or reads it with the \
+                         other arity"
+                    );
+                }
+                let mut held: Vec<&str> = grammar.switches.to_vec();
+                held.extend(grammar.values);
+                held.extend(FORGE_GLOBAL_SWITCHES);
+                if grammar.repo {
+                    held.extend(FORGE_GLOBAL_VALUES);
+                }
+                for option in held {
+                    assert!(
+                        listed.iter().any(|(name, _)| name == option)
+                            || unlisted.iter().any(|(name, on, hidden)| {
+                                name == command && (*on == "*" || *on == verb) && *hidden == option
+                            }),
+                        "`{command} {verb}` {option}: the grammar holds an option the page does \
+                         not list"
+                    );
+                }
+            }
+        }
+        // And no grammar goes uncompared.
+        assert_eq!(pages, FORGE_GRAMMAR.len());
+    }
+
+    #[test]
+    fn the_shipped_tables_read_every_option_with_the_arity_its_verb_gives_it() {
+        // A table that named `-c` as text on `gh pr review`, where it is a
+        // switch, is refused where the option is used. The tables this tool
+        // ships and writes must never be that table.
+        #[derive(Deserialize)]
+        struct Tables {
+            #[serde(default)]
+            shim: Vec<Shim>,
+        }
+        let own = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/policy/principles.toml"
+        ))
+        .unwrap();
+        let mut checked = 0;
+        for text in [crate::init::GH_SHIM, own.as_str()] {
+            let tables: Tables = toml::from_str(text).unwrap();
+            for shim in &tables.shim {
+                for verb in &shim.match_ {
+                    let words: Vec<String> = verb
+                        .split(':')
+                        .filter(|word| *word != "*")
+                        .map(str::to_owned)
+                        .collect();
+                    // `api` is read with its own grammar and never the table's.
+                    if words.first().is_some_and(|word| word == "api") {
+                        continue;
+                    }
+                    let effective = shim.for_verb(&words);
+                    let Some(parent) = effective.grammar_of(&words) else {
+                        continue;
+                    };
+                    let mut grammars = vec![parent];
+                    grammars.extend(parent.subcommands.iter().filter_map(|sub| {
+                        Grammar::of(&shim.command, &format!("{}:{sub}", parent.verb))
+                    }));
+                    let flags = [
+                        &effective.target_flags,
+                        &effective.text_flags,
+                        &effective.title_flags,
+                        &effective.message_flags,
+                        &effective.file_flags,
+                        &effective.path_flags,
+                        &effective.skip_flags,
+                        &effective.web_flags,
+                        &effective.editor_unless,
+                        &effective.inert_flags,
+                    ];
+                    for grammar in grammars {
+                        for flag in flags.iter().flat_map(|list| list.iter()) {
+                            if let Some(arity) = grammar.arity(flag) {
+                                assert_eq!(
+                                    arity,
+                                    effective.takes_value(flag),
+                                    "{} {}: {flag}",
+                                    shim.command,
+                                    grammar.verb
+                                );
+                                checked += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 100, "{checked}");
     }
 }
