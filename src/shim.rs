@@ -1900,28 +1900,34 @@ impl Shim {
         Ok(subjects)
     }
 
-    /// The words after the `api` verb, where this invocation is one.
+    /// The words the `api` verb reads, where this invocation is one: argv
+    /// with the verb taken out.
     ///
     /// `None` for every other command and every other verb, which is what makes
     /// the whole of the `api` reading below opt-in on one word.
     ///
-    /// Both readings are tried, the way [`Shim::reading`] tries both: an option
-    /// in front of the verb that nothing here can classify shifts the first
-    /// positional word by one, and a reading that missed `api` under one arity
-    /// would silently hand this invocation back to the flag collector -- whose
-    /// vocabulary means something else on this verb.
-    fn api_rest<'a>(&self, argv: &'a [String]) -> Option<&'a [String]> {
+    /// Found where the command finds it, by [`forge_path`]: `gh --squash api pr
+    /// merge -t X` is `pr merge`, `--squash` having taken `api` for its value
+    /// at the root, and a reading that called it `gh api` read `-t` as
+    /// `--template` and the title went out unread. Every word but the verb is
+    /// kept, because the verb's own parser reads them all: in `gh -f body=X api
+    /// repos/o/r/issues` the root passes `body=X` over with `-f`, and `api`
+    /// then reads it as a field.
+    fn api_rest(&self, argv: &[String]) -> Option<Vec<String>> {
         if !FORGE_API_COMMANDS.contains(&self.command.as_str()) {
             return None;
         }
-        for unknown_takes_value in [false, true] {
-            let scanned = self.scan(argv, unknown_takes_value, 1);
-            if let (Some(index), Some("api")) = (scanned.first, scanned.positional.first().copied())
-            {
-                return argv.get(index + 1..);
-            }
+        let at = self.forge_path(argv)?.first().copied()?;
+        if argv.get(at).is_none_or(|word| word != "api") {
+            return None;
         }
-        None
+        Some(
+            argv.iter()
+                .enumerate()
+                .filter(|(index, _)| *index != at)
+                .map(|(_, word)| word.clone())
+                .collect(),
+        )
     }
 
     /// Whether a matched invocation carries anything to publish at all.
@@ -1936,7 +1942,7 @@ impl Shim {
     /// option.
     fn carries_a_body(&self, argv: &[String]) -> bool {
         self.api_rest(argv).is_none_or(|rest| {
-            ApiCall::of(&self.command, rest).map_or(true, |call| call.publishes())
+            ApiCall::of(&self.command, &rest).map_or(true, |call| call.publishes())
         })
     }
 
@@ -2062,7 +2068,7 @@ impl Shim {
         // INVOCATION and not of the table: one `[[shim]]` stands in front of
         // `gh pr create` and `gh api` both, and only argv says which this is.
         if let Some(rest) = self.api_rest(argv) {
-            let call = ApiCall::of(&self.command, rest).map_err(|unknown| {
+            let call = ApiCall::of(&self.command, &rest).map_err(|unknown| {
                 Fatal::new(format!(
                     "{0}: `{0} api` was given {unknown:?}, an option this shim does not know on \
                      that verb, so whether the call publishes, and what, could not be read and \

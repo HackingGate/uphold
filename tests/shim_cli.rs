@@ -3365,6 +3365,127 @@ fn a_verb_is_found_where_the_command_finds_it_past_an_option_before_it() {
 }
 
 #[test]
+fn the_api_verb_is_found_where_the_command_finds_it() {
+    // `gh --squash api pr merge -t X` is `pr merge`: the root does not know
+    // `--squash`, so it takes `api` for its value. Read as `gh api`, `-t` was
+    // `--template` and `-F` a field, and the subject and the body file went
+    // out unread.
+    let zw = "x\u{200B}y";
+    let root = own_gh_workspace();
+    std::fs::write(root.join("z.md"), format!("{zw}\n")).unwrap();
+    for form in [
+        vec![
+            "gh", "--squash", "api", "pr", "merge", "-t", zw, "-F", "z.md",
+        ],
+        vec![
+            "gh", "--draft", "api", "release", "create", "-t", zw, "-F", "z.md",
+        ],
+        vec!["gh", "--edit-last", "api", "pr", "comment", "-F", "z.md"],
+        // And an option the root passes over with its value is the `api`
+        // verb's to read.
+        vec![
+            "gh",
+            "--hostname",
+            "github.com",
+            "api",
+            "-X",
+            "PATCH",
+            "repos/o/r/issues/1",
+            "-f",
+            &format!("title={zw}"),
+        ],
+        vec!["gh", "-f", &format!("body={zw}"), "api", "repos/o/r/issues"],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+200B"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("gh ran:"), "{form:?}");
+    }
+    // `gh api` takes no `-R`, and `gh` refuses it there; so does the shim,
+    // naming it, rather than reading the call some other way.
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "-R",
+            "o/r",
+            "api",
+            "-X",
+            "PATCH",
+            "repos/o/r/issues/1",
+            "-f",
+            "body=ok",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("`gh api` was given \"-R\""),
+        "{}",
+        stderr(&output)
+    );
+    // A plain call is the `api` verb as before: a GET runs, a body is read.
+    let output = shim(&root, &["gh", "api", "repos/o/r"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "PATCH",
+            "repos/o/r/issues/1",
+            "-f",
+            "body=ok",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+
+    let root = own_glab_workspace();
+    for form in [
+        vec![
+            "glab",
+            "--squash",
+            "api",
+            "mr",
+            "merge",
+            "1",
+            "--squash-message",
+            zw,
+        ],
+        vec!["glab", "--yes", "api", "mr", "create", "-t", zw],
+        vec![
+            "glab",
+            "--hostname",
+            "gitlab.com",
+            "api",
+            "-X",
+            "PUT",
+            "projects/o%2Fr/merge_requests/1",
+            "-f",
+            &format!("title={zw}"),
+        ],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("U+200B"),
+            "{form:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stdout(&output).contains("glab ran:"), "{form:?}");
+    }
+    let output = shim(&root, &["glab", "api", "projects/o%2Fr"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("glab ran:"), "{}", stdout(&output));
+}
+
+#[test]
 fn a_glab_merge_says_which_commit_message_the_forge_composes_unread() {
     let root = own_glab_workspace();
     // `-mWIP` is a message given: it is read, and nothing is said about one
