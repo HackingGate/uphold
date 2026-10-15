@@ -476,7 +476,7 @@ command = "gh"
 match = [
   "pr:create", "pr:edit", "pr:comment", "pr:review",
   "issue:create", "issue:edit", "issue:comment",
-  "release:create", "release:edit",
+  "release:create", "release:edit", "release:upload",
   "gist:create",
   # Five that carry text and stood behind nothing until 1.8.0. `pr:merge`
   # publishes the merge commit message through `--body` and `--subject`, and
@@ -526,6 +526,10 @@ scope = "public-target"
   # these commands accept, and reading a flag a command will not take is this
   # shim claiming to have checked a subject that was never published.
   [[shim.verbs]]
+  match = ["release:upload"]
+  editor = "never"
+
+  [[shim.verbs]]
   match = ["issue:close", "pr:close", "issue:reopen", "pr:reopen"]
   text_flags = ["-c", "--comment"]
   editor = "never"
@@ -559,7 +563,7 @@ command = "glab"
 # with the separator escaped, and the destination predicate reads it as one.
 match = [
   "mr:create", "mr:update", "mr:note", "issue:create", "issue:update", "issue:note",
-  "mr:merge",
+  "mr:merge", "work-items:create", "work-items:update",
   "api:*",
 ]
 text_flags = ["-d", "--description", "-m", "--message"]
@@ -569,6 +573,15 @@ target_flags = ["-R", "--repo"]
 editor_env = "GLAB_EDITOR"
 target = "forge-repo"
 scope = "public-target"
+
+  # Work items open an editor only for `--description -`, which the shim
+  # refuses explicitly. `-m` on update is a milestone rather than a message.
+  [[shim.verbs]]
+  match = ["work-items:create", "work-items:update"]
+  text_flags = ["-d", "--description"]
+  title_flags = ["-t", "--title"]
+  file_flags = ["--description-file"]
+  editor = "never"
 
   # `glab mr merge` writes the merge commit into the target branch, and its
   # message reached no text guard: the verb was not matched. Each flag carries

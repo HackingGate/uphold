@@ -58,7 +58,7 @@ match = [
   "pr:create", "pr:edit", "pr:comment", "pr:review", "pr:merge",
   "pr:close", "pr:reopen",
   "issue:create", "issue:edit", "issue:comment", "issue:close", "issue:reopen",
-  "release:create", "release:edit", "gist:create",
+  "release:create", "release:edit", "release:upload", "gist:create",
   "api:*",
 ]
 text_flags = ["-b", "--body", "-n", "--notes"]
@@ -70,6 +70,10 @@ web_flags = ["-w", "--web"]
 editor_env = "GH_EDITOR"
 target = "forge-repo"
 scope = "public-target"
+
+  [[shim.verbs]]
+  match = ["release:upload"]
+  editor = "never"
 
   [[shim.verbs]]
   match = ["issue:close", "pr:close", "issue:reopen", "pr:reopen"]
@@ -347,7 +351,13 @@ mod tests {
             assert_ne!(normalized_table(changed), expected, "removed {field}");
         }
         let mut changed = original.clone();
-        changed["verbs"][0]["text_flags"]
+        let verb = changed["verbs"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|verb| verb.get("text_flags").is_some())
+            .unwrap();
+        verb["text_flags"]
             .as_array_mut()
             .unwrap()
             .push(toml::Value::String("--unexpected".into()));

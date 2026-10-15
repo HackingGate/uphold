@@ -552,8 +552,8 @@ fn in_list(list: &[String], needle: &str) -> bool {
 /// config, and no policy author should have to write it there to be guarded.
 const ALIAS_COMMANDS: &[&str] = &["git", "gh", "glab"];
 
-/// How many `gh` aliases one invocation is followed through: one alias may
-/// expand to another, and `gh` runs that one too.
+/// How many `git` or `gh` aliases one invocation is followed through: one
+/// alias may expand to another, and these commands run that one too.
 const ALIAS_DEPTH: usize = 8;
 
 /// Commands whose `api` verb is the whole forge behind one word.
@@ -1130,6 +1130,7 @@ fn json_strings(text: &str) -> std::result::Result<Option<Walked>, serde_json::E
 fn command_line_alias(argv: &[String], word: &str) -> Option<String> {
     let wanted = format!("alias.{word}=");
     let mut index = 0;
+    let mut value = None;
     while let Some(argument) = argv.get(index) {
         index += 1;
         // `-c` takes the word after it. `git` accepts no `-c=<setting>`, so
@@ -1139,26 +1140,40 @@ fn command_line_alias(argv: &[String], word: &str) -> Option<String> {
         }
         if let Some(setting) = argv.get(index) {
             index += 1;
-            if let Some(value) = setting.strip_prefix(&wanted) {
-                return Some(value.to_owned());
+            if let Some(found) = setting.strip_prefix(&wanted) {
+                value = Some(found.to_owned());
             }
         }
     }
-    None
+    value
 }
 
 /// One alias out of what `glab alias list` printed.
 ///
-/// It prints one alias per line as a name and an expansion, and promises no
-/// separator: `co: pr checkout`, `co\tpr checkout` and `co=pr checkout` have
-/// all been shipped by one forge CLI or the other. Splitting on the first of
-/// the three reads every one of them, and a line that carries none is not an
-/// alias. `gh` prints YAML, and is read by [`Shim::gh_alias`].
-fn alias_in_list(text: &str, word: &str) -> Option<String> {
-    text.lines().find_map(|line| {
-        let (name, expansion) = line.split_once([':', '\t', '='])?;
-        (name.trim() == word).then(|| expansion.trim().to_owned())
-    })
+/// The table can put a wrapped or multiline expansion on continuation rows
+/// with no name. Its presentation does not say which line breaks belonged to
+/// the expansion, so refuse those rows rather than judging only its first
+/// line. Read the entire list even after finding the requested alias.
+/// `gh` prints YAML, and is read by [`Shim::gh_alias`].
+fn alias_in_list(text: &str, word: &str) -> Result<Option<String>> {
+    let mut found = None;
+    for line in text.lines() {
+        if line.trim().is_empty() && !line.contains('\t') {
+            continue;
+        }
+        let row = line.split_once([':', '\t', '=']);
+        let Some((name, expansion)) = row.filter(|(name, _)| !name.trim().is_empty()) else {
+            return Err(Fatal::new(format!(
+                "glab: `glab alias list` printed a continuation or unread row ({line:?}), so \
+                 whether {word:?} is an alias and its complete expansion could not be \
+                 established. Nothing was published; run the command the alias stands for"
+            )));
+        };
+        if name.trim() == word {
+            found = Some(expansion.trim().to_owned());
+        }
+    }
+    Ok(found)
 }
 
 /// An alias one invocation names, as the command's alias list holds it.
@@ -1905,11 +1920,12 @@ impl Shim {
     /// command (`root.SetArgs`, `root.Execute`), so an expansion that names
     /// another alias runs that one in turn: with `a2` set to `pr comment 5 -b`
     /// and `a1` to `a2 $1`, `gh a1 X` comments `X`, and one expansion read `a2
-    /// X`, which no table matched. So a `gh` expansion is expanded again until
-    /// it names no alias. An alias met twice on the way is a loop, and a chain
-    /// longer than [`ALIAS_DEPTH`] is not followed further; both are exit 2.
+    /// X`, which no table matched. `git` also follows chains of aliases. So a
+    /// `git` or `gh` expansion is expanded again until it names no alias. An
+    /// alias met twice on the way is a loop, and a chain longer than
+    /// [`ALIAS_DEPTH`] is not followed further; both are exit 2.
     /// `glab` expands once, before cobra runs, and an expansion that names
-    /// another alias is no command there; `git` is expanded once here.
+    /// another alias is no command there.
     fn expand_aliases(&self, root: &Path, mut words: Vec<String>) -> Result<Vec<String>> {
         let mut seen: Vec<String> = Vec::new();
         loop {
@@ -1945,7 +1961,7 @@ impl Shim {
             }
             seen.push(name);
             words = self.canonical(&next);
-            if self.command != "gh" {
+            if self.command == "glab" {
                 return Ok(words);
             }
         }
@@ -2045,7 +2061,7 @@ impl Shim {
         // and reading it costs no process. The persisted alias below is the
         // case that needs one.
         if self.command == "git"
-            && let Some(value) = command_line_alias(argv, word)
+            && let Some(value) = command_line_alias(argv.get(..index).unwrap_or_default(), word)
         {
             return Ok(Some(one(value)));
         }
@@ -2070,6 +2086,11 @@ impl Shim {
         // question, and the twenty-nine thousand `gh alias list` processes
         // `HANDED` describes were this line.
         let mut command = inner_tool(&real);
+        if self.command == "git" {
+            // Resolve every link in the same repository and configuration as
+            // the invocation, including globals retained by earlier links.
+            command.args(argv.get(..index).unwrap_or_default());
+        }
         command.args(query).current_dir(root);
         if self.command == "git" {
             command.arg(format!("alias.{word}"));
@@ -2105,7 +2126,7 @@ impl Shim {
         if self.command == "gh" {
             return self.gh_alias(&text, argv);
         }
-        Ok(alias_in_list(&text, word).map(one))
+        Ok(alias_in_list(&text, word)?.map(one))
     }
 
     /// This table, with the flag lists of whichever `[[shim.verbs]]` entry
@@ -2282,18 +2303,80 @@ impl Shim {
                 index += 1;
                 next
             });
+            // Work items can name a group instead of a project. The existing
+            // destination resolver asks about repositories, so it cannot prove
+            // the visibility of that target. A description of `-` opens an
+            // editor even when a body flag was given, outside the table's
+            // normal editor condition.
+            if self.command == "glab" && grammar.verb.starts_with("work-items:") {
+                if matches!(flag.as_str(), "-g" | "--group") && !value.is_empty() {
+                    return Err(Fatal::new(format!(
+                        "{}: `{flag}` targets a group, whose visibility this shim cannot \
+                         establish. Nothing was published; use a project target instead",
+                        on()
+                    )));
+                }
+                if matches!(flag.as_str(), "-d" | "--description") && value == "-" {
+                    return Err(Fatal::new(format!(
+                        "{}: `{flag} -` opens an editor whose text this shim cannot read on \
+                         this verb. Nothing was published; pass the text with \
+                         `--description-file` instead",
+                        on()
+                    )));
+                }
+            }
             given.push((flag.clone(), value.clone()));
             if ATTACH_FLAGS.contains(&flag.as_str()) {
                 collected
                     .subjects
                     .extend(attached_subjects(&self.command, &value));
             }
+            // Editing can publish a new tag name through an option rather
+            // than the creation operand. The current tag operand only selects
+            // the release being edited.
+            if self.command == "gh" && grammar.verb == "release:edit" && flag == "--tag" {
+                collected.subjects.push(Subject {
+                    kind: "text",
+                    value: value.clone(),
+                    added: None,
+                });
+            }
             self.read_option(&mut collected, &flag, value, paired)?;
+        }
+        // GroupOverride uses GITLAB_GROUP when no nonempty --repo was
+        // supplied, even inside a repository. Do not mistake that group for
+        // the current project's destination.
+        if self.command == "glab"
+            && grammar.verb.starts_with("work-items:")
+            && std::env::var_os("GITLAB_GROUP").is_some_and(|group| !group.is_empty())
+            && given
+                .iter()
+                .rev()
+                .find(|(flag, _)| matches!(flag.as_str(), "-R" | "--repo"))
+                .is_none_or(|(_, value)| value.is_empty())
+        {
+            return Err(Fatal::new(format!(
+                "{}: `GITLAB_GROUP` targets a group, whose visibility this shim cannot \
+                 establish. Nothing was published; use a project target with `--repo` instead",
+                on()
+            )));
         }
         if let Some(body) = grammar.stdin_body {
             self.stdin_body(&mut collected, &given, body, &on)?;
         }
-        // The first operand is the tag.
+        // Creating a release can create the tag on the server too. It is
+        // published text, independent of the release's optional title.
+        if self.command == "gh"
+            && grammar.verb == "release:create"
+            && let Some(tag) = operands.first()
+        {
+            collected.subjects.push(Subject {
+                kind: "text",
+                value: (*tag).to_owned(),
+                added: None,
+            });
+        }
+        // The first operand is the tag, on both create and upload.
         if grammar.assets {
             for asset in operands.iter().skip(1) {
                 collected
@@ -3661,7 +3744,7 @@ struct Grammar {
     /// that name the verb name its alias too.
     aliases: &'static [&'static str],
     /// Whether the operands after the first are files the verb uploads, each
-    /// spelt `file#label`: `gh release create <tag> [<file>...]`. The label
+    /// spelt `file#label`: `gh release create|upload <tag> <file>...`. The label
     /// and the file's name are published beside the release.
     assets: bool,
     /// What the forge holds of this verb's text, where it holds any.
@@ -3981,6 +4064,10 @@ const FORGE_GRAMMAR: &[Grammar] = &[
                 "--title",
             ],
         )
+    },
+    Grammar {
+        assets: true,
+        ..grammar("gh", "release:upload", &["--clobber"], &[])
     },
     grammar(
         "gh",
@@ -4337,6 +4424,52 @@ const FORGE_GRAMMAR: &[Grammar] = &[
         aliases: &["comment"],
         ..grammar("glab", "issue:note", &[], &["--attach", "-m", "--message"])
     },
+    grammar(
+        "glab",
+        "work-items:create",
+        &["-c", "--confidential"],
+        &[
+            "--attach",
+            "-d",
+            "--description",
+            "--description-file",
+            "-g",
+            "--group",
+            "--jq",
+            "-F",
+            "--output",
+            "-t",
+            "--title",
+            "-T",
+            "--type",
+        ],
+    ),
+    grammar(
+        "glab",
+        "work-items:update",
+        &[],
+        &[
+            "-a",
+            "--assignee",
+            "--attach",
+            "-d",
+            "--description",
+            "--description-file",
+            "--duedate",
+            "-g",
+            "--group",
+            "--jq",
+            "-m",
+            "--milestone",
+            "-F",
+            "--output",
+            "--startdate",
+            "-t",
+            "--title",
+            "-w",
+            "--weight",
+        ],
+    ),
     Grammar {
         repo: false,
         ..grammar(
@@ -8650,7 +8783,10 @@ mod tests {
             entries.sort();
             for page in entries {
                 let stem = page.file_stem().unwrap().to_string_lossy().into_owned();
-                let verb = stem.replace('-', ":");
+                let verb = stem.strip_prefix("work-items-").map_or_else(
+                    || stem.replace('-', ":"),
+                    |noun| format!("work-items:{noun}"),
+                );
                 let grammar = Grammar::of(command, &verb);
                 assert!(
                     grammar.is_some(),

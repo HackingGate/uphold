@@ -2082,12 +2082,12 @@ A flag is read where a word is the flag a list names, or `--flag=value` for
 one. On every verb the shipped tables match, the shim carries the verb's whole
 option grammar and reads each option word as the command's own parser does:
 `gh pr create|edit|comment|review|merge|close|reopen`, `gh issue
-create|edit|comment|close|reopen`, `gh release create|edit`, `gh gist create`
+create|edit|comment|close|reopen`, `gh release create|edit|upload`, `gh gist create`
 and `gh api` from `gh` 2.102, and `glab mr create|update|note|merge`, `glab
-issue create|update|note` and `glab api` from `glab` 1.123.0, with each `glab mr
-note` subcommand, and each `glab mr note draft` subcommand below it, read with
-its own. So `-st X` is `-s` and then `-t
-X`, and `-iF k=v` is `-i` and `-F k=v`. The value follows pflag, which both
+issue create|update|note`, `glab work-items create|update` and `glab api` from
+`glab` 1.123.0, with each `glab mr note` subcommand, and each `glab mr note
+draft` subcommand below it, read with its own. So `-st X` is `-s` and then
+`-t X`, and `-iF k=v` is `-i` and `-F k=v`. The value follows pflag, which both
 parse with, at whichever letter takes it: `=` plus at least one character gives
 what follows the `=` (`-b=Text` and `-st=Text` are `Text`), anything else after
 the letter is the value whole (`-bText`, `-ftitle=X`; `-b=` alone is the value
@@ -2095,6 +2095,14 @@ the letter is the value whole (`-bText`, `-ftitle=X`; `-b=` alone is the value
 name is read with the arity the command gives it, so `-Bmain` and `-lwip` are
 one option each, `gh pr merge -A -b -t X` is an author email `-b` and the
 subject `X`, and `gh issue create -l -b -t X` is a label `-b` and the title `X`.
+
+`glab work-items create|update` reads titles, descriptions, description files
+(including stdin), and attachment names with the same checks. Its `-m` on
+update names a milestone. A nonempty `--group`, or `GITLAB_GROUP` without a
+nonempty `--repo` override, is exit `2`: the repository target resolver cannot
+establish a group's visibility. Its `--description -` editor form is also
+exit `2`; use `--description-file` instead so the text can be read before
+publication.
 
 A letter or an option the verb's grammar does not have is exit `2`, naming it:
 a letter nothing here knows cannot be told from a value, so where the options
@@ -2148,12 +2156,18 @@ with a grammar both are read whatever the table names:
   body, so that alt can be all it publishes. `glab` uploads the file under its
   own name, which GitLab writes into the reference (`-` is uploaded as
   `upload`). The alt and the file's name are judged as prose on both.
-- **Release assets.** On `gh release create`, each operand after the tag is a
-  file it uploads. An operand holding a `#` is `file#label`, split at the first
+- **Release assets.** On `gh release create` and `gh release upload`, each
+  operand after the tag is a file it uploads. An operand holding a `#` is `file#label`, split at the first
   `#` past its start. The label and the file's name, which the release lists
   the asset by, are judged as prose. Any other operand is a pattern `gh`
   expands itself. One holding `*`, `?`, `[` or `\` names files the command
   line does not, so it is exit `2`; let the shell expand it.
+
+The tag operand of `gh release create` and the `--tag` value of `gh release
+edit` are also judged as prose, because they can publish a new tag name. They
+are separate from the release title, so a rule limited to titles does not
+read them. The existing tag operand of `edit` or `upload` selects a release;
+it is not a new tag name.
 
 An alt text or a label is judged whenever it is not empty, including one made
 only of characters Rust's `trim` removes (U+000B, U+0085), because `gh`
@@ -2240,18 +2254,22 @@ where git's splitter and this one differ, is exit `2`.
 decoded as YAML: a quoted expansion (`note2: 'pr comment $1 --body "Note:
 $2"'`), a block scalar (`ml: |-` and the indented lines under it) and a quoted
 name are each read as `gh` reads them. Output that is not a map of names to
-expansions is exit `2`. `glab alias list` prints a table, read a line at a
-time. An alias's name is split into words as `gh` splits it, so one set with
+expansions is exit `2`. `glab alias list` prints a table. A continuation row
+from a wrapped or multiline expansion, or a row the shim cannot read, makes
+the lookup exit `2`: the complete expansion cannot be recovered reliably
+from its presentation. Run the command the alias stands for instead. An
+alias's name is split into words as `gh` splits it, so one set with
 `gh alias set 'pr say' …` is found where `gh` runs it, at `gh pr say`, and its
 arguments are the words around both. A name of three words or more whose first
 two the invocation spells is exit `2`, and so is an invocation two aliases
 name. `gh` runs an expansion through its own root command again, so an
 expansion that names another alias runs that one too: with `a2` set to `pr
 comment 5 -b` and `a1` to `a2 $1`, `gh a1 X` comments `X`. A `gh` expansion is
-expanded again until it names no alias. An alias met twice on the way is a
-loop, and a chain more than eight aliases long is not followed; both are exit
-`2`. `glab` and `git` are expanded once here. `glab` runs an expansion that
-names another alias as no command.
+expanded again until it names no alias. `git` also follows chains of aliases,
+keeping global options and command-line configuration overrides at every link.
+For either command, an alias met twice on the way is a loop, and a chain more
+than eight aliases long is not followed; both are exit `2`. `glab` is expanded
+once here; it runs an expansion that names another alias as no command.
 
 A **shell alias** (`!…`) and a lookup that failed are
 could-not-looks, not absences: exit `2`, since what a shell runs is not an
@@ -2385,6 +2403,13 @@ what is judged:
   and percent-decoded. A finding in any of them refuses, so a remote holding a
   name the rule refuses blocks the placeholder even where the command would
   have picked another. `glab api` reads no `GITLAB_REPO`.
+
+  The shim does not read `glab`'s per-host `subfolder` configuration or
+  `GITLAB_SUBFOLDER`. For an instance installed below the domain root, the
+  remote URL alone cannot distinguish that installation prefix from the
+  project's namespace. The source judged for `:group` or `:namespace` can
+  therefore include an installation prefix that `glab` removes when filling
+  the placeholder; it is not a reconstruction of the substituted segment.
 
 A placeholder that asks for a branch where none is checked out, or for a
 repository where there is no source to read, is exit `2`. The command cannot fill it

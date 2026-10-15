@@ -92,6 +92,7 @@ fn shim_with(root: &Path, args: &[&str], variables: &[(&str, &str)]) -> Output {
         .env_remove("UPHOLD_ALLOW")
         .env_remove("UPHOLD_SHIM_INNER")
         .env_remove("GH_REPO")
+        .env_remove("GITLAB_GROUP")
         .envs(variables.iter().copied())
         .output()
         .unwrap()
@@ -1725,7 +1726,11 @@ fn a_git_global_option_before_the_subcommand_does_not_switch_the_shim_off() {
     // `match` entry contains that, so a push to a public forge exec'd
     // unexamined, silently and with an exit code of 0.
     let root = workspace(GIT_POLICY);
-    stub(&root, "git", "#!/bin/sh\necho \"git ran: $*\"\n");
+    stub(
+        &root,
+        "git",
+        "#!/bin/sh\nfor word in \"$@\"; do\n  [ \"$word\" = config ] && exit 1\ndone\necho \"git ran: $*\"\n",
+    );
     for form in [
         vec![
             "git",
@@ -3989,6 +3994,61 @@ fn an_alias_is_read_with_the_arguments_it_puts_into_its_expansion() {
     assert!(stdout(&output).contains("glab ran:"), "{}", stdout(&output));
 }
 
+#[test]
+fn a_glab_alias_table_must_expose_the_complete_expansion() {
+    let root = own_glab_workspace();
+    stub(
+        &root,
+        "glab",
+        "#!/bin/sh\n\
+         if [ \"$1 $2\" = \"alias list\" ]; then cat \"$(dirname \"$0\")/../aliases.txt\"; exit 0; fi\n\
+         echo \"glab ran: $*\"\n",
+    );
+    // glab's table uses an empty first cell for continuation rows, both
+    // when wrapping at a column boundary and for a literal newline.
+    for aliases in [
+        "Alias\tCommand\nmc\tmr note 5 -m safe\n  \t--message x\u{200B}y\n",
+        "Alias\tCommand\nmc\tmr note 5 -m \"safe\n  \tx\u{200B}y\"\n",
+        // A first-line-only reader would also miss a later shell command.
+        "Alias\tCommand\nmc\tmr note 5 -m safe\n  \t!shell command\n",
+        // An unread list cannot prove that an unknown verb is no alias.
+        "Alias\tCommand\nmc mr note 5 -m safe\n",
+    ] {
+        std::fs::write(root.join("aliases.txt"), aliases).unwrap();
+        for word in ["mc", "unknown"] {
+            let output = shim(&root, &["glab", word]);
+            assert_eq!(code(&output), 2, "{aliases:?}: {}", stderr(&output));
+            assert!(
+                stderr(&output).contains("continuation or unread row"),
+                "{}",
+                stderr(&output)
+            );
+            assert!(
+                !stdout(&output).contains("glab ran:"),
+                "{}",
+                stdout(&output)
+            );
+        }
+    }
+    // The same real table shape remains usable for ordinary aliases,
+    // including long values when glab prints them without wrapping.
+    for message in [
+        "safe".to_owned(),
+        "safe ".repeat(30),
+        "x\u{200B}y".to_owned(),
+    ] {
+        std::fs::write(
+            root.join("aliases.txt"),
+            format!("Alias\tCommand\nmc\tmr note 5 -m \"{message}\"\nother\tmr list\n"),
+        )
+        .unwrap();
+        let output = shim(&root, &["glab", "mc"]);
+        let expected = i32::from(message.contains('\u{200B}'));
+        assert_eq!(code(&output), expected, "{}", stderr(&output));
+        assert_eq!(stdout(&output).contains("glab ran:"), expected == 0);
+    }
+}
+
 /// `shim`, with `input` on its stdin -- a file, which is not a terminal.
 fn shim_fed(root: &Path, args: &[&str], input: &str) -> Output {
     let fed = root.join("stdin.txt");
@@ -5040,6 +5100,101 @@ fn a_repository_placeholder_is_judged_against_every_source_the_command_may_read(
 }
 
 #[test]
+fn a_release_upload_judges_asset_labels_and_file_names() {
+    let root = own_gh_workspace();
+    let label = "./asset.zip#a\u{200B}b";
+    let name = "./a\u{200B}b.zip";
+    refuses_each(
+        &root,
+        &[
+            vec!["gh", "release", "upload", "v1", label],
+            vec!["gh", "release", "upload", "--clobber", "v1", name],
+            vec!["gh", "release", "upload", "v1", "--", label],
+        ],
+        "gh ran:",
+    );
+    unreadable_each(
+        &root,
+        &[vec!["gh", "release", "upload", "v1", "dist/*.zip"]],
+        "let the shell expand the pattern",
+        "gh ran:",
+    );
+    let output = shim(
+        &root,
+        &["gh", "release", "upload", "v1", "./asset.zip#Linux"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    assert!(!stderr(&output).contains("editor"), "{}", stderr(&output));
+}
+
+#[test]
+fn a_release_judges_a_new_tag_separately_from_its_title() {
+    let root = own_gh_workspace();
+    let tag = "v1\u{200B}";
+    refuses_each(
+        &root,
+        &[
+            vec!["gh", "release", "create", tag, "-n", "ok"],
+            vec![
+                "gh",
+                "release",
+                "create",
+                "-t",
+                "clean title",
+                "-n",
+                "ok",
+                tag,
+            ],
+            vec!["gh", "release", "create", "--verify-tag", tag, "-n", "ok"],
+            vec!["gh", "release", "edit", "v1", "--tag", tag, "-n", "ok"],
+            vec![
+                "gh",
+                "release",
+                "edit",
+                "v1",
+                "--tag=v2\u{200B}",
+                "-n",
+                "ok",
+            ],
+        ],
+        "gh ran:",
+    );
+    let output = shim(&root, &["gh", "release", "create", "v1", "-n", "ok"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+
+    let policy = root.join("policy/principles.toml");
+    let mut text = std::fs::read_to_string(&policy).unwrap();
+    text.push_str(
+        r#"
+[rule.title-shape]
+message = "use the release title"
+require_regexp = '^Release title$'
+subjects = ["title"]
+command.before = ["gh"]
+command.scope = "always"
+"#,
+    );
+    std::fs::write(policy, text).unwrap();
+    let output = shim(
+        &root,
+        &[
+            "gh",
+            "release",
+            "create",
+            "v1",
+            "-t",
+            "Release title",
+            "-n",
+            "ok",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+#[test]
 fn an_alt_text_or_asset_label_of_unicode_blanks_alone_is_judged() {
     // Rust's `trim` strips U+0085 and U+000B, so text made of nothing else
     // read as empty and was never handed to the rule. `gh` publishes it.
@@ -5051,6 +5206,7 @@ fn an_alt_text_or_asset_label_of_unicode_blanks_alone_is_judged() {
         for form in [
             vec!["gh", "issue", "comment", "12", "-b", "ok", "--attach", &alt],
             vec!["gh", "release", "create", "v1.0.0", "-n", "ok", &label],
+            vec!["gh", "release", "upload", "v1.0.0", &label],
         ] {
             let output = shim(&root, &form);
             assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
@@ -6218,8 +6374,8 @@ fn plumbing_git(root: &Path) {
         root,
         "git",
         &format!(
-            "#!/bin/sh\ncase \"$1\" in\n  config|for-each-ref|symbolic-ref|rev-parse) exec {} \
-             \"$@\" ;;\nesac\necho \"git ran: $*\"\n",
+            "#!/bin/sh\nfor word in \"$@\"; do\n  case \"$word\" in\n  config|for-each-ref|symbolic-ref|rev-parse) exec {} \
+             \"$@\" ;;\nesac\ndone\necho \"git ran: $*\"\n",
             support::real_git().display()
         ),
     );
@@ -6259,6 +6415,118 @@ fn an_alias_for_a_push_is_expanded_before_the_match_list_is_read() {
     let clean = shim(&root, &["git", "p", "origin", "fix/ordinary"]);
     assert_eq!(code(&clean), 0, "{}", stderr(&clean));
     assert!(stdout(&clean).contains("git ran: p"), "{}", stdout(&clean));
+}
+
+#[test]
+fn a_git_alias_chain_is_read_with_its_globals_and_overrides() {
+    let root = workspace(GIT_REFS_POLICY);
+    plumbing_git(&root);
+    support::git(&root, &["config", "alias.deploy", "publish"]);
+    support::git(&root, &["config", "alias.publish", "push -o 'ci skip'"]);
+
+    for form in [
+        vec!["git", "deploy", "origin", "fix/acme-outage"],
+        vec![
+            "git",
+            "-c",
+            "alias.start=deploy",
+            "start",
+            "origin",
+            "fix/acme-outage",
+        ],
+        vec![
+            "git",
+            "-c",
+            "alias.deploy=status",
+            "-c",
+            "alias.deploy=publish",
+            "deploy",
+            "origin",
+            "fix/acme-outage",
+        ],
+        vec![
+            "git",
+            "-c",
+            "alias.start=deploy",
+            "-c",
+            "alias.deploy=status",
+            "-c",
+            "alias.deploy=publish",
+            "start",
+            "origin",
+            "fix/acme-outage",
+        ],
+    ] {
+        let output = shim(&root, &form);
+        assert_eq!(code(&output), 1, "{form:?}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("git ran:"), "{form:?}");
+    }
+
+    // Each lookup must use the repository designated by the retained -C.
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    support::git(&nested, &["init", "--quiet"]);
+    support::git(&nested, &["config", "alias.deploy", "publish"]);
+    support::git(&nested, &["config", "alias.publish", "push"]);
+    support::git(&root, &["config", "alias.deploy", "status"]);
+    let output = shim(
+        &root,
+        &["git", "-C", "nested", "deploy", "origin", "fix/acme-outage"],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("git ran:"));
+
+    support::git(&root, &["config", "alias.deploy", "publish"]);
+    let clean = shim(&root, &["git", "deploy", "origin", "fix/ordinary"]);
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert!(stdout(&clean).contains("git ran: deploy origin fix/ordinary"));
+
+    support::git(&root, &["config", "alias.publish", "status"]);
+    let harmless = shim(&root, &["git", "deploy"]);
+    assert_eq!(code(&harmless), 0, "{}", stderr(&harmless));
+    assert!(stdout(&harmless).contains("git ran: deploy"));
+}
+
+#[test]
+fn a_git_alias_chain_cannot_hide_a_shell_alias_loop_or_excessive_depth() {
+    let root = workspace(GIT_REFS_POLICY);
+    plumbing_git(&root);
+    support::git(&root, &["config", "alias.deploy", "publish"]);
+    for (expansion, evidence) in [
+        ("!echo deploying", "shell command"),
+        ("deploy", "to itself"),
+    ] {
+        support::git(&root, &["config", "alias.publish", expansion]);
+        let output = shim(&root, &["git", "deploy"]);
+        assert_eq!(code(&output), 2, "{}", stderr(&output));
+        assert!(stderr(&output).contains(evidence), "{}", stderr(&output));
+        assert!(!stdout(&output).contains("git ran:"));
+    }
+
+    for index in 1..=8 {
+        support::git(
+            &root,
+            &[
+                "config",
+                &format!("alias.chain{index}"),
+                &format!("chain{}", index + 1),
+            ],
+        );
+    }
+    support::git(&root, &["config", "alias.chain9", "status"]);
+    let output = shim(&root, &["git", "chain1"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("more than 8 deep"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("git ran:"));
+
+    // Exactly eight links remain usable.
+    let output = shim(&root, &["git", "chain2"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("git ran: chain2"));
 }
 
 #[test]
@@ -7531,4 +7799,102 @@ fn a_verbs_entry_can_hand_the_rules_the_command_line_for_that_verb_alone() {
     let other = shim(&root, &["faux", "pr", "create", "-b", "release create"]);
     assert_eq!(code(&other), 0, "{}", stderr(&other));
     assert!(stdout(&other).contains("faux ran:"), "{}", stdout(&other));
+}
+
+#[test]
+fn glab_work_items_judge_titles_descriptions_files_and_attachment_names() {
+    let root = own_glab_workspace();
+    let hidden = "a\u{200B}b";
+    let attachment = format!("./{hidden}.png");
+    let body_file = root.join("description.md");
+    std::fs::write(&body_file, hidden).unwrap();
+    for verb in ["create", "update"] {
+        let mut command = vec!["glab", "work-items", verb];
+        if verb == "update" {
+            command.push("42");
+        }
+        for flag in ["-t", "--title", "-d", "--description"] {
+            let mut args = command.clone();
+            args.extend([flag, hidden]);
+            refuses_each(&root, &[args], "glab ran:");
+        }
+        for pair in [
+            ("--description-file", body_file.to_str().unwrap()),
+            ("--attach", attachment.as_str()),
+        ] {
+            let mut args = command.clone();
+            args.extend(<[&str; 2]>::from(pair));
+            refuses_each(&root, &[args], "glab ran:");
+        }
+        let mut title = command.clone();
+        title.extend(["--title", LOOKALIKE]);
+        let output = shim(&root, &title);
+        assert_eq!(code(&output), 1, "{}", stderr(&output));
+        assert!(stderr(&output).contains("SUBJECT LINE"));
+        assert!(!stdout(&output).contains("glab ran:"));
+
+        let mut args = command.clone();
+        args.extend(["--description-file", "-"]);
+        let output = shim_fed(&root, &args, hidden);
+        assert_eq!(code(&output), 1, "{}", stderr(&output));
+        assert!(!stdout(&output).contains("glab ran:"));
+
+        let mut args = command;
+        args.extend([
+            "-tClean title",
+            "--description=Clean body",
+            "--attach",
+            "./plain.png",
+        ]);
+        if verb == "create" {
+            args.extend(["-Tissue", "--output=json"]);
+        } else {
+            // This is a milestone, not the table's parent-level message flag.
+            args.extend(["-m", hidden]);
+        }
+        let output = shim(&root, &args);
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert!(stdout(&output).contains("glab ran:"));
+        assert!(!stderr(&output).contains("editor"));
+    }
+}
+
+#[test]
+fn glab_work_items_refuse_unread_editor_text_and_group_targets() {
+    let root = own_glab_workspace();
+    for verb in ["create", "update"] {
+        for flag in ["-d", "--description"] {
+            unreadable_each(
+                &root,
+                &[vec!["glab", "work-items", verb, flag, "-"]],
+                "pass the text with `--description-file` instead",
+                "glab ran:",
+            );
+        }
+        for flag in ["-gteam", "--group=team"] {
+            unreadable_each(
+                &root,
+                &[vec!["glab", "work-items", verb, flag, "-tClean"]],
+                "targets a group",
+                "glab ran:",
+            );
+        }
+    }
+}
+
+#[test]
+fn glab_work_items_group_environment_requires_a_project_override() {
+    let root = own_glab_workspace();
+    for verb in ["create", "update"] {
+        let command = ["glab", "work-items", verb, "-tClean"];
+        let output = shim_with(&root, &command, &[("GITLAB_GROUP", "team")]);
+        assert_eq!(code(&output), 2, "{}", stderr(&output));
+        assert!(stderr(&output).contains("`GITLAB_GROUP` targets a group"));
+        assert!(!stdout(&output).contains("glab ran:"));
+        let mut args = command.to_vec();
+        args.extend(["--repo", "team/project"]);
+        let output = shim_with(&root, &args, &[("GITLAB_GROUP", "team")]);
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert!(stdout(&output).contains("glab ran:"));
+    }
 }
