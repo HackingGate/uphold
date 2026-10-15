@@ -587,3 +587,72 @@ fn init_leaves_an_existing_hook_config_alone() {
         String::from_utf8_lossy(&output.stdout)
     );
 }
+
+// --- `inherit.paths` stays inside the repository ------------------------------
+
+/// A superproject holding `policy/rules.toml` and a member repository whose own
+/// policy inherits `entry`.
+fn member_inheriting(entry: &str) -> PathBuf {
+    let superproject = workspace();
+    write(&superproject, "policy/rules.toml", POLICY);
+    let member = superproject.join("member");
+    mark_repository(&member);
+    write(
+        &member,
+        "policy/principles.toml",
+        &format!("[inherit]\npaths = [{entry:?}]\n"),
+    );
+    write(&member, "inside.txt", "nothing to find here\n");
+    member
+}
+
+fn assert_refused_as_upward(output: &Output, entry: &str) {
+    assert_eq!(code(output), Some(2), "{}", stderr(output));
+    let message = stderr(output);
+    assert!(message.contains("`inherit.paths` names"), "{message}");
+    assert!(message.contains(entry), "{message}");
+    assert!(
+        message.contains("does not borrow upward from what encloses it"),
+        "{message}"
+    );
+}
+
+#[test]
+fn an_inherit_path_that_climbs_out_of_the_repository_is_refused() {
+    let member = member_inheriting("../policy/rules.toml");
+    let output = uphold(&member, &["scan"]);
+    assert_refused_as_upward(&output, "../policy/rules.toml");
+    assert!(!stdout(&output).contains("policy checks passed"));
+}
+
+#[test]
+fn an_absolute_inherit_path_is_refused() {
+    let member = member_inheriting("/nonexistent-uphold-root/rules.toml");
+    let output = uphold(&member, &["scan"]);
+    assert_refused_as_upward(&output, "/nonexistent-uphold-root/rules.toml");
+    assert!(stderr(&output).contains("absolute"), "{}", stderr(&output));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_inherit_path_through_a_symlink_out_of_the_repository_is_refused() {
+    let member = member_inheriting("linked/rules.toml");
+    std::os::unix::fs::symlink(
+        member.parent().unwrap().join("policy"),
+        member.join("linked"),
+    )
+    .unwrap();
+    let output = uphold(&member, &["scan"]);
+    assert_refused_as_upward(&output, "linked/rules.toml");
+    assert!(stderr(&output).contains("symlink"), "{}", stderr(&output));
+}
+
+#[test]
+fn an_inherit_path_inside_the_repository_still_loads() {
+    let member = member_inheriting("policy/rules.toml");
+    write(&member, "policy/rules.toml", POLICY);
+    write(&member, "found.txt", "TODO: here\n");
+    let output = uphold(&member, &["scan"]);
+    assert_eq!(code(&output), Some(1), "{}", stderr(&output));
+    assert!(stderr(&output).contains("found.txt"), "{}", stderr(&output));
+}
