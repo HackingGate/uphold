@@ -3646,7 +3646,11 @@ it is written.
 
 Fixtures are staged in the throwaway worktree the moment they are planted, so
 a rule that reads **tracked** files sees every plant — a probe is never
-invisible to the scan it drives.
+invisible to the scan it drives. This includes fixtures matched by `.gitignore`.
+A staging failure is exit `2`, with git's diagnostic. A fixture path must name
+a file within the worktree: absolute paths, parent traversal and `.git`
+metadata are refused, as are paths through symlinks. These checks apply before
+planting and before removing a fixture.
 
 ### `push = "empty"` — the range the delegate exists for
 
