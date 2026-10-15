@@ -2112,7 +2112,10 @@ fn resolve_link(root: &Path, target: &str, containing: &str) -> PathBuf {
     }
 }
 
-fn percent_decode(text: &str) -> String {
+/// `text` with each `%XX` escape put back as the byte it spells, read as
+/// UTF-8 with any invalid sequence replaced. An escape that is not two hex
+/// digits is kept as written.
+pub(crate) fn percent_decode(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut index = 0;

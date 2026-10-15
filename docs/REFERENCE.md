@@ -2135,6 +2135,27 @@ limit: the built-in aliases are read only for a verb with a grammar, so a verb
 with none is matched by the names its table writes, and an alias the table
 does not name is not checked.
 
+Two option values publish text that is not the value as written, and on a verb
+with a grammar both are read whatever the table names:
+
+- **`--attach`.** `gh` writes an attached image into the text as `![alt](url)`.
+  The alt is what follows the `#` after the longest prefix of the value that
+  names a file. Where there is no such `#`, it is the file's name without its
+  extension, with each `.` a space. A comment that attaches a file needs no
+  body, so that alt can be all it publishes. `glab` uploads the file under its
+  own name, which GitLab writes into the reference (`-` is uploaded as
+  `upload`). The alt and the file's name are judged as prose on both.
+- **Release assets.** On `gh release create`, each operand after the tag is a
+  file it uploads. An operand holding a `#` is `file#label`, split at the first
+  `#` past its start. The label and the file's name, which the release lists
+  the asset by, are judged as prose. Any other operand is a pattern `gh`
+  expands itself. One holding `*`, `?`, `[` or `\` names files the command
+  line does not, so it is exit `2`; let the shell expand it.
+
+An alt text or a label is judged whenever it is not empty, including one made
+only of characters Rust's `trim` removes (U+000B, U+0085), because `gh`
+publishes it as written.
+
 `target` is `forge-repo` or `git-remote`, both built-in resolvers. `scope` is
 `public-target | public-registry | always`, with
 `scope = { command = { command = "..." } }` as the escape hatch — exit `0` to
@@ -2317,7 +2338,10 @@ in front of its own lookup is a loop.
 | `-F`/`--field` | the value after `key=`, with `@file` read from the file and `@-` from stdin |
 | `-f`/`--raw-field` | the value after `key=` as written, `@` included, because that is what is sent |
 | either, by key | a **title** where the key is `title`, `commit_title` or `subject`; a **message** (first line a title, the rest prose) where it is `squash_commit_message` or `merge_commit_message`; prose otherwise |
-| `--input FILE` | the whole file — each **string value** where it is JSON, read by its key as a `--field` is (a `title` is a subject), the raw text where it is not |
+| `--input FILE` | the whole file — each **string value** where it is JSON, read by its key as a `--field` is (a `title` is a subject), the raw text where it is not. One that starts as JSON (`{`, `[` or `"`) and does not decode here is exit `2`; on `glab`, which sends every `--input` body as JSON, so is any non-empty body that is not JSON |
+| a `glab` `-F` value starting with `[` or `{` | decoded as JSON, as `glab` decodes it, and judged by each string under its key (the field's own at the top) and by each object key as prose. One that does not decode here is exit `2`, naming the field: `glab`'s decoder takes values this one refuses (a lone surrogate escape, a number too large for a double, nesting 128 deep), so the value cannot be judged as written |
+| a placeholder in an `-F` value | the value **as the command fills it** (see below), not as written |
+| the endpoint's query string | prose, with the call's placeholders filled, both as written and percent-decoded, because a forge reads a query parameter as it reads a field |
 | the endpoint path | `repos/OWNER/REPO/…`, or GitLab's `projects/OWNER%2FREPO`, as the **destination** |
 
 The destination is the same `owner/repo` a `--repo` resolves to on every other
@@ -2330,9 +2354,60 @@ destination of a GraphQL mutation is inside its query, and nothing in
 a path can say. A JSON body is judged one string value at a time because the
 encoding otherwise hides the text — a prose rule reading the raw document reads
 the escapes rather than the sentence — and "JSON" means a document that starts
-with `{` or `[` and parses as one, not YAML's superset reading, under which an
+with `{`, `[` or `"`, not YAML's superset reading, under which an
 ordinary Markdown body with a `Note: something` line would parse as a mapping
 and most of it would reach no checker at all.
+
+Both commands fill placeholders into a typed field's value (not into a raw
+`-f` field, an `@file`, `--input` or `glab`'s `--form`), and the filled value is
+what is judged:
+
+- **The call's own.** `glab api --placeholder name=value` puts `value` where a
+  field or the endpoint says `:name`, so `-F title=:t --placeholder t=X` sends
+  the title `X` and is judged as `X`. The endpoint is read with the value put
+  in as one path segment, so `projects/:p/issues --placeholder p=owner/repo` is
+  aimed at `owner/repo` for the destination checks.
+- **The current branch.** `gh`'s `{branch}` and `:branch` and `glab`'s
+  `:branch` are filled with the branch checked out where the command runs.
+- **The current repository.** `gh`'s `{owner}`, `{repo}`, `:owner` and
+  `:repo`, and `glab`'s `:fullpath`, `:group/:namespace/:repo`,
+  `:namespace/:repo`, `:group`, `:namespace` and `:repo`, are not filled here.
+  Which remote the command picks, and how it reads a url, are the command's own
+  rules, and a copy of them drifts. Instead, every source the command may read
+  the names from is judged, under the field's key, as one subject: each
+  `remote.<name>.url` and `remote.<name>.pushurl`, each url `git remote -v`
+  prints (with `insteadOf` applied), each saved resolution
+  (`remote.<name>.gh-resolved`, `glab-resolved`, `glab-resolved-base`,
+  `glab-resolved-head`), and for `gh`, `GH_REPO`. Each is judged as written
+  and percent-decoded. A finding in any of them refuses, so a remote holding a
+  name the rule refuses blocks the placeholder even where the command would
+  have picked another. `glab api` reads no `GITLAB_REPO`.
+
+A placeholder that asks for a branch where none is checked out, or for a
+repository where there is no source to read, is exit `2`. The command cannot fill it
+either. `glab`'s `:id`, `:user` and `:username` are filled only by asking
+the forge (the project's number and the account's own name), and are judged as
+written.
+
+**Known limits: text the shim does not read.** Each of these publishes text
+that reaches no checker:
+
+- `glab api --form key=@file` uploads the file's contents as a multipart
+  part, and only the value as written is judged.
+- `--recover FILE` on `gh pr create` and `gh issue create` reloads a title and
+  body saved by an earlier run that failed. `gh` takes it only when it runs
+  interactively, where it prompts with that text before it publishes.
+- `gh release create --generate-notes` publishes notes GitHub composes.
+- `gh gist create` publishes the files it names, and only the description is
+  read.
+
+Two switches publish text from a source on this machine that is not the
+command line, and are exit `2` rather than read: `gh release create
+--notes-from-tag` (the tag's annotation becomes the notes) and `--recover` on
+`glab mr create` and `glab issue create` (the title and description come from
+`glab`'s recovery file). The message names the options that carry the same
+text on the command line, `--notes`/`-n` for `gh` and `--title`/`-t` and
+`--description`/`-d` for `glab`, where it is judged.
 
 ### The stand-downs
 
