@@ -2148,12 +2148,17 @@ with a grammar both are read whatever the table names:
   body, so that alt can be all it publishes. `glab` uploads the file under its
   own name, which GitLab writes into the reference (`-` is uploaded as
   `upload`). The alt and the file's name are judged as prose on both.
-- **Release assets.** On `gh release create`, each operand after the tag is a
+- **Release assets.** On `gh release create` and `gh release upload`, each
+  operand after the tag is a
   file it uploads. An operand holding a `#` is `file#label`, split at the first
   `#` past its start. The label and the file's name, which the release lists
   the asset by, are judged as prose. Any other operand is a pattern `gh`
   expands itself. One holding `*`, `?`, `[` or `\` names files the command
   line does not, so it is exit `2`; let the shell expand it.
+
+The tag operand of `gh release create` is also judged as prose, because the
+command can create that tag on the server. It is separate from the release
+title, so a rule limited to titles does not read it.
 
 An alt text or a label is judged whenever it is not empty, including one made
 only of characters Rust's `trim` removes (U+000B, U+0085), because `gh`

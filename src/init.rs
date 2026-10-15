@@ -58,7 +58,7 @@ match = [
   "pr:create", "pr:edit", "pr:comment", "pr:review", "pr:merge",
   "pr:close", "pr:reopen",
   "issue:create", "issue:edit", "issue:comment", "issue:close", "issue:reopen",
-  "release:create", "release:edit", "gist:create",
+  "release:create", "release:edit", "release:upload", "gist:create",
   "api:*",
 ]
 text_flags = ["-b", "--body", "-n", "--notes"]

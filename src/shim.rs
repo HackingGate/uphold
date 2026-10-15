@@ -2293,7 +2293,19 @@ impl Shim {
         if let Some(body) = grammar.stdin_body {
             self.stdin_body(&mut collected, &given, body, &on)?;
         }
-        // The first operand is the tag.
+        // Creating a release can create the tag on the server too. It is
+        // published text, independent of the release's optional title.
+        if self.command == "gh"
+            && grammar.verb == "release:create"
+            && let Some(tag) = operands.first()
+        {
+            collected.subjects.push(Subject {
+                kind: "text",
+                value: (*tag).to_owned(),
+                added: None,
+            });
+        }
+        // The first operand is the tag, on both create and upload.
         if grammar.assets {
             for asset in operands.iter().skip(1) {
                 collected
@@ -3661,7 +3673,7 @@ struct Grammar {
     /// that name the verb name its alias too.
     aliases: &'static [&'static str],
     /// Whether the operands after the first are files the verb uploads, each
-    /// spelt `file#label`: `gh release create <tag> [<file>...]`. The label
+    /// spelt `file#label`: `gh release create|upload <tag> <file>...`. The label
     /// and the file's name are published beside the release.
     assets: bool,
     /// What the forge holds of this verb's text, where it holds any.
@@ -3981,6 +3993,10 @@ const FORGE_GRAMMAR: &[Grammar] = &[
                 "--title",
             ],
         )
+    },
+    Grammar {
+        assets: true,
+        ..grammar("gh", "release:upload", &["--clobber"], &[])
     },
     grammar(
         "gh",

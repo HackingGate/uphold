@@ -5040,6 +5040,61 @@ fn a_repository_placeholder_is_judged_against_every_source_the_command_may_read(
 }
 
 #[test]
+fn a_release_upload_judges_asset_labels_and_file_names() {
+    let root = own_gh_workspace();
+    let label = "./asset.zip#a\u{200B}b";
+    let name = "./a\u{200B}b.zip";
+    refuses_each(
+        &root,
+        &[
+            vec!["gh", "release", "upload", "v1", label],
+            vec!["gh", "release", "upload", "--clobber", "v1", name],
+            vec!["gh", "release", "upload", "v1", "--", label],
+        ],
+        "gh ran:",
+    );
+    unreadable_each(
+        &root,
+        &[vec!["gh", "release", "upload", "v1", "dist/*.zip"]],
+        "let the shell expand the pattern",
+        "gh ran:",
+    );
+    let output = shim(
+        &root,
+        &["gh", "release", "upload", "v1", "./asset.zip#Linux"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_release_create_judges_the_tag_separately_from_its_title() {
+    let root = own_gh_workspace();
+    let tag = "v1\u{200B}";
+    refuses_each(
+        &root,
+        &[
+            vec!["gh", "release", "create", tag, "-n", "ok"],
+            vec![
+                "gh",
+                "release",
+                "create",
+                "-t",
+                "clean title",
+                "-n",
+                "ok",
+                tag,
+            ],
+            vec!["gh", "release", "create", "--verify-tag", tag, "-n", "ok"],
+        ],
+        "gh ran:",
+    );
+    let output = shim(&root, &["gh", "release", "create", "v1", "-n", "ok"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+}
+
+#[test]
 fn an_alt_text_or_asset_label_of_unicode_blanks_alone_is_judged() {
     // Rust's `trim` strips U+0085 and U+000B, so text made of nothing else
     // read as empty and was never handed to the rule. `gh` publishes it.

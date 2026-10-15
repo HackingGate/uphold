@@ -476,7 +476,7 @@ command = "gh"
 match = [
   "pr:create", "pr:edit", "pr:comment", "pr:review",
   "issue:create", "issue:edit", "issue:comment",
-  "release:create", "release:edit",
+  "release:create", "release:edit", "release:upload",
   "gist:create",
   # Five that carry text and stood behind nothing until 1.8.0. `pr:merge`
   # publishes the merge commit message through `--body` and `--subject`, and
