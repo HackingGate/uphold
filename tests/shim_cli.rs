@@ -2705,6 +2705,48 @@ fn a_title_set_through_the_api_is_judged_as_the_title_it_is() {
     assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
 }
 
+#[test]
+fn an_input_json_title_is_judged_as_a_subject_and_the_same_word_in_a_body_is_prose() {
+    // The keyed reader the harness hook uses, shared rather than copied: the
+    // same JSON gets the same checks at either seam.
+    let root = gh_stub_workspace(&GH_TITLE_POLICY.replace(
+        "match = [\"pr:create\", \"pr:merge\"]",
+        "match = [\"pr:create\", \"pr:merge\", \"api:*\"]",
+    ));
+    let call = |payload: serde_json::Value| {
+        std::fs::write(root.join("payload.json"), payload.to_string()).unwrap();
+        shim(
+            &root,
+            &[
+                "gh",
+                "api",
+                "-X",
+                "PATCH",
+                "repos/o/r/pulls/1",
+                "--input",
+                "payload.json",
+            ],
+        )
+    };
+
+    let refused = call(serde_json::json!({"title": LOOKALIKE, "body": "ordinary"}));
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("CYRILLIC SMALL LETTER A"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(
+        !stdout(&refused).contains("gh ran:"),
+        "{}",
+        stdout(&refused)
+    );
+
+    let passed = call(serde_json::json!({"title": "ordinary", "body": LOOKALIKE}));
+    assert_eq!(code(&passed), 0, "{}", stderr(&passed));
+    assert!(stdout(&passed).contains("gh ran:"), "{}", stdout(&passed));
+}
+
 /// This repository's own `glab` table, scoped `always` because there is no
 /// forge to ask, under the unicode rule.
 fn own_glab_workspace() -> PathBuf {

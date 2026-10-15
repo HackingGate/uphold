@@ -754,15 +754,85 @@ fn repo_in_api_path(path: &str) -> Option<String> {
     None
 }
 
-/// Every string in a JSON document, or nothing where the text is not one.
+/// Every string anywhere under `value`, as prose or as a headline.
+///
+/// The one reader of a JSON document's keys, called by both the harness hook
+/// (a tool call's arguments) and `gh api --input` (a request body), so the same
+/// JSON gets the same checks whichever seam carries it.
+///
+/// Deliberately not a list of field names per harness and per tool to READ. A
+/// server decides what to call the field holding a pull-request body, a release
+/// note or a branch name, and a table of those names is a table that is missing
+/// the one a new server just added -- silently, and in the green direction.
+/// Reading them all costs a second pass over text that is already in memory;
+/// missing one costs the whole seam. Every string is read, whatever its key.
+///
+/// What a key does decide is which CHECK a string gets, and only towards the
+/// stricter one. A string whose nearest key is one the shim already treats as
+/// a title in an `api` field -- [`API_TITLE_KEYS`] -- is a headline, and one
+/// under a whole-message key -- [`API_MESSAGE_KEYS`] -- is a headline for its
+/// first line and prose for the rest. That list fails the other way from a
+/// table of fields to read: a title key it lacks leaves that string prose,
+/// which is what every string here was judged as before, so a missing key costs
+/// the lookalike pass on one field and never the seam. The lists are
+/// this file's, so a key added for `gh api` is a key at the hook too.
+///
+/// The order is whatever the JSON reader hands back, which for an object is by
+/// key rather than by the order somebody wrote the fields in. Nothing here
+/// depends on it: the strings are joined and searched, and a rule that matched
+/// only when two fields happened to be adjacent would be a rule about the
+/// harness's serializer.
+pub(crate) fn walk_strings(value: &serde_json::Value, key: Option<&str>, into: &mut Walked) {
+    match value {
+        serde_json::Value::String(text) => match key {
+            Some(key) if API_TITLE_KEYS.contains(&key) => {
+                into.headlines.push((key.to_owned(), text.clone()));
+            }
+            Some(key) if API_MESSAGE_KEYS.contains(&key) => {
+                for subject in message_subjects(text.clone()) {
+                    if subject.kind == Subject::HEADLINE {
+                        into.headlines.push((key.to_owned(), subject.value));
+                    } else {
+                        into.prose.push(subject.value);
+                    }
+                }
+            }
+            _ => into.prose.push(text.clone()),
+        },
+        serde_json::Value::Array(items) => {
+            for item in items {
+                walk_strings(item, key, into);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for (name, field) in fields {
+                walk_strings(field, Some(name), into);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A tool call's strings, sorted by the check each gets. A headline keeps the
+/// key it was found under, so a finding names `commit_title` or `subject`
+/// rather than a generic "title" the call never said.
+#[derive(Default)]
+pub(crate) struct Walked {
+    pub(crate) prose: Vec<String>,
+    pub(crate) headlines: Vec<(String, String)>,
+}
+
+/// Every string in a JSON document, keyed as [`walk_strings`] reads it, or
+/// nothing where the text is not one.
 ///
 /// An `--input` file is a body, and a body that happens to be JSON hides its
 /// text from a checker behind the encoding: `"body": "Generated with X\n"` is
 /// one escaped string, and a prose rule reading the raw document reads the
 /// escapes rather than the sentence. So the values are judged one at a time,
-/// the way a `--field` value is. A file that is NOT JSON is judged whole, which
-/// is what it is.
-fn json_strings(text: &str) -> Option<Vec<String>> {
+/// the way a `--field` value is, and by the key they sit under the way a
+/// `--field` value is. A file that is NOT JSON is judged whole, which is what
+/// it is.
+fn json_strings(text: &str) -> Option<Walked> {
     // Deliberately strict, and deliberately not the YAML reader the rest of
     // this file uses on forge responses: YAML 1.2 is a superset of JSON, so an
     // ordinary Markdown body with a `Note: something` line parses as a mapping
@@ -773,26 +843,9 @@ fn json_strings(text: &str) -> Option<Vec<String>> {
         return None;
     }
     let parsed = serde_json::from_str::<serde_json::Value>(text).ok()?;
-    let mut found = Vec::new();
-    push_json_strings(&parsed, &mut found);
+    let mut found = Walked::default();
+    walk_strings(&parsed, None, &mut found);
     Some(found)
-}
-
-fn push_json_strings(value: &serde_json::Value, into: &mut Vec<String>) {
-    match value {
-        serde_json::Value::String(text) => into.push(text.clone()),
-        serde_json::Value::Array(items) => {
-            for item in items {
-                push_json_strings(item, into);
-            }
-        }
-        serde_json::Value::Object(map) => {
-            for item in map.values() {
-                push_json_strings(item, into);
-            }
-        }
-        _ => {}
-    }
 }
 
 /// An `alias.<name>` set with `-c` on the command line, which outranks config.
@@ -1907,11 +1960,18 @@ impl Shim {
         if let Some(file) = &call.input {
             let text = self.api_file("--input", file, &mut stdin)?;
             match json_strings(&text) {
-                Some(values) => subjects.extend(values.into_iter().map(|value| Subject {
-                    kind: "text",
-                    value,
-                    added: None,
-                })),
+                Some(walked) => {
+                    subjects.extend(walked.headlines.into_iter().map(|(_, value)| Subject {
+                        kind: Subject::HEADLINE,
+                        value,
+                        added: None,
+                    }));
+                    subjects.extend(walked.prose.into_iter().map(|value| Subject {
+                        kind: "text",
+                        value,
+                        added: None,
+                    }));
+                }
                 None => subjects.push(Subject {
                     kind: "text",
                     value: text,
