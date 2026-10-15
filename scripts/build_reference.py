@@ -84,17 +84,17 @@ def render() -> str:
 
     # Two groupings of the same records, for a reader who arrives with "which
     # records are heuristics" or "what applies to data" rather than a name.
-    # `kind` and `domains` answer different questions (ADR 0011), so each gets
-    # its own list rather than one being folded into the other.
+    # `kind` says what sort of claim a record makes; `domains` says where it
+    # applies. Each gets its own list rather than one being folded into the other.
     lines.extend(["", "## By kind", ""])
     lines.extend(grouped(records, lambda record: [record["kind"]]))
     lines.extend(["", "## By domain", ""])
     lines.extend(grouped(records, lambda record: record["domains"]))
 
-    # The third question a record answers (ADR 0011): at which rung a gate can
-    # see it. In ladder order, and with the records that state no rung listed
-    # last under one word, so the line a reader wants -- what a reviewer alone
-    # can hold -- is a line and not a subtraction.
+    # The third axis is where a gate can see the claim. Groups follow ladder
+    # order; records that state no rung appear under one final heading, so the
+    # line a reader wants -- what a reviewer alone can hold -- is a line and
+    # not a subtraction.
     lines.extend(["", "## By rung", ""])
     lines.extend(grouped(records, rungs_of, order=(*RUNGS, NO_RUNG)))
 

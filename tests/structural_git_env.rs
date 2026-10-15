@@ -151,8 +151,8 @@ fn bare_constructions(source: &str) -> Vec<String> {
 /// one name -- a helper that iterates some other constant strips nothing this
 /// reader can see.
 ///
-/// WHAT THIS DOES NOT PROVE, and it is the same boundary the ADR draws. The
-/// helper hands `env_remove` a loop variable, so the argument at the call site
+/// WHAT THIS DOES NOT PROVE. The helper hands `env_remove` a loop variable, so
+/// the argument at the call site
 /// is an identifier: what is read here is that the helper removes SOMETHING and
 /// that the name appears as a literal in the same function. Tying this literal
 /// to that call means following the value into the loop, which is the tier

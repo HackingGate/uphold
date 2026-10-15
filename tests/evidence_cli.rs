@@ -98,8 +98,7 @@ fn a_removal_the_message_does_not_name_is_refused_and_named_it_is_clean() {
 
 #[test]
 fn a_staged_file_the_parser_could_not_read_is_exit_two_and_not_a_pass() {
-    // The measurement ADR 0003 records, as a verdict a repository gets: the
-    // staged side has an unterminated string, the grammar recovers a tree
+    // The staged side has an unterminated string, the grammar recovers a tree
     // with nothing removed in it, and the run says it could not look rather
     // than that the message names everything.
     let root = staged(

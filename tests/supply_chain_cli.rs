@@ -1482,6 +1482,38 @@ fn guarddog_issues_without_risks_are_not_a_finding() {
     );
 }
 
+/// A report must carry both the checks guarddog ran and its risk list. A
+/// missing or mistyped field is an incomplete answer, not an empty finding.
+#[test]
+fn guarddog_with_an_incomplete_result_is_could_not_look() {
+    let root = repository();
+    std::fs::create_dir_all(root.join("web")).unwrap();
+    std::fs::write(
+        root.join("web/package.json"),
+        "{\"name\": \"web\", \"dependencies\": {\"cookie\": \"^1.1.1\"}}\n",
+    )
+    .unwrap();
+    for result in [
+        r#"{"errors":{},"results":{}}"#,
+        r#"{"errors":{},"results":{},"risks":null}"#,
+        r#"{"errors":{},"results":null,"risks":[]}"#,
+    ] {
+        let report = format!(r#"[{{"dependency":"cookie","result":{result}}}]"#);
+        let tools = stubs(&[
+            ("osv-scanner", "exit 0"),
+            ("guarddog", &format!("echo '{report}'\nexit 0")),
+        ]);
+        let output = supply(&root, Some(&tools));
+        assert_eq!(code(&output), 2, "{result}: {}", text(&output));
+        let said = text(&output);
+        assert!(
+            said.contains("incomplete report for cookie"),
+            "{result}: {said}"
+        );
+        assert!(!said.contains("all checks passed"), "{result}: {said}");
+    }
+}
+
 /// A dependency guarddog could not download is could-not-look, not clean.
 ///
 /// The 404 and network paths populate `errors` and drop `results`, and still

@@ -190,8 +190,8 @@ consumer, and it puts no proof rung into anyone else's tree.
 A structural rule, such as "no `.unwrap()` outside `#[cfg(test)]`", is an
 `ast-grep` rule in the consumer's own tree, run from the consumer's own hook
 config. uphold carries no rule form over the parse tree and no wrapper around
-`ast-grep`; [ADR 0009](adr/0009-a-consumers-structural-rules-are-ast-greps.md)
-records why. The entry, for pre-commit or prek:
+`ast-grep`: the consumer owns the rule and its gate, so changing either does
+not require an uphold release. The entry, for pre-commit or prek:
 
 ```yaml
 - repo: local

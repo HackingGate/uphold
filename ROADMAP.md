@@ -34,8 +34,8 @@ Open:
   enforces. A provider whose configuration is local and readable (`deny.toml`,
   an `ast-grep` rule directory, a `zizmor.yml`, a `repo: local` hook, a lefthook
   command) can be asked whether the id is defined in it. That does not establish
-  what the id means; `uphold probe` does, by driving it to a refusal. See
-  [ADR 0005](docs/adr/0005-what-a-provider-must-answer.md).
+  what the id means; `uphold probe` does, by driving it to a refusal. See the
+  [provider contract](docs/DESIGN.md#what-an-external-provider-must-establish).
 - **Detect that an installed rule never fires.** A rule that cannot match is
   effectively disabled, and no config file shows it. This needs firing counts
   from the tiers themselves, and a way to tell a clean tree from a dead rule.
@@ -76,16 +76,16 @@ provenance in refusal output. The remaining work is per repository.
 
 ## Evidence providers, and what the evidence layer leaves open
 
-The evidence layer ([ADR 0008](docs/adr/0008-evidence-and-what-a-policy-may-consume.md))
+The [evidence layer](docs/DESIGN.md#evidence-what-a-provider-reports-and-what-a-policy-may-read)
 ships with three compiled-in providers (Git over the message, tree-sitter over
 the staged trees, a pattern over the staged diff) and one policy,
 `removed-function-named`, that reads them. Not yet shipped:
 
 - **A compiler or LSP provider.** `symbol_defined`, `unresolved_reference` and
   `type_changed` are kinds the evidence-layer design names and nothing reports;
-  a kind with no provider would be dead configuration. ADR 0004 measured what
-  the semantic tier costs before a commit, so such a provider belongs at the
-  manual stage or nowhere.
+  a kind with no provider would be dead configuration. Semantic analysis
+  requires compiler or language-server setup, so such a provider belongs at
+  the manual stage or nowhere.
 - **`dependency_edge` and layer kinds.** The architectural-boundary policy the
   evidence-layer design sketches needs a provider that resolves imports across
   modules, the same tier as above.

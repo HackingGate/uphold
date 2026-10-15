@@ -441,7 +441,7 @@ fn initialise_inner(root: &Path) {
 
 #[test]
 fn a_member_that_pins_a_member_is_followed_at_every_depth() {
-    // The ADR leaves the depth open. A pin is a claim at every depth: the
+    // A pin is a claim at every depth: the
     // superproject pins the outer member's commit, and that commit pins its
     // own member, so a rule claiming the pinned content reads both.
     let root = nested("reach-nested");

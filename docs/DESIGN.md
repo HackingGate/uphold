@@ -12,8 +12,9 @@ without scope conditions is a slogan; a principle without trade-offs is
 marketing; a principle without an enforcement path cannot be treated as policy.
 
 Not every entry is a principle: the catalog is typed by epistemic kind, so a
-law, a theorem, a heuristic and a metric each say what they are
-([ADR 0011](adr/0011-what-an-entry-is-where-it-is-used-and-how-a-check-sees-it.md)).
+law, a theorem, a heuristic and a metric each say what they are. The
+[catalog schema](../principles/SCHEMA.md) defines each kind separately from
+its domains and enforcement rungs.
 
 The collection begins with software and systems engineering because those are
 the most directly enforceable domains, but it also includes reliability,
@@ -248,6 +249,20 @@ in the environment and is deliberately not a rule field: a bypass belongs to one
 invocation by whoever is running it, and written into the policy file it would
 be committed, reviewed once, and permanent, which is not a bypass.
 
+## What an external provider must establish
+
+A trustworthy provider claim has a verifiable rule name, a demonstrated
+refusal, and a way to distinguish compliant input from input the provider
+could not read. `uphold probe` can demonstrate a refusal by planting invalid
+and clean fixtures and checking both verdicts. Where the provider cannot
+report unread input itself, a companion check must supply that evidence;
+silence alone is insufficient evidence of a clean run.
+
+These are criteria for choosing a provider. The reconciler currently credits
+external hook ids from their installation and takes the claim's word for what
+they enforce; inspecting a provider's local rule definitions is still planned.
+Probing is opt-in, not a prerequisite enforced on every claim.
+
 ## Evidence: what a provider reports and what a policy may read
 
 Most guards read their own artifact and decide on the spot, and for a rule
@@ -273,18 +288,17 @@ so the seam exists before the first one does.
 A provider that could not look says so in its answer, as a variant and never as
 an empty list. The parser provider answers `Unavailable` for a file with an
 `ERROR` node on either side, naming the file and the line, because the
-recovered tree is unpredictably shorter than the file. ADR 0008 measured this:
-one missing brace hides one function of two from the walk, and an unterminated
-string hides none. What follows is decided the same way every time: parser
-unavailable and the diff pattern silent is exit 2; parser unavailable and the
+recovered tree can omit functions from the file; an empty parser result is
+therefore not evidence that no function was removed. What follows is decided
+the same way every time: parser unavailable and the diff pattern silent is exit 2; parser unavailable and the
 diff pattern found a removal is a refusal; two `Proven` providers disagreeing
 about one subject is a refusal naming both.
 
 It is not a rule DSL and not a plugin API. A policy is a Rust predicate in this
 binary dispatched like every other built-in, a provider is a Rust type compiled
-in, and the trait between them is the shape of an answer to ADR 0005's third
-question for readers that live inside the binary. ADRs 0003, 0005 and 0008
-carry the argument.
+in, and the trait between them distinguishes evidence from an unavailable
+source. This keeps policies independent of parser details while preserving a
+failure to inspect as an explicit answer.
 
 ## Shims: what is data and what is code
 
@@ -350,8 +364,7 @@ is enforced at another seam.
 `no-stale-hook-pins` asks both halves of one question of one answer: whether a
 pin has fallen behind the newest upstream tag, and whether the ref it names
 exists at all. The first half is asked of lefthook refs only; for a pre-commit
-`rev:` it belongs to `prek update --check`, run by the consumer
-([ADR 0010](adr/0010-who-asks-whether-a-hook-pin-is-current.md)). They were
+`rev:` it belongs to `prek update --check`, run by the consumer. They were
 two checkers for a while (a `check_hook_pins.py` script beside the guard), and
 that arrangement is the drift this section warns about: the two read the same
 `rev:` lines, reached the same remote, and were free to return different

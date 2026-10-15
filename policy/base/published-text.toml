@@ -25,8 +25,7 @@
 # the CHECKERS and never the shims -- a repository that inherits it without
 # declaring the tables is refused at load, with the table to write named in
 # the refusal. Declaring the shim is the visible decision; this set is what
-# stops six repositories from transcribing the checkers behind it. See
-# ADR 0006.
+# stops six repositories from transcribing the checkers behind it.
 #
 # WHAT THE SWEEP FOUND. Six repositories in one workspace declared these three
 # rules by hand, near-identically -- the same ids, the same `command.before`,

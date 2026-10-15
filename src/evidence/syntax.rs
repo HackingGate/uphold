@@ -7,8 +7,7 @@
 //! comment rules, read off the same table, so a language added there is a
 //! language this provider reads.
 //!
-//! The one rule this provider carries that the others do not is ADR 0003's:
-//! a tree with an ERROR or MISSING node in it is a tree the grammar recovered
+//! A tree with an ERROR or MISSING node is one the grammar recovered
 //! rather than read, and a walk over it finds less than is there. A file that
 //! did not parse on either side makes the whole answer `Unavailable`, naming
 //! the file and the line, rather than a shorter list of facts that reads
@@ -377,8 +376,8 @@ mod tests {
 
     #[test]
     fn a_side_that_did_not_parse_makes_the_whole_answer_unavailable() {
-        // ADR 0003's measurement, at this seam: the removed function is
-        // three lines under an unterminated string, the recovered tree does
+        // The removed function is three lines under an unterminated string,
+        // the recovered tree does
         // not contain it, and a walk would report nothing -- which is the
         // report from a file that removes nothing. The answer names the file
         // and the line instead.

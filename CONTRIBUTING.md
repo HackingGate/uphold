@@ -88,11 +88,9 @@ The repository receives only what runs, plus
 uphold does now. Tracked files carry no issue numbers, dates or status lines;
 those stay in the Design record that rules the change.
 
-The records under `docs/adr/` stay as history and are cited as they are. No new
-one is added: the `adr-freeze` rule in `policy/principles.toml` refuses any
-other file under that directory, and its message names the remedy.
-[ADR 0012](docs/adr/0012-a-rule-may-reach-the-content-its-repository-pins.md)
-is Accepted and implemented as `files.reach`.
+Decisions live in Design record issues. [DESIGN.md](docs/DESIGN.md) explains
+the current architecture; [REFERENCE.md](docs/REFERENCE.md) defines its
+behavior. Retired decision files remain available in Git history.
 
 ## Working on the engine
 

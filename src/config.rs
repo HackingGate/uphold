@@ -157,7 +157,7 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
     // and the diff on what was removed, the message on what was intended --
     // and judges that. Its own name because taking it is a house-style
     // decision about commit messages, which a repository inheriting the
-    // residue guards has said nothing about. See ADR 0008.
+    // residue guards has not opted into.
     (
         "unnamed-removal",
         include_str!("../policy/base/unnamed-removal.toml"),
@@ -167,7 +167,7 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
     // inside the `[set] commands` ceiling, and each names a `[[shim]]` the
     // inheriting repository has declared itself -- a repository that has not
     // put a program in front of `gh` is refused at load with the table to
-    // write, not handed one by a version bump. See ADR 0006.
+    // write, not handed one by inheriting the set.
     (
         "published-text",
         include_str!("../policy/base/published-text.toml"),
@@ -1191,7 +1191,7 @@ pub(crate) struct SetHeader {
     /// What this ceiling deliberately does NOT grant: a shim. A set's rule
     /// reaches a command only through a `[[shim]]` the repository declared
     /// itself, and inheriting a set in a repository that has not declared one
-    /// is refused at load, naming the table to write. See ADR 0006.
+    /// is refused at load, naming the table to write.
     #[serde(default)]
     pub commands: Vec<String>,
 }

@@ -108,7 +108,8 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     // evidence every compiled-in provider reported about the change and
     // judges that -- so which parser or which diff supplied a fact is not its
     // business, and `tests/structural_evidence.rs` refuses the policy file
-    // naming one. See `evidence` for the shape and ADR 0008 for why.
+    // naming one. See `evidence` for the shape and docs/DESIGN.md for why a
+    // policy reads evidence rather than naming its provider.
     "removed-function-named",
 ];
 

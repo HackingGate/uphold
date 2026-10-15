@@ -1562,6 +1562,16 @@ fn guarddog_read(
                 )
             ));
         }
+        let Some(results) = result.get("results").and_then(serde_json::Value::as_object) else {
+            return Read::Unread(format!(
+                "guarddog gave an incomplete report for {name} at {at}: `results` is not an object"
+            ));
+        };
+        let Some(reported_risks) = result.get("risks").and_then(serde_json::Value::as_array) else {
+            return Read::Unread(format!(
+                "guarddog gave an incomplete report for {name} at {at}: `risks` is not an array"
+            ));
+        };
         // The version guarddog resolved, which for npm is the release a range
         // in `package.json` picked and not the range itself.
         let version = result
@@ -1573,11 +1583,7 @@ fn guarddog_read(
             .seen
             .insert((ecosystem.to_owned(), (*name).to_owned()));
         let mut risks = 0_usize;
-        for risk in result
-            .get("risks")
-            .and_then(serde_json::Value::as_array)
-            .map_or(&[][..], Vec::as_slice)
-        {
+        for risk in reported_risks {
             // The rule that raised it, as a waiver names it; `name` is the
             // risk's own id, for a risk no single rule raised.
             let rule = risk
@@ -1587,13 +1593,18 @@ fn guarddog_read(
                 .or_else(|| risk.get("name").and_then(serde_json::Value::as_str))
                 .unwrap_or("");
             // npm's own publish-time rewrites, named on the line that lets
-            // them through; anything else in the same risk keeps it counted.
+            // them through. The risk and the underlying result must describe
+            // the same difference; anything else keeps the risk counted.
             if ecosystem == "npm"
                 && rule == "metadata_mismatch"
-                && let Some(accepted) = risk
+                && let Some(description) = risk
                     .get("threat_description")
                     .and_then(serde_json::Value::as_str)
-                    .and_then(tolerated)
+                && results
+                    .get("metadata_mismatch")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(description)
+                && let Some(accepted) = tolerated(description)
             {
                 println!(
                     "   tolerated: {rule} on {ecosystem}:{name}@{version} at {at} -- {}",
@@ -2247,6 +2258,24 @@ mod tests {
                 "npm strips a leading node_modules/.bin/ (scripts.test = \"mocha t\")"
             )])
         );
+    }
+
+    /// Guarddog repeats the mismatch in `results` and on its risk. A risk's
+    /// description alone cannot excuse a different underlying result.
+    #[test]
+    fn npm_tolerance_requires_the_result_and_risk_to_agree() {
+        let mut report: serde_json::Value = serde_json::from_str(REACT_DOM).unwrap();
+        report[0]["result"]["results"]["metadata_mismatch"] = serde_json::Value::from(format!(
+            "{HEADER}scripts: \n  postinstall: Manifest(\"node evil.js\"), \
+                 package.json(\"None\") \n"
+        ));
+        assert_eq!(objected("npm", &report.to_string()), Ok(true));
+
+        report[0]["result"]["results"]
+            .as_object_mut()
+            .unwrap()
+            .remove("metadata_mismatch");
+        assert_eq!(objected("npm", &report.to_string()), Ok(true));
     }
 
     /// A normalization alongside any other difference is still a finding: the

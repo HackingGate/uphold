@@ -141,8 +141,8 @@ mod tests {
 
     #[test]
     fn a_parser_that_could_not_read_and_a_pattern_that_saw_nothing_is_could_not_look() {
-        // ADR 0003's finding at this seam. The staged side does not parse, the
-        // diff removes no `fn` line the pattern can see, and the verdict is
+        // The staged side does not parse, the diff removes no `fn` line the
+        // pattern can see, and the verdict is
         // exit 2 -- not the clean that both readers' silence would add up to.
         let root = staged(
             "lib.rs",
