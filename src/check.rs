@@ -566,13 +566,15 @@ pub(crate) fn installed(root: &Path) -> Result<Installed> {
         Err(error) => found.unreadable.push(error.to_string()),
     }
 
-    match harness_hook(root) {
-        Ok(Some(at)) => {
-            found.hook = true;
-            found.how.push(format!("{at} runs `uphold hook`"));
+    for name in HARNESS_SETTINGS {
+        match harness_hook(root, name) {
+            Ok(true) => {
+                found.hook = true;
+                found.how.push(format!("{name} runs `uphold hook`"));
+            }
+            Ok(false) => {}
+            Err(error) => found.unreadable.push(error.to_string()),
         }
-        Ok(None) => {}
-        Err(error) => found.unreadable.push(error.to_string()),
     }
 
     if found.nothing() && found.how.is_empty() {
@@ -589,15 +591,20 @@ pub(crate) fn installed(root: &Path) -> Result<Installed> {
 /// `.claude/settings.json` and not `settings.local.json`: the local file is
 /// untracked by the harness's own convention, so it says what one machine does
 /// and not what this repository asks of every checkout.
-const HARNESS_SETTINGS: &[&str] = &[".claude/settings.json"];
+const HARNESS_SETTINGS: &[&str] = &[
+    ".claude/settings.json",
+    ".codex/hooks.json",
+    ".codex/config.toml",
+];
 
-/// The tracked harness settings file that runs `uphold hook`, if any.
+/// Whether a repository's harness settings file runs `uphold hook`.
 ///
-/// Every string in the document is looked at rather than one path into it:
-/// the harness nests a command under an event, a matcher and a list, and a
-/// pointer written for today's shape is one that misses tomorrow's in the
-/// green direction. A file that is not JSON is could-not-look.
-fn harness_hook(root: &Path) -> Result<Option<String>> {
+/// Every string under `hooks` is looked at rather than one path into it:
+/// the harness nests a command under an event, a matcher and a list. JSON and
+/// TOML are decoded into the same value so both use one command matcher.
+/// The caller reads every source even after finding a hook, because one valid
+/// source must not hide an unreadable later source.
+fn harness_hook(root: &Path, name: &str) -> Result<bool> {
     fn runs_hook(value: &serde_json::Value) -> bool {
         match value {
             serde_json::Value::String(text) => text.split([';', '&', '|']).any(|command| {
@@ -612,19 +619,18 @@ fn harness_hook(root: &Path) -> Result<Option<String>> {
             _ => false,
         }
     }
-    for name in HARNESS_SETTINGS {
-        let path = root.join(name);
-        if !path.is_file() {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).map_err(|error| Fatal::at(&path, error))?;
-        let document: serde_json::Value =
-            serde_json::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
-        if document.get("hooks").is_some_and(runs_hook) {
-            return Ok(Some((*name).to_owned()));
-        }
-    }
-    Ok(None)
+    let path = root.join(name);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(Fatal::at(&path, error)),
+    };
+    let document: serde_json::Value = if path.extension().is_some_and(|ext| ext == "toml") {
+        toml::from_str(&text).map_err(|error| Fatal::at(&path, error))?
+    } else {
+        serde_json::from_str(&text).map_err(|error| Fatal::at(&path, error))?
+    };
+    Ok(document.get("hooks").is_some_and(runs_hook))
 }
 
 /// Which seams supply each resolved rule, and what could not be established.
@@ -821,6 +827,12 @@ pub(crate) fn run(root: &Path, policy: &Policy, coverage: bool) -> Result<Exit> 
     }
     if !failures.is_empty() || !installed.misplaced.is_empty() {
         return Ok(Exit::Violations);
+    }
+    if !installed.unreadable.is_empty() {
+        return Err(Fatal::new(format!(
+            "runner configuration could not be read: {}",
+            installed.unreadable.join("; ")
+        )));
     }
 
     println!("reconciled {} enforcement claims:", evidence.len());

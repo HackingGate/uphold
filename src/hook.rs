@@ -36,9 +36,9 @@
 //! ## The exit code is not uphold's to choose
 //!
 //! Everywhere else in this binary, 1 means refused and 2 means could not look.
-//! Here the harness owns the protocol: Claude Code reads a refusal out of a
-//! JSON document on stdout and treats a non-zero status as an error in the hook
-//! rather than a verdict on the call, so exiting 1 to signal a refusal would
+//! Here the harness owns the protocol: Claude Code and Codex read a refusal
+//! out of a JSON document on stdout at exit 0. Exit 1 is an error in the hook
+//! rather than a verdict on the call, so using it to signal a refusal would
 //! let the call through with a complaint attached. The refusal travels in the
 //! document, and it is ALSO printed to stderr, so that a person running
 //! `uphold hook` by hand sees the report rather than a line of JSON.
@@ -56,8 +56,8 @@ use crate::text::{self, Verdict};
 
 /// What one harness calls the three things every harness has.
 struct Shape {
-    /// The name this harness is asked for by, on the command line.
-    name: &'static str,
+    /// Harness names sharing this wire protocol, as accepted on the command line.
+    names: &'static [&'static str],
     /// JSON pointer to what the call is called. Reported, never matched on.
     label: &'static str,
     /// JSON pointer to the object holding what the call is about to send.
@@ -70,11 +70,11 @@ struct Shape {
     refused: Exit,
 }
 
-/// One entry. A second harness is two pointers and a document, and if adding it
-/// turns out to need a function instead, that is the discovery that this table
-/// was the wrong shape rather than a reason to special-case one member of it.
+/// Claude Code and Codex share the same input pointers and refusal document.
+/// A different protocol needs another shape; another name for this protocol
+/// belongs in the same entry so the wire contracts cannot drift apart.
 const SHAPES: &[Shape] = &[Shape {
-    name: "claude-code",
+    names: &["claude-code", "codex"],
     label: "/tool_name",
     subject: "/tool_input",
     refusal: r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}"#,
@@ -86,7 +86,7 @@ const SHAPES: &[Shape] = &[Shape {
 pub(crate) fn known() -> String {
     SHAPES
         .iter()
-        .map(|shape| shape.name)
+        .flat_map(|shape| shape.names.iter().copied())
         .collect::<Vec<&str>>()
         .join("|")
 }
@@ -98,12 +98,16 @@ pub(crate) fn known() -> String {
 /// written template is how a refusal about unusual characters becomes a
 /// document the harness cannot parse.
 fn refusal_document(shape: &Shape, report: &str) -> Result<String> {
-    let mut document: Value = serde_json::from_str(shape.refusal)
-        .map_err(|error| Fatal::new(format!("{}: malformed refusal shape: {error}", shape.name)))?;
+    let mut document: Value = serde_json::from_str(shape.refusal).map_err(|error| {
+        Fatal::new(format!(
+            "{}: malformed refusal shape: {error}",
+            shape.names.join("|")
+        ))
+    })?;
     let (parent, key) = shape.reason_at.rsplit_once('/').ok_or_else(|| {
         Fatal::new(format!(
             "{}: refusal shape names no place for the report",
-            shape.name
+            shape.names.join("|")
         ))
     })?;
     let target = document
@@ -112,12 +116,16 @@ fn refusal_document(shape: &Shape, report: &str) -> Result<String> {
         .ok_or_else(|| {
             Fatal::new(format!(
                 "{}: refusal shape has no object at {parent:?}",
-                shape.name
+                shape.names.join("|")
             ))
         })?;
     target.insert(key.to_owned(), Value::String(report.to_owned()));
-    serde_json::to_string(&document)
-        .map_err(|error| Fatal::new(format!("{}: refusal is not writable: {error}", shape.name)))
+    serde_json::to_string(&document).map_err(|error| {
+        Fatal::new(format!(
+            "{}: refusal is not writable: {error}",
+            shape.names.join("|")
+        ))
+    })
 }
 
 /// Judge one pending tool call, read from stdin in the harness's own shape.
@@ -131,7 +139,7 @@ fn refusal_document(shape: &Shape, report: &str) -> Result<String> {
 pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<Exit> {
     let shape = SHAPES
         .iter()
-        .find(|shape| shape.name == harness)
+        .find(|shape| shape.names.contains(&harness))
         .ok_or_else(|| {
             Fatal::new(format!(
                 "unknown harness {harness:?}. This binary knows {}. A harness it does not \

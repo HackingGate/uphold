@@ -2680,6 +2680,7 @@ history and in a CI log. An empty `UPHOLD_ALLOW=` switches nothing off.
 
 ```sh
 uphold hook claude-code   # the pending call arrives as JSON on stdin
+uphold hook codex         # Codex uses the same PreToolUse protocol
 ```
 
 The shim decides by `argv[0]`, which works for exactly as long as publishing
@@ -2716,6 +2717,8 @@ still reads the subject after the fact.
 
 ### Configuring it
 
+For Claude Code:
+
 ```jsonc
 // ~/.claude/settings.json
 {"hooks": {"PreToolUse": [
@@ -2723,6 +2726,41 @@ still reads the subject after the fact.
    "hooks": [{"type": "command", "command": "uphold hook claude-code"}]}
 ]}}
 ```
+
+For Codex, put this in `.codex/hooks.json` in the repository or
+`~/.codex/hooks.json` for all projects:
+
+```json
+{"hooks": {"PreToolUse": [
+  {"matcher": "mcp__github__.*",
+   "hooks": [{"type": "command", "command": "uphold hook codex"}]}
+]}}
+```
+
+Alternatively, use inline hooks in `.codex/config.toml` or
+`~/.codex/config.toml`:
+
+```toml
+[[hooks.PreToolUse]]
+matcher = "mcp__github__.*"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "uphold hook codex"
+```
+
+Choose one form per configuration layer: Codex loads matching hooks from both
+files when both are present. Use `/hooks` in Codex to review and trust the
+hook's current definition. New or changed hooks are skipped until trusted;
+project hooks also require a trusted project. `uphold` must be on the PATH
+of the hook process. See the [Codex hook documentation](https://learn.chatgpt.com/docs/hooks).
+
+Both harnesses send `tool_name` and `tool_input` and read the same denial
+document, so the two names select one shared protocol in uphold. The hook
+checks text in the pending arguments; it does not execute the tool or resolve
+file paths in its arguments. The example matches the GitHub MCP server;
+adjust the matcher to the publishing tools you use. Codex hosted tools such
+as web search do not run these local tool hooks.
 
 The `.*` is required. A matcher of `mcp__github` holds only exact-match
 characters, so it is compared as a string and matches no tool.
@@ -2756,10 +2794,10 @@ to stderr: partial coverage, said out loud, rather than a pass.
 ### The exit code is the harness's, not uphold's
 
 Everywhere else in this binary `1` is refused and `2` is could-not-look. Here the
-harness owns the protocol. Claude Code reads a refusal out of a JSON document on
-stdout and treats a non-zero status as a failure *of the hook* rather than a
-verdict *on the call* — so exiting `1` to mean refused would let the body through
-with a complaint attached. The refusal travels in the document:
+harness owns the protocol. Claude Code and Codex read a refusal out of a JSON
+document on stdout at exit `0`. Exit `1` means a failure *of the hook* rather
+than a verdict *on the call*, so using it to mean refused would let the body
+through with a complaint attached. The refusal travels in the document:
 
 ```json
 {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
@@ -2774,6 +2812,9 @@ should be, and a policy that does not load. None was examined, and none is
 reported as allowed. The policy is loaded before the subject is read, so a broken
 one is `2` on every call, including one carrying no strings; no policy found is
 not a broken one, and loads as empty.
+
+Codex also treats exit `2` with a reason on stderr as blocking the pending
+call, so uphold's could-not-look failures block there as well.
 
 That third one is the case that does not announce itself. The JSON parses, the
 run exits, and what the call was about to send was never read — which is what a
@@ -3675,10 +3716,13 @@ declares for it: the scan and a git stage where a hook id or lefthook command
 runs them, a shim where a `[[shim]]` table names the command in the rule's
 `command.before`, `--text` where a hook runs `uphold scan --text` over the
 commit message (`uphold-scan-text`, or the same command under lefthook), and the
-hook where a tracked `.claude/settings.json` runs `uphold hook`. Each is what the repository asks for rather than what a machine
+hook where a tracked `.claude/settings.json`, `.codex/hooks.json` or inline
+`[hooks]` in `.codex/config.toml` runs `uphold hook`. Each is what the repository asks for rather than what a machine
 has installed. A pinned hook id counts without asking whether `pre-commit
 install` ran, and a shim table counts without asking whether the link is on
-PATH. A settings file that is not JSON is exit `2`.
+PATH. Hook trust in Codex and user-level settings are outside this declaration
+check. A settings file that cannot be parsed in its JSON or TOML format is exit
+`2`, including when another settings file declares a valid hook.
 
 `--coverage` counts the direction the reconcile cannot — a rule firing under no
 claim is invisible to a reconcile. It reports and does not refuse: `0`, or `2`

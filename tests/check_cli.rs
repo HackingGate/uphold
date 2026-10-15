@@ -543,6 +543,116 @@ fn an_unreadable_harness_settings_file_is_two() {
 }
 
 #[test]
+fn codex_hook_declarations_supply_the_hook_seam() {
+    for (path, config) in [
+        (
+            ".codex/hooks.json",
+            r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"uphold hook codex"}]}]}}"#,
+        ),
+        (
+            ".codex/config.toml",
+            r#"[[hooks.PreToolUse]]
+matcher = "mcp__github__.*"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "uphold hook codex"
+"#,
+        ),
+    ] {
+        let root = workspace();
+        write(&root, "policy/principles.toml", HOOK_ONLY_POLICY);
+        write(&root, "policy/upheld.toml", HOOK_ONLY_CLAIM);
+        write(&root, path, config);
+
+        let output = check(&root, &[]);
+        assert_eq!(code(&output), 0, "{}{}", stdout(&output), stderr(&output));
+        assert!(
+            stdout(&output).contains(&format!("{path} runs `uphold hook`")),
+            "{}",
+            stdout(&output)
+        );
+    }
+}
+
+#[test]
+fn valid_harness_configs_without_hook_commands_do_not_supply_the_hook_seam() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", HOOK_ONLY_POLICY);
+    write(&root, "policy/upheld.toml", HOOK_ONLY_CLAIM);
+    write(
+        &root,
+        ".codex/hooks.json",
+        r#"{"description":"uphold hook codex","hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"echo ready"}]}]}}"#,
+    );
+    write(
+        &root,
+        ".codex/config.toml",
+        r#"model = "uphold hook codex"
+[[hooks.PreToolUse]]
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo ready"
+"#,
+    );
+
+    let output = check(&root, &[]);
+    assert_eq!(code(&output), 1, "{}{}", stdout(&output), stderr(&output));
+    assert!(!stdout(&output).contains("runs `uphold hook`"));
+}
+
+#[test]
+fn all_harness_configs_are_reported_and_later_errors_are_preserved() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", HOOK_ONLY_POLICY);
+    write(&root, "policy/upheld.toml", HOOK_ONLY_CLAIM);
+    for (path, harness) in [
+        (".claude/settings.json", "claude-code"),
+        (".codex/hooks.json", "codex"),
+    ] {
+        let config = serde_json::json!({"hooks": {"PreToolUse": [{"hooks": [{
+            "type": "command", "command": format!("uphold hook {harness}")
+        }]}]}});
+        write(&root, path, &config.to_string());
+    }
+    write(&root, ".codex/config.toml", "[hooks");
+
+    for args in [vec![], vec!["--coverage"]] {
+        let output = check(&root, &args);
+        assert_eq!(code(&output), 2, "{}{}", stdout(&output), stderr(&output));
+        let report = format!("{}{}", stdout(&output), stderr(&output));
+        assert!(report.contains(".codex/config.toml"), "{report}");
+        // Coverage reports the sources it could read alongside the error.
+        if !args.is_empty() {
+            for path in [".claude/settings.json", ".codex/hooks.json"] {
+                assert!(
+                    report.contains(&format!("{path} runs `uphold hook`")),
+                    "{report}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn malformed_codex_json_and_toml_configs_are_could_not_look() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", HOOK_ONLY_POLICY);
+    write(&root, "policy/upheld.toml", HOOK_ONLY_CLAIM);
+    write(&root, ".codex/hooks.json", "{ not json");
+    write(
+        &root,
+        ".codex/config.toml",
+        "[[hooks.PreToolUse]\ncommand =",
+    );
+
+    let output = check(&root, &["--coverage"]);
+    assert_eq!(code(&output), 2, "{}{}", stdout(&output), stderr(&output));
+    let report = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(report.contains(".codex/hooks.json"), "{report}");
+    assert!(report.contains(".codex/config.toml"), "{report}");
+}
+
+#[test]
 fn the_seam_is_found_by_a_published_id_not_by_one_repositorys_name() {
     // Every published guard id has to make its own stage visible, and the id is
     // the whole of what is matched. The predicate this replaced was a
