@@ -1,3 +1,6 @@
+ALIASES
+  gh issue new
+
 FLAGS
   -a, --assignee login       Assign people by their login. Use "@me" to self-assign.
       --attach file          Attach an image or video file, in '<file>#<image alt text>' format

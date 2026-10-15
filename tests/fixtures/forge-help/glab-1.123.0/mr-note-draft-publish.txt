@@ -1,0 +1,15 @@
+## Options
+
+```plaintext
+      --internal                Mark the summary note as internal. Requires --message.
+  -m, --message string          Summary note to add to the merge request when publishing.
+      --reviewer-state string   Set the review state after publishing: requested_changes, reviewed. Does not record a formal approval.
+  -y, --yes                     Skip confirmation prompt.
+```
+
+## Options inherited from parent commands
+
+```plaintext
+  -h, --help          Show help for this command.
+  -R, --repo string   Select another repository. You can use either OWNER/REPO or GROUP/NAMESPACE/REPO. The full URL or Git URL is also accepted.
+```

@@ -2048,7 +2048,8 @@ bodyless `gh api` GET), a destination the forge calls private, and every
 command other than `gh`. A destination that cannot be resolved or asked about
 runs, with a line on stderr saying it is not a pass. An alias for a publishing
 verb is not expanded here, since expanding one costs a process on every `gh`
-call on the machine.
+call on the machine. A built-in alias such as `gh pr new` is read as the verb
+it stands for, as it is everywhere, because that costs no process.
 
 ```toml
 [[shim]]
@@ -2081,7 +2082,8 @@ option grammar and reads each option word as the command's own parser does:
 create|edit|comment|close|reopen`, `gh release create|edit`, `gh gist create`
 and `gh api` from `gh` 2.102, and `glab mr create|update|note|merge`, `glab
 issue create|update|note` and `glab api` from `glab` 1.123.0, with each `glab mr
-note` subcommand but `draft` read with its own. So `-st X` is `-s` and then `-t
+note` subcommand, and each `glab mr note draft` subcommand below it, read with
+its own. So `-st X` is `-s` and then `-t
 X`, and `-iF k=v` is `-i` and `-F k=v`. The value follows pflag, which both
 parse with, at whichever letter takes it: `=` plus at least one character gives
 what follows the `=` (`-b=Text` and `-st=Text` are `Text`), anything else after
@@ -2106,11 +2108,20 @@ for what it is. The other way round, a value-taking option the table names as a
 switch (a web, skip or inert flag), would leave the value unread, and is exit
 `2` wherever the option is used.
 
-The verb, the noun and a subcommand are found where the command's parser finds
-them (cobra's `stripFlags`): an option the level above does not know as a
+The verb, the noun and each subcommand are found where the command's parser
+finds them (cobra's `stripFlags`): an option the level above does not know as a
 switch takes the word after it. So `gh pr -d 1 close -c X` is `pr close`, read
 with that verb's grammar, its `[[shim.verbs]]` entry and what the forge holds of
 it, and `1` is its selector.
+
+A word of that path the parser takes as a built-in alias is read as the verb it
+stands for before anything is matched: `gh pr new`, `gh issue new`, `gh release
+new` and `gh gist new` are `create`, `glab mr new` and `glab issue new` are
+`create`, `glab mr comment` and `glab issue comment` are `note`, and `glab mr
+accept` is `merge`. The `match` list, a `[[shim.verbs]]` entry, a rule's
+`command.before` and the grammar all see the verb's own name, so none of them
+has to list its aliases. The command is handed the words it was given. The
+aliases are part of each grammar and are compared with the same help pages.
 
 On a verb with no grammar — one a table matches beyond those above, such as a
 consumer's `repo:create` — a word the table does not name whole is skipped
@@ -2119,11 +2130,10 @@ options they are, so the text after them is read. It also means a short-option
 cluster or an attached value is **not read** there: `-st X`, `-bText`,
 `-b=Text` and their like are passed to the command unchecked, and an unnamed
 option that takes a value shifts the reading of the words after it. This is a
-known gap; spell each option as a word of its own there. Two more are known
-limits: `glab mr note draft …` has no grammar and is read that way, and a verb
-the command spells by a built-in alias — `gh pr new`, `glab mr accept`, `glab
-mr comment` — is not matched by a table that names `pr:create`, `mr:merge` or
-`mr:note`, so it is not checked at all unless the table names the alias too.
+known gap; spell each option as a word of its own there. One more is a known
+limit: the built-in aliases are read only for a verb with a grammar, so a verb
+with none is matched by the names its table writes, and an alias the table
+does not name is not checked.
 
 `target` is `forge-repo` or `git-remote`, both built-in resolvers. `scope` is
 `public-target | public-registry | always`, with
@@ -2185,8 +2195,42 @@ push`, `gh alias set` and `glab alias set` all present a verb no list contains.
 Where — and only where — nothing matched, the shim asks the
 real command what the word expands to (`git config --get alias.<word>`,
 `<command> alias list`) and matches again against the expansion, with the global
-options left in front of it. A **shell alias** (`!…`) and a lookup that failed
-are could-not-looks, not absences: exit `2`, since what a shell runs is not an
+options left in front of it. A `gh` or `glab` alias is read with its arguments
+put in, as each command does it: every `$1`, `$2`, … in the expansion's text is
+replaced by that argument before the text is split into words, and once the
+expansion holds no `$` the remaining arguments follow it. So with `pc` set to
+`pr comment $1 -b "$2"`, `gh pc 5 X` is read as a comment whose body is `X`. An
+expansion that still asks for an argument after that is refused by the command,
+and is exit `2` here. The text is then split into words as both commands split
+it, by `google/shlex`'s rules: a `#` that opens a word comments out the rest of
+its line, so with `hash` set to `pr comment $1`, `gh hash '5 #c -R' -b X` is
+read as `pr comment 5 -b X`, as `gh` runs it; a `#` inside a word or inside
+quotes is a letter; and a backslash takes the next character as a letter,
+inside double quotes too. A backslash in an argument is read that way, not
+refused. An unclosed quote, or a backslash at the end of the text, is refused
+by the command, and is exit `2` here. `git`'s aliases take no arguments and are
+split as git splits them, and one holding a backslash or a carriage return,
+where git's splitter and this one differ, is exit `2`.
+
+`gh alias list` prints the YAML its config holds the aliases in, and it is
+decoded as YAML: a quoted expansion (`note2: 'pr comment $1 --body "Note:
+$2"'`), a block scalar (`ml: |-` and the indented lines under it) and a quoted
+name are each read as `gh` reads them. Output that is not a map of names to
+expansions is exit `2`. `glab alias list` prints a table, read a line at a
+time. An alias's name is split into words as `gh` splits it, so one set with
+`gh alias set 'pr say' …` is found where `gh` runs it, at `gh pr say`, and its
+arguments are the words around both. A name of three words or more whose first
+two the invocation spells is exit `2`, and so is an invocation two aliases
+name. `gh` runs an expansion through its own root command again, so an
+expansion that names another alias runs that one too: with `a2` set to `pr
+comment 5 -b` and `a1` to `a2 $1`, `gh a1 X` comments `X`. A `gh` expansion is
+expanded again until it names no alias. An alias met twice on the way is a
+loop, and a chain more than eight aliases long is not followed; both are exit
+`2`. `glab` and `git` are expanded once here. `glab` runs an expansion that
+names another alias as no command.
+
+A **shell alias** (`!…`) and a lookup that failed are
+could-not-looks, not absences: exit `2`, since what a shell runs is not an
 invocation any table can read and it may well be a push. An ordinary `git push`
 pays no process for this — a `match` hit is already the answer.
 
@@ -2464,6 +2508,17 @@ happens later. A `--subject ""` counts as not given, because `gh` sends no
 headline for an empty subject and GitHub composes it; a `--body ""` is the
 body, because `gh` sends a body whenever the flag is given, empty or not. `gh pr merge --help`
 and `gh pr merge --disable-auto` merge nothing, so neither is said.
+
+**A `glab` note given no message is read off stdin.** `glab mr note`, `glab
+mr note create|update` and `glab mr note draft create|update` take the note
+from stdin where no `-m`/`--message` holds anything but white space and stdin
+is not a terminal, and open the editor where it is one. The shim does the same:
+off a terminal it reads stdin as the note, judges it, and hands the same bytes
+to the command; on a terminal it stands in as the editor. A blank `-m` counts
+as no message there, as each verb trims it. `--attach` keeps the note off
+stdin on the verbs that take it, and so does a `--resolve` or `--unresolve` of
+a thread other than `0` on `glab mr note`, which then writes no note. Stdin
+that is not UTF-8 is exit `2`.
 
 The re-entry is routed by a WORD on the command line. The editor variable is set
 to `<this binary> shim --as-editor <command>`, and `--as-editor` is what tells

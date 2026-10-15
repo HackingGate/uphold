@@ -1,3 +1,6 @@
+ALIASES
+  gh release new
+
 FLAGS
       --discussion-category string   Start a discussion in the specified category
   -d, --draft                        Save the release as a draft instead of publishing it
