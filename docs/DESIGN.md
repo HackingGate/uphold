@@ -269,7 +269,23 @@ silence alone is insufficient evidence of a clean run.
 These are criteria for choosing a provider. The reconciler currently credits
 external hook ids from their installation and takes the claim's word for what
 they enforce; inspecting a provider's local rule definitions is still planned.
-Probing is opt-in, not a prerequisite enforced on every claim.
+Probing is opt-in, not a prerequisite enforced on every claim. Reconciliation
+reports installation independently of behavior, which starts unmeasured.
+`uphold check --probe` adds measurements from the same invocation without
+changing the installation verdict. A bad-and-clean pair can demonstrate only
+the selected manager's named hook at the captured repository revision; missing
+controls, unread runs, timeouts and observed failures cannot demonstrate it.
+A wrapper's result does not certify its individual engine rules or a same-named
+hook supplied through another manager.
+
+Behavioral evidence is transient. The command captures a clean committed
+snapshot before loading the policy and evaluating installation, runs that
+exact revision, and refuses to certify changes during measurement. Provenance
+includes the hook declaration, runner, stage and fixtures, so the exercised
+subject is visible. This avoids a storage format or cache whose freshness a
+later invocation would have to prove. External policies, machine dependencies
+and remote services remain outside that snapshot; even a qualifying pair proves
+only its exercised cases.
 
 ## Evidence: what a provider reports and what a policy may read
 

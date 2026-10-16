@@ -3800,7 +3800,13 @@ when the result is refused or unavailable:
       "principle": "explicit-unknown",
       "rule": "catalog-tests",
       "status": "reconciled",
-      "suppliers": [{"component": "local", "seam": "a hook installed here"}]
+      "suppliers": [{"component": "local", "seam": "a hook installed here"}],
+      "behavior": [{
+        "rule": "catalog-tests", "subject": "rule",
+        "manager": null, "stage": null, "source": null,
+        "state": "unmeasured", "outcome": "not_requested",
+        "detail": "no behavioral probe requested", "provenance": null
+      }]
     }
   ],
   "violations": [],
@@ -3830,6 +3836,60 @@ a known violation exits `1` even if other configuration is unreadable. The
 A range-only hook configured exclusively at stages without a push range does
 not supply a claim. A valid declaration of the same id at another stage or
 through another runner still supplies it independently.
+
+Installation and behavior are separate evidence dimensions. A reconciled claim
+establishes installation from repository configuration. Each claim's `behavior`
+array says whether a control was exercised: `unmeasured`, `demonstrated`, or
+`measured_failure`. Ordinary checks report `unmeasured` with
+`outcome = "not_requested"`; they need no runner or Git repository to do so.
+The human report prints behavior separately from the installation evidence.
+
+```sh
+uphold check --probe           # installation plus fresh behavioral evidence
+uphold check --probe --json    # the same evidence as a structured report
+```
+
+`--probe` runs the file probes in `policy/hooks.toml` during this invocation,
+using the runner detected from root configuration and PATH, as `uphold probe`
+does. It adds evidence without changing reconciliation's exit status or making
+probes a prerequisite for claims. A failed probe can therefore accompany a
+clean installation verdict. Use `uphold probe` when the probe verdict itself
+must determine the process exit. `--coverage` is a separate mode.
+
+A demonstrated measurement requires both refusal and acceptance controls. Its
+subject is the exact hook id in the selected manager's root configuration at
+the probed stage. The report names `manager`, `stage` and `source` separately;
+a same-named hook under another manager remains unmeasured. A hook probe does
+not certify an engine rule behind its wrapper. Empty-range push probes exercise
+Git's delegate, so their labels are not matched to runner-hook claims.
+
+`cannot_fail`, `refuses_everything` and `unexpected_refusal` are measured
+failures. Known startup, signal and snapshot-read failures during a control
+are `unread` measured failures; an unread prerequisite leaves behavior
+unmeasured. `timeout`,
+`missing_clean_control`, `no_matching_probe` and `unmatched` remain unmeasured.
+No missing probe, timeout or recognized unread condition establishes a
+demonstration. Runner exit codes follow the existing probe contract: nonzero
+for the bad control, zero for the clean control. Third-party runners have no
+universal code for an internal error; declare `expect` to bind a nonzero exit
+to the intended refusal rather than relying on the exit alone.
+
+Measured evidence carries `provenance`: the runner executable path, manager,
+hook, stage, repository revision, configuration source, canonical hook
+declaration, upstream and pin, and the fixture's path, refusal contents,
+acceptance contents and expected refusal text. A clean committed snapshot is
+captured before loading the policy and reconciling. Probes run a detached
+checkout of that exact revision. Changes outside the fixture during either
+control invalidate the pair. A dirty tree or a changed revision before or after
+measurement leaves behavior unmeasured with the reason reported.
+
+No behavioral evidence is saved or reused: changing a rule, fixture or revision
+requires a new run. Demonstration establishes only the exercised cases at that
+snapshot, not universal correctness, coverage of every seam, or independence
+from the author of the fixtures. The snapshot does not capture external
+inherited policies, runner dependencies, machine configuration, or remote
+services; the report is evidence of this invocation, not a promise of future
+reproducibility.
 
 The Python review and OSCAL consumers read this JSON contract. They reject
 unknown schema versions, malformed or inconsistent reports, unexpected process

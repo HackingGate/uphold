@@ -44,7 +44,7 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Exit, Fatal, Result, read_to_string};
 use crate::pins::{Manager, declarations};
@@ -140,6 +140,272 @@ enum Verdict {
     Unmeasured { after: u64 },
 }
 
+/// Behavior belongs to the named hook and runner, independently of installation.
+/// Evidence is returned only from this invocation; it is never loaded from disk.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct Evidence {
+    /// The claim identifier this observation can be matched to.
+    pub rule: String,
+    /// `hook` bounds the result to one runner hook; `rule` is an unmeasured claim.
+    pub subject: &'static str,
+    /// Absent when no runner-specific subject was established.
+    pub manager: Option<String>,
+    /// The Git stage exercised, so another stage cannot inherit the result.
+    pub stage: Option<String>,
+    /// Repository-relative configuration defining the observed hook.
+    pub source: Option<String>,
+    /// The evidence dimension, independent of installation and process status.
+    pub state: &'static str,
+    /// Stable reason code distinguishing failures and incomplete measurements.
+    pub outcome: &'static str,
+    /// Human explanation; consumers use outcome rather than parsing these words.
+    pub detail: String,
+    /// Present for an attempted control pair, including failed attempts.
+    pub provenance: Option<Provenance>,
+}
+
+/// The repository snapshot and execution subject of one attempted control pair.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct Provenance {
+    /// Executable resolved on PATH for this invocation; external dependencies are not captured.
+    pub runner: String,
+    /// The configuration namespace the runner read.
+    pub manager: String,
+    /// The exact id requested from the runner in isolation.
+    pub hook: String,
+    /// The stage passed to that runner for both controls.
+    pub stage: String,
+    /// Committed revision captured before policy loading and checked after measurement.
+    pub revision: String,
+    /// The root configuration containing the matched declaration.
+    pub source: String,
+    /// Canonical hook body, retained whole so unknown runner fields remain visible.
+    pub declaration: String,
+    /// The declared origin of the hook when the configuration names one.
+    pub upstream: Option<String>,
+    /// The upstream revision declared in the runner configuration.
+    pub pin: Option<String>,
+    /// Both controls and the refusal text used to judge their outcomes.
+    pub fixture: Fixture,
+}
+
+/// Reviewable controls copied from the committed probe declaration.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct Fixture {
+    /// Repository-relative file planted in the disposable checkout.
+    pub path: Option<String>,
+    /// Bad control contents the hook must reject.
+    pub refuses: String,
+    /// Clean control contents; absence cannot establish demonstration.
+    pub allows: Option<String>,
+    /// Required refusal text when the fixture declares a more specific reason.
+    pub expect: Option<String>,
+}
+
+impl Evidence {
+    /// Explain absence of behavioral proof without inventing a measured subject.
+    pub(crate) fn unmeasured(rule: &str, outcome: &'static str, detail: String) -> Self {
+        Self {
+            rule: rule.to_owned(),
+            subject: "rule",
+            manager: None,
+            stage: None,
+            source: None,
+            state: "unmeasured",
+            outcome,
+            detail,
+            provenance: None,
+        }
+    }
+}
+
+/// Drive the root configuration's hooks at one clean, immutable revision.
+///
+/// A reconciliation reads the working tree, while a probe runs a checkout. A
+/// dirty tree cannot identify those two as the same subject. Refuse to certify
+/// it, and check again afterwards so a concurrent edit cannot inherit evidence.
+/// External programs and services are not captured by this repository snapshot.
+pub(crate) fn measure(root: &Path, revision: &str) -> Result<Vec<Evidence>> {
+    if snapshot(root)? != revision {
+        return Err(Fatal::new(
+            "repository revision changed after reconciliation began; behavioral evidence would describe a different configuration",
+        ));
+    }
+    let (probes, file_timeout) = probes(root)?;
+    let declarations = declarations(root)?;
+    if probes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let runner = detect(root)?;
+    let mut evidence = Vec::new();
+    for probe in &probes {
+        // A push probe exercises git's installed delegate, not a runner hook
+        // whose arbitrary label happens to equal an enforcement claim.
+        if probe.push.is_some() {
+            continue;
+        }
+        let hook_stage = probe.stage.as_deref().unwrap_or("pre-commit");
+        let matching: Vec<_> = declarations
+            .iter()
+            .filter(|declaration| {
+                declaration.id == probe.id
+                    && declaration.manager == runner.manager()
+                    && Path::new(&declaration.source).parent() == Some(Path::new(""))
+                    && declaration
+                        .stage
+                        .as_deref()
+                        .is_none_or(|declared| declared == hook_stage)
+            })
+            .collect();
+        let [declaration] = matching.as_slice() else {
+            evidence.push(Evidence::unmeasured(
+                &probe.id,
+                "unmatched",
+                format!(
+                    "the selected {} root configuration has {} matching declarations at {hook_stage}",
+                    runner.command(),
+                    matching.len()
+                ),
+            ));
+            continue;
+        };
+        let worktree = Worktree::at_revision(root, revision)?;
+        let result = drive(
+            &worktree,
+            runner,
+            probe,
+            probe.timeout_seconds.or(file_timeout),
+            true,
+        );
+        let (state, outcome, detail) = match result {
+            Ok(Verdict::Demonstrated) => (
+                "demonstrated",
+                "bad_and_clean",
+                "refuses its fixture, accepts a clean one".to_owned(),
+            ),
+            Ok(Verdict::RefusedOnly) => (
+                "unmeasured",
+                "missing_clean_control",
+                "no allows fixture establishes acceptance".to_owned(),
+            ),
+            Ok(Verdict::CannotFail) => (
+                "measured_failure",
+                "cannot_fail",
+                "accepted the fixture it must refuse".to_owned(),
+            ),
+            Ok(Verdict::RefusesEverything) => (
+                "measured_failure",
+                "refuses_everything",
+                "refused the clean fixture as well".to_owned(),
+            ),
+            Ok(Verdict::RefusedForAnotherReason { said }) => {
+                ("measured_failure", "unexpected_refusal", said)
+            }
+            Ok(Verdict::Unmeasured { after }) => (
+                "unmeasured",
+                "timeout",
+                format!("no verdict after {after}s"),
+            ),
+            Err(error) => ("measured_failure", "unread", error.to_string()),
+        };
+        evidence.push(Evidence {
+            rule: probe.id.clone(),
+            subject: "hook",
+            manager: Some(runner.manager().as_str().to_owned()),
+            stage: Some(hook_stage.to_owned()),
+            source: Some(declaration.source.clone()),
+            state,
+            outcome,
+            detail,
+            provenance: Some(Provenance {
+                runner: which(runner.command()).map_or_else(
+                    || runner.command().to_owned(),
+                    |path| path.display().to_string(),
+                ),
+                manager: runner.manager().as_str().to_owned(),
+                hook: probe.id.clone(),
+                stage: hook_stage.to_owned(),
+                revision: revision.to_owned(),
+                source: declaration.source.clone(),
+                declaration: declaration.body.clone(),
+                upstream: declaration.from.clone(),
+                pin: declaration.rev.clone(),
+                fixture: Fixture {
+                    path: probe.path.clone(),
+                    refuses: probe.refuses.clone(),
+                    allows: probe.allows.clone(),
+                    expect: probe.expect.clone(),
+                },
+            }),
+        });
+    }
+    for declaration in &declarations {
+        if declaration.manager == Manager::Git
+            || Path::new(&declaration.source).parent() != Some(Path::new(""))
+            || evidence.iter().any(|item| {
+                item.rule == declaration.id
+                    && item.manager.as_deref() == Some(declaration.manager.as_str())
+                    && item.source.as_deref() == Some(declaration.source.as_str())
+                    && declaration
+                        .stage
+                        .as_deref()
+                        .is_none_or(|stage| item.stage.as_deref() == Some(stage))
+            })
+        {
+            continue;
+        }
+        let mut item = Evidence::unmeasured(
+            &declaration.id,
+            "no_matching_probe",
+            "no qualifying probe ran for this hook declaration".to_owned(),
+        );
+        item.subject = "hook";
+        item.manager = Some(declaration.manager.as_str().to_owned());
+        item.stage.clone_from(&declaration.stage);
+        item.source = Some(declaration.source.clone());
+        evidence.push(item);
+    }
+    if snapshot(root)? != revision {
+        return Err(Fatal::new(
+            "repository revision changed while probing; behavioral evidence is stale",
+        ));
+    }
+    Ok(evidence)
+}
+
+/// Identify a committed subject only when the working tree agrees with it.
+pub(crate) fn snapshot(root: &Path) -> Result<String> {
+    let status = detached("git", root)
+        .args([
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ])
+        .output()
+        .map_err(|error| Fatal::new(format!("could not establish probe snapshot: {error}")))?;
+    if !status.status.success() {
+        return Err(Fatal::new(format!(
+            "could not establish probe snapshot: {}",
+            String::from_utf8_lossy(&status.stderr).trim()
+        )));
+    }
+    if !status.stdout.is_empty() {
+        return Err(Fatal::new(
+            "behavioral evidence requires a clean committed tree; changed rules or fixtures cannot be certified by a probe of HEAD",
+        ));
+    }
+    let head = detached("git", root)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()?;
+    if !head.status.success() {
+        return Err(Fatal::new(
+            "could not identify the committed revision to probe",
+        ));
+    }
+    Ok(String::from_utf8_lossy(&head.stdout).trim().to_owned())
+}
+
 /// `uphold probe`
 pub(crate) fn run(root: &Path, runner: Option<&str>, timeout: Option<u64>) -> Result<Exit> {
     let (probes, file_timeout) = probes(root)?;
@@ -200,7 +466,7 @@ pub(crate) fn run(root: &Path, runner: Option<&str>, timeout: Option<u64>) -> Re
         } else {
             probe.id.clone()
         };
-        results.push((label, drive(&worktree, runner, probe, patience)?));
+        results.push((label, drive(&worktree, runner, probe, patience, false)?));
     }
     drop(worktree);
 
@@ -282,6 +548,7 @@ fn drive(
     runner: Runner,
     probe: &Probe,
     patience: Option<u64>,
+    verify_snapshot: bool,
 ) -> Result<Verdict> {
     let stage = probe.stage.as_deref().unwrap_or("pre-commit");
     let run = |fixture: &str| -> Result<Ran> {
@@ -293,6 +560,9 @@ fn drive(
         let path = probe.path.as_deref().unwrap_or_default();
         worktree.plant(path, fixture)?;
         let ran = runner.drive(worktree.path(), &probe.id, path, stage, patience);
+        if verify_snapshot {
+            worktree.unchanged_except(path)?;
+        }
         worktree.remove(path)?;
         ran
     };
@@ -588,16 +858,21 @@ pub(crate) fn detached(program: &str, directory: &Path) -> Command {
 struct Worktree {
     root: PathBuf,
     path: PathBuf,
+    revision: String,
 }
 
 impl Worktree {
     fn at(root: &Path) -> Result<Self> {
+        Self::at_revision(root, "HEAD")
+    }
+
+    fn at_revision(root: &Path, revision: &str) -> Result<Self> {
         let path = std::env::temp_dir().join(format!("uphold-probe-{}", std::process::id()));
         drop(std::fs::remove_dir_all(&path));
         let output = detached("git", root)
             .args(["worktree", "add", "--detach", "--quiet"])
             .arg(&path)
-            .arg("HEAD")
+            .arg(revision)
             .output()
             .map_err(|error| Fatal::new(format!("could not add a worktree: {error}")))?;
         if !output.status.success() {
@@ -609,11 +884,40 @@ impl Worktree {
         Ok(Self {
             root: root.to_path_buf(),
             path,
+            revision: revision.to_owned(),
         })
     }
 
     const fn path(&self) -> &PathBuf {
         &self.path
+    }
+
+    fn unchanged_except(&self, fixture: &str) -> Result<()> {
+        let head = detached("git", &self.path)
+            .args(["rev-parse", "--verify", "HEAD"])
+            .output()?;
+        if !head.status.success() || String::from_utf8_lossy(&head.stdout).trim() != self.revision {
+            return Err(Fatal::new(
+                "hook changed the probe revision; the controls did not measure the same committed configuration",
+            ));
+        }
+        let status = detached("git", &self.path)
+            .args([
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+                "--",
+                ".",
+            ])
+            .arg(format!(":(exclude,literal){fixture}"))
+            .output()?;
+        if !status.status.success() || !status.stdout.is_empty() {
+            return Err(Fatal::new(
+                "hook changed the probe snapshot outside its fixture; the controls did not measure the same committed configuration",
+            ));
+        }
+        Ok(())
     }
 
     fn plant(&self, relative: &str, contents: &str) -> Result<()> {
@@ -943,6 +1247,56 @@ mod tests {
         ] {
             assert!(!is_destination(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_revision_captured_before_reconciliation_must_still_match_before_measurement() {
+        let root = crate::fixture::scratch("probe-snapshot");
+        std::fs::create_dir_all(&root).unwrap();
+        for arguments in [
+            vec!["init", "--quiet"],
+            vec!["config", "user.name", "Test"],
+            vec!["config", "user.email", "test@example.test"],
+            vec![
+                "-c",
+                "core.hooksPath=/dev/null",
+                "commit",
+                "--allow-empty",
+                "--quiet",
+                "-m",
+                "first",
+            ],
+        ] {
+            assert!(
+                detached("git", &root)
+                    .args(arguments)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let captured = snapshot(&root).unwrap();
+        assert!(
+            detached("git", &root)
+                .args([
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "commit",
+                    "--allow-empty",
+                    "--quiet",
+                    "-m",
+                    "advanced"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let error = measure(&root, &captured).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("revision changed after reconciliation began")
+        );
     }
 
     #[test]

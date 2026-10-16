@@ -765,6 +765,8 @@ pub(crate) struct EvaluatedClaim {
     pub(crate) rule: String,
     status: ClaimStatus,
     suppliers: Vec<Supplier>,
+    /// Independent observations; these never change the installation verdict.
+    behavior: Vec<crate::probe::Evidence>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -782,7 +784,13 @@ struct Supplier {
 }
 
 /// `uphold check`, its JSON form, and the separate coverage report.
-pub(crate) fn run(root: &Path, policy: &Policy, coverage: bool, json: bool) -> Result<Exit> {
+pub(crate) fn run(
+    root: &Path,
+    policy: &Policy,
+    coverage: bool,
+    json: bool,
+    probe_revision: Option<Result<String>>,
+) -> Result<Exit> {
     let path = root.join(DECLARATION);
     if !path.is_file() {
         return Err(Fatal::new(format!(
@@ -799,7 +807,41 @@ pub(crate) fn run(root: &Path, policy: &Policy, coverage: bool, json: bool) -> R
     if coverage {
         return report_coverage(policy, &declaration, &installed, &supply);
     }
-    let report = evaluate(&path, &declaration, &installed, &supply)?;
+    let mut report = evaluate(&path, &declaration, &installed, &supply)?;
+    let measured = probe_revision
+        .map(|revision| revision.and_then(|revision| crate::probe::measure(root, &revision)));
+    for claim in &mut report.claims {
+        let (outcome, detail) = match &measured {
+            None => ("not_requested", "no behavioral probe requested".to_owned()),
+            Some(Err(error)) => ("unread", error.to_string()),
+            Some(Ok(_)) => (
+                "no_matching_probe",
+                "no qualifying probe ran for this rule".to_owned(),
+            ),
+        };
+        if let Some(Ok(evidence)) = &measured {
+            claim.behavior.extend(
+                evidence
+                    .iter()
+                    .filter(|item| item.rule == claim.rule)
+                    .cloned(),
+            );
+        }
+        // A wrapper hook's probe cannot certify the engine's separate rule,
+        // even when both happen to use the same identifier.
+        if claim.behavior.is_empty()
+            || claim
+                .suppliers
+                .iter()
+                .any(|supplier| supplier.component == "uphold")
+        {
+            claim.behavior.push(crate::probe::Evidence::unmeasured(
+                &claim.rule,
+                outcome,
+                detail,
+            ));
+        }
+    }
     if json {
         println!(
             "{}",
@@ -935,6 +977,7 @@ fn evaluate(
             principle: principle.to_owned(),
             rule: rule.to_owned(),
             status,
+            behavior: Vec::new(),
             suppliers: if status == ClaimStatus::Reconciled {
                 by.into_iter()
                     .flatten()
@@ -1005,6 +1048,18 @@ fn report_human(report: &Report) -> Result<Exit> {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
+    }
+    for claim in &report.claims {
+        for evidence in &claim.behavior {
+            let manager = evidence
+                .manager
+                .as_ref()
+                .map_or(String::new(), |manager| format!(" ({manager})"));
+            println!(
+                "  behavior  {}{manager}: {} [{}] — {}",
+                claim.rule, evidence.state, evidence.outcome, evidence.detail
+            );
+        }
     }
     for note in &report.notes {
         println!("  note  {note}");
