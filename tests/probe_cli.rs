@@ -704,3 +704,328 @@ fn a_runner_probe_with_no_path_is_refused_at_load() {
     assert_eq!(code(&output), 2, "{}", text(&output));
     assert!(text(&output).contains("has no `path`"), "{}", text(&output));
 }
+
+fn claimed_repository(probes: &str) -> PathBuf {
+    let root = repository(probes);
+    std::fs::write(
+        root.join("policy/principles.toml"),
+        "allowed_scripts = ['Latin']\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("policy/upheld.toml"),
+        "[[enforce]]\nprinciple = 'explicit-unknown'\nrule = 'no-markers'\n",
+    )
+    .unwrap();
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "claim", "--no-verify"]);
+    root
+}
+
+fn reconciliation(root: &Path, stub: &Path, measure: bool) -> serde_json::Value {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command.args(["check", "--json"]);
+    if measure {
+        command.arg("--probe");
+    }
+    let mut path = stub.as_os_str().to_owned();
+    path.push(":/usr/bin:/bin");
+    let output = command
+        .current_dir(root)
+        .env("PATH", path)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    // Behavioral reporting is independent of the installation contract.
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[test]
+fn installed_hook_with_no_probe_has_explicitly_unmeasured_behavior() {
+    let root = claimed_repository("");
+    let stub = runner("exit 0");
+    let measured = reconciliation(&root, &stub, true);
+    assert_eq!(
+        measured.pointer("/claims/0/behavior/0/state").unwrap(),
+        "unmeasured"
+    );
+    assert_eq!(
+        measured.pointer("/claims/0/behavior/0/outcome").unwrap(),
+        "no_matching_probe"
+    );
+    // Ordinary check needs neither a runner nor a git snapshot.
+    std::fs::remove_dir_all(root.join(".git")).unwrap();
+    let report = reconciliation(&root, &stub, false);
+    let claim = &report.pointer("/claims/0").unwrap();
+    assert_eq!(claim["status"], "reconciled");
+    assert_eq!(claim.pointer("/behavior/0").unwrap()["state"], "unmeasured");
+    assert_eq!(
+        claim.pointer("/behavior/0").unwrap()["outcome"],
+        "not_requested"
+    );
+    assert!(claim.pointer("/behavior/0").unwrap()["provenance"].is_null());
+}
+
+#[test]
+fn combined_report_demonstrates_only_the_matching_hook_with_provenance() {
+    let root = claimed_repository(ONE_PROBE);
+    let stub = runner("grep -q MARKER sample.txt && exit 1\nexit 0");
+    let report = reconciliation(&root, &stub, true);
+    let behavior = &report.pointer("/claims/0/behavior/0").unwrap();
+    assert_eq!(behavior["state"], "demonstrated");
+    assert_eq!(behavior["subject"], "hook");
+    assert_eq!(behavior["manager"], "pre-commit");
+    let provenance = &behavior["provenance"];
+    assert_eq!(provenance["hook"], "no-markers");
+    assert_eq!(provenance["stage"], "pre-commit");
+    assert_eq!(provenance["source"], ".pre-commit-config.yaml");
+    assert_eq!(provenance.pointer("/fixture/refuses").unwrap(), "MARKER\n");
+    assert_eq!(provenance.pointer("/fixture/allows").unwrap(), "clean\n");
+    assert!(provenance["runner"].as_str().unwrap().ends_with("/prek"));
+    let head = support::git_command(&root)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        provenance["revision"],
+        String::from_utf8_lossy(&head.stdout).trim()
+    );
+    assert!(
+        provenance["declaration"]
+            .as_str()
+            .unwrap()
+            .contains("no-markers")
+    );
+}
+
+#[test]
+fn failed_and_partial_controls_never_demonstrate_a_claim_or_change_installation_acceptance() {
+    for (script, probes, state, outcome) in [
+        (
+            "exit 0",
+            ONE_PROBE.to_owned(),
+            "measured_failure",
+            "cannot_fail",
+        ),
+        (
+            "exit 1",
+            ONE_PROBE.to_owned(),
+            "measured_failure",
+            "refuses_everything",
+        ),
+        (
+            "kill -TERM $$",
+            ONE_PROBE.to_owned(),
+            "measured_failure",
+            "unread",
+        ),
+        (
+            "sleep 2",
+            format!("timeout_seconds = 1\n{ONE_PROBE}"),
+            "unmeasured",
+            "timeout",
+        ),
+        (
+            "exit 1",
+            ONE_PROBE.replace("allows = \"clean\\n\"", ""),
+            "unmeasured",
+            "missing_clean_control",
+        ),
+    ] {
+        let root = claimed_repository(&probes);
+        let stub = runner(script);
+        let report = reconciliation(&root, &stub, true);
+        let behavior = &report.pointer("/claims/0/behavior/0").unwrap();
+        assert_eq!(behavior["state"], state, "{report}");
+        assert_eq!(behavior["outcome"], outcome, "{report}");
+        assert_eq!(report.pointer("/claims/0").unwrap()["status"], "reconciled");
+    }
+}
+
+#[test]
+fn changed_rules_fixtures_and_revisions_cannot_reuse_demonstration() {
+    let root = claimed_repository(ONE_PROBE);
+    let stub = runner("grep -q MARKER sample.txt && exit 1\nexit 0");
+    let first = reconciliation(&root, &stub, true);
+    let old_revision = first
+        .pointer("/claims/0/behavior/0/provenance/revision")
+        .unwrap()
+        .clone();
+    for relative in [".pre-commit-config.yaml", "policy/hooks.toml"] {
+        let contents = std::fs::read_to_string(root.join(relative)).unwrap();
+        std::fs::write(root.join(relative), format!("{contents}\n# changed\n")).unwrap();
+        let report = reconciliation(&root, &stub, true);
+        assert_eq!(
+            report.pointer("/claims/0/behavior/0").unwrap()["state"],
+            "unmeasured"
+        );
+        assert!(
+            report.pointer("/claims/0/behavior/0").unwrap()["detail"]
+                .as_str()
+                .unwrap()
+                .contains("clean committed tree")
+        );
+        std::fs::write(root.join(relative), contents).unwrap();
+    }
+    std::fs::write(
+        root.join("policy/hooks.toml"),
+        ONE_PROBE.replace("MARKER", "OTHER"),
+    )
+    .unwrap();
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "changed fixture", "--no-verify"]);
+    let changed = reconciliation(&root, &stub, true);
+    let behavior = &changed.pointer("/claims/0/behavior/0").unwrap();
+    assert_eq!(behavior["state"], "measured_failure");
+    assert_eq!(behavior["outcome"], "cannot_fail");
+    assert_ne!(
+        behavior.pointer("/provenance/revision").unwrap(),
+        &old_revision
+    );
+    assert_eq!(
+        behavior.pointer("/provenance/fixture/refuses").unwrap(),
+        "OTHER\n"
+    );
+}
+
+#[test]
+fn mutation_between_controls_is_unread_instead_of_demonstrated() {
+    let root = claimed_repository(ONE_PROBE);
+    let stub = runner(
+        "echo '# changed by hook' >> .pre-commit-config.yaml\ngrep -q MARKER sample.txt && exit 1\nexit 0",
+    );
+    let report = reconciliation(&root, &stub, true);
+    let behavior = &report.pointer("/claims/0/behavior/0").unwrap();
+    assert_eq!(behavior["state"], "measured_failure");
+    assert_eq!(behavior["outcome"], "unread");
+    assert!(
+        behavior["detail"]
+            .as_str()
+            .unwrap()
+            .contains("changed the probe snapshot")
+    );
+}
+
+#[test]
+fn same_id_in_another_manager_does_not_inherit_a_demonstration() {
+    let root = claimed_repository(ONE_PROBE);
+    std::fs::write(
+        root.join("lefthook.yml"),
+        "pre-commit:\n  commands:\n    no-markers:\n      run: echo unrelated\n",
+    )
+    .unwrap();
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "second manager", "--no-verify"]);
+    let stub = runner("grep -q MARKER sample.txt && exit 1\nexit 0");
+    let report = reconciliation(&root, &stub, true);
+    let measurements = report
+        .pointer("/claims/0/behavior")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(measurements.len(), 2, "{report}");
+    assert!(
+        measurements
+            .iter()
+            .any(|item| item["manager"] == "pre-commit" && item["state"] == "demonstrated")
+    );
+    assert!(
+        measurements
+            .iter()
+            .any(|item| item["manager"] == "lefthook" && item["state"] == "unmeasured")
+    );
+}
+
+#[test]
+fn a_push_probe_label_cannot_certify_a_runner_hook() {
+    let root = claimed_repository(
+        "[[probe]]\nid = 'no-markers'\npush = 'empty'\nrefuses = 'other/repo'\nallows = 'example/repo'\n",
+    );
+    let stub = runner("exit 1");
+    let report = reconciliation(&root, &stub, true);
+    let evidence = report.pointer("/claims/0/behavior/0").unwrap();
+    assert_eq!(evidence["state"], "unmeasured");
+    assert_eq!(evidence["outcome"], "no_matching_probe");
+}
+
+#[test]
+fn a_wrapper_hook_does_not_certify_an_engine_rule_with_the_same_name() {
+    let root = claimed_repository(ONE_PROBE);
+    std::fs::write(root.join("policy/principles.toml"), "[rule.no-markers]\nregexp = 'MARKER'\nmessage = 'marker'\nfiles.include = ['sample.txt']\n").unwrap();
+    let config = std::fs::read_to_string(root.join(".pre-commit-config.yaml")).unwrap();
+    std::fs::write(root.join(".pre-commit-config.yaml"), format!("{config}  - repo: https://github.com/HackingGate/uphold\n    rev: v1.0.0\n    hooks:\n      - id: uphold-scan\n")).unwrap();
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "engine supplier", "--no-verify"]);
+    let stub = runner("grep -q MARKER sample.txt && exit 1\nexit 0");
+    let report = reconciliation(&root, &stub, true);
+    let evidence = report
+        .pointer("/claims/0/behavior")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert!(
+        evidence
+            .iter()
+            .any(|item| item["subject"] == "hook" && item["state"] == "demonstrated"),
+        "{report}"
+    );
+    assert!(
+        evidence
+            .iter()
+            .any(|item| item["subject"] == "rule" && item["state"] == "unmeasured"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_revision_changed_during_the_probe_invalidates_all_demonstrations() {
+    let root = claimed_repository(ONE_PROBE);
+    // Synthetic local fixture commits are the test subject; this never changes
+    // the checkout running the suite.
+    let script = format!(
+        "git -C '{}' -c core.hooksPath=/dev/null commit --allow-empty -qm advanced\ngrep -q MARKER sample.txt && exit 1\nexit 0",
+        root.display()
+    );
+    let stub = runner(&script);
+    let report = reconciliation(&root, &stub, true);
+    let evidence = report.pointer("/claims/0/behavior/0").unwrap();
+    assert_eq!(evidence["state"], "unmeasured");
+    assert!(
+        evidence["detail"]
+            .as_str()
+            .unwrap()
+            .contains("revision changed")
+    );
+}
+
+#[test]
+fn human_reconciliation_names_behavior_separately_from_installation() {
+    let root = claimed_repository("");
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .arg("check")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(text(&output).contains("enforced by a hook installed here"));
+    assert!(text(&output).contains("behavior  no-markers: unmeasured"));
+}
+
+#[test]
+fn committing_a_changed_probe_snapshot_cannot_hide_mutation_between_controls() {
+    let root = claimed_repository(ONE_PROBE);
+    let stub = runner(
+        "echo '# changed by hook' >> .pre-commit-config.yaml\ngit add -A\ngit -c core.hooksPath=/dev/null commit -qm changed\ngrep -q MARKER sample.txt && exit 1\nexit 0",
+    );
+    let report = reconciliation(&root, &stub, true);
+    let evidence = report.pointer("/claims/0/behavior/0").unwrap();
+    assert_eq!(evidence["state"], "measured_failure");
+    assert_eq!(evidence["outcome"], "unread");
+    assert!(
+        evidence["detail"]
+            .as_str()
+            .unwrap()
+            .contains("changed the probe revision")
+    );
+}
