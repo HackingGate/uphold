@@ -44,7 +44,7 @@
 //! run with `--output-format json` and its own `risks` list is counted. The
 //! count is reported, never recomputed; the choice is to parse it or to run it
 //! for nothing. One named exception: a `metadata_mismatch` risk whose every
-//! difference is one npm writes at publish (`PUBLISH_NORMALIZATIONS`) is
+//! difference is a known npm rewrite or a verified `PyPI` optional extra is
 //! printed as tolerated rather than counted.
 //!
 //! guarddog is also not handed what it cannot look up. A `uv export` spells a
@@ -101,6 +101,7 @@ use std::process::Command;
 use crate::config::{Policy, Waiver};
 use crate::error::{Exit, Fatal, Result, verdict};
 
+mod pypi;
 mod references;
 
 /// The zizmor policy run where the repository has none of its own.
@@ -1248,8 +1249,8 @@ const GUARDDOG_RULES: [&str; 10] = [
     "metadata_mismatch",
 ];
 
-/// A difference guarddog's npm `metadata_mismatch` reports that npm itself
-/// writes at publish, tolerated rather than counted.
+/// The closed list of metadata normalizations supported by the report reader.
+/// `OptionalExtras` additionally requires release evidence from [`pypi`].
 ///
 /// The rule compares the registry's manifest for a release with the
 /// `package.json` inside its tarball. `npm publish` normalizes the manifest it
@@ -1275,20 +1276,21 @@ const GUARDDOG_RULES: [&str; 10] = [
 /// and a waiver still applies to it. Not on the list: `"install": "node-gyp
 /// rebuild"`, which npm adds where `binding.gyp` exists; an install script runs
 /// at install time, which `start` does not, so it joins only with a case and a
-/// test. Nor `PyPI`'s optional extras, which guarddog 3.2.0 compares with the
-/// required dependencies: its report keeps the names and drops the `extra ==`
-/// markers, so it cannot tell an extra from an injected dependency.
+/// test. `PyPI` optional extras use separate release evidence in [`pypi`],
+/// because the report itself drops the markers that identify an extra.
 #[derive(Clone, Copy)]
 enum Normalization {
     DefaultStart,
     BinPrefixStripped,
+    OptionalExtras,
 }
 
 /// Every normalization tolerated, in the order a difference is tried against
 /// them.
-const PUBLISH_NORMALIZATIONS: [Normalization; 2] = [
+const PUBLISH_NORMALIZATIONS: [Normalization; 3] = [
     Normalization::DefaultStart,
     Normalization::BinPrefixStripped,
+    Normalization::OptionalExtras,
 ];
 
 impl Normalization {
@@ -1297,6 +1299,7 @@ impl Normalization {
         match self {
             Self::DefaultStart => "npm default start script",
             Self::BinPrefixStripped => "npm strips a leading node_modules/.bin/",
+            Self::OptionalExtras => "PyPI optional extras verified against release requires_dist",
         }
     }
 
@@ -1310,6 +1313,7 @@ impl Normalization {
             Self::BinPrefixStripped => ["./node_modules/.bin/", "node_modules/.bin/"]
                 .iter()
                 .any(|prefix| tarball.strip_prefix(prefix) == Some(registry)),
+            Self::OptionalExtras => false,
         }
     }
 }
@@ -1351,6 +1355,36 @@ fn tolerated(description: &str) -> Option<Vec<String>> {
         ));
     }
     (!accepted.is_empty()).then_some(accepted)
+}
+
+/// A second source is consulted only for the exact `PyPI` report shape it can
+/// explain. Unavailable or mismatched evidence leaves the scanner's finding
+/// intact, so optional normalization never makes the scan depend on a pass.
+fn tolerated_metadata(
+    ecosystem: &str,
+    name: &str,
+    version: &str,
+    description: &str,
+    metadata: &mut impl FnMut(&str, &str) -> std::result::Result<serde_json::Value, String>,
+) -> Option<Vec<String>> {
+    match ecosystem {
+        "npm" => tolerated(description),
+        "pypi" => {
+            let differences = pypi::differences(description)?;
+            match metadata(name, version) {
+                Ok(release) => pypi::confirms(&release, name, version, &differences)
+                    .map(|accepted| vec![accepted]),
+                Err(reason) => {
+                    println!(
+                        "   retained: metadata_mismatch on pypi:{name}@{version} -- \
+                         could not verify optional extras: {reason}"
+                    );
+                    None
+                }
+            }
+        }
+        _ => None,
+    }
 }
 
 /// guarddog's floor: the "rules failed to run while scanning" text, the JSON
@@ -1502,7 +1536,7 @@ enum Read {
 /// it for nothing. `risks` is guarddog's own list of what it objected to and
 /// nothing is re-judged: the count is reported, not recomputed.
 ///
-/// A risk that is only npm's own publish-time rewrites ([`tolerated`]) is
+/// A risk covered by [`tolerated_metadata`] is
 /// printed as tolerated, naming each, and is not held against the run.
 ///
 /// A risk a waiver covers is printed as waived, with the waiver's reason, and
@@ -1522,6 +1556,7 @@ fn guarddog_read(
     code: Option<i32>,
     stdout: &str,
     stderr: &str,
+    metadata: &mut impl FnMut(&str, &str) -> std::result::Result<serde_json::Value, String>,
 ) -> Read {
     // Its own admission first, because it survives whatever the report is.
     if let Some(reason) = rules_that_did_not_run(stdout).or_else(|| rules_that_did_not_run(stderr))
@@ -1603,11 +1638,10 @@ fn guarddog_read(
                 .and_then(serde_json::Value::as_str)
                 .or_else(|| risk.get("name").and_then(serde_json::Value::as_str))
                 .unwrap_or("");
-            // npm's own publish-time rewrites, named on the line that lets
+            // Known metadata normalizations, named on the line that lets
             // them through. The risk and the underlying result must describe
             // the same difference; anything else keeps the risk counted.
-            if ecosystem == "npm"
-                && rule == "metadata_mismatch"
+            if rule == "metadata_mismatch"
                 && let Some(description) = risk
                     .get("threat_description")
                     .and_then(serde_json::Value::as_str)
@@ -1615,7 +1649,8 @@ fn guarddog_read(
                     .get("metadata_mismatch")
                     .and_then(serde_json::Value::as_str)
                     == Some(description)
-                && let Some(accepted) = tolerated(description)
+                && let Some(accepted) =
+                    tolerated_metadata(ecosystem, name, version, description, metadata)
             {
                 println!(
                     "   tolerated: {rule} on {ecosystem}:{name}@{version} at {at} -- {}",
@@ -1817,6 +1852,7 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
             status.status.code(),
             &String::from_utf8_lossy(&status.stdout),
             &String::from_utf8_lossy(&status.stderr),
+            &mut pypi::fetch,
         ) {
             Read::Clean => {
                 ledger.read.insert("pypi");
@@ -1895,6 +1931,7 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
             status.status.code(),
             &String::from_utf8_lossy(&status.stdout),
             &String::from_utf8_lossy(&status.stderr),
+            &mut pypi::fetch,
         ) {
             Read::Clean => {
                 ledger.read.insert("npm");
@@ -2255,6 +2292,7 @@ mod tests {
             Some(0),
             report,
             "",
+            &mut |_, _| Err(String::from("no registry evidence in this fixture")),
         );
         match read {
             Read::Risks(..) => Ok(true),
@@ -2425,14 +2463,93 @@ mod tests {
         assert_eq!(objected("npm", &bare.to_string()), Ok(true));
     }
 
-    /// The npm normalizations are npm's, and `PyPI`'s optional extras are not on
-    /// the list: guarddog's report drops the `extra ==` markers, so pandas is
-    /// still a finding, and so is an npm-shaped description in a `PyPI` report.
+    /// Without release evidence, the dropped `extra ==` markers cannot be
+    /// recovered from the report. An npm-shaped `PyPI` report also stays a finding.
     #[test]
     fn pypi_metadata_mismatch_is_not_tolerated() {
         assert_eq!(objected("pypi", PANDAS), Ok(true));
         let npm_shaped = describing(PANDAS, &format!("{HEADER}scripts: \n{START}"));
         assert_eq!(objected("pypi", &npm_shaped), Ok(true));
+    }
+
+    #[test]
+    fn pypi_extras_need_release_evidence_and_agreeing_reports() {
+        let mut report: serde_json::Value = serde_json::from_str(PANDAS).unwrap();
+        let description = "Dependency mismatch between PyPI metadata and pyproject.toml:\n  In PyPI metadata but NOT in pyproject.toml: pyarrow\n";
+        report[0]["result"]["results"]["metadata_mismatch"] = description.into();
+        report[0]["result"]["risks"][0]["threat_description"] = description.into();
+        for (requirements, clean) in [
+            (vec!["pyarrow>=13; extra == 'parquet'"], true),
+            (vec!["pyarrow>=13"], false),
+            (vec!["pyarrow; extra == 'parquet'", "pyarrow"], false),
+        ] {
+            let read = guarddog_read(
+                "project",
+                "pypi",
+                &BTreeSet::from([String::from("pandas")]),
+                &[],
+                &mut Ledger::default(),
+                Some(0),
+                &report.to_string(),
+                "",
+                &mut |name, version| {
+                    assert_eq!((name, version), ("pandas", "3.0.3"));
+                    Ok(serde_json::json!({"info": {
+                        "name": name, "version": version, "requires_dist": requirements,
+                    }}))
+                },
+            );
+            assert_eq!(matches!(read, Read::Clean), clean);
+        }
+        report[0]["result"]["results"]["metadata_mismatch"] = "different evidence".into();
+        let mut fetched = false;
+        let read = guarddog_read(
+            "project",
+            "pypi",
+            &BTreeSet::new(),
+            &[],
+            &mut Ledger::default(),
+            Some(0),
+            &report.to_string(),
+            "",
+            &mut |_, _| {
+                fetched = true;
+                Err(String::from("unexpected lookup"))
+            },
+        );
+        assert!(matches!(read, Read::Risks(..)));
+        assert!(!fetched);
+    }
+
+    #[test]
+    fn verified_pypi_extras_leave_unrelated_risks_counted() {
+        let mut report: serde_json::Value = serde_json::from_str(PANDAS).unwrap();
+        for other_risk in [false, true] {
+            if other_risk {
+                report[0]["result"]["risks"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({"threat_rule": "typosquatting"}));
+            }
+            let read = guarddog_read(
+                "project",
+                "pypi",
+                &BTreeSet::from([String::from("pandas")]),
+                &[],
+                &mut Ledger::default(),
+                Some(0),
+                &report.to_string(),
+                "",
+                &mut |_, _| {
+                    Ok(serde_json::from_str(include_str!(
+                        "../tests/fixtures/guarddog/pypi-pandas-3.0.3-metadata.json"
+                    ))
+                    .unwrap())
+                },
+            );
+            assert_eq!(matches!(read, Read::Risks(..)), other_risk);
+            assert_eq!(matches!(read, Read::Clean), !other_risk);
+        }
     }
 
     /// guarddog unpacks under the cache directory, whatever `TMPDIR` says: the

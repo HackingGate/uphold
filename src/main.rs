@@ -95,6 +95,7 @@ mod pins;
 mod policy;
 mod probe;
 mod prose;
+mod remote_policy;
 mod report;
 mod runner;
 mod scan;
@@ -979,6 +980,8 @@ fn pruned(value: serde_json::Value) -> serde_json::Value {
 #[derive(serde::Serialize)]
 struct EffectiveRule<'rule> {
     id: &'rule str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remote: Option<&'rule remote_policy::Remote>,
     git_hooks: &'rule [String],
     /// `git_hooks` alone cannot answer where a hookless rule runs, and a caller
     /// that has to guess guesses the scan -- which is how a claim on a rule
@@ -1047,6 +1050,9 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
                     rule.overridden.join(", ")
                 );
             }
+            if let config::Origin::Remote(remote) = &rule.origin {
+                println!("    source: {}", remote.label());
+            }
         }
         return Ok(Exit::Clean);
     }
@@ -1056,6 +1062,10 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
         .iter()
         .map(|rule| EffectiveRule {
             id: &rule.id,
+            remote: match &rule.origin {
+                config::Origin::Remote(remote) => Some(remote),
+                _ => None,
+            },
             git_hooks: rule.hooks(),
             seams: rule.seams(),
             reach: (rule.reach() == config::Reach::Pinned).then_some(config::Reach::Pinned),

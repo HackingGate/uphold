@@ -62,6 +62,11 @@ sets supply, and the `.pre-commit-config.yaml` below at this binary's version
 has a policy, and leaves an existing hook config as it is, printing the block to
 add. The owner and the visibility are stated, never read from `origin`.
 
+Share organization rules without copying them: `[inherit] remote` accepts a
+GitHub `owner/name`, a full commit ID in `rev`, and a policy-file `path`.
+Remote rules support the same overrides as bundled rules and show their
+provenance in `uphold rules --effective`. See [remote inheritance](docs/REFERENCE.md).
+
 **pre-commit / prek** — one manifest serves both, and no Rust toolchain is
 needed (`language: rust` bootstraps it).
 

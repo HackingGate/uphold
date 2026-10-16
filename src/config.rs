@@ -370,6 +370,9 @@ pub(crate) struct Inherit {
     /// and before the repository's own rules, in the order written.
     #[serde(default)]
     pub paths: Vec<String>,
+    /// Organization policy fetched at an immutable GitHub commit, after local paths.
+    #[serde(default)]
+    pub remote: Vec<crate::remote_policy::Remote>,
     /// Ids dropped from everything inherited. A repository's own rule of the
     /// same id overrides instead, which is the other half of the same choice.
     #[serde(default)]
@@ -758,6 +761,8 @@ pub(crate) enum Origin {
     Set(String),
     /// Inherited from an `inherit.paths` entry, named by the path as written.
     Path(String),
+    /// A policy in another repository, with its immutable revision and path.
+    Remote(crate::remote_policy::Remote),
 }
 
 impl Origin {
@@ -765,7 +770,7 @@ impl Origin {
     pub(crate) fn set(&self) -> Option<&str> {
         match self {
             Self::Set(name) => Some(name),
-            Self::Own | Self::Path(_) => None,
+            Self::Own | Self::Path(_) | Self::Remote(_) => None,
         }
     }
 }
@@ -1787,6 +1792,67 @@ fn inherited_path(root: &Path, policy_path: &Path, relative: &str) -> Result<Pat
     Ok(path)
 }
 
+/// Both local and remote inheritance adopt rules only. Refuse declarations that
+/// would otherwise look effective while silently disappearing.
+fn inherited_rules(path: &Path, parsed: PolicyFile, origin: &Origin) -> Result<Vec<Rule>> {
+    refuse_set_header(path, &parsed)?;
+    refuse_inherited_declaration(path, &parsed, "an inherited file")?;
+    refuse_inherited_override(path, &parsed, "an inherited file")?;
+    // Only `.rules` is merged from an inherited file, and a top-level line
+    // that would vanish is refused rather than dropped. A bundled set's
+    // default is adopted because the set is reviewed with the binary; an
+    // inherited file supplies rules, while the consumer owns its identity.
+    if parsed.private_owners_file.is_some() {
+        return Err(Fatal::at(
+            path,
+            format!(
+                "{} declares `private_owners_file` at its top level, and an inherited \
+                     file's top-level declarations are not adopted. Write the line at the \
+                     top of the consumer's policy file",
+                path.display()
+            ),
+        ));
+    }
+    // Refused rather than merged, and refused rather than ignored. Only
+    // `.rules` is merged below, so an inherited `[[shim]]` used to vanish --
+    // and vanish in the worst possible way, because the `exec` rule that
+    // came with it survived, and `validate_shims` then reported that rule's
+    // `command.before` as naming a shim nobody declared. The author would be
+    // told to declare the shim they had in fact declared. Merging is the
+    // other available answer and it is not obviously right: a shim is the
+    // thing that stands in front of a command, and inheriting one silently
+    // puts a program in front of `git` on the strength of a path in an
+    // `[inherit]` line. Until that is a decision somebody makes on purpose,
+    // say so here.
+    if !parsed.shims.is_empty() {
+        return Err(Fatal::at(
+            path,
+            format!(
+                "{} declares {} `[[shim]]` table(s), and an inherited file's shims are \
+                     not adopted. A shim stands in front of a real command, which is not \
+                     something to acquire by inheriting a path. Move the `[[shim]]` into \
+                     the consumer's policy file",
+                path.display(),
+                parsed.shims.len()
+            ),
+        ));
+    }
+    if matches!(origin, Origin::Remote(_)) && parsed.inherit.is_some() {
+        return Err(Fatal::at(
+            path,
+            "an inherited file may not declare `[inherit]`; list each source in the repository's own policy",
+        ));
+    }
+    Ok(parsed
+        .rules
+        .into_values()
+        .map(|mut rule| {
+            rule.origin = origin.clone();
+            rule
+        })
+        .collect())
+}
+
 /// Load a policy file, resolving `[inherit]` and validating the result.
 pub(crate) fn load(root: &Path, policy_path: &Path) -> Result<Policy> {
     let text = read_to_string(policy_path)?;
@@ -1871,53 +1937,21 @@ pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<P
         let path = inherited_path(root, policy_path, relative)?;
         let extended = read_to_string(&path)?;
         let parsed = parse(&path, &extended)?;
-        refuse_set_header(&path, &parsed)?;
-        refuse_inherited_declaration(&path, &parsed, "an inherited file")?;
-        refuse_inherited_override(&path, &parsed, "an inherited file")?;
-        // Only `.rules` is merged from an inherited file, and a top-level line
-        // that would vanish is refused rather than dropped. A bundled set's
-        // default is adopted because the set is reviewed in the one repository
-        // that can review it; a file in THIS tree has no such reason to speak
-        // from anywhere but the policy file.
-        if parsed.private_owners_file.is_some() {
-            return Err(Fatal::at(
-                policy_path,
-                format!(
-                    "{} declares `private_owners_file` at its top level, and an inherited \
-                     file's top-level declarations are not adopted. Write the line at the \
-                     top of this file",
-                    path.display()
-                ),
-            ));
-        }
-        // Refused rather than merged, and refused rather than ignored. Only
-        // `.rules` is merged below, so an inherited `[[shim]]` used to vanish --
-        // and vanish in the worst possible way, because the `exec` rule that
-        // came with it survived, and `validate_shims` then reported that rule's
-        // `command.before` as naming a shim nobody declared. The author would be
-        // told to declare the shim they had in fact declared. Merging is the
-        // other available answer and it is not obviously right: a shim is the
-        // thing that stands in front of a command, and inheriting one silently
-        // puts a program in front of `git` on the strength of a path in an
-        // `[inherit]` line. Until that is a decision somebody makes on purpose,
-        // say so here.
-        if !parsed.shims.is_empty() {
-            return Err(Fatal::at(
-                policy_path,
-                format!(
-                    "{} declares {} `[[shim]]` table(s), and an inherited file's shims are \
-                     not adopted. A shim stands in front of a real command, which is not \
-                     something to acquire by inheriting a path. Move the `[[shim]]` into \
-                     this file",
-                    path.display(),
-                    parsed.shims.len()
-                ),
-            ));
-        }
-        inherited.extend(parsed.rules.into_values().map(|mut rule| {
-            rule.origin = Origin::Path(relative.clone());
-            rule
-        }));
+        inherited.extend(inherited_rules(
+            &path,
+            parsed,
+            &Origin::Path(relative.clone()),
+        )?);
+    }
+    for remote in &inherit.remote {
+        let path = PathBuf::from(remote.label());
+        let remote_text = remote.read(policy_path)?;
+        let parsed = parse(&path, &remote_text)?;
+        inherited.extend(inherited_rules(
+            &path,
+            parsed,
+            &Origin::Remote(remote.clone()),
+        )?);
     }
 
     // The policy-level host globs, held to the same spelling the rule-level
@@ -1939,6 +1973,7 @@ pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<P
     let own_ids: Vec<&str> = file.rules.keys().map(String::as_str).collect();
     let disabled = &inherit.disabled_rules;
 
+    let inheritable: Vec<String> = inherited.iter().map(|rule| rule.id.clone()).collect();
     report_reshaped_shadows(&inherited, &file.rules);
 
     let mut rules: Vec<Rule> = inherited
@@ -2036,20 +2071,6 @@ pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<P
     // entry: it reads as a decision that is doing something and it is doing
     // nothing, and it will keep reading that way after the rule it named is
     // gone.
-    let inheritable: Vec<String> = {
-        let mut names = Vec::new();
-        for name in &inherit.sets {
-            if let Some((_, bundled)) = BUNDLED.iter().find(|(bundled, _)| *bundled == name) {
-                names.extend(parse_bundled(name, bundled)?.rules.into_keys());
-            }
-        }
-        for relative in &inherit.paths {
-            let path = inherited_path(root, policy_path, relative)?;
-            let extended = read_to_string(&path)?;
-            names.extend(parse(&path, &extended)?.rules.into_keys());
-        }
-        names
-    };
     for id in disabled {
         if !inheritable.contains(id) {
             return Err(Fatal::at(
@@ -2133,6 +2154,7 @@ fn report_reshaped_shadows(inherited: &[Rule], own: &BTreeMap<String, Rule>) {
         let from = match &rule.origin {
             Origin::Set(name) => format!("the bundled set {name:?}"),
             Origin::Path(path) => format!("the inherited file {path:?}"),
+            Origin::Remote(remote) => format!("the remote policy {}", remote.label()),
             Origin::Own => continue,
         };
         eprintln!(
