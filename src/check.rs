@@ -726,6 +726,7 @@ pub(crate) struct Report {
     fatal: Option<String>,
 }
 
+/// The machine report names the same outcome that determines the process status.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Verdict {
@@ -744,6 +745,8 @@ impl Verdict {
     }
 }
 
+/// A declaration entry retains its individual result and supplying seams, so a
+/// refused or incomplete report can still identify the claims that held.
 #[derive(Debug, Serialize)]
 pub(crate) struct EvaluatedClaim {
     pub(crate) principle: String,
