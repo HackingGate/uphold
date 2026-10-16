@@ -2806,6 +2806,13 @@ Tool-name rules also run when arguments contain only numbers, booleans, nulls,
 or empty containers. Such calls have no argument-text subject; an explicitly
 supplied empty string still has one.
 
+The hook does not infer a destination host or repository from arbitrary tool
+argument names. It checks the strings and tool identity using the policy where
+the call was made. Destination ownership and `public-target` checks remain
+command-adapter checks; raw `scan --text` and `guard --text` input likewise
+supplies no destination. A missing required argument surface is an unread
+subject and exits `2`, rather than being treated as a call with no prose.
+
 ### What runs where there is no policy
 
 Every other seam requires a policy and exits `2` without one, because a git hook

@@ -89,6 +89,7 @@ mod hook;
 mod hooks;
 mod init;
 mod install;
+mod invocation;
 mod out;
 mod pins;
 mod policy;
@@ -767,17 +768,25 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
         // Both arms become a refusal, because that is the word this command
         // reports in: a finding reached through `--text` and one reached
         // through a guard are the same verdict on the same text.
-        let refusals: Vec<guard::Refusal> =
-            text::judged(text::Seam::Guard, &root, &policy, &source, Some(&text), &[])?
-                .into_iter()
-                .map(|verdict| match verdict {
-                    text::Verdict::Guard(refusal) => refusal,
-                    text::Verdict::Rule(failure) => guard::Refusal {
-                        report: failure.report(),
-                        id: failure.label,
-                    },
-                })
-                .collect();
+        let refusals: Vec<guard::Refusal> = text::judged(
+            &invocation::Invocation::text(
+                text::Seam::Guard,
+                &source,
+                invocation::Observed::Present(&text),
+                &[],
+            ),
+            &root,
+            &policy,
+        )?
+        .into_iter()
+        .map(|verdict| match verdict {
+            text::Verdict::Guard(refusal) => refusal,
+            text::Verdict::Rule(failure) => guard::Refusal {
+                report: failure.report(),
+                id: failure.label,
+            },
+        })
+        .collect();
         for refusal in &refusals {
             eprintln!("guard refused: {}", guard::refused_by(&policy, refusal));
             eprintln!("{}", refusal.report.trim_end());

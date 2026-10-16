@@ -43,6 +43,14 @@ use serde::Deserialize;
 use crate::config::{Policy, Rule};
 use crate::error::{Exit, Fatal, Result};
 use crate::git;
+use crate::invocation::Invocation;
+
+mod checker;
+mod destination;
+
+pub(crate) use checker::pattern_finding;
+use checker::{consult, pattern_refusal};
+use destination::{CommandContext, effective_scope};
 
 /// Where an invocation is going, when that is a meaningful question at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
@@ -3216,269 +3224,6 @@ impl Shim {
         }
         Ok(collected)
     }
-
-    /// Whether one scope predicate holds for this invocation.
-    ///
-    /// The predicate is a parameter rather than the table's own, because a rule
-    /// may carry its own `command.scope`: the table's answers for the command,
-    /// and a rule that applies on every egress -- host identity in a
-    /// pull-request body is worth refusing whatever the destination -- says so
-    /// beside its `command.before` rather than inheriting the table's idea of
-    /// the question.
-    ///
-    /// The policy is a parameter for the sake of one arm: `public-target` is a
-    /// question this repository may already have answered in writing, and a
-    /// predicate that asks a forge anyway is a network call -- and a token, and
-    /// a rate limit -- spent on a fact that was sitting in `principles.toml`
-    /// the whole time. See [`declared_standing`].
-    pub(crate) fn scope_holds(
-        &self,
-        scope: &Scope,
-        root: &Path,
-        policy: &Policy,
-        collected: &Collected,
-        argv: &[String],
-    ) -> Result<Standing> {
-        match scope {
-            Scope::Always => Ok(Standing::Holds),
-            Scope::PublicTarget => {
-                let Some(target) = self.resolve_target(root, collected)? else {
-                    // No answer is not "public", and it is not "not public"
-                    // either. `gh` unauthenticated, rate-limited, offline, or a
-                    // repository with no `origin` all land here, and what the
-                    // caller does about it is the caller's decision -- see
-                    // [`Unresolved`].
-                    return Ok(Standing::CouldNotTell(String::from(
-                        "no target could be resolved, so whether the `public-target` checks \
-                         apply here could not be established",
-                    )));
-                };
-                // What this repository says about itself, before anybody is
-                // asked. Read here and not before the resolver, because a tree
-                // with no `origin` has no destination for a declaration to be
-                // about, and that is the resolver's answer above rather than
-                // this one's.
-                if let Some(standing) = declared_standing(root, policy, collected, self)? {
-                    return Ok(standing);
-                }
-                match self.visibility(root, &target).as_deref() {
-                    Ok("public") => Ok(Standing::Holds),
-                    Ok(_) => Ok(Standing::DoesNotHold),
-                    // The cause, in the words the forge used. A rate limit, an
-                    // unauthenticated `gh` and a deleted repository are three
-                    // different instructions to the reader, and a refusal
-                    // naming none of them is one the reader can only bypass.
-                    Err(silence) => Ok(Standing::CouldNotTell(format!(
-                        "the forge did not say whether {target} is public, so whether the \
-                         `public-target` checks apply here could not be established. {}",
-                        silence.sentence()
-                    ))),
-                }
-            }
-            Scope::PublicRegistry => {
-                if argv.iter().any(|argument| argument == "--dry-run") {
-                    return Ok(Standing::DoesNotHold);
-                }
-                // Two independent reasons this is nobody's business, and either
-                // one is enough: a package marked private cannot be published
-                // at all, and a registry that is not the public one is
-                // somebody's internal infrastructure.
-                if let Ok(text) = std::fs::read_to_string(root.join("package.json"))
-                    && text.contains("\"private\"")
-                    && json_bool_field(&text, "private")
-                {
-                    return Ok(Standing::DoesNotHold);
-                }
-                let registry = collected
-                    .target
-                    .clone()
-                    .unwrap_or_else(|| String::from("https://registry.npmjs.org"));
-                Ok(if registry.contains("registry.npmjs.org") {
-                    Standing::Holds
-                } else {
-                    Standing::DoesNotHold
-                })
-            }
-            Scope::Command { command } => {
-                let status = Command::new("sh")
-                    .arg("-c")
-                    .arg(command)
-                    .current_dir(root)
-                    .status()
-                    .map_err(|error| {
-                        Fatal::new(format!("{}: scope command: {error}", self.command))
-                    })?;
-                Ok(if status.success() {
-                    Standing::Holds
-                } else {
-                    Standing::DoesNotHold
-                })
-            }
-        }
-    }
-
-    /// Which forge can answer for this repository, where that has an answer.
-    fn forge(&self, root: &Path) -> Option<Forge> {
-        // The command is the strongest evidence there is: somebody running
-        // `glab` is publishing to GitLab whatever else is configured.
-        match self.command.as_str() {
-            "gh" => return Some(Forge::GitHub),
-            "glab" => return Some(Forge::GitLab),
-            _ => {}
-        }
-        // Otherwise the remote decides, which is what the `git` shim needs:
-        // one shim stands in front of a command that pushes to either.
-        Forge::of_url(&git::remote_url(root, "origin")?)
-    }
-
-    /// What the forge says the target's visibility is, in the forge's own word.
-    ///
-    /// Asking `gh` for every target is why the shipped `glab` shim could never
-    /// resolve one: `gh api repos/<owner>/<repo>` answers about GitHub and
-    /// about nothing else, so a GitLab remote fell through the `None` arm on
-    /// every invocation and a shim declared `public-target` was inert.
-    ///
-    /// Both vocabularies come back unchanged, and GitLab's `internal` is why:
-    /// it means public to everyone with an account on the instance, which is
-    /// neither public to the internet nor private. Only `public` is treated as
-    /// public by the caller, so a forge that grows a fourth word does not
-    /// quietly become one of the three.
-    fn visibility(&self, root: &Path, target: &str) -> std::result::Result<String, Silence> {
-        let Some(forge) = self.forge(root) else {
-            return Err(Silence::Refused(String::from(
-                "no forge client is known for that host, so there was nobody to ask",
-            )));
-        };
-        match forge {
-            Forge::GitHub => {
-                let name = git::owner_repo(target).map_or_else(
-                    || target.to_owned(),
-                    |(owner, repo)| format!("{owner}/{repo}"),
-                );
-                let endpoint = format!("repos/{name}");
-                let mut args = vec!["api", endpoint.as_str(), "--jq", ".visibility"];
-                let host = git::host(target);
-                if let Some(host) = host.as_deref() {
-                    args.extend(["--hostname", host]);
-                }
-                forge_field("gh", &args, None)
-            }
-            // Deliberately not `--jq`: `glab api` is not `gh api`, and a shim
-            // that is inert the day one flag differs is the defect this arm
-            // exists to end. The project id is a path, so its separators are
-            // escaped -- `owner/name` and `group/sub/name` are each one id.
-            Forge::GitLab => forge_field(
-                "glab",
-                &["api", &format!("projects/{}", target.replace('/', "%2F"))],
-                Some("visibility"),
-            ),
-        }
-    }
-
-    fn resolve_target(&self, root: &Path, collected: &Collected) -> Result<Option<String>> {
-        let explicit = collected
-            .target
-            .as_deref()
-            .filter(|target| !target.is_empty());
-        // `gh`'s repo override is command line first, then GH_REPO. In
-        // particular an environment-selected repository is never `origin`,
-        // even when its owner/name happen to match the checkout.
-        let gh_repo = self.command == "gh" && self.target != Target::None;
-        let environment = gh_repo
-            .then(|| {
-                std::env::var("GH_REPO")
-                    .ok()
-                    .filter(|value| !value.is_empty())
-            })
-            .flatten();
-        if let Some(named) = explicit.or(environment.as_deref()) {
-            if gh_repo && repository_placeholder("gh", named)? {
-                // API placeholders are expanded by gh's own remote/default
-                // resolution, which is not established by an origin guess.
-                // Visibility can ask gh to expand these same placeholders;
-                // the ownership guard separately refuses unresolved names.
-                return Ok(Some(named.to_owned()));
-            }
-            return if gh_repo {
-                gh_repository_target(named).map(Some)
-            } else {
-                Ok(Some(named.to_owned()))
-            };
-        }
-        if gh_repo {
-            return git::remote_url(root, "origin")
-                .map(|url| gh_repository_target(&url))
-                .transpose();
-        }
-        Ok(match self.target {
-            Target::None => None,
-            Target::GitRemote => git::remote_url(root, "origin")
-                .and_then(|url| git::owner_repo(&url))
-                .map(|(owner, repo)| format!("{owner}/{repo}")),
-            Target::ForgeRepo => {
-                // Both forge CLIs answer this, and every spec that wanted it
-                // wrote the same call. The remote is the same answer without a
-                // network round trip, so it is tried first.
-                git::remote_url(root, "origin")
-                    .and_then(|url| git::owner_repo(&url))
-                    .map(|(owner, repo)| format!("{owner}/{repo}"))
-            }
-        })
-    }
-}
-
-/// Resolve the host-bearing spellings accepted by `gh` without treating an
-/// enterprise repository as its same-named github.com counterpart. Enterprise
-/// support is deliberately absent here, as it is in `Forge::of_url`.
-fn gh_repository_target(named: &str) -> Result<String> {
-    let parts: Vec<_> = named.split('/').collect();
-    let host = if named.contains("://") || named.contains(':') {
-        git::host(named)
-    } else if parts.len() == 3 {
-        parts.first().map(|hostname| hostname.to_lowercase())
-    } else {
-        None
-    };
-    let environment_host = std::env::var("GH_HOST")
-        .ok()
-        .filter(|configured| !configured.is_empty());
-    if let Some(hostname) = host.as_ref().or(environment_host.as_ref())
-        && !matches!(
-            hostname.to_lowercase().as_str(),
-            "github.com" | "www.github.com"
-        )
-    {
-        return Err(Fatal::new(format!(
-            "gh: destination {named:?} uses host {hostname:?}, whose repository authority \
-             cannot be verified by this shim. Nothing was published; use a supported \
-             GitHub destination with a matching GH_HOST"
-        )));
-    }
-    let path = if named.contains("://") || named.contains(':') {
-        git::owner_repo(named).map(|(owner, repo)| format!("{owner}/{repo}"))
-    } else {
-        match parts.as_slice() {
-            [owner, repo] | [_, owner, repo] => Some(format!("{owner}/{repo}")),
-            _ => None,
-        }
-    };
-    let Some(path) = path.filter(|path| {
-        path.split('/').all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
-        })
-    }) else {
-        return Err(Fatal::new(format!(
-            "gh: destination {named:?} could not be resolved as [HOST/]OWNER/REPO. \
-             Nothing was published"
-        )));
-    };
-    Ok(match host {
-        Some(hostname) => format!("https://{hostname}/{path}"),
-        None => path,
-    })
 }
 
 /// What one invocation is about to publish.
@@ -3538,72 +3283,6 @@ impl Forge {
             None
         }
     }
-}
-
-/// What the policy already says about this destination, where it speaks for it.
-///
-/// `Some` is a declaration that settles the question offline, and it is the same
-/// declaration `guard::names::target_is_public` reads: a repository whose
-/// `principles.toml` says `visibility = "private"` has stated the fact, and a
-/// shim that ran `gh api repos/<owner>/<repo>` anyway needed an authenticated
-/// `gh` on every `git push` to learn it a second time. When GitHub rate-limits
-/// the account that lookup fails, the failure is a [`Standing::CouldNotTell`],
-/// and `unresolved = "refuse"` -- the default -- stops every push in every tree
-/// over a fact nobody had to ask for.
-///
-/// `None` sends the caller to the forge, and the narrowing that makes this safe
-/// is the destination it will read the declaration for. A declaration is about
-/// ONE repository, so this reads it only where the destination is the one
-/// [`Shim::resolve_target`] took from `origin` -- which is to say where nothing
-/// on the command line or in `GH_REPO` named a destination, and `GH_HOST`
-/// did not change the host context. A `target_flags` value is a
-/// destination somebody typed, and a typed `owner/repo` carries no host: `-R
-/// acme/widget` under a `--hostname` or a `GH_HOST` is a repository on another
-/// forge that happens to share a name with this one, and there is nothing in
-/// two matching path segments that can tell it apart from this tree. So every
-/// named destination goes to the forge exactly as it did before, including the
-/// ones that name this repository, and what is bought offline is the case the
-/// cost was actually in: the push that names nothing and means `origin`.
-fn declared_standing(
-    root: &Path,
-    policy: &Policy,
-    collected: &Collected,
-    shim: &Shim,
-) -> Result<Option<Standing>> {
-    if shim.command == "gh"
-        && (std::env::var("GH_REPO").is_ok_and(|repo| !repo.is_empty())
-            || std::env::var("GH_HOST").is_ok_and(|host| !host.is_empty()))
-    {
-        return Ok(None);
-    }
-    if collected
-        .target
-        .as_deref()
-        .is_some_and(|named| !named.is_empty())
-    {
-        return Ok(None);
-    }
-    // Lazily, and only here. Reading it is allowed to run `visibility_from`, which
-    // is a process, and a predicate that spawned one for a target the declaration
-    // does not speak for would trade the lookup this exists to avoid for another
-    // one.
-    let Some(declared) = policy.declared_visibility(root)? else {
-        return Ok(None);
-    };
-    // Held to the three spellings before it arrives -- a written one at load, a
-    // `visibility_from` answer as it is read -- so `None` here is unreachable
-    // rather than a fourth word being guessed at. It falls through to the forge
-    // regardless: a word this seam cannot read is not an answer this seam may
-    // invent.
-    Ok(
-        crate::config::visibility_is_public(&declared).map(|public| {
-            if public {
-                Standing::Holds
-            } else {
-                Standing::DoesNotHold
-            }
-        }),
-    )
 }
 
 /// Why a forge CLI gave no answer, told apart by what it printed.
@@ -5368,190 +5047,6 @@ fn json_bool_field(text: &str, field: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// One pattern rule's verdict over one subject.
-///
-/// The same engine `scan` searches files with, asked about a string that never
-/// becomes one -- same regex grammar, same meaning. `require_regexp` refuses a
-/// subject the pattern is absent from; `regexp` refuses one it is present in.
-/// Both name the kind and the pattern, because the reader's next step is to
-/// fix the text, and "refused" without which-test-failed is a round trip.
-///
-/// `prose_regexp` is the third, and the subject reaches it as whole-text prose:
-/// a pull-request body is a document, so a fenced example in one is skipped
-/// here exactly as it is in a committed document, and a sentence wrapped by
-/// whatever composed the body is unwrapped before the pattern sees it. A rule
-/// that refused a shape in a document and allowed it in the body announcing
-/// that document would be one rule with two answers.
-fn pattern_refusal(rule: &Rule, subject: &Subject) -> Result<Option<String>> {
-    Ok(pattern_finding(rule, subject)?.map(|finding| format!("{finding}\n{}", rule.message())))
-}
-
-/// What a pattern rule found in one subject, as the line a report names it by,
-/// without the rule's message. Split from [`pattern_refusal`] for the hook,
-/// whose report carries the message as its own paragraph, the way `--text`
-/// prints it.
-pub(crate) fn pattern_finding(rule: &Rule, subject: &Subject) -> Result<Option<String>> {
-    let multiline = rule.files().multiline;
-    if let Some(pattern) = rule.prose_regexp() {
-        let matcher = crate::prose::compile(pattern, &rule.id)?;
-        let Some(span) = crate::prose::of_text(&subject.value)
-            .into_iter()
-            .find(|span| matcher.is_match(&span.text))
-        else {
-            return Ok(None);
-        };
-        return Ok(Some(format!(
-            "{}: the {} subject matches {pattern:?}: {}",
-            rule.id, subject.kind, span.text
-        )));
-    }
-    if let Some(pattern) = rule.require_regexp() {
-        let hits = crate::engine::search_text(
-            &subject.value,
-            &crate::engine::Query::regex(pattern, multiline),
-            &rule.id,
-        )?;
-        if hits.is_empty() {
-            return Ok(Some(format!(
-                "{}: the {} subject does not satisfy {pattern:?}",
-                rule.id, subject.kind
-            )));
-        }
-        return Ok(None);
-    }
-    let Some(pattern) = rule.regexp() else {
-        return Ok(None);
-    };
-    let hits = crate::engine::search_text(
-        &subject.value,
-        &crate::engine::Query::regex(pattern, multiline),
-        &rule.id,
-    )?;
-    let Some(hit) = hits.first() else {
-        return Ok(None);
-    };
-    Ok(Some(format!(
-        "{}: the {} subject matches {pattern:?}: {}",
-        rule.id,
-        subject.kind,
-        hit.text.trim_end()
-    )))
-}
-
-/// Run one checker over one subject.
-///
-/// The contract cmd-shims documented, unchanged and now the only one: the
-/// subject on stdin, its kind in the environment, 0 to pass, 1 to refuse, 2 to
-/// say it could not look. A checker written in anything satisfies it.
-///
-/// All three pipes are worked at once, and that is not tidiness. A pipe holds
-/// about 64 KiB: writing a longer subject blocks until the checker reads it,
-/// and a checker that writes more than a bufferful blocks until this process
-/// reads THAT. Writing the whole subject first and reading afterwards means
-/// each side is waiting for the other and neither ever moves -- on exactly the
-/// long bodies a guard most needs to see, and with no output at all to say
-/// what happened.
-fn consult(root: &Path, rule: &Rule, subject: &Subject) -> Result<Option<String>> {
-    // `exec`, not `values_from`. They were one field called `run` in v2, and a
-    // checker whose command reads empty passes everything it is asked about --
-    // which is also why an ABSENT command is an error here rather than a
-    // default: a rule mis-dispatched to this function once ran `sh -c ""`,
-    // approved everything, and the pass was indistinguishable from a checker
-    // that looked.
-    let Some(run) = rule.exec().filter(|command| !command.trim().is_empty()) else {
-        return Err(Fatal::new(format!(
-            "{}: consulted as an `exec` checker while declaring no `exec` command, so \
-             nothing could have been asked -- a dispatch hole, not a pass",
-            rule.id
-        )));
-    };
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(run)
-        .current_dir(root)
-        .env("UPHOLD_KIND", subject.kind)
-        .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|error| Fatal::new(format!("{}: {error}", rule.id)))?;
-
-    let mut stdin = child.stdin.take();
-    let mut stdout = child.stdout.take();
-    let mut stderr = child.stderr.take();
-    let body = subject.value.as_bytes();
-
-    let (written, report) =
-        std::thread::scope(|scope| -> Result<(std::io::Result<()>, Vec<u8>)> {
-            let writer = scope.spawn(move || -> std::io::Result<()> {
-                let Some(pipe) = stdin.as_mut() else {
-                    return Ok(());
-                };
-                pipe.write_all(body)?;
-                pipe.flush()
-                // Dropped on the way out of this closure, which is the end of
-                // input the checker is waiting for.
-            });
-            // Drained rather than read: the contract puts a checker's report on
-            // stderr, but a checker that writes to stdout still fills a pipe,
-            // and a full pipe nobody empties is the same deadlock from the
-            // other side.
-            let drain = scope.spawn(move || {
-                if let Some(pipe) = stdout.as_mut() {
-                    drop(pipe.read_to_end(&mut Vec::new()));
-                }
-            });
-            let mut report = Vec::new();
-            if let Some(pipe) = stderr.as_mut() {
-                drop(pipe.read_to_end(&mut report));
-            }
-            let written = writer.join().map_err(|_| {
-                Fatal::new(format!(
-                    "{}: the thread feeding it the subject died",
-                    rule.id
-                ))
-            })?;
-            drain.join().map_err(|_| {
-                Fatal::new(format!("{}: the thread draining its output died", rule.id))
-            })?;
-            Ok((written, report))
-        })?;
-
-    let status = child
-        .wait()
-        .map_err(|error| Fatal::new(format!("{}: {error}", rule.id)))?;
-    let report = String::from_utf8_lossy(&report);
-    let report = report.trim();
-    match (status.code(), written) {
-        // A refusal stands even where the write did not finish. A checker that
-        // stopped reading and then said no had already seen enough to say it,
-        // and turning that into an infrastructure error would teach people to
-        // re-run until the refusal went away.
-        (Some(1), _) => Ok(Some(format!(
-            "{} refused a {} subject: {report}",
-            rule.id, subject.kind
-        ))),
-        // The write result is an answer, not something to drop with `.ok()`: a
-        // subject that never arrived is the one case where a 0 means nothing at
-        // all, because the checker approved whatever part of it got through and
-        // that is not what this invocation is about to publish.
-        (_, Err(error)) => Err(Fatal::new(format!(
-            "{} did not take the whole {} subject ({error}), so its answer is not about what \
-             would be published: {report}",
-            rule.id, subject.kind
-        ))),
-        (Some(0), Ok(())) => Ok(None),
-        // 2 is could-not-look, and it is not a pass. A checker that could not
-        // read what it was handed has established nothing.
-        (other, Ok(())) => Err(Fatal::new(format!(
-            "{} exited {} on a {} subject: {report}",
-            rule.id,
-            other.unwrap_or(-1),
-            subject.kind
-        ))),
-    }
-}
-
 /// What a file IS, not where it sits: device and inode. `canonicalize` sees
 /// through symlinks but a hard link canonicalizes to its own path, so a path
 /// comparison would call a hard-linked shim "the real command". Metadata
@@ -6191,92 +5686,6 @@ fn install_editor(
     Ok(())
 }
 
-/// The scope one rule is judged under: its own where it wrote one, the
-/// table's where it did not.
-fn effective_scope<'a>(rule: &'a Rule, shim: &'a Shim) -> &'a Scope {
-    rule.command
-        .as_ref()
-        .and_then(|where_| where_.scope.as_ref())
-        .unwrap_or(&shim.scope)
-}
-
-/// One invocation's scope answers, each predicate evaluated at most once.
-///
-/// A memo rather than a per-rule call, because `public-target` asks a forge
-/// and three rules behind one table would ask it three times -- and because
-/// the could-not-resolve arm says its piece on stderr, which said three times
-/// reads as three failures.
-#[derive(Default)]
-struct ScopeMemo {
-    answers: BTreeMap<String, Standing>,
-}
-
-impl ScopeMemo {
-    /// Whether this scope holds, with a predicate that could not be asked
-    /// answered by the table's `unresolved`.
-    ///
-    /// The conversion lives here rather than at each call site because there
-    /// are six of them and one of them forgetting is the whole defect: a
-    /// could-not-tell read as "does not hold" skips the checkers, and the
-    /// destination guard behind them promises exit 2 on exactly that.
-    fn holds(
-        &mut self,
-        shim: &Shim,
-        scope: &Scope,
-        root: &Path,
-        policy: &Policy,
-        collected: &Collected,
-        argv: &[String],
-    ) -> Result<bool> {
-        match self.standing(shim, scope, root, policy, collected, argv)? {
-            Standing::Holds => Ok(true),
-            Standing::DoesNotHold => Ok(false),
-            Standing::CouldNotTell(why) => match shim.unresolved {
-                Unresolved::Refuse => Err(Fatal::new(format!(
-                    "{}: {why}. A check that could not look is not a check that passed, so \
-                     nothing was published. Name the destination explicitly, run this where \
-                     the repository has a remote and the forge can be reached, or write \
-                     `unresolved = \"run\"` on this `[[shim]]` table to run the command \
-                     unchecked instead",
-                    shim.command
-                ))),
-                Unresolved::Run => Ok(false),
-            },
-        }
-    }
-
-    /// The predicate's own answer, asked once per invocation.
-    ///
-    /// The `run` half of `unresolved` says its piece here rather than in
-    /// `holds`, so a table that stands three rules down over one unreachable
-    /// forge prints one line and not three.
-    fn standing(
-        &mut self,
-        shim: &Shim,
-        scope: &Scope,
-        root: &Path,
-        policy: &Policy,
-        collected: &Collected,
-        argv: &[String],
-    ) -> Result<Standing> {
-        let key = match scope {
-            Scope::Always => return Ok(Standing::Holds),
-            Scope::PublicTarget => String::from("public-target"),
-            Scope::PublicRegistry => String::from("public-registry"),
-            Scope::Command { command } => format!("command:{command}"),
-        };
-        if let Some(answer) = self.answers.get(&key) {
-            return Ok(answer.clone());
-        }
-        let answer = shim.scope_holds(scope, root, policy, collected, argv)?;
-        if let (Standing::CouldNotTell(why), Unresolved::Run) = (&answer, shim.unresolved) {
-            eprintln!("uphold shim: {why}, and the command ran anyway. This is not a pass.");
-        }
-        self.answers.insert(key, answer.clone());
-        Ok(answer)
-    }
-}
-
 /// Run the user's editor, then judge what it produced.
 ///
 /// Refusing here is what makes it a checkpoint rather than a report: `gh` and
@@ -6369,22 +5778,21 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
     // `text-guards` rule whose own scope held runs other rules, and each of
     // those is judged under its own scope off this same memo.
     let mut scoping = match policy.shims.iter().find(|shim| shim.command == name) {
-        Some(shim) => Some((shim, shim.collect(root, &opened_for)?, ScopeMemo::default())),
+        Some(shim) => {
+            let collected = shim.collect(root, &opened_for)?;
+            Some((
+                shim,
+                CommandContext::new(shim, root, &collected, &opened_for),
+            ))
+        }
         None => None,
     };
     let checkers: Vec<&Rule> = match &mut scoping {
-        Some((shim, collected, scopes)) => {
+        Some((shim, scopes)) => {
             let shim = *shim;
             let mut kept: Vec<&Rule> = Vec::new();
             for rule in &named {
-                if scopes.holds(
-                    shim,
-                    effective_scope(rule, shim),
-                    root,
-                    policy,
-                    collected,
-                    &opened_for,
-                )? {
+                if scopes.holds(effective_scope(rule, shim), policy)? {
                     kept.push(*rule);
                 }
             }
@@ -6403,9 +5811,10 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
     // this command means no destination either, and the text guards judge
     // against `origin` as every seam without one does.
     let destination = match &scoping {
-        Some((shim, collected, _)) => shim.resolve_target(root, collected)?,
+        Some((_, context)) => context.destination()?.target.clone(),
         None => None,
     };
+    let invocation = Invocation::command(name, std::slice::from_ref(&subject));
     let mut refusals: Vec<String> = Vec::new();
     for rule in checkers {
         if crate::guard::bypassed(&rule.id) {
@@ -6422,7 +5831,7 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
         let Some(kind) = crate::text::Judged::of(rule) else {
             continue;
         };
-        if !rule.judged_at(crate::text::Seam::Command) {
+        if !rule.judged_at(invocation.seam) {
             continue;
         }
         match kind {
@@ -6439,14 +5848,7 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
                     // As in `run`: only a rule this command names carries a
                     // scope written about it here.
                     _ if !named.iter().any(|stands| stands.id == inner.id) => Ok(true),
-                    Some((shim, collected, scopes)) => scopes.holds(
-                        shim,
-                        effective_scope(inner, shim),
-                        root,
-                        policy,
-                        collected,
-                        &opened_for,
-                    ),
+                    Some((shim, scopes)) => scopes.holds(effective_scope(inner, shim), policy),
                     // No `[[shim]]` table names this command, so there is no
                     // scope to judge under and nothing to stand down for.
                     None => Ok(true),
@@ -6663,7 +6065,6 @@ pub(crate) fn run(
     // Whether the message the forge composes was asked for and judged, which
     // makes the notice that it was not untrue.
     let mut composed_read = false;
-    let mut scopes = ScopeMemo::default();
     let reading = shim.reading(&words);
     if let Reading::Unclear(flag) = &reading {
         // Said out loud, and for the same reason the unresolvable-target arm in
@@ -6702,16 +6103,10 @@ pub(crate) fn run(
             )));
         }
         collected = shim.collect(root, &words)?;
-        let in_scope = scopes.holds(shim, &shim.scope, root, policy, &collected, &words)?;
+        let mut scopes = CommandContext::new(shim, root, &collected, &words);
+        let in_scope = scopes.holds(&shim.scope, policy)?;
         for rule in &checkers {
-            if scopes.holds(
-                shim,
-                effective_scope(rule, shim),
-                root,
-                policy,
-                &collected,
-                &words,
-            )? {
+            if scopes.holds(effective_scope(rule, shim), policy)? {
                 any_applies = true;
             }
         }
@@ -6750,11 +6145,12 @@ pub(crate) fn run(
         // subject loop, and asked even where the invocation collected no
         // subject at all.
         //
-        // Resolved ONCE, before the loop, and only where some rule judges a
-        // destination. `resolve_target` reads `--repo`/`-R` off argv and
+        // Read from the invocation's one observation, before the loop, where
+        // some rule judges a
+        // destination. The context reads the collected `--repo`/`-R` target,
         // otherwise `GH_REPO` for gh, then `git remote get-url origin`; it
-        // asks no forge. An ordinary invocation still pays no round trip: `Scope::PublicTarget`'s
-        // `visibility()` is not called from here at all, and the forge question
+        // asks no forge. An ordinary invocation still pays no round trip: the
+        // visibility lookup is not called from here at all, and the forge question
         // inside `target_refusal` is reached only for a destination the
         // allow-list has ALREADY refused -- a call that was about to be stopped
         // either way. Nothing that would have run waits on somebody's service.
@@ -6769,11 +6165,12 @@ pub(crate) fn run(
             rule.builtin()
                 .is_some_and(|builtin| crate::guard::TARGET_GUARDS.contains(&builtin))
         }) {
-            let target = shim.resolve_target(root, &collected)?;
+            let destination = scopes.destination()?;
+            let target = destination.target.clone();
             // A qualified override or origin carries its own host, which
             // takes precedence over gh's ambient default for both probes.
-            let hostname = target.as_deref().and_then(git::host);
-            let forge = shim.forge(root);
+            let hostname = destination.hostname.clone();
+            let forge = destination.forge;
             let mut asked = BTreeMap::new();
             for rule in &checkers {
                 if crate::guard::bypassed(&rule.id) {
@@ -6782,14 +6179,7 @@ pub(crate) fn run(
                 // The rule's own scope where it wrote one, the table's where it
                 // did not -- the same reading the text path takes, answered
                 // from the same memo.
-                if !scopes.holds(
-                    shim,
-                    effective_scope(rule, shim),
-                    root,
-                    policy,
-                    &collected,
-                    &words,
-                )? {
+                if !scopes.holds(effective_scope(rule, shim), policy)? {
                     continue;
                 }
                 if let Some(refusal) = crate::guard::target_refusal(
@@ -6822,8 +6212,9 @@ pub(crate) fn run(
             // path says rather than whatever checkout the command was typed
             // in. The resolver the `public-target` scope and the destination
             // guard read, so the three cannot disagree about one invocation.
-            let destination = shim.resolve_target(root, &collected)?;
-            for subject in &collected.subjects {
+            let destination = scopes.destination()?.target.clone();
+            let invocation = Invocation::command(name, &collected.subjects);
+            for subject in invocation.command_subjects()? {
                 // An empty subject is not a subject a checker can read: a
                 // program handed "" on stdin, or a text guard asked whether ""
                 // names a private repository, is being asked to judge text that
@@ -6854,14 +6245,7 @@ pub(crate) fn run(
                     // The rule's own scope where it wrote one, the table's
                     // where it did not -- answered from the memo, so a
                     // destination is looked up once however many rules ask.
-                    if !scopes.holds(
-                        shim,
-                        effective_scope(rule, shim),
-                        root,
-                        policy,
-                        &collected,
-                        &words,
-                    )? {
+                    if !scopes.holds(effective_scope(rule, shim), policy)? {
                         continue;
                     }
                     // `subjects` narrows every kind of checker the same way:
@@ -6877,7 +6261,7 @@ pub(crate) fn run(
                     let Some(kind) = crate::text::Judged::of(rule) else {
                         continue;
                     };
-                    if !rule.judged_at(crate::text::Seam::Command) {
+                    if !rule.judged_at(invocation.seam) {
                         continue;
                     }
                     match kind {
@@ -6914,14 +6298,7 @@ pub(crate) fn run(
                                 if !checkers.iter().any(|named| named.id == inner.id) {
                                     return Ok(true);
                                 }
-                                scopes.holds(
-                                    shim,
-                                    effective_scope(inner, shim),
-                                    root,
-                                    policy,
-                                    &collected,
-                                    &words,
-                                )
+                                scopes.holds(effective_scope(inner, shim), policy)
                             };
                             if let Some(refusal) = crate::guard::text_refusal(
                                 root,
@@ -8065,6 +7442,49 @@ mod tests {
     }
 
     #[test]
+    fn all_destination_consumers_share_the_first_observation() {
+        let root = crate::fixture::scratch("shim-destination-context");
+        std::fs::create_dir_all(&root).unwrap();
+        crate::fixture::git(&root, &["init", "-q"]);
+        crate::fixture::git(
+            &root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/example-user/first",
+            ],
+        );
+        let mut shim = gh();
+        // This adapter does not interpret ambient gh environment variables.
+        shim.command = String::from("faux");
+        let words = argv("pr create");
+        let context = CommandContext::new(&shim, &root, &Collected::default(), &words);
+        assert_eq!(
+            context.destination().unwrap().target.as_deref(),
+            Some("example-user/first")
+        );
+        crate::fixture::git(
+            &root,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "https://github.com/example-user/second",
+            ],
+        );
+        assert_eq!(
+            context.destination().unwrap().target.as_deref(),
+            Some("example-user/first")
+        );
+        let next = CommandContext::new(&shim, &root, &Collected::default(), &words);
+        assert_eq!(
+            next.destination().unwrap().target.as_deref(),
+            Some("example-user/second")
+        );
+    }
+
+    #[test]
     fn one_scope_predicate_is_asked_once_however_many_rules_ask_it() {
         // `public-target` asks a forge, and three rules behind one table would
         // ask it three times -- and the could-not-resolve arm says its piece on
@@ -8076,33 +7496,13 @@ mod tests {
         let scope = Scope::Command {
             command: format!("echo asked >> {}", asked.display()),
         };
-        let mut memo = ScopeMemo::default();
+        let shim = npm();
+        let words = argv("publish");
+        let mut memo = CommandContext::new(&shim, &dir, &Collected::default(), &words);
         for _ in 0..3 {
-            assert!(
-                memo.holds(
-                    &npm(),
-                    &scope,
-                    &dir,
-                    &undeclared(),
-                    &Collected::default(),
-                    &argv("publish")
-                )
-                .unwrap()
-            );
-            // A different predicate is a different key, and is not answered
-            // out of the first one's memo.
-            assert!(
-                !memo
-                    .holds(
-                        &npm(),
-                        &Scope::PublicRegistry,
-                        &dir,
-                        &undeclared(),
-                        &Collected::default(),
-                        &argv("publish")
-                    )
-                    .unwrap()
-            );
+            assert!(memo.holds(&scope, &undeclared()).unwrap());
+            // Different predicates retain separate answers in one context.
+            assert!(!memo.holds(&Scope::PublicRegistry, &undeclared()).unwrap());
         }
         assert_eq!(
             std::fs::read_to_string(&asked).unwrap().lines().count(),

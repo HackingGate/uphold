@@ -51,6 +51,7 @@ use serde_json::Value;
 
 use crate::error::{Exit, Fatal, Result};
 use crate::guard;
+use crate::invocation::{Invocation, Observed};
 use crate::shim::{Walked, walk_strings};
 use crate::text::{self, Verdict};
 
@@ -182,15 +183,19 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
     // rather than an object -- that is text, and it is checked as text. The
     // question here is whether the subject was found, never what shape the
     // harness chose for it.
-    let Some(subject) = event.pointer(shape.subject) else {
-        return Err(Fatal::new(format!(
-            "the {harness} event carries nothing at {:?}, so what this call was about to \
-             send could not be read and \"allowed\" would mean \"unexamined\". That pointer \
-             is the shape this harness's events have; an event without it is a harness that \
-             changed rather than a call that published nothing",
-            shape.subject
-        )));
-    };
+    let observation = event.pointer(shape.subject).map_or_else(
+        || {
+            Observed::Unread(format!(
+                "the {harness} event carries nothing at {:?}, so what this call was about to \
+                 send could not be read and \"allowed\" would mean \"unexamined\". That pointer \
+                 is the shape this harness's events have; an event without it is a harness that \
+                 changed rather than a call that published nothing",
+                shape.subject
+            ))
+        },
+        Observed::Present,
+    );
+    let subject = observation.read()?.copied();
 
     // Everything a piece of published text is judged by, from the one place
     // that knows what that is. The host-identity rules run wherever the call
@@ -211,7 +216,9 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
     let (root, policy) = text::load_for(found)?;
 
     let mut collected = Walked::default();
-    walk_strings(subject, None, &mut collected);
+    if let Some(subject) = subject {
+        walk_strings(subject, None, &mut collected);
+    }
     let has_text = !collected.prose.is_empty() || !collected.headlines.is_empty();
     let text = collected.prose.join("\n");
     let headlines: Vec<text::Headline> = collected
@@ -225,14 +232,17 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
 
     let mut report = String::new();
 
-    for verdict in text::judged(
+    let invocation = Invocation::text(
         text::Seam::Hook,
-        &root,
-        &policy,
         label,
-        has_text.then_some(text.as_str()),
+        if has_text {
+            Observed::Present(text.as_str())
+        } else {
+            Observed::Absent
+        },
         &headlines,
-    )? {
+    );
+    for verdict in text::judged(&invocation, &root, &policy)? {
         match verdict {
             // The message as well as the finding. At the shim and at `--text`
             // the message is what tells the author what to do instead; here the

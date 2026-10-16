@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use crate::config::{self, Check, CheckKind, Literals, Policy, Rule};
 use crate::engine::{self, Query};
 use crate::error::{Exit, Fatal, Result, verdict};
+use crate::invocation::{Invocation, Observed};
 use crate::report::Failure;
 use crate::sources;
 
@@ -299,24 +300,24 @@ pub(crate) struct Headline {
 
 /// Everything a piece of published text is judged by, at one seam.
 ///
-/// The single assembly. `label` is what the subject is called in a report --
-/// the tool name at the hook, the source at `--text` -- and is also matched as
-/// the hook's `tool` subject. `text` is the prose; `headlines` are the subjects
-/// the seam could tell apart from it, which only the harness hook can, by a tool call's
-/// argument names. Every checker but the guards reads the two joined, as it
-/// always has; `None` means the call has no argument text, while its tool name
-/// remains a subject. The guards are handed each headline as one, so the
-/// lookalike pass a title gets at the shim is the pass it gets here.
+/// The single assembly. The invocation carries report identity, observed prose
+/// and separately identified headlines. Only the hook exposes that identity as
+/// a `tool` subject; raw text filenames are labels. An absent prose subject
+/// leaves the tool observable, while unread required prose stops judgment.
+/// Checkers read prose and headlines joined; guards receive each headline
+/// separately, preserving the same headline treatment as command collection.
 pub(crate) fn judged(
-    seam: Seam,
+    invocation: &Invocation<'_>,
     root: &std::path::Path,
     policy: &Policy,
-    label: &str,
-    text: Option<&str>,
-    headlines: &[Headline],
 ) -> Result<Vec<Verdict>> {
-    let has_text = text.is_some() || !headlines.is_empty();
-    let text = text.unwrap_or_default();
+    let input = invocation.text_input()?;
+    let prose = input.prose.read()?.copied();
+    let headlines = input.headlines;
+    let seam = invocation.seam;
+    let label = invocation.label;
+    let has_text = prose.is_some() || !headlines.is_empty();
+    let text = prose.unwrap_or_default();
     let joined;
     let whole = if headlines.is_empty() {
         text
@@ -389,12 +390,16 @@ pub(crate) fn judged(
                 .collect(),
             // Only the hook consults these here, and only the rules whose
             // `seams` names it -- see `Seam::runs_by_default`.
-            Judged::Patterns => {
-                patterns_over(policy, seam, label, has_text.then_some(whole), headlines)?
-                    .into_iter()
-                    .map(Verdict::Rule)
-                    .collect()
-            }
+            Judged::Patterns => patterns_over(
+                policy,
+                seam,
+                invocation.tool(),
+                has_text.then_some(whole),
+                headlines,
+            )?
+            .into_iter()
+            .map(Verdict::Rule)
+            .collect(),
             // The shim's, and the shim does not arrive here: it holds a subject
             // and a per-rule scope this function is not given, so it dispatches
             // rule by rule through `Judged::of` instead.
@@ -474,7 +479,7 @@ fn merged_by_rule(refusals: Vec<crate::guard::Refusal>) -> Vec<crate::guard::Ref
 fn patterns_over(
     policy: &Policy,
     seam: Seam,
-    label: &str,
+    tool: Option<&str>,
     text: Option<&str>,
     headlines: &[Headline],
 ) -> Result<Vec<Failure>> {
@@ -497,14 +502,16 @@ fn patterns_over(
             },
         ));
     }
-    subjects.push((
-        None,
-        crate::shim::Subject {
-            kind: "tool",
-            value: label.to_owned(),
-            added: None,
-        },
-    ));
+    if let Some(tool) = tool {
+        subjects.push((
+            None,
+            crate::shim::Subject {
+                kind: "tool",
+                value: tool.to_owned(),
+                added: None,
+            },
+        ));
+    }
     subjects.extend(headlines.iter().map(|headline| {
         (
             Some(headline.label.as_str()),
@@ -554,7 +561,8 @@ fn patterns_over(
 pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<Exit> {
     let text = read(source)?;
     let (root, policy) = load_for(found)?;
-    let verdicts = judged(Seam::Scan, &root, &policy, source, Some(&text), &[])?;
+    let invocation = Invocation::text(Seam::Scan, source, Observed::Present(&text), &[]);
+    let verdicts = judged(&invocation, &root, &policy)?;
 
     for verdict in &verdicts {
         match verdict {
