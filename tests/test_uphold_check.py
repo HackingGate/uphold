@@ -333,6 +333,36 @@ class TheTwoReadersOfOneReport(unittest.TestCase):
         }
         self.assertEqual(rules, {"prevent-public-push", "no-merge-conflict-markers"})
 
+    def test_misplaced_range_only_hook_does_not_silence_review(self):
+        exemptions = [
+            f'{key} = "No subject in this scratch repository."'
+            for key, record in uphold_check.load_records().items()
+            if record["enforcement"]["automatable"] == "yes"
+            and key != "explicit-unknown"
+        ]
+        build(
+            self.tmp,
+            "\n".join(
+                [
+                    "[[enforce]]",
+                    'principle = "explicit-unknown"',
+                    'rule = "uphold-supply-chain"',
+                    "[review]",
+                    "max_lines = 10000",
+                    "[review.no_subject_here]",
+                    *exemptions,
+                ]
+            ),
+            **{
+                ".pre-commit-config.yaml": "repos:\n  - repo: https://github.com/HackingGate/uphold\n    rev: v2.0.0\n    hooks:\n      - id: uphold-supply-chain\n        stages: [manual]\n",
+            },
+        )
+        self.assertEqual(uphold_check.engine_suppliers(self.tmp, strict=False), {})
+        result = run(self.tmp, "--review")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("explicit-unknown", result.stderr)
+        self.assertIn("no rule here claims it", result.stderr)
+
     def test_human_wording_is_not_part_of_the_consumer_contract(self):
         real = uphold_check.engine
 

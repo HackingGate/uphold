@@ -1372,3 +1372,65 @@ fn json_is_a_reconciliation_format_and_not_a_coverage_format() {
     assert_eq!(output.stdout, Vec::<u8>::new());
     assert!(stderr(&output).contains("usage: uphold check"));
 }
+
+#[test]
+fn misplaced_range_hooks_do_not_supply_partial_claim_evidence() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", GUARD_POLICY);
+    write(
+        &root,
+        "policy/upheld.toml",
+        "[[enforce]]\nprinciple = 'explicit-unknown'\nrule = 'uphold-supply-chain'\n",
+    );
+    for (stages, other_hook, lefthook, expected_status, expected_exit) in [
+        ("[manual]", "", "", "refused", 1),
+        ("[pre-commit]", "", "", "refused", 1),
+        ("[]", "", "", "refused", 1),
+        ("[pre-push, manual]", "", "", "reconciled", 1),
+        (
+            "[manual]",
+            "      - id: uphold-supply-chain\n        stages: [pre-push]\n",
+            "",
+            "reconciled",
+            1,
+        ),
+        (
+            "[manual]",
+            "",
+            "pre-push:\n  commands:\n    uphold-supply-chain:\n      run: ./check.sh\n",
+            "reconciled",
+            1,
+        ),
+        ("[pre-push]", "", "", "reconciled", 0),
+    ] {
+        let config = format!(
+            "repos:\n  - repo: https://github.com/HackingGate/uphold\n    rev: v2.0.0\n    hooks:\n      - id: uphold-supply-chain\n        stages: {stages}\n{other_hook}"
+        );
+        write(&root, ".pre-commit-config.yaml", &config);
+        write(&root, "lefthook.yml", lefthook);
+        let output = check(&root, &["--json"]);
+        assert_eq!(
+            code(&output),
+            expected_exit,
+            "{}{}",
+            stdout(&output),
+            stderr(&output)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            report.pointer("/claims/0/status").unwrap(),
+            expected_status,
+            "{report}"
+        );
+        let suppliers = report
+            .pointer("/claims/0/suppliers")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            suppliers.is_empty(),
+            expected_status == "refused",
+            "{report}"
+        );
+    }
+}

@@ -3820,6 +3820,10 @@ a claim whose missing rule may be in unread configuration exits `2`; otherwise
 a known violation exits `1` even if other configuration is unreadable. The
 `unavailable` array records unread evidence regardless of the exit code.
 
+A range-only hook configured exclusively at stages without a push range does
+not supply a claim. A valid declaration of the same id at another stage or
+through another runner still supplies it independently.
+
 The Python review and OSCAL consumers read this JSON contract. They reject
 unknown schema versions, malformed or inconsistent reports, unexpected process
 statuses, and any unavailable evidence. Review accepts an evaluated refusal

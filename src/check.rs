@@ -340,6 +340,18 @@ fn pinned_ids(root: &Path) -> Result<Option<(BTreeSet<String>, Vec<String>)>> {
     let mut every = BTreeSet::new();
     for entry in repos {
         for hook in entry.hooks {
+            // A range-only hook at no push stage cannot supply a claim. Filter
+            // this declaration only: another declaration may install the same
+            // id at a valid stage, or another runner may supply it independently.
+            if RANGE_IDS.contains(&hook.id.as_str())
+                && hook.stages.as_ref().is_some_and(|stages| {
+                    !stages
+                        .iter()
+                        .any(|stage| RANGE_STAGES.contains(&stage.as_str()))
+                })
+            {
+                continue;
+            }
             every.insert(hook.id);
         }
     }
