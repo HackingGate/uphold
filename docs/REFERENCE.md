@@ -859,8 +859,9 @@ content and invalid policy all fail with exit 2. Nothing falls back to the
 repository's latest revision. Each load fetches into a fresh temporary bare
 repository and removes it afterwards; network access and Git credentials for
 private sources must therefore be available wherever the policy runs. Git's
-normal credential helpers and URL rewrites apply. No checkout, submodules or
-source repository hooks are run.
+normal credential helpers and URL rewrites apply. Terminal and askpass
+credential prompts are disabled; HTTP transfers below one byte per second
+for 30 seconds abort. No checkout, submodules or source repository hooks run.
 
 Only rules are adopted. Remote files may not declare their own `[inherit]`,
 `[override]` or `[[shim]]`: sources and shims remain explicit decisions in the

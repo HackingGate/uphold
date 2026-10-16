@@ -83,9 +83,10 @@ impl Remote {
         // No checkout, submodule recursion, hooks or repository-supplied config.
         // Git's normal credentials and URL rewrites remain available, including
         // credentials for an organization's private policy repository.
-        if crate::git::try_run_elsewhere(
-            &directory.0,
-            &[
+        let mut fetch = crate::shim::inner_tool("git");
+        fetch
+            .current_dir(&directory.0)
+            .args([
                 "-c",
                 "fetch.recurseSubmodules=false",
                 "fetch",
@@ -95,9 +96,19 @@ impl Remote {
                 "--",
                 &url,
                 &self.rev,
-            ],
-        )?
-        .is_none()
+            ])
+            // Hook and agent invocations cannot answer credential prompts.
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_ASKPASS", "")
+            .env("GIT_HTTP_LOW_SPEED_LIMIT", "1")
+            .env("GIT_HTTP_LOW_SPEED_TIME", "30")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if !crate::git::elsewhere(&mut fetch)
+            .status()
+            .map_err(|_| fail())?
+            .success()
         {
             return Err(fail());
         }

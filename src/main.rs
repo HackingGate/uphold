@@ -1033,9 +1033,6 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
             } else {
                 hooks.join(", ")
             };
-            if let config::Origin::Remote(remote) = &rule.origin {
-                println!("  source: {}", remote.label());
-            }
             // Which parts of an inherited rule this policy changed, so a
             // reworded message or a widened selection reads as local rather
             // than as the set's.
@@ -1052,6 +1049,9 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
                     rule.id,
                     rule.overridden.join(", ")
                 );
+            }
+            if let config::Origin::Remote(remote) = &rule.origin {
+                println!("    source: {}", remote.label());
             }
         }
         return Ok(Exit::Clean);

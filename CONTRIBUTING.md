@@ -83,9 +83,10 @@ one ruling label. The template files it with `ruling:pending`, and the ruling
 is recorded by replacing that label with `ruling:accepted`, `ruling:rejected`
 or `ruling:deferred`.
 
-The repository receives only what runs, plus
-[REFERENCE.md](docs/REFERENCE.md), which stays the normative statement of what
-uphold does now. Tracked files carry no issue numbers, dates or status lines;
+The repository carries runnable content and current-state documentation,
+including [DESIGN.md](docs/DESIGN.md) for the architecture and
+[REFERENCE.md](docs/REFERENCE.md) for normative behavior.
+Tracked files carry no issue numbers, dates or status lines;
 those stay in the tracker and Git history.
 
 The versioned source tree is authoritative for the delivered system: its

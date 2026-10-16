@@ -97,6 +97,61 @@ impl Fixture {
 
 const RULE: &str = "[rule.org-rule]\nregexp = 'ORG_BANNED'\nmessage = 'organization rule'\n[rule.org-rule.files]\nexclude = ['policy/**']\n";
 
+#[cfg(unix)]
+#[test]
+fn an_authentication_failure_never_launches_an_interactive_prompt() {
+    use std::io::{BufRead as _, Write as _};
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let fixture = Fixture::new(RULE);
+    let askpass = fixture.root.join("askpass");
+    std::fs::write(
+        &askpass,
+        "#!/bin/sh\nprintf asked > \"$0.called\"\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&askpass, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::fs::write(&fixture.config, format!(
+        "[url \"http://{address}/policy.git\"]\n insteadOf = https://github.com/example/policy.git\n"
+    )).unwrap();
+    support::git(
+        &fixture.source,
+        &[
+            "config",
+            "--file",
+            fixture.config.to_str().unwrap(),
+            "core.askPass",
+            askpass.to_str().unwrap(),
+        ],
+    );
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut reader = std::io::BufReader::new(&stream);
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap() != 0 {
+            if line == "\r\n" {
+                break;
+            }
+            line.clear();
+        }
+        stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"fixture\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+    });
+    let output = fixture.run(&["rules", "--effective"]);
+    server.join().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!fixture.root.join("askpass.called").exists());
+}
+
 #[test]
 fn remote_rules_run_keep_provenance_and_accept_overrides() {
     let fixture = Fixture::new(RULE);
@@ -117,6 +172,18 @@ fn remote_rules_run_keep_provenance_and_accept_overrides() {
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("message"))
+    );
+    let human = fixture.run(&["rules", "--effective"]);
+    assert_eq!(human.status.code(), Some(0));
+    let listing = String::from_utf8(human.stdout).unwrap();
+    let lines: Vec<_> = listing.lines().collect();
+    let rule_line = lines
+        .iter()
+        .position(|line| line.starts_with("  org-rule  ("))
+        .unwrap();
+    assert_eq!(
+        lines.get(rule_line + 1).copied(),
+        Some(format!("    source: example/policy@{}:policy/org.toml", fixture.rev).as_str())
     );
     std::fs::write(fixture.root.join("consumer/skip.txt"), "ORG_BANNED").unwrap();
     support::git(&fixture.root.join("consumer"), &["add", "."]);
