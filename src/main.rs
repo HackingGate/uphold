@@ -114,7 +114,7 @@ usage:
   uphold scan --text [FILE|-]        run the host-identity rules over text
   uphold guard --stage STAGE         run the guards that fire at STAGE
   uphold guard --text [FILE|-]       run the text-capable guards over text
-  uphold check                       reconcile policy/upheld.toml against what runs
+  uphold check [--json]              reconcile policy/upheld.toml against what runs
   uphold check --coverage            which rules run here and carry no principle
   uphold audit --for-publication     what a private->public flip would republish
   uphold init --owner OWNER          write a first policy, claims and hook config
@@ -361,10 +361,11 @@ fn run() -> Result<Exit> {
         "guard" => guard_command(rest),
         "audit" => audit_command(rest),
         "check" => match rest {
-            [] => check_command(false),
-            [flag] if flag == "--coverage" => check_command(true),
+            [] => check_command(false, false),
+            [flag] if flag == "--coverage" => check_command(true, false),
+            [flag] if flag == "--json" => check_command(false, true),
             _ => Err(Fatal::new(format!(
-                "usage: uphold check [--coverage]\n\n{USAGE}"
+                "usage: uphold check [--coverage | --json]\n\n{USAGE}"
             ))),
         },
         "hooks" => match rest {
@@ -579,11 +580,11 @@ fn run() -> Result<Exit> {
 /// The loader runs first and its answer is what the reconcile reads, which is
 /// the whole point of moving this in: `uphold_check.py` re-implemented
 /// `config::load` to answer the same question and was free to disagree with it.
-fn check_command(coverage: bool) -> Result<Exit> {
+fn check_command(coverage: bool, json: bool) -> Result<Exit> {
     let working = std::env::current_dir()?;
     let (root, policy_path) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
     let policy = config::load(&root, &policy_path)?;
-    check::run(&root, &policy, coverage)
+    check::run(&root, &policy, coverage, json)
 }
 
 fn scan_command(arguments: &[OsString]) -> Result<Exit> {

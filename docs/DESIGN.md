@@ -169,6 +169,14 @@ component, here are the controls it implements. Its ecosystem
 Compliance-to-Policy) already turns that into policy for several engines and
 normalizes their results back, which a private format would forgo.
 
+Rust evaluates reconciliation once into a report; the default human renderer
+and the versioned `uphold check --json` renderer consume that same result.
+Python review and OSCAL read the JSON contract, including explicit component
+identities, rather than interpreting a human evidence line. A malformed report,
+unknown schema version, unavailable evidence, or unexpected process status is
+could-not-look. Review can still use the partial evidence from an evaluated
+refusal; an export requires the whole reconciliation to hold.
+
 The export reconciles first and emits only what held: a component definition is
 an assertion to an outside reader, and exporting an unreconciled one would
 publish a claim this tool had just failed to confirm.

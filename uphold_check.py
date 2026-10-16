@@ -238,95 +238,122 @@ def declared_claims(declaration: dict) -> list[tuple[str, str]]:
     return claims
 
 
-# The report `uphold check` prints, as the two fragments this reader keys on.
-# Written down here rather than inline because the count check below is the only
-# thing that notices when the binary's format and this reader drift apart, and a
-# reader that has to be read alongside the format it parses should say what it
-# expects in one place.
-RECONCILED_PREFIX = "reconciled "
-RECONCILED_SUFFIX = " enforcement claims:"
-ENFORCED_BY = "  enforced by "
+def report_object(pairs: list[tuple[str, object]]) -> dict:
+    """JSON objects cannot silently overwrite evidence through duplicate keys."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON field {key!r}")
+        result[key] = value
+    return result
 
 
-def reconciled_count(line: str) -> int | None:
-    """The N of `reconciled N enforcement claims:`, or None for any other line."""
-    line = line.strip()
-    if not (line.startswith(RECONCILED_PREFIX) and line.endswith(RECONCILED_SUFFIX)):
-        return None
-    count = line[len(RECONCILED_PREFIX) : -len(RECONCILED_SUFFIX)]
-    return int(count) if count.isdigit() else None
+def reconciliation_report(answered: subprocess.CompletedProcess) -> dict:
+    """Validate the versioned engine contract before any evidence is consumed."""
+    try:
+        report = json.loads(answered.stdout, object_pairs_hook=report_object)
+    except (ValueError, TypeError) as error:
+        raise CouldNotLook(
+            f"uphold check --json returned malformed JSON: {error}"
+        ) from error
+    if not isinstance(report, dict) or type(report.get("schema_version")) is not int:
+        raise CouldNotLook("uphold check --json has no integer schema_version")
+    if report["schema_version"] != 1:
+        raise CouldNotLook(
+            f"unsupported uphold check schema version {report['schema_version']!r}"
+        )
+    verdicts = {"clean": 0, "violations": 1, "could_not_look": 2}
+    verdict = report.get("verdict")
+    if not isinstance(verdict, str) or verdicts.get(verdict) != answered.returncode:
+        raise CouldNotLook(
+            "uphold check --json verdict disagrees with its process status"
+        )
+    for field in ("violations", "unavailable", "notes"):
+        values = report.get(field)
+        if not isinstance(values, list) or not all(
+            isinstance(value, str) and value.strip() for value in values
+        ):
+            raise CouldNotLook(f"uphold check --json has malformed {field}")
+    claims = report.get("claims")
+    if not isinstance(claims, list):
+        raise CouldNotLook("uphold check --json has no claims array")
+    for claim in claims:
+        if not isinstance(claim, dict) or not all(
+            isinstance(claim.get(field), str) and claim[field].strip()
+            for field in ("principle", "rule")
+        ):
+            raise CouldNotLook("uphold check --json has a malformed claim")
+        status = claim.get("status")
+        if status not in ("reconciled", "refused", "unavailable"):
+            raise CouldNotLook("uphold check --json has an unknown claim status")
+        suppliers = claim.get("suppliers")
+        if not isinstance(suppliers, list) or bool(suppliers) != (
+            status == "reconciled"
+        ):
+            raise CouldNotLook("uphold check --json has inconsistent claim suppliers")
+        for supplier in suppliers:
+            if (
+                not isinstance(supplier, dict)
+                or supplier.get("component") not in ("local", "uphold")
+                or not isinstance(supplier.get("seam"), str)
+                or not supplier["seam"].strip()
+            ):
+                raise CouldNotLook("uphold check --json has a malformed supplier")
+        if status == "refused" and not report["violations"]:
+            raise CouldNotLook("uphold check --json omits the claim's violation")
+        if status == "unavailable" and not report["unavailable"]:
+            raise CouldNotLook(
+                "uphold check --json omits the claim's unavailable evidence"
+            )
+    if (
+        (verdict == "clean" and (report["violations"] or report["unavailable"]))
+        or (verdict == "violations" and not report["violations"])
+        or (verdict == "could_not_look" and not report["unavailable"])
+    ):
+        raise CouldNotLook("uphold check --json has inconsistent verdict evidence")
+    return report
 
 
-def engine_suppliers(root: Path, *, strict: bool = True) -> dict[str, list[str]]:
-    """Which seams supply each rule, as the reconcile in the binary sees it.
+def engine_report(root: Path, *, strict: bool = True) -> dict:
+    """Read Rust's evaluated evidence through its versioned JSON contract.
 
-    `strict` is the difference between the two callers. `--oscal` publishes an
-    assertion to an outside reader, so a declaration that does not reconcile has
-    nothing honest to export and the refusal travels. `--review` runs over a
-    declaration somebody is still writing: a claim naming a rule nothing
-    supplies is exactly the state it exists to help with, and refusing there
-    would take the review document away at the moment it is most wanted. The
-    evidence lines for the claims that DID hold are on stdout either way.
-
-    The evidence lines are counted against the binary's own header, because this
-    is a PARSER of another program's report and a parser that stops recognising
-    it fails silently: every line skipped by the `continue` below, an empty
-    mapping returned, and `--oscal` publishing a component definition with no
-    components at all -- exit 0, to an outside reader, over a repository whose
-    reconcile had just succeeded on every claim. Nothing in the pipeline could
-    tell that apart from a repository that enforces nothing. A report this
-    reader could not read is could-not-look; see the `explicit-unknown` record.
+    OSCAL requires a clean reconciliation. Review also accepts an evaluated
+    refusal and retains evidence for claims that held. Neither can use a report
+    with unavailable evidence, even when a violation determines the exit code.
     """
-    answered = engine(root, "check")
-    if answered.returncode == 2:
-        raise CouldNotLook(answered.stderr.strip() or "uphold check could not look")
-    if answered.returncode not in (0, 1):
+    answered = engine(root, "check", "--json")
+    if answered.returncode not in (0, 1, 2):
         raise CouldNotLook(
             f"uphold check exited unexpectedly with status {answered.returncode}: "
             f"{answered.stderr.strip() or 'no diagnostic was reported'}"
         )
-    if answered.returncode != 0 and strict:
+    if answered.returncode == 2 and not answered.stdout.strip():
+        # Loading/discovery/declaration failures happen before a report exists.
+        raise CouldNotLook(answered.stderr.strip() or "uphold check could not look")
+    report = reconciliation_report(answered)
+    if report["unavailable"]:
+        raise CouldNotLook(
+            "uphold check could not look: " + "; ".join(report["unavailable"])
+        )
+    if answered.returncode == 1 and strict:
         raise Refused(
             "the enforcement claims do not reconcile, so there is nothing "
-            f"honest to export:\n{answered.stderr.strip()}"
+            "honest to export:\n" + "\n".join(report["violations"])
         )
-    suppliers: dict[str, list[str]] = {}
-    reconciled: int | None = None
-    read = 0
-    for line in answered.stdout.splitlines():
-        if reconciled is None:
-            reconciled = reconciled_count(line)
-        if " <- " not in line or ENFORCED_BY not in line:
-            continue
-        read += 1
-        _, rest = line.split(" <- ", 1)
-        rule, by = rest.split(ENFORCED_BY, 1)
-        # Folded back to the SEAM, because an OSCAL component is a thing that
-        # implements a control and the seam is that thing. `uphold check` names
-        # the evidence -- which stage, which scan -- and a component per stage
-        # would split one implementation across five.
-        seams = []
-        for part in by.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            seams.append("local" if part.startswith("a hook") else "uphold")
-        for seam in seams:
-            if seam not in suppliers.setdefault(rule.strip(), []):
-                suppliers[rule.strip()].append(seam)
+    return report
 
-    # Only where the binary said the reconcile HELD. A refused one prints its
-    # failures on stderr and nothing on stdout, and `--review` is meant to keep
-    # going over exactly that; there is no count there to check against, and
-    # requiring one would turn the state this mode exists for into exit 2.
-    if answered.returncode == 0 and read != reconciled:
-        raise CouldNotLook(
-            f"`uphold check` reported {reconciled if reconciled is not None else 'no'} "
-            f"reconciled claim(s) and this reader recovered {read} evidence line(s) "
-            "from the same report, so which seam supplies which rule is unknown. "
-            "The binary's report and this reader have drifted apart; the binary "
-            "is the authority, so fix the reader."
-        )
+
+def engine_suppliers(root: Path, *, strict: bool = True) -> dict[str, list[str]]:
+    """Fold reconciled claims into the components used by the OSCAL export."""
+    report = engine_report(root, strict=strict)
+    suppliers: dict[str, list[str]] = {}
+    for claim in report["claims"]:
+        if claim["status"] != "reconciled":
+            continue
+        for supplier in claim["suppliers"]:
+            seams = suppliers.setdefault(claim["rule"], [])
+            if supplier["component"] not in seams:
+                seams.append(supplier["component"])
     return suppliers
 
 
@@ -730,28 +757,28 @@ def run_review(argv: list[str]) -> int:
             (name, emit_target(root, name)) for name in settings["emit_controls"]
         ]
         claims = declared_claims(declaration)
-        suppliers = engine_suppliers(root, strict=False)
+        report = engine_report(root, strict=False)
+        reconciled = {
+            (claim["principle"], claim["rule"])
+            for claim in report["claims"]
+            if claim["status"] == "reconciled"
+        }
     except CouldNotLook as error:
         print(f"uphold review could not look: {error}", file=sys.stderr)
         return 2
 
     records = load_records()
-    # Filtered by `suppliers`, exactly as `active` is on the line below. A
-    # principle leaves the review document because a rule enforces it -- that is
-    # the `continue` in `review.route`, "a rule enforces it; a reviewer
-    # repeating it is noise" -- and a claim naming a rule no seam here supplies
-    # enforces nothing. Unfiltered, such a claim removed the principle from the
-    # document AND was absent from the "already active here" list the same
-    # document prints, so an `automatable = "yes"` record could be enforced by
-    # nothing and reviewed by nobody, with the page showing no trace of either.
-    #
-    # The reconcile refuses that claim outright; this mode has to survive it,
-    # because `--review` runs over a declaration a person is still writing.
-    claimed = {principle for principle, rule in claims if rule in suppliers}
+    # Partial reports identify the exact claims that held. A refused claim may
+    # name the same rule as a reconciled one, so the rule id alone is insufficient.
+    claimed = {
+        principle for principle, rule in claims if (principle, rule) in reconciled
+    }
     for_review, errors, stale = review_mod.route(
         records, claimed, settings["exempt"], settings["include_domains"]
     )
-    active = sorted({rule for _, rule in claims if rule in suppliers})
+    active = sorted(
+        {rule for principle, rule in claims if (principle, rule) in reconciled}
+    )
     document = review_mod.render(for_review, active)
 
     control_errors, uncontrolled = review_mod.audit_controls(
