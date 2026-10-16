@@ -176,53 +176,6 @@ fn a_path_rule_matches_the_path_and_not_the_content() {
 }
 
 #[test]
-fn retired_adr_paths_are_refused_by_the_repository_policy() {
-    let source: toml::Value = toml::from_str(include_str!("../policy/principles.toml")).unwrap();
-    let mut policy = toml::Table::new();
-    let mut rules = toml::Table::new();
-    rules.insert(
-        "adr-retired".into(),
-        source
-            .get("rule")
-            .unwrap()
-            .get("adr-retired")
-            .unwrap()
-            .clone(),
-    );
-    policy.insert("rule".into(), toml::Value::Table(rules));
-    let root = workspace();
-    write(
-        &root,
-        "policy/principles.toml",
-        &toml::to_string(&policy).unwrap(),
-    );
-    write(&root, "docs/DESIGN.md", "Current architecture.\n");
-    let empty = scan(&root);
-    assert_eq!(code(&empty), 0, "{}", stderr(&empty));
-    for path in [
-        "docs/adr/0001-old.md",
-        "docs/adr/0013-new.md",
-        "docs/adr/nested/record.md",
-    ] {
-        write(&root, path, "A decision.\n");
-        let output = scan(&root);
-        assert_eq!(code(&output), 1, "{}", stderr(&output));
-        assert!(
-            stderr(&output).contains("adr-retired"),
-            "{}",
-            stderr(&output)
-        );
-        assert!(stderr(&output).contains(path), "{}", stderr(&output));
-        assert!(
-            stderr(&output).contains("file a Design record"),
-            "{}",
-            stderr(&output)
-        );
-        std::fs::remove_file(root.join(path)).unwrap();
-    }
-}
-
-#[test]
 fn a_require_rule_fails_on_the_file_that_is_missing_the_pattern() {
     let root = workspace();
     write(

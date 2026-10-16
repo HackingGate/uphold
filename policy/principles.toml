@@ -130,12 +130,6 @@ sets = [
 allowed_scripts = ["Latin", "Han", "Hiragana", "Katakana"]
 files.include = ["tests", "src/guard/unicode.rs"]
 
-[rule.adr-retired]
-message = "file a Design record issue (label design); docs/adr is retired."
-path_regexp = '^docs/adr/'
-files.include = ["."]
-files.glob = ["docs/adr/**"]
-
 # `workflow-declares-permissions` used to stand here, as the one instance of the
 # `require_regexp` kind anywhere -- a rule kind with no instance is
 # indistinguishable from a rule kind that does not work. It is in

@@ -13,10 +13,6 @@
 # a config file that would have no condition on which to raise them.
 
 [[enforce]]
-principle = "single-authoritative-source"
-rule = "adr-retired"
-
-[[enforce]]
 principle = "explicit-unknown"
 rule = "catalog-tests"
 # tests/test_uphold_check.py asserts that an unreadable declaration exits 2

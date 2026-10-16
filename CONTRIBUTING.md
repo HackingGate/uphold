@@ -75,32 +75,29 @@ the policy file, and the two forms the note names are checked as well. See
 
 ## Where a decision goes
 
-A change that needs a decision is a GitHub issue in the
-[Design record](.github/ISSUE_TEMPLATE/design.md) shape before a pull request
-exists: the decision in the body, and the research in a comment that carries
-the version, date and evidence of each claim. A Design record carries exactly
+A proposal that benefits from design discussion can use a GitHub issue in the
+[Design record](.github/ISSUE_TEMPLATE/design.md) shape: the proposed decision
+in the body, and the research in a comment that carries the version, date and
+evidence of each claim. A Design record carries exactly
 one ruling label. The template files it with `ruling:pending`, and the ruling
 is recorded by replacing that label with `ruling:accepted`, `ruling:rejected`
 or `ruling:deferred`.
 
-The read-only Design record workflow checks open records when issues open,
-reopen or change labels, and daily. Each open record must have exactly one
-recognized ruling label; `ruling:pending` is overdue at 30 days from creation.
-Run `python3 scripts/design_age.py` with `GITHUB_REPOSITORY` and `GH_TOKEN` set
-to check manually. Rule the record or mark it `ruling:deferred` and record a
-revisit date in the issue. API failures fail the check rather than reporting
-that records are ruled.
-
 The repository receives only what runs, plus
 [REFERENCE.md](docs/REFERENCE.md), which stays the normative statement of what
 uphold does now. Tracked files carry no issue numbers, dates or status lines;
-those stay in the Design record that rules the change.
+those stay in the tracker and Git history.
 
-Decisions live in Design record issues. [DESIGN.md](docs/DESIGN.md) explains
-the current architecture; [REFERENCE.md](docs/REFERENCE.md) defines its
-behavior. Retired decision files remain available in Git history. The `adr-retired`
-path rule refuses every tracked file under `docs/adr`; file a Design record
-for a new decision.
+The versioned source tree is authoritative for the delivered system: its
+implementation, tests, [DESIGN.md](docs/DESIGN.md) and
+[REFERENCE.md](docs/REFERENCE.md) describe the accepted architecture and
+behavior together. Design record issues hold proposals, discussion and
+historical context. An accepted proposal changes the delivered system only
+through a reviewed repository change; an issue's status or age does not change
+what a revision implements or whether it passes its checks. Keep the accepted
+contract and the rationale needed to maintain it in the repository so a reader
+can understand the system without consulting the issue tracker. Retired
+decision files remain available in Git history.
 
 ## Working on the engine
 
