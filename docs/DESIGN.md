@@ -323,6 +323,40 @@ examples.
 forge), so `collect = "git-refs"` replaces the argv walk rather than forking the
 shim.
 
+### Publication adapter boundaries
+
+`invocation::Invocation` is the shared adapter-to-policy subject contract. It
+carries the seam, report identity, and either pathless prose with separately
+identified headlines or command-collected subject kinds. `Observed` distinguishes
+a missing subject from a present empty string and from an unread required
+surface. Tool identity remains available when a harness call has no argument
+strings. `text::judged` consumes the pathless form; the shim consumes named
+subjects under the same authoritative `text::Judged` and `text::Seam` table.
+Passing a command's subjects to the pathless evaluator is an error.
+
+Publication commands have additional facts that raw text cannot establish.
+`shim::destination::CommandContext` binds the canonical arguments and collected
+target to one invocation. It resolves the destination lazily and retains its
+repository spelling, host, forge client and selection provenance. Scope,
+ownership and destination-sensitive text guards consume that observation.
+Local visibility is reused only for a destination selected from origin without
+an ambient host override. A required destination that remains unresolved takes
+the existing explicit unresolved-scope path; it cannot become a clean answer.
+
+The command grammar and collection remain in `shim`; they do not evaluate
+policy. `shim::checker` evaluates one selected rule against one subject, with
+pattern or subprocess checks and the existing checker exit contract. The shim
+orchestrator selects rules, asks scope, judges destination then subjects, and
+hands the original arguments and any replayed stdin to the process. Editor
+re-entry uses the same command context and checker implementations. These are
+internal modules of the same binary, with no separate installation lifecycle.
+
+Harness hooks collect strings and recognized headline fields. They do not
+interpret arbitrary tool arguments as forge destinations; direct text checks
+also have no destination supplied by their caller. The existing text guards'
+repository context remains unchanged. Command normalization does not extend
+that coverage to another transport or an unknown command grammar.
+
 ### `before` scopes a checker
 
 Until v3 a checker was consulted by every declared shim: a check written for a
