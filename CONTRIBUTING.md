@@ -83,6 +83,14 @@ one ruling label. The template files it with `ruling:pending`, and the ruling
 is recorded by replacing that label with `ruling:accepted`, `ruling:rejected`
 or `ruling:deferred`.
 
+The read-only Design record workflow checks open records when issues open,
+reopen or change labels, and daily. Each open record must have exactly one
+recognized ruling label; `ruling:pending` is overdue at 30 days from creation.
+Run `python3 scripts/design_age.py` with `GITHUB_REPOSITORY` and `GH_TOKEN` set
+to check manually. Rule the record or mark it `ruling:deferred` and record a
+revisit date in the issue. API failures fail the check rather than reporting
+that records are ruled.
+
 The repository receives only what runs, plus
 [REFERENCE.md](docs/REFERENCE.md), which stays the normative statement of what
 uphold does now. Tracked files carry no issue numbers, dates or status lines;
@@ -90,7 +98,9 @@ those stay in the Design record that rules the change.
 
 Decisions live in Design record issues. [DESIGN.md](docs/DESIGN.md) explains
 the current architecture; [REFERENCE.md](docs/REFERENCE.md) defines its
-behavior. Retired decision files remain available in Git history.
+behavior. Retired decision files remain available in Git history. The `adr-retired`
+path rule refuses every tracked file under `docs/adr`; file a Design record
+for a new decision.
 
 ## Working on the engine
 

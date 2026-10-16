@@ -839,6 +839,37 @@ and is a one-line diff that says so. `[set]` in a repository's own policy, or in
 an `inherit.paths` file, is refused — nothing there ships compiled in, so
 nothing there has the problem the ceiling exists for.
 
+Organization rules may instead come from a GitHub repository at an immutable
+commit. They are merged after `inherit.paths`, before the repository's own
+rules, and use the same `[override.<id>]`, shadowing and `disabled_rules` behavior:
+
+```toml
+[inherit]
+remote = [{ repo = "example/policy", rev = "0123456789abcdef0123456789abcdef01234567", path = "policy/org.toml" }]
+
+[override.org-rule.files]
+exclude = ["fixtures/**"]
+```
+
+`repo` is `owner/name` on GitHub. `rev` must be a full 40-character commit ID;
+a branch, abbreviated ID or tag is refused with exit 2 because it can move.
+Resolve a release tag to its commit before recording the pin. Missing commits,
+unreachable repositories, missing files, symlinks, directories, non-UTF-8
+content and invalid policy all fail with exit 2. Nothing falls back to the
+repository's latest revision. Each load fetches into a fresh temporary bare
+repository and removes it afterwards; network access and Git credentials for
+private sources must therefore be available wherever the policy runs. Git's
+normal credential helpers and URL rewrites apply. No checkout, submodules or
+source repository hooks are run.
+
+Only rules are adopted. Remote files may not declare their own `[inherit]`,
+`[override]` or `[[shim]]`: sources and shims remain explicit decisions in the
+consumer's own policy. This deliberately leaves org-wide shim inheritance
+unsupported, separately from the bundled-set constraint. `rules --effective`
+shows each remote rule's repository, commit and path; `--json` includes them in
+its `remote` object, preserved when an override adjusts the rule. An own rule
+that replaces the inherited id has its own provenance instead.
+
 `inherit.disabled_rules` drops an inherited rule, and naming an id nothing
 inherited defines is an error. `inherit.paths` merges extra policy files,
 repository-relative, after the bundled sets. A path must stay inside the
@@ -3253,7 +3284,7 @@ itself calls clean. It trades a false negative for a false positive.
 So guarddog is run with `--output-format json` and its own `risks` list is
 counted. This is the one scanner whose findings are read here. The count is
 reported, never recomputed, with one named exception: a `metadata_mismatch`
-risk made up only of npm's publish-time normalizations is printed as
+risk made up only of known metadata normalizations is printed as
 tolerated rather than counted
 ([below](#what-npm-writes-at-publish-is-tolerated-by-name)).
 
@@ -3397,18 +3428,40 @@ these is true:
   `: Manifest("` or the `"), package.json("` marker appears more than once
   is not read.
 
-Two cases are not on the list:
-
-- `"install": "node-gyp rebuild"`, which npm adds where `binding.gyp` exists. An
-  install script runs at install time, so it is not the same risk as `start`.
-- PyPI optional extras, which guarddog 3.2.0 compares against the required
-  dependencies. Its report keeps the names and drops the `extra ==` markers,
-  so the report alone cannot tell an extra from an injected dependency. Those
-  findings still need a waiver.
+`"install": "node-gyp rebuild"`, which npm adds where `binding.gyp` exists,
+is not on the list. An install script runs at install time, so it is not the
+same risk as `start`.
 
 guarddog's report does not list the tarball's files, so the `server.js` that
 npm's step requires is not confirmed. guarddog also prints an absent value as
 `None`, the same way it prints a literal `"None"`.
+
+### PyPI optional extras require release evidence
+
+guarddog compares every `requires_dist` name with the required dependencies
+in `pyproject.toml`, including names declared only under optional extras. Its
+report drops the markers, so uphold fetches the exact scanned release from
+[PyPI's release JSON endpoint](https://docs.pypi.org/api/json/) only when the
+entire difference consists of names present in PyPI metadata and absent from
+`pyproject.toml`. It verifies the response's package and version, then parses
+all `requires_dist` entries with `pyreq`.
+
+A name is tolerated only when every occurrence has a simple positive
+`extra == "name"` marker (including the reversed equality). An occurrence
+with no marker, a platform marker, a conjunction or an alternative keeps the
+finding. This closed form covers the ordinary extras declarations without
+evaluating conditions against the host. All reported names must qualify. Both copies of guarddog's
+description must agree; malformed reports, unknown differences, missing
+metadata or unparseable requirements retain the finding and remain eligible
+for an exact-version waiver.
+
+The lookup uses HTTPS at `pypi.org`, refuses redirects, and is bounded to
+15 seconds and 2 MiB per response. A failed lookup prints why the finding was
+retained. A successful normalization prints `tolerated:` with the verified
+names and release. No package-wide exemption or cross-run metadata cache is
+created. This verifies registry metadata, not the artifact contents; PyPI
+metadata can differ from the uploaded artifact. This does not repair guarddog's order-dependent choice of a wheel
+root, so an unmatched PyPI metadata waiver is still not called removable.
 
 ### Waiving a confirmed guarddog false positive
 

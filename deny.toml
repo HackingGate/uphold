@@ -41,6 +41,9 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    # TLS implementation and the Mozilla root certificate data carried by ureq.
+    "ISC",
+    "CDLA-Permissive-2.0",
     "MIT",
     "Unicode-3.0",
     "Unicode-DFS-2016",
