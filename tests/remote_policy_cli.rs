@@ -25,6 +25,8 @@ impl Fixture {
         let source = root.join("source");
         std::fs::create_dir_all(source.join("policy")).unwrap();
         support::git(&source, &["init", "-q", "-b", "main"]);
+        support::git(&source, &["config", "user.name", "Test"]);
+        support::git(&source, &["config", "user.email", "test@example.test"]);
         std::fs::write(source.join("policy/org.toml"), text).unwrap();
         support::git(&source, &["add", "."]);
         support::git(&source, &["commit", "-qm", "policy"]);
