@@ -28,7 +28,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::catalog;
 use crate::config::Policy;
@@ -340,6 +340,18 @@ fn pinned_ids(root: &Path) -> Result<Option<(BTreeSet<String>, Vec<String>)>> {
     let mut every = BTreeSet::new();
     for entry in repos {
         for hook in entry.hooks {
+            // A range-only hook at no push stage cannot supply a claim. Filter
+            // this declaration only: another declaration may install the same
+            // id at a valid stage, or another runner may supply it independently.
+            if RANGE_IDS.contains(&hook.id.as_str())
+                && hook.stages.as_ref().is_some_and(|stages| {
+                    !stages
+                        .iter()
+                        .any(|stage| RANGE_STAGES.contains(&stage.as_str()))
+                })
+            {
+                continue;
+            }
             every.insert(hook.id);
         }
     }
@@ -711,8 +723,66 @@ pub(crate) struct Supply {
     pub unestablished: Vec<String>,
 }
 
-/// `uphold check`, and `uphold check --coverage`.
-pub(crate) fn run(root: &Path, policy: &Policy, coverage: bool) -> Result<Exit> {
+/// The versioned machine contract, independent of the human report's wording.
+#[derive(Debug, Serialize)]
+pub(crate) struct Report {
+    schema_version: u8,
+    pub(crate) verdict: Verdict,
+    pub(crate) claims: Vec<EvaluatedClaim>,
+    violations: Vec<String>,
+    unavailable: Vec<String>,
+    notes: Vec<String>,
+    #[serde(skip)]
+    misplaced_count: usize,
+    #[serde(skip)]
+    fatal: Option<String>,
+}
+
+/// The machine report names the same outcome that determines the process status.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Verdict {
+    Clean,
+    Violations,
+    CouldNotLook,
+}
+
+impl Verdict {
+    const fn exit(self) -> Exit {
+        match self {
+            Self::Clean => Exit::Clean,
+            Self::Violations => Exit::Violations,
+            Self::CouldNotLook => Exit::Broken,
+        }
+    }
+}
+
+/// A declaration entry retains its individual result and supplying seams, so a
+/// refused or incomplete report can still identify the claims that held.
+#[derive(Debug, Serialize)]
+pub(crate) struct EvaluatedClaim {
+    pub(crate) principle: String,
+    pub(crate) rule: String,
+    status: ClaimStatus,
+    suppliers: Vec<Supplier>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ClaimStatus {
+    Reconciled,
+    Refused,
+    Unavailable,
+}
+
+#[derive(Debug, Serialize)]
+struct Supplier {
+    component: &'static str,
+    seam: String,
+}
+
+/// `uphold check`, its JSON form, and the separate coverage report.
+pub(crate) fn run(root: &Path, policy: &Policy, coverage: bool, json: bool) -> Result<Exit> {
     let path = root.join(DECLARATION);
     if !path.is_file() {
         return Err(Fatal::new(format!(
@@ -724,125 +794,222 @@ pub(crate) fn run(root: &Path, policy: &Policy, coverage: bool) -> Result<Exit> 
     let text = std::fs::read_to_string(&path).map_err(|error| Fatal::at(&path, error))?;
     let declaration: Declaration =
         toml::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
-
     let installed = installed(root)?;
     let supply = suppliers(policy, &installed);
-
     if coverage {
         return report_coverage(policy, &declaration, &installed, &supply);
     }
+    let report = evaluate(&path, &declaration, &installed, &supply)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&report).map_err(|error| Fatal::new(error.to_string()))?
+        );
+        Ok(report.verdict.exit())
+    } else {
+        report_human(&report)
+    }
+}
 
-    let mut failures: Vec<String> = Vec::new();
-    let mut evidence: Vec<String> = Vec::new();
+fn validate_claim<'a>(path: &Path, index: usize, claim: &'a Claim) -> Result<(&'a str, &'a str)> {
+    let at = format!("enforce[{index}]");
+    if claim.tier.is_some() {
+        return Err(Fatal::at(
+            path,
+            format!(
+                "{at} carries a `tier`. The field is gone: a rule id resolves across \
+             every seam at once, so a claim naming one no longer has to say which. \
+             Drop the line."
+            ),
+        ));
+    }
+    let (Some(principle), Some(rule)) = (claim.principle.as_deref(), claim.rule.as_deref()) else {
+        return Err(Fatal::at(
+            path,
+            format!("{at}: `principle` and `rule` are both required"),
+        ));
+    };
+    if principle.trim().is_empty() || rule.trim().is_empty() {
+        return Err(Fatal::at(
+            path,
+            format!("{at}: `principle` and `rule` must not be blank"),
+        ));
+    }
+    Ok((principle, rule))
+}
 
-    for (index, claim) in declaration.enforce.iter().enumerate() {
-        let at = format!("enforce[{index}]");
-        if claim.tier.is_some() {
-            return Err(Fatal::at(
-                &path,
-                format!(
-                    "{at} carries a `tier`. The field is gone: a rule id resolves across \
-                     every seam at once, so a claim naming one no longer has to say which. \
-                     Drop the line."
-                ),
-            ));
-        }
-        let (Some(principle), Some(rule)) = (claim.principle.as_deref(), claim.rule.as_deref())
-        else {
-            return Err(Fatal::at(
-                &path,
-                format!("{at}: `principle` and `rule` are both required"),
-            ));
-        };
-        if principle.trim().is_empty() || rule.trim().is_empty() {
-            return Err(Fatal::at(
-                &path,
-                format!("{at}: `principle` and `rule` must not be blank"),
-            ));
-        }
-
-        let Some(record) = catalog::get(principle)? else {
-            failures.push(format!(
+fn assess_claim(
+    index: usize,
+    principle: &str,
+    rule: &str,
+    supplied: bool,
+    unreadable: &[String],
+) -> Result<(ClaimStatus, Option<String>)> {
+    let at = format!("enforce[{index}]");
+    let Some(record) = catalog::get(principle)? else {
+        return Ok((
+            ClaimStatus::Refused,
+            Some(format!(
                 "{at}: {}",
                 catalog::unknown(principle, catalog::ids()?.len())
-            ));
-            continue;
-        };
-        if record.deprecated() {
-            failures.push(format!(
+            )),
+        ));
+    };
+    if record.deprecated() {
+        return Ok((
+            ClaimStatus::Refused,
+            Some(format!(
                 "{at}: {principle:?} is deprecated; the catalog keeps it for redirects only"
-            ));
-            continue;
-        }
-        if record.refuses_automation() {
-            failures.push(format!(
-                "{at}: the {principle:?} record says enforcement.automatable = \"no\"; \
-                 no rule can be claimed to enforce it"
-            ));
-            continue;
-        }
-
-        if let Some(by) = supply.supplied.get(rule) {
-            evidence.push(format!(
-                "{principle} <- {rule}  enforced by {}",
-                by.join(", ")
-            ));
-            continue;
-        }
-
-        if !installed.unreadable.is_empty() {
-            // A rule absent from what could be read is not an absent rule. The
-            // configuration that could not be inspected is exactly where it
-            // might be, so this is could-not-look and not a false claim.
-            return Err(Fatal::new(format!(
-                "{at}: no rule {rule:?} in what could be read, and {} \
-                 could not be read; cannot tell whether the claim holds",
-                installed.unreadable.join("; ")
-            )));
-        }
-
-        let mut failure =
-            format!("{at}: {principle:?} claims {rule:?}, which no seam here supplies");
-        if let Some((_, went)) = REMOVED.iter().find(|(id, _)| *id == rule) {
-            failure.push_str("; ");
-            failure.push_str(went);
-        }
-        failures.push(failure);
+            )),
+        ));
     }
+    if record.refuses_automation() {
+        return Ok((
+            ClaimStatus::Refused,
+            Some(format!(
+                "{at}: the {principle:?} record says enforcement.automatable = \"no\"; \
+             no rule can be claimed to enforce it"
+            )),
+        ));
+    }
+    if supplied {
+        return Ok((ClaimStatus::Reconciled, None));
+    }
+    // A rule absent from an unreadable configuration is unknown, not false.
+    if !unreadable.is_empty() {
+        return Ok((
+            ClaimStatus::Unavailable,
+            Some(format!(
+                "{at}: no rule {rule:?} in what could be read, and {} \
+             could not be read; cannot tell whether the claim holds",
+                unreadable.join("; ")
+            )),
+        ));
+    }
+    let mut failure = format!("{at}: {principle:?} claims {rule:?}, which no seam here supplies");
+    if let Some((_, went)) = REMOVED.iter().find(|(id, _)| *id == rule) {
+        failure.push_str("; ");
+        failure.push_str(went);
+    }
+    Ok((ClaimStatus::Refused, Some(failure)))
+}
 
-    // A hook that can only fail where it is pinned is a defect in the file this
-    // reconcile reads, whatever it is claimed for, so it is refused beside the
-    // claims rather than inside them.
-    if !installed.misplaced.is_empty() {
+fn evaluate(
+    path: &Path,
+    declaration: &Declaration,
+    installed: &Installed,
+    supply: &Supply,
+) -> Result<Report> {
+    // Invalid declarations are pre-evaluation failures: neither renderer emits a report.
+    let claims = declaration
+        .enforce
+        .iter()
+        .enumerate()
+        .map(|(index, claim)| validate_claim(path, index, claim))
+        .collect::<Result<Vec<_>>>()?;
+    let mut report = Report {
+        schema_version: 1,
+        verdict: Verdict::Clean,
+        claims: Vec::new(),
+        violations: installed.misplaced.clone(),
+        unavailable: installed.unreadable.clone(),
+        notes: installed.how.clone(),
+        misplaced_count: installed.misplaced.len(),
+        fatal: None,
+    };
+    for (index, (principle, rule)) in claims.into_iter().enumerate() {
+        let by = supply.supplied.get(rule);
+        let (status, diagnostic) =
+            assess_claim(index, principle, rule, by.is_some(), &installed.unreadable)?;
+        if let Some(diagnostic) = diagnostic {
+            if status == ClaimStatus::Unavailable {
+                if report.fatal.is_none() {
+                    report.fatal = Some(diagnostic.clone());
+                }
+                report.unavailable.push(diagnostic);
+            } else {
+                report.violations.push(diagnostic);
+            }
+        }
+        report.claims.push(EvaluatedClaim {
+            principle: principle.to_owned(),
+            rule: rule.to_owned(),
+            status,
+            suppliers: if status == ClaimStatus::Reconciled {
+                by.into_iter()
+                    .flatten()
+                    .map(|seam| Supplier {
+                        component: if seam == "a hook installed here" {
+                            "local"
+                        } else {
+                            "uphold"
+                        },
+                        seam: seam.clone(),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
+        });
+    }
+    // Preserve the reconcile's precedence: an indeterminate claim stops the run;
+    // otherwise a found violation outranks an unread runner configuration.
+    let exit = if report.fatal.is_some() {
+        Exit::Broken
+    } else {
+        verdict(report.violations.len(), report.unavailable.len())
+    };
+    report.verdict = match exit {
+        Exit::Clean => Verdict::Clean,
+        Exit::Violations => Verdict::Violations,
+        Exit::Broken => Verdict::CouldNotLook,
+    };
+    Ok(report)
+}
+
+fn report_human(report: &Report) -> Result<Exit> {
+    if let Some(fatal) = &report.fatal {
+        return Err(Fatal::new(fatal.clone()));
+    }
+    if report.misplaced_count > 0 {
         eprintln!("hook configuration refused:");
-        for misplaced in &installed.misplaced {
+        for misplaced in report.violations.iter().take(report.misplaced_count) {
             eprintln!("- {misplaced}");
         }
     }
-    if !failures.is_empty() {
+    if report.violations.len() > report.misplaced_count {
         eprintln!("enforcement claims refused ({DECLARATION}):");
-        for failure in &failures {
+        for failure in report.violations.iter().skip(report.misplaced_count) {
             eprintln!("- {failure}");
         }
     }
-    if !failures.is_empty() || !installed.misplaced.is_empty() {
+    if !report.violations.is_empty() {
         return Ok(Exit::Violations);
     }
-    if !installed.unreadable.is_empty() {
+    if !report.unavailable.is_empty() {
         return Err(Fatal::new(format!(
             "runner configuration could not be read: {}",
-            installed.unreadable.join("; ")
+            report.unavailable.join("; ")
         )));
     }
-
-    println!("reconciled {} enforcement claims:", evidence.len());
-    for line in &evidence {
-        println!("  {line}");
+    println!("reconciled {} enforcement claims:", report.claims.len());
+    for claim in &report.claims {
+        println!(
+            "  {} <- {}  enforced by {}",
+            claim.principle,
+            claim.rule,
+            claim
+                .suppliers
+                .iter()
+                .map(|supplier| supplier.seam.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
-    for note in &installed.how {
+    for note in &report.notes {
         println!("  note  {note}");
     }
-    Ok(Exit::Clean)
+    Ok(report.verdict.exit())
 }
 
 /// The denominator the reconcile cannot see: rules that run and claim nothing.

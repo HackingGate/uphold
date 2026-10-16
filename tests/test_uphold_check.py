@@ -289,15 +289,7 @@ class OscalExport(unittest.TestCase):
 
 @needs_the_engine
 class TheTwoReadersOfOneReport(unittest.TestCase):
-    """The binary decides which rules run; the export must carry that answer whole.
-
-    Since the reconcile moved into the loader, this script no longer derives a
-    rule set of its own -- it PARSES the binary's report. That closes the old
-    disagreement and opens a quieter one: a parser that stops recognising the
-    report it reads produces an empty answer rather than an error, and an empty
-    answer here is a component definition with no components, published at exit
-    0 over a repository whose reconcile had just succeeded on every claim.
-    """
+    """The binary decides which rules run; its machine contract carries that answer."""
 
     def setUp(self):
         self._directory = tempfile.TemporaryDirectory()
@@ -341,48 +333,246 @@ class TheTwoReadersOfOneReport(unittest.TestCase):
         }
         self.assertEqual(rules, {"prevent-public-push", "no-merge-conflict-markers"})
 
-    def test_a_report_this_reader_cannot_parse_is_could_not_look(self):
-        """One word of the report changes, and the reader recovers nothing.
+    def test_misplaced_range_only_hook_does_not_silence_review(self):
+        exemptions = [
+            f'{key} = "No subject in this scratch repository."'
+            for key, record in uphold_check.load_records().items()
+            if record["enforcement"]["automatable"] == "yes"
+            and key != "explicit-unknown"
+        ]
+        build(
+            self.tmp,
+            "\n".join(
+                [
+                    "[[enforce]]",
+                    'principle = "explicit-unknown"',
+                    'rule = "uphold-supply-chain"',
+                    "[review]",
+                    "max_lines = 10000",
+                    "[review.no_subject_here]",
+                    *exemptions,
+                ]
+            ),
+            **{
+                ".pre-commit-config.yaml": "repos:\n  - repo: https://github.com/HackingGate/uphold\n    rev: v2.0.0\n    hooks:\n      - id: uphold-supply-chain\n        stages: [manual]\n",
+            },
+        )
+        self.assertEqual(uphold_check.engine_suppliers(self.tmp, strict=False), {})
+        result = run(self.tmp, "--review")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("explicit-unknown", result.stderr)
+        self.assertIn("no rule here claims it", result.stderr)
 
-        Before the count check this returned `{}`, which is indistinguishable
-        from a repository where no claim is supplied by anything.
-        """
+    def test_human_wording_is_not_part_of_the_consumer_contract(self):
         real = uphold_check.engine
 
-        def drifted(root, *args):
-            answered = real(root, *args)
-            if args[:1] == ("check",):
-                answered.stdout = answered.stdout.replace("enforced by", "supplied by")
-            return answered
+        def human_wording(root, *args):
+            self.assertEqual(args, ("check", "--json"))
+            return real(root, *args)
 
-        with (
-            mock.patch.object(uphold_check, "engine", drifted),
-            self.assertRaises(uphold_check.CouldNotLook) as raised,
-        ):
-            uphold_check.engine_suppliers(self.tmp)
-        self.assertIn("2 reconciled claim(s)", str(raised.exception))
-        self.assertIn("0 evidence line(s)", str(raised.exception))
+        with mock.patch.object(uphold_check, "engine", human_wording):
+            self.assertEqual(
+                uphold_check.engine_suppliers(self.tmp),
+                {
+                    "prevent-public-push": ["uphold"],
+                    "no-merge-conflict-markers": ["uphold"],
+                },
+            )
 
-    def test_a_drifted_report_publishes_no_component_definition(self):
-        """Could not look is exit 2 and no document, not exit 0 and an empty one."""
-        real = uphold_check.engine
-
-        def drifted(root, *args):
-            answered = real(root, *args)
-            if args[:1] == ("check",):
-                answered.stdout = answered.stdout.replace("enforced by", "supplied by")
-            return answered
-
+    def test_malformed_json_publishes_no_component_definition(self):
+        failed = subprocess.CompletedProcess(
+            ["uphold", "check", "--json"], 0, "not JSON", ""
+        )
         stdout = io.StringIO()
         with (
             contextlib.chdir(self.tmp),
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(io.StringIO()),
-            mock.patch.object(uphold_check, "engine", drifted),
+            mock.patch.object(uphold_check, "engine", return_value=failed),
         ):
             code = uphold_check.main(["--oscal"])
         self.assertEqual(code, 2)
         self.assertEqual(stdout.getvalue().strip(), "")
+
+
+class ReconciliationContract(unittest.TestCase):
+    def clean_report(self):
+        return {
+            "schema_version": 1,
+            "verdict": "clean",
+            "claims": [
+                {
+                    "principle": "explicit-unknown",
+                    "rule": "my-check",
+                    "status": "reconciled",
+                    "suppliers": [{"component": "local", "seam": "wording can change"}],
+                }
+            ],
+            "violations": [],
+            "unavailable": [],
+            "notes": [],
+        }
+
+    def suppliers(self, report, *, status=0, strict=True):
+        answered = subprocess.CompletedProcess(
+            ["uphold", "check", "--json"], status, json.dumps(report), ""
+        )
+        with mock.patch.object(uphold_check, "engine", return_value=answered) as engine:
+            result = uphold_check.engine_suppliers(ROOT, strict=strict)
+        engine.assert_called_once_with(ROOT, "check", "--json")
+        return result
+
+    def test_component_is_explicit_and_seam_wording_does_not_route_it(self):
+        report = self.clean_report()
+        self.assertEqual(self.suppliers(report), {"my-check": ["local"]})
+        report["claims"][0]["suppliers"][0]["seam"] = "a hook installed here"
+        report["claims"][0]["suppliers"][0]["component"] = "uphold"
+        self.assertEqual(self.suppliers(report), {"my-check": ["uphold"]})
+
+    def test_empty_evaluated_claims_are_a_valid_clean_report(self):
+        report = self.clean_report()
+        report["claims"] = []
+        self.assertEqual(self.suppliers(report), {})
+
+    def test_unknown_versions_including_boolean_and_float_are_rejected(self):
+        for version in (None, True, 1.0, 0, 2, "1"):
+            with (
+                self.subTest(version=version),
+                self.assertRaises(uphold_check.CouldNotLook),
+            ):
+                report = self.clean_report()
+                report["schema_version"] = version
+                self.suppliers(report)
+
+    def test_malformed_and_inconsistent_reports_fail_closed(self):
+        mutations = [
+            lambda r: r.pop("claims"),
+            lambda r: r.update(claims={}),
+            lambda r: r.update(verdict="unknown"),
+            lambda r: r.update(verdict="violations", violations=["refused"]),
+            lambda r: r.update(unavailable=["missing config"]),
+            lambda r: r.update(violations=["refused"]),
+            lambda r: r.update(notes=[3]),
+            lambda r: r["claims"].append(None),
+            lambda r: r["claims"][0].update(rule=""),
+            lambda r: r["claims"][0].update(status="unknown"),
+            lambda r: r["claims"][0].update(status="refused", suppliers=[]),
+            lambda r: r["claims"][0].update(status="unavailable", suppliers=[]),
+            lambda r: r["claims"][0].update(suppliers=[]),
+            lambda r: r["claims"][0].update(suppliers=[None]),
+            lambda r: r["claims"][0]["suppliers"][0].update(component="other"),
+            lambda r: r["claims"][0]["suppliers"][0].update(seam=""),
+        ]
+        for mutate in mutations:
+            with (
+                self.subTest(mutate=mutate),
+                self.assertRaises(uphold_check.CouldNotLook),
+            ):
+                report = self.clean_report()
+                mutate(report)
+                self.suppliers(report, strict=False)
+        for report in (None, [], True):
+            with (
+                self.subTest(report=report),
+                self.assertRaises(uphold_check.CouldNotLook),
+            ):
+                self.suppliers(report)
+
+    def test_malformed_json_and_duplicate_fields_fail_closed(self):
+        for payload in ("", "not JSON", '{"schema_version": 1, "schema_version": 1}'):
+            answered = subprocess.CompletedProcess(["uphold", "check"], 0, payload, "")
+            with (
+                self.subTest(payload=payload),
+                mock.patch.object(uphold_check, "engine", return_value=answered),
+                self.assertRaises(uphold_check.CouldNotLook),
+            ):
+                uphold_check.engine_suppliers(ROOT, strict=False)
+
+    def test_review_retains_partial_evidence_from_an_evaluated_refusal(self):
+        report = self.clean_report()
+        report.update(verdict="violations", violations=["a false claim"])
+        report["claims"].append(
+            {
+                "principle": "explicit-unknown",
+                "rule": "missing",
+                "status": "refused",
+                "suppliers": [],
+            }
+        )
+        self.assertEqual(
+            self.suppliers(report, status=1, strict=False), {"my-check": ["local"]}
+        )
+        with self.assertRaises(uphold_check.Refused):
+            self.suppliers(report, status=1)
+
+    def test_unavailable_evidence_never_becomes_an_ordinary_review_refusal(self):
+        for verdict, status, violations in (
+            ("could_not_look", 2, []),
+            ("violations", 1, ["bad claim"]),
+        ):
+            report = self.clean_report()
+            report.update(
+                verdict=verdict, violations=violations, unavailable=["unread runner"]
+            )
+            for strict in (False, True):
+                with (
+                    self.subTest(verdict=verdict, strict=strict),
+                    self.assertRaises(uphold_check.CouldNotLook),
+                ):
+                    self.suppliers(report, status=status, strict=strict)
+
+    def test_a_refused_claim_cannot_borrow_a_reconciled_claims_rule(self):
+        report = self.clean_report()
+        report["claims"][0]["rule"] = "my-check"
+        report["claims"].append(
+            {
+                "principle": "conways-law",
+                "rule": "my-check",
+                "status": "refused",
+                "suppliers": [],
+            }
+        )
+        report.update(
+            verdict="violations", violations=["conways-law cannot be automated"]
+        )
+        refused = subprocess.CompletedProcess(
+            ["uphold", "check"], 1, json.dumps(report), ""
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exemptions = [
+                f'{key} = "No subject in this scratch repository."'
+                for key, record in uphold_check.load_records().items()
+                if record["enforcement"]["automatable"] == "yes"
+                and key != "explicit-unknown"
+            ]
+            build(
+                root,
+                "\n".join(
+                    [
+                        "[[enforce]]",
+                        'principle = "explicit-unknown"',
+                        'rule = "my-check"',
+                        "[[enforce]]",
+                        'principle = "conways-law"',
+                        'rule = "my-check"',
+                        "[review]",
+                        "max_lines = 10000",
+                        "[review.no_subject_here]",
+                        *exemptions,
+                    ]
+                ),
+            )
+            output = io.StringIO()
+            with (
+                contextlib.chdir(root),
+                contextlib.redirect_stdout(output),
+                contextlib.redirect_stderr(io.StringIO()),
+                mock.patch.object(uphold_check, "engine", return_value=refused),
+            ):
+                code = uphold_check.main(["--review"])
+            self.assertEqual(code, 0)
+            self.assertIn("1 static rule(s)", output.getvalue())
 
 
 class AnUnavailableEngine(unittest.TestCase):
@@ -423,7 +613,21 @@ class AnUnavailableEngine(unittest.TestCase):
                         self.assertFalse((root / "REVIEW.md").exists())
 
     def test_evaluated_refusal_remains_available_to_review_only(self):
-        refused = subprocess.CompletedProcess(["uphold", "check"], 1, "", "bad claim")
+        refused = subprocess.CompletedProcess(
+            ["uphold", "check", "--json"],
+            1,
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "verdict": "violations",
+                    "claims": [],
+                    "violations": ["bad claim"],
+                    "unavailable": [],
+                    "notes": [],
+                }
+            ),
+            "",
+        )
         with mock.patch.object(uphold_check, "engine", return_value=refused):
             self.assertEqual(uphold_check.engine_suppliers(ROOT, strict=False), {})
             with self.assertRaises(uphold_check.Refused):

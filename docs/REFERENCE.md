@@ -3787,6 +3787,56 @@ PATH. Hook trust in Codex and user-level settings are outside this declaration
 check. A settings file that cannot be parsed in its JSON or TOML format is exit
 `2`, including when another settings file declares a valid hook.
 
+`uphold check --json` renders the same evaluated reconciliation as the default
+human report. It emits one JSON object on stdout, including partial evidence
+when the result is refused or unavailable:
+
+```json
+{
+  "schema_version": 1,
+  "verdict": "clean",
+  "claims": [
+    {
+      "principle": "explicit-unknown",
+      "rule": "catalog-tests",
+      "status": "reconciled",
+      "suppliers": [{"component": "local", "seam": "a hook installed here"}]
+    }
+  ],
+  "violations": [],
+  "unavailable": [],
+  "notes": []
+}
+```
+
+`schema_version` is an integer. `verdict` is `clean`, `violations`, or
+`could_not_look`, corresponding to process status `0`, `1`, or `2`. `claims`
+contains every evaluated declaration entry, in declaration order. Its `status`
+is `reconciled`, `refused`, or `unavailable`; only reconciled claims have
+suppliers. Each supplier names its `component` (`local` or `uphold`) explicitly
+and carries the supplying `seam` as a description. Consumers route by component
+and treat seam descriptions, notes and diagnostics as text for a person.
+`violations`, `unavailable` and `notes` are arrays of diagnostic strings.
+Additional fields may be added within a schema version.
+
+A missing or invalid policy or declaration, discovery failure, or other error
+before evaluation produces no JSON: stdout is empty, the diagnostic is on
+stderr, and the process exits `2`. `--coverage` and `--json` are separate modes
+and cannot be combined. Exit precedence remains the same as the human mode:
+a claim whose missing rule may be in unread configuration exits `2`; otherwise
+a known violation exits `1` even if other configuration is unreadable. The
+`unavailable` array records unread evidence regardless of the exit code.
+
+A range-only hook configured exclusively at stages without a push range does
+not supply a claim. A valid declaration of the same id at another stage or
+through another runner still supplies it independently.
+
+The Python review and OSCAL consumers read this JSON contract. They reject
+unknown schema versions, malformed or inconsistent reports, unexpected process
+statuses, and any unavailable evidence. Review accepts an evaluated refusal
+and retains the claims that reconciled. OSCAL requires a clean report. Neither
+consumer parses the human report's wording.
+
 `--coverage` counts the direction the reconcile cannot — a rule firing under no
 claim is invisible to a reconcile. It reports and does not refuse: `0`, or `2`
 where a tier's configuration could not be read, with a count of `?` rather than

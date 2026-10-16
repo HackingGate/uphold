@@ -1190,3 +1190,247 @@ fn a_claim_on_a_text_only_rule_is_credited_to_scan_text() {
         stdout(&present)
     );
 }
+
+#[test]
+fn json_and_human_output_share_the_evaluated_claims() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", GUARD_POLICY);
+    write(&root, ".pre-commit-config.yaml", PRE_COMMIT);
+    write(
+        &root,
+        "policy/upheld.toml",
+        "[[enforce]]\nprinciple = \"fail-safe-defaults\"\nrule = \"prevent-public-push\"\n\n[[enforce]]\nprinciple = \"explicit-unknown\"\nrule = \"my-own-check\"\n",
+    );
+    let human = check(&root, &[]);
+    let machine = check(&root, &["--json"]);
+    assert_eq!(code(&human), 0, "{}", stderr(&human));
+    assert_eq!(code(&machine), 0, "{}", stderr(&machine));
+    assert!(machine.stderr.is_empty(), "{}", stderr(&machine));
+    let report: serde_json::Value = serde_json::from_slice(&machine.stdout).unwrap();
+    assert_eq!(report.pointer("/schema_version").unwrap(), 1);
+    assert_eq!(report.pointer("/verdict").unwrap(), "clean");
+    let claims = report.pointer("/claims").unwrap().as_array().unwrap();
+    assert_eq!(claims.len(), 2);
+    for claim in claims {
+        assert_eq!(claim.pointer("/status").unwrap(), "reconciled");
+        let principle = claim.pointer("/principle").unwrap().as_str().unwrap();
+        let rule = claim.pointer("/rule").unwrap().as_str().unwrap();
+        let suppliers = claim.pointer("/suppliers").unwrap().as_array().unwrap();
+        let seams: Vec<&str> = suppliers
+            .iter()
+            .map(|by| by.pointer("/seam").unwrap().as_str().unwrap())
+            .collect();
+        assert!(stdout(&human).contains(&format!(
+            "{principle} <- {rule}  enforced by {}",
+            seams.join(", ")
+        )));
+    }
+    assert_eq!(
+        claims
+            .first()
+            .unwrap()
+            .pointer("/suppliers/0/component")
+            .unwrap(),
+        "uphold"
+    );
+    assert_eq!(
+        claims
+            .last()
+            .unwrap()
+            .pointer("/suppliers/0/component")
+            .unwrap(),
+        "local"
+    );
+    assert_eq!(
+        report.pointer("/violations").unwrap(),
+        &serde_json::json!([])
+    );
+    assert_eq!(
+        report.pointer("/unavailable").unwrap(),
+        &serde_json::json!([])
+    );
+    for note in report.pointer("/notes").unwrap().as_array().unwrap() {
+        assert!(stdout(&human).contains(note.as_str().unwrap()));
+    }
+}
+
+#[test]
+fn json_refusal_keeps_the_claims_that_reconciled() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", GUARD_POLICY);
+    write(&root, ".pre-commit-config.yaml", PRE_COMMIT);
+    write(
+        &root,
+        "policy/upheld.toml",
+        "[[enforce]]\nprinciple = \"explicit-unknown\"\nrule = \"my-own-check\"\n\n[[enforce]]\nprinciple = \"fail-safe-defaults\"\nrule = \"missing-check\"\n",
+    );
+    let human = check(&root, &[]);
+    let machine = check(&root, &["--json"]);
+    assert_eq!(code(&human), 1);
+    assert_eq!(human.stdout, Vec::<u8>::new());
+    assert_eq!(code(&machine), 1, "{}", stderr(&machine));
+    let report: serde_json::Value = serde_json::from_slice(&machine.stdout).unwrap();
+    assert_eq!(report.pointer("/verdict").unwrap(), "violations");
+    assert_eq!(report.pointer("/claims/0/status").unwrap(), "reconciled");
+    assert_eq!(report.pointer("/claims/1/status").unwrap(), "refused");
+    assert_eq!(
+        report.pointer("/claims/1/suppliers").unwrap(),
+        &serde_json::json!([])
+    );
+    let failure = report.pointer("/violations/0").unwrap().as_str().unwrap();
+    assert!(failure.contains("missing-check"));
+    assert!(stderr(&human).contains(failure));
+}
+
+#[test]
+fn json_unavailable_evidence_preserves_partial_claims_and_status_precedence() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", GUARD_POLICY);
+    write(&root, ".pre-commit-config.yaml", PRE_COMMIT);
+    write(&root, ".codex/hooks.json", "{ not json");
+    let held = "[[enforce]]\nprinciple = \"explicit-unknown\"\nrule = \"my-own-check\"\n";
+    // A supplied claim remains visible even when another configuration cannot be read.
+    for (extra, expected, status) in [
+        ("", 2, "reconciled"),
+        (
+            "\n[[enforce]]\nprinciple = \"fail-safe-defaults\"\nrule = \"missing-check\"\n",
+            2,
+            "unavailable",
+        ),
+        (
+            "\n[[enforce]]\nprinciple = \"not-a-principle\"\nrule = \"my-own-check\"\n",
+            1,
+            "refused",
+        ),
+    ] {
+        write(&root, "policy/upheld.toml", &format!("{held}{extra}"));
+        let machine = check(&root, &["--json"]);
+        assert_eq!(code(&machine), expected, "{}", stderr(&machine));
+        assert_eq!(code(&check(&root, &[])), expected);
+        let report: serde_json::Value = serde_json::from_slice(&machine.stdout).unwrap();
+        assert_eq!(report.pointer("/claims/0/status").unwrap(), "reconciled");
+        assert_eq!(
+            report
+                .pointer("/claims")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()
+                .get("status")
+                .unwrap(),
+            status
+        );
+        assert!(
+            report
+                .pointer("/unavailable")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|note| note.as_str().unwrap().contains(".codex/hooks.json"))
+        );
+        assert_eq!(
+            report.pointer("/verdict").unwrap(),
+            if expected == 1 {
+                "violations"
+            } else {
+                "could_not_look"
+            }
+        );
+    }
+}
+
+#[test]
+fn json_pre_evaluation_failures_have_no_report() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", GUARD_POLICY);
+    for declaration in [
+        None,
+        Some("[[enforce]] this is not TOML"),
+        Some("[[enforce]]\nprinciple = \"explicit-unknown\"\n"),
+    ] {
+        if let Some(contents) = declaration {
+            write(&root, "policy/upheld.toml", contents);
+        }
+        let output = check(&root, &["--json"]);
+        assert_eq!(code(&output), 2);
+        assert_eq!(output.stdout, Vec::<u8>::new());
+        assert_ne!(output.stderr, Vec::<u8>::new());
+    }
+    write(&root, "policy/principles.toml", "[rule");
+    let output = check(&root, &["--json"]);
+    assert_eq!(code(&output), 2);
+    assert_eq!(output.stdout, Vec::<u8>::new());
+}
+
+#[test]
+fn json_is_a_reconciliation_format_and_not_a_coverage_format() {
+    let root = workspace();
+    let output = check(&root, &["--coverage", "--json"]);
+    assert_eq!(code(&output), 2);
+    assert_eq!(output.stdout, Vec::<u8>::new());
+    assert!(stderr(&output).contains("usage: uphold check"));
+}
+
+#[test]
+fn misplaced_range_hooks_do_not_supply_partial_claim_evidence() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", GUARD_POLICY);
+    write(
+        &root,
+        "policy/upheld.toml",
+        "[[enforce]]\nprinciple = 'explicit-unknown'\nrule = 'uphold-supply-chain'\n",
+    );
+    for (stages, other_hook, lefthook, expected_status, expected_exit) in [
+        ("[manual]", "", "", "refused", 1),
+        ("[pre-commit]", "", "", "refused", 1),
+        ("[]", "", "", "refused", 1),
+        ("[pre-push, manual]", "", "", "reconciled", 1),
+        (
+            "[manual]",
+            "      - id: uphold-supply-chain\n        stages: [pre-push]\n",
+            "",
+            "reconciled",
+            1,
+        ),
+        (
+            "[manual]",
+            "",
+            "pre-push:\n  commands:\n    uphold-supply-chain:\n      run: ./check.sh\n",
+            "reconciled",
+            1,
+        ),
+        ("[pre-push]", "", "", "reconciled", 0),
+    ] {
+        let config = format!(
+            "repos:\n  - repo: https://github.com/HackingGate/uphold\n    rev: v2.0.0\n    hooks:\n      - id: uphold-supply-chain\n        stages: {stages}\n{other_hook}"
+        );
+        write(&root, ".pre-commit-config.yaml", &config);
+        write(&root, "lefthook.yml", lefthook);
+        let output = check(&root, &["--json"]);
+        assert_eq!(
+            code(&output),
+            expected_exit,
+            "{}{}",
+            stdout(&output),
+            stderr(&output)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            report.pointer("/claims/0/status").unwrap(),
+            expected_status,
+            "{report}"
+        );
+        let suppliers = report
+            .pointer("/claims/0/suppliers")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            suppliers.is_empty(),
+            expected_status == "refused",
+            "{report}"
+        );
+    }
+}
