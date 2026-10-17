@@ -104,6 +104,7 @@ mod shim;
 mod sources;
 mod supply;
 mod text;
+mod verdicts;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -167,6 +168,7 @@ exit codes:
   2  the check could not be made (bad policy, missing source, unreadable file)
 
 UPHOLD_ALLOW=<id>,<id> bypasses named guards for one invocation.
+UPHOLD_VERDICTS=FILE appends one JSON line per guard a `guard` run evaluated.
 ";
 
 /// The policy file, newest name first.

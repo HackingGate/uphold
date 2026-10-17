@@ -142,6 +142,118 @@ fn a_bypass_for_one_guard_does_not_release_another() {
     assert_eq!(code(&output), 1, "{}", stderr(&output));
 }
 
+const AI_AUTHOR_AND_ASCII_SUBJECT: &str = r#"
+[rule.prevent-ai-author]
+builtin = "prevent-ai-author"
+
+[rule.prevent-ai-author.git]
+hooks = ["commit-msg"]
+
+[rule.ascii-only-commit-subject]
+builtin = "ascii-only-commit-subject"
+
+[rule.ascii-only-commit-subject.git]
+hooks = ["commit-msg"]
+"#;
+
+fn guard_with_verdicts(root: &Path, verdicts: &Path, allow: Option<&str>) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command
+        .args(["guard", "--stage", "commit-msg", "--message", "msg.txt"])
+        .current_dir(root)
+        .env("UPHOLD_VERDICTS", verdicts)
+        .env_remove("UPHOLD_ALLOW");
+    if let Some(allow) = allow {
+        command.env("UPHOLD_ALLOW", allow);
+    }
+    command.output().unwrap()
+}
+
+fn verdict_lines(path: &Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+fn outcome_of<'a>(lines: &'a [serde_json::Value], rule: &str) -> Vec<&'a str> {
+    lines
+        .iter()
+        .filter(|line| line["rule"] == rule)
+        .map(|line| line["outcome"].as_str().unwrap())
+        .collect()
+}
+
+#[test]
+fn verdicts_name_each_rules_answer_and_never_the_subject() {
+    let root = repository(AI_AUTHOR_AND_ASCII_SUBJECT);
+    write(&root, "msg.txt", "x\n\nGenerated with Claude Code\n");
+    let verdicts = root.join("verdicts.jsonl");
+
+    let output = guard_with_verdicts(&root, &verdicts, None);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    // A second run appends: the file is the caller's, and what it already
+    // holds is not this run's to replace.
+    let output = guard_with_verdicts(&root, &verdicts, Some("prevent-ai-author"));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    let lines = verdict_lines(&verdicts);
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert_eq!(
+        outcome_of(&lines, "prevent-ai-author"),
+        ["refuse", "bypass"]
+    );
+    assert_eq!(
+        outcome_of(&lines, "ascii-only-commit-subject"),
+        ["pass", "pass"]
+    );
+    for line in &lines {
+        assert_eq!(line["schema_version"], 1, "{line}");
+        assert_eq!(line["seam"], "guard", "{line}");
+        assert_eq!(line["stage"], "commit-msg", "{line}");
+        assert_eq!(
+            line.get("by").is_some(),
+            line["outcome"] == "bypass",
+            "{line}"
+        );
+    }
+    let text = std::fs::read_to_string(&verdicts).unwrap();
+    assert!(!text.contains("Generated"), "{text}");
+}
+
+#[test]
+fn a_verdicts_file_that_cannot_be_opened_stops_the_run_before_it_decides() {
+    let root = repository(AI_AUTHOR);
+    write(&root, "msg.txt", "x\n\nGenerated with Claude Code\n");
+    // A directory where the file should be: nothing can append to it.
+    let output = guard_with_verdicts(&root, &root, None);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("UPHOLD_VERDICTS"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("guard refused"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn an_empty_verdicts_variable_is_refused_and_not_read_as_unset() {
+    let root = repository(AI_AUTHOR);
+    write(&root, "msg.txt", "Fix the thing\n");
+    let output = guard_with_verdicts(&root, Path::new(""), None);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("names no file"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn a_guard_is_only_asked_at_a_stage_it_can_observe() {
     // Asked at a stage it cannot see, a guard has not passed -- it has not run.

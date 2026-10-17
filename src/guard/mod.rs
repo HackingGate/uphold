@@ -28,6 +28,7 @@ use std::path::Path;
 
 use crate::config::{CheckKind, Policy, Rule};
 use crate::error::{Exit, Fatal, Result};
+use crate::verdicts::Outcome;
 
 /// Every built-in check this binary carries, and the only list of them.
 ///
@@ -647,8 +648,12 @@ pub(crate) fn parameters(builtin: &str) -> &'static [&'static str] {
 
 /// Run every guard the policy declares that has something to say at `stage`.
 pub(crate) fn run(root: &Path, policy: &Policy, request: &RunRequest<'_>) -> Result<Exit> {
+    // Opened before anything is decided, so a file that cannot be written stops
+    // the run while it has decided nothing. See `verdicts`.
+    let mut verdicts = crate::verdicts::Sink::from_env()?;
+    let stage = request.stage.as_str();
     // Every rule the CONFIG puts at this hook, and nothing else decides it.
-    let at_hook: Vec<&Rule> = policy.at_hook(request.stage.as_str()).collect();
+    let at_hook: Vec<&Rule> = policy.at_hook(stage).collect();
     if policy.at_hook_any().next().is_none() {
         println!("no rule declares a git hook");
         return Ok(Exit::Clean);
@@ -658,11 +663,13 @@ pub(crate) fn run(root: &Path, policy: &Policy, request: &RunRequest<'_>) -> Res
     let mut ran = 0usize;
     let mut bypassed_here = 0usize;
     for rule in at_hook {
+        let set = policy.set_of(&rule.id);
         // Counted where the work happens, not where the loop starts. A bypassed
         // rule did not run, and folding it into the same number reported a
         // deliberately disabled check as one that passed.
         if bypassed(rule.id.as_str()) {
             eprintln!("uphold guard: {} bypassed by UPHOLD_ALLOW", rule.id);
+            verdicts.record(stage, &rule.id, set, Outcome::Bypass)?;
             bypassed_here += 1;
             continue;
         }
@@ -678,8 +685,23 @@ pub(crate) fn run(root: &Path, policy: &Policy, request: &RunRequest<'_>) -> Res
             remote_name: request.remote_name,
             remote_url: request.remote_url,
         };
-        if let Some(refusal) = evaluate(&one)? {
-            refusals.push(refusal);
+        match evaluate(&one) {
+            Ok(Some(refusal)) => {
+                verdicts.record(stage, &rule.id, set, Outcome::Refuse)?;
+                refusals.push(refusal);
+            }
+            Ok(None) => verdicts.record(stage, &rule.id, set, Outcome::Pass)?,
+            // The rule could not look, and the run ends here with exit 2. The
+            // line says which rule that was; the error the reader acts on is
+            // still the rule's own, with the file's appended if both failed.
+            Err(error) => {
+                return Err(
+                    match verdicts.record(stage, &rule.id, set, Outcome::Unknown) {
+                        Ok(()) => error,
+                        Err(also) => Fatal::new(format!("{error}\n\n{also}")),
+                    },
+                );
+            }
         }
     }
 
@@ -701,12 +723,9 @@ pub(crate) fn run(root: &Path, policy: &Policy, request: &RunRequest<'_>) -> Res
     }
 
     if bypassed_here > 0 {
-        println!(
-            "{ran} guard(s) passed at {}, {bypassed_here} bypassed by UPHOLD_ALLOW",
-            request.stage.as_str()
-        );
+        println!("{ran} guard(s) passed at {stage}, {bypassed_here} bypassed by UPHOLD_ALLOW");
     } else {
-        println!("{ran} guard(s) passed at {}", request.stage.as_str());
+        println!("{ran} guard(s) passed at {stage}");
     }
     Ok(Exit::Clean)
 }
