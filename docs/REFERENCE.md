@@ -2009,6 +2009,45 @@ history and in a CI log. It stays in the environment and is deliberately not a
 rule field: a bypass written into the policy file would be committed, reviewed
 once, and permanent.
 
+### Recording what a run decided
+
+```sh
+UPHOLD_VERDICTS=/path/run.jsonl uphold guard --stage pre-push
+```
+
+With the variable set, each rule the stage evaluated appends one JSON line to
+the file it names. Unset, nothing is written.
+
+```json
+{"schema_version":1,"seam":"guard","stage":"pre-push","rule":"prevent-public-push","set":"unowned-push","outcome":"pass"}
+{"schema_version":1,"seam":"guard","stage":"pre-push","rule":"no-local-merge","set":"unreviewed-history","outcome":"bypass","by":"UPHOLD_ALLOW"}
+```
+
+| field | holds |
+|---|---|
+| `schema_version` | `1`. Bumped when a field changes meaning or goes away, never when one is added |
+| `seam` | `guard` |
+| `stage` | the stage the run was told it is at |
+| `rule` | the rule's id |
+| `set` | the bundled set the rule came from; absent for a rule the policy declares itself |
+| `outcome` | `pass`, `refuse`, `bypass` or `unknown` |
+| `by` | `UPHOLD_ALLOW`, on a bypass and only there |
+
+- **No subject.** A line never carries the message, the diff or the refs the
+  rule read, so the file never holds the text a refusal was protecting.
+- **Appended, never replaced.** The file belongs to the caller; two runs
+  sharing it interleave whole lines.
+- **`unknown` is the last line.** A rule that could not look ends the run with
+  exit `2`, and its line says which rule that was.
+- **A file that cannot be written is exit `2`**, checked before any rule runs.
+  So is a variable set to nothing: a caller who asked for verdicts and got
+  none must not read the absence as a clean run.
+
+uphold records nothing itself. Signing the lines, storing them beside the
+commit and publishing them belong to whatever ran the gate. A commit pushed
+with `--no-verify` ran no hook and so has no lines, which a verifier
+expecting a record on every pushed commit sees as the record's absence.
+
 ## `uphold shim` — the shims
 
 A pull-request body is typed into a CLI and goes straight to a public API
