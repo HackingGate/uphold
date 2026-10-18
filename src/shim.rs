@@ -621,9 +621,11 @@ pub(crate) const API_TITLE_KEYS: &[&str] = &["title", "commit_title", "subject"]
 /// hook too, for the same reason as [`API_TITLE_KEYS`].
 pub(crate) const API_MESSAGE_KEYS: &[&str] = &["squash_commit_message", "merge_commit_message"];
 
-/// The fields of GitHub's merge endpoint that carry the merge commit's message:
-/// its subject and its body. `PUT repos/{owner}/{repo}/pulls/{number}/merge`.
-const API_MERGE_MESSAGE_KEYS: &[&str] = &["commit_title", "commit_message"];
+/// The field of GitHub's merge endpoint that carries the merge commit's
+/// subject. `PUT repos/{owner}/{repo}/pulls/{number}/merge`. Its body field,
+/// `commit_message`, is not here: an empty body is a deliberate choice -- see
+/// [`crate::guard::merge_subject`].
+const API_MERGE_SUBJECT_KEY: &str = "commit_title";
 
 /// Whether a `gh api` endpoint is a pull request's merge, in any spelling the
 /// path half of [`repo_in_api_path`] reads: a bare path, a leading `/`, a whole
@@ -640,6 +642,147 @@ fn merges_a_pull_request(endpoint: &str) -> bool {
         segments.as_slice(),
         [.., "repos", _, _, "pulls", _, "merge"]
     )
+}
+
+/// The merge commit subjects a `gh api` call sends, where it writes a merge
+/// commit; `None` where the endpoint writes none.
+///
+/// Two endpoints. The REST merge reads `commit_title` and sends what it is
+/// handed: an empty one is an empty subject, which is the realistic road to a
+/// subject of ` (#N)`. GraphQL reads a `commitHeadline` argument -- on
+/// `mergePullRequest`, and on `enablePullRequestAutoMerge`, which merges later
+/// with it -- written in the query as a string literal or as a `$variable`
+/// given by a field or by an `--input` body's `variables`. A headline inside
+/// a variable that holds the whole `input` object is not read: that is a JSON
+/// value in a field, and reading it means knowing which variable the query
+/// binds to `input`.
+fn api_merge_subjects(
+    endpoint: &str,
+    sent: &[(String, String)],
+) -> Option<Vec<crate::guard::merge_subject::Subject>> {
+    if merges_a_pull_request(endpoint) {
+        return Some(
+            sent.iter()
+                .filter(|(key, _)| key == API_MERGE_SUBJECT_KEY)
+                .map(|(key, text)| crate::guard::merge_subject::Subject {
+                    given_by: key.clone(),
+                    text: text.clone(),
+                })
+                .collect(),
+        );
+    }
+    if endpoint.trim_start_matches('/') != "graphql" {
+        return None;
+    }
+    let (_, query) = sent.iter().find(|(key, _)| key == "query")?;
+    let headlines = graphql_headlines(query);
+    if headlines.is_empty() {
+        return None;
+    }
+    Some(
+        headlines
+            .into_iter()
+            .filter_map(|headline| match headline {
+                Headline::Literal(text) => Some(crate::guard::merge_subject::Subject {
+                    given_by: String::from("commitHeadline"),
+                    text,
+                }),
+                // A variable nobody gave is the forge's to answer: GraphQL
+                // refuses a missing required variable, and an optional one is
+                // no headline, which the forge composes.
+                Headline::Variable(name) => {
+                    sent.iter()
+                        .rev()
+                        .find(|(key, _)| *key == name)
+                        .map(|(_, text)| crate::guard::merge_subject::Subject {
+                            given_by: format!("commitHeadline: ${name}"),
+                            text: text.clone(),
+                        })
+                }
+            })
+            .collect(),
+    )
+}
+
+/// One `commitHeadline` argument in a GraphQL document, as written.
+#[derive(Debug, PartialEq, Eq)]
+enum Headline {
+    /// A string literal, decoded.
+    Literal(String),
+    /// A `$variable`, by its name.
+    Variable(String),
+}
+
+/// Every `commitHeadline:` argument in `query`, in order.
+///
+/// A scanner for exactly this argument rather than a GraphQL parser: a
+/// headline can be written as a string, a block string or a variable, and
+/// those three are read here. A string's escapes are decoded, so that `"\n"`
+/// and `" "` are read as the whitespace they send; a block string is
+/// read between its fences. A longer name that merely contains
+/// `commitHeadline` is some other field and is not this argument.
+fn graphql_headlines(query: &str) -> Vec<Headline> {
+    const NAME: &str = "commitHeadline";
+    let is_name = |character: char| character.is_ascii_alphanumeric() || character == '_';
+    let mut found = Vec::new();
+    let mut rest = query;
+    while let Some(at) = rest.find(NAME) {
+        let before = rest.get(..at).and_then(|head| head.chars().last());
+        rest = rest.get(at + NAME.len()..).unwrap_or_default();
+        if before.is_some_and(is_name) || rest.starts_with(is_name) {
+            continue;
+        }
+        let Some(value) = rest.trim_start().strip_prefix(':') else {
+            continue;
+        };
+        let value = value.trim_start();
+        if let Some(name) = value.strip_prefix('$') {
+            let end = name
+                .find(|character: char| !is_name(character))
+                .unwrap_or(name.len());
+            found.push(Headline::Variable(
+                name.get(..end).unwrap_or_default().to_owned(),
+            ));
+        } else if let Some(block) = value.strip_prefix("\"\"\"") {
+            found.push(Headline::Literal(
+                block.split("\"\"\"").next().unwrap_or_default().to_owned(),
+            ));
+        } else if let Some(string) = value.strip_prefix('"') {
+            found.push(Headline::Literal(graphql_string(string)));
+        }
+    }
+    found
+}
+
+/// The text of a GraphQL string literal whose opening quote was just read, up
+/// to its closing quote, with its escapes decoded.
+fn graphql_string(string: &str) -> String {
+    let mut text = String::new();
+    let mut characters = string.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '"' => break,
+            '\\' => match characters.next() {
+                Some('n') => text.push('\n'),
+                Some('t') => text.push('\t'),
+                Some('r') => text.push('\r'),
+                Some('b') => text.push('\u{8}'),
+                Some('f') => text.push('\u{c}'),
+                Some('u') => {
+                    let hex: String = characters.by_ref().take(4).collect();
+                    if let Some(decoded) =
+                        u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32)
+                    {
+                        text.push(decoded);
+                    }
+                }
+                Some(other) => text.push(other),
+                None => break,
+            },
+            other => text.push(other),
+        }
+    }
+    text
 }
 
 /// The `api` option that names a file holding the whole body.
@@ -2904,20 +3047,20 @@ impl Shim {
             .join(" ")
     }
 
-    /// The merge commit message parts this invocation gives, where it writes a
+    /// The merge commit subjects this invocation gives, where it writes a
     /// merge commit: `gh pr merge`, and `gh api` to a pull request's merge
-    /// endpoint. `None` for every other invocation.
+    /// endpoint. `None` for every other invocation, and an empty list for a
+    /// merge that gave no subject, which the forge composes.
     ///
-    /// On `gh pr merge` the parts are the subjects collected off the table's
-    /// flags for the verb -- a title subject is the commit subject, a body
-    /// subject the commit body -- so which flags carry them is the table's to
-    /// say and not a list here. A part the invocation did not give is not in
-    /// the list, and the forge composes it.
-    fn merge_message(
+    /// On `gh pr merge` they are the title subjects collected off the table's
+    /// flags for the verb, so which flags carry the subject is the table's to
+    /// say and not a list here -- less an exactly empty one, which `gh` itself
+    /// does not send.
+    fn merge_subjects(
         &self,
         argv: &[String],
         collected: &Collected,
-    ) -> Option<Vec<crate::guard::merge_message::Part>> {
+    ) -> Option<Vec<crate::guard::merge_subject::Subject>> {
         if self.command != "gh" {
             return None;
         }
@@ -2934,11 +3077,15 @@ impl Shim {
                 .iter()
                 .filter_map(|(index, flag)| {
                     let subject = collected.subjects.get(*index)?;
-                    let headline = subject.kind == Subject::HEADLINE;
-                    (headline || subject.kind == "text").then(|| {
-                        crate::guard::merge_message::Part {
+                    // An exactly empty subject is not sent. cli/cli v2.102.0,
+                    // pkg/cmd/pr/merge/http.go:68: `if payload.commitSubject
+                    // != "" { input.CommitHeadline = ... }`, so `--subject ""`
+                    // sends no headline and the forge writes the pull
+                    // request's title, as if the flag were absent. A subject
+                    // of whitespace is not empty, and is sent.
+                    (subject.kind == Subject::HEADLINE && !subject.value.is_empty()).then(|| {
+                        crate::guard::merge_subject::Subject {
                             given_by: flag.clone(),
-                            subject: headline,
                             text: subject.value.clone(),
                         }
                     })
@@ -2971,25 +3118,11 @@ impl Shim {
     fn collect_api(&self, call: &ApiCall) -> Result<Collected> {
         let mut subjects = Vec::new();
         let mut stdin = None;
-        // Each merge message field as `gh` sends it, in whichever field form it
-        // arrived, where the endpoint is a pull request's merge.
-        let mut api_merge = (self.command == "gh"
-            && call
-                .positional
-                .first()
-                .is_some_and(|endpoint| merges_a_pull_request(endpoint)))
-        .then(Vec::new);
-        let mut merge_field = |key: &str, value: &str| {
-            if let Some(parts) = api_merge.as_mut()
-                && API_MERGE_MESSAGE_KEYS.contains(&key)
-            {
-                parts.push(crate::guard::merge_message::Part {
-                    given_by: key.to_owned(),
-                    subject: key == "commit_title",
-                    text: value.to_owned(),
-                });
-            }
-        };
+        // Every field as `gh` sends it, by its key, in whichever field form it
+        // arrived: what a merge's subject is read from once the whole call is
+        // known, because a GraphQL variable may be given before the query
+        // that names it.
+        let mut sent: Vec<(String, String)> = Vec::new();
         let placeholders = Placeholders::of(&self.command, &call.placeholders)?;
         let mut current = Current::default();
         for (flag, field) in &call.fields {
@@ -3008,14 +3141,14 @@ impl Shim {
                 } else {
                     value.to_owned()
                 };
-                merge_field(key, &value);
+                sent.push((key.to_owned(), value.clone()));
                 field_subjects(&mut subjects, key, value);
                 continue;
             }
             // A typed value `gh` sends as a string -- an empty one is the
             // empty string -- is read as written; one it would send as a
             // number, a boolean or null is no subject text either way.
-            merge_field(key, value);
+            sent.push((key.to_owned(), value.to_owned()));
             let what = format!("`{flag} {key}=...`");
             // `glab` decodes a typed value that starts as JSON does, and puts
             // the placeholders into each string and key of it, so a string
@@ -3081,14 +3214,21 @@ impl Shim {
         }
         if let Some(file) = &call.input {
             let text = self.api_file("--input", file, &mut stdin)?;
-            // The top-level fields of the request body, which is where a merge
-            // reads its message from; a body that is not a JSON object has none.
+            // The top-level fields of the request body, which is where a REST
+            // merge reads its subject from, and the strings of a GraphQL body's
+            // `variables`, which is where a query's `$name` is given. A body
+            // that is not a JSON object has neither.
             if let Ok(serde_json::Value::Object(fields)) =
                 serde_json::from_str::<serde_json::Value>(&text)
             {
-                for (key, value) in &fields {
+                let variables = fields
+                    .get("variables")
+                    .and_then(serde_json::Value::as_object)
+                    .into_iter()
+                    .flatten();
+                for (key, value) in fields.iter().chain(variables) {
                     if let Some(value) = value.as_str() {
-                        merge_field(key, value);
+                        sent.push((key.clone(), value.to_owned()));
                     }
                 }
             }
@@ -3121,7 +3261,10 @@ impl Shim {
             withheld: Withheld::Nothing,
             stdin,
             flagged: Vec::new(),
-            api_merge,
+            api_merge: (self.command == "gh")
+                .then(|| call.positional.first())
+                .flatten()
+                .and_then(|endpoint| api_merge_subjects(endpoint, &sent)),
         })
     }
 
@@ -3377,11 +3520,11 @@ pub(crate) struct Collected {
     /// The flag each flag-collected subject came through, by its index in
     /// `subjects`.
     pub flagged: Vec<(usize, String)>,
-    /// The merge commit message fields of a `gh api` call to a pull request's
+    /// The merge commit subject fields of a `gh api` call to a pull request's
     /// `merge` endpoint, as sent; `None` for a call to any other endpoint. Kept
-    /// apart from `subjects` because a subject knows its kind and not its key,
-    /// and a merge's other fields -- `merge_method`, `sha` -- are prose there.
-    pub api_merge: Option<Vec<crate::guard::merge_message::Part>>,
+    /// apart from `subjects` because a subject knows its kind and not its key:
+    /// `title` on another endpoint is a headline too, and is no merge's.
+    pub api_merge: Option<Vec<crate::guard::merge_subject::Subject>>,
 }
 
 /// The forges whose questions this tool knows how to ask.
@@ -6199,7 +6342,7 @@ fn refused(name: &str, refusals: &[String], fix: Fix) -> Exit {
 
 /// Ask every invocation guard this invocation names about it, and answer with
 /// the refusals each gave, named the way a hook names one: the actor guard's
-/// first, about the credential, then the merge-message guard's, about the text.
+/// first, about the credential, then the merge-subject guard's, about the text.
 ///
 /// Once per run and outside the subject loop, as the destination is: `gh pr
 /// merge --squash` may carry no subject and is a write. Which verbs are writes
@@ -6248,7 +6391,7 @@ fn invocation_judged(
     } else {
         None
     };
-    let merge = shim.merge_message(words, collected);
+    let merge = shim.merge_subjects(words, collected);
     let command = shim.attempted(words);
     let call = crate::guard::Call {
         command: &command,

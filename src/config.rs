@@ -3574,13 +3574,13 @@ mod tests {
         }
     }
 
-    /// The merge-message guard is held to the same seam and scope, and needs
+    /// The merge-subject guard is held to the same seam and scope, and needs
     /// no parameter at all.
     #[test]
-    fn a_merge_message_declaration_is_held_to_the_shim_seam_and_always() {
+    fn a_merge_subject_declaration_is_held_to_the_shim_seam_and_always() {
         let declared = |lines: &str| {
             policy_from(&format!(
-                "[rule.merge-message]\nbuiltin = \"no-empty-merge-message\"\n{lines}\n\
+                "[rule.merge-subject]\nbuiltin = \"no-empty-merge-subject\"\n{lines}\n\
                  [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\n"
             ))
         };
@@ -5011,7 +5011,7 @@ mod tests {
         assert_eq!(
             arrived,
             [
-                "no-empty-merge-message",
+                "no-empty-merge-subject",
                 "no-published-host-identity",
                 "no-published-markers",
                 "no-published-private-repo-names",

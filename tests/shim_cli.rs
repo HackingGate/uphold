@@ -8854,14 +8854,14 @@ fn a_malformed_declaration_is_refused_before_anything_runs() {
     );
 }
 
-// ── a merge commit with no message ───────────────────────────────────
+// ── a merge commit with no subject ───────────────────────────────────
 
-/// The merge-message guard as `published-text` ships it, declared here so the
+/// The merge-subject guard as `published-text` ships it, declared here so the
 /// cases below are about the guard and not about the set. The table names the
 /// `gh pr merge` flags the repository's own table names for the verb.
-const MERGE_MESSAGE_POLICY: &str = r#"
-[rule.no-empty-merge-message]
-builtin = "no-empty-merge-message"
+const MERGE_SUBJECT_POLICY: &str = r#"
+[rule.no-empty-merge-subject]
+builtin = "no-empty-merge-subject"
 command.before = ["gh"]
 command.scope = "always"
 
@@ -8899,28 +8899,22 @@ fn run_merge(root: &Path, args: &[String]) -> Output {
 }
 
 #[test]
-fn a_merge_given_a_blank_subject_or_body_is_refused() {
-    let root = merge_workspace(MERGE_MESSAGE_POLICY);
+fn a_merge_given_a_whitespace_subject_is_refused() {
+    // `gh` sends a subject of whitespace as the headline, and the forge then
+    // writes ` (#N)` -- or a line of spaces before it -- onto the base branch.
+    let root = merge_workspace(MERGE_SUBJECT_POLICY);
     for (extra, says) in [
         (
-            &["--subject", ""][..],
-            "empty commit subject: `--subject` was given as nothing",
+            &["--subject", " "][..],
+            "`--subject` was given as nothing but whitespace",
         ),
         (
-            &["--subject="][..],
-            "empty commit subject: `--subject` was given as nothing",
+            &["--subject= \t"][..],
+            "`--subject` was given as nothing but whitespace",
         ),
         (
-            &["-t", "   "][..],
+            &["-t", "   ", "--body", "Why."][..],
             "`-t` was given as nothing but whitespace",
-        ),
-        (
-            &["--subject", "Fix the parser", "--body", ""][..],
-            "empty commit body: `--body` was given as nothing",
-        ),
-        (
-            &["-t", "Fix the parser", "-b", "\t"][..],
-            "empty commit body: `-b`",
         ),
     ] {
         let output = run_merge(&root, &merge_with(extra));
@@ -8928,7 +8922,7 @@ fn a_merge_given_a_blank_subject_or_body_is_refused() {
         assert!(!stdout(&output).contains("gh ran:"), "{extra:?}");
         let text = stderr(&output);
         assert!(
-            text.contains("no-empty-merge-message: `gh pr merge` would write"),
+            text.contains("no-empty-merge-subject: `gh pr merge` would write a merge commit with an empty subject"),
             "{text}"
         );
         assert!(text.contains(says), "{says:?} not in {text}");
@@ -8940,33 +8934,34 @@ fn a_merge_given_a_blank_subject_or_body_is_refused() {
 }
 
 #[test]
-fn an_empty_body_file_is_an_empty_body() {
-    let root = merge_workspace(MERGE_MESSAGE_POLICY);
-    std::fs::write(root.join("empty.md"), "\n").unwrap();
-    let output = run_merge(
-        &root,
-        &merge_with(&["-t", "Fix the parser", "-F", "empty.md"]),
-    );
-    assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(stderr(&output).contains("`-F` was given as nothing but whitespace"));
-}
-
-#[test]
-fn a_merge_given_a_message_or_none_at_all_runs() {
-    let root = merge_workspace(MERGE_MESSAGE_POLICY);
+fn a_merge_given_an_empty_subject_a_written_one_or_none_runs() {
+    let root = merge_workspace(MERGE_SUBJECT_POLICY);
     for extra in [
-        // Both written.
+        // Exactly empty: `gh` sends no headline for it (cli/cli v2.102.0,
+        // pkg/cmd/pr/merge/http.go:68), so the forge writes the pull request's
+        // title, as if the flag were absent.
+        &["--subject", ""][..],
+        &["--subject="][..],
+        // Written.
         &["--subject", "Fix the parser", "--body", "Why it was wrong."][..],
-        // A subject alone: the forge writes the body.
-        &["-t", "Fix the parser"][..],
-        // Nothing given: the forge writes the subject, which is the pull
-        // request's title, and the body.
+        // Absent: the forge writes the subject, which is the pull request's
+        // title, and the body.
         &[][..],
+        // An empty body is not judged. It is how the list of the branch's
+        // commits is kept out of a squash commit.
+        &["-t", "Fix the parser", "--body", ""][..],
+        &["-t", "Fix the parser", "-b", " "][..],
     ] {
         let output = run_merge(&root, &merge_with(extra));
         assert_eq!(code(&output), 0, "{extra:?}: {}", stderr(&output));
         assert!(stdout(&output).contains("gh ran: pr merge 1"), "{extra:?}");
     }
+    std::fs::write(root.join("empty.md"), "").unwrap();
+    let output = run_merge(
+        &root,
+        &merge_with(&["-t", "Fix the parser", "-F", "empty.md"]),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
 /// The merge endpoint, in the two spellings an agent writes.
@@ -8976,8 +8971,10 @@ const MERGE_ENDPOINTS: &[&str] = &[
 ];
 
 #[test]
-fn a_merge_through_the_api_with_a_blank_field_is_refused_in_every_field_form() {
-    let root = merge_workspace(MERGE_MESSAGE_POLICY);
+fn a_merge_through_the_api_with_an_empty_or_blank_title_is_refused_in_every_field_form() {
+    // The API sends what it is handed, so here an exactly empty title is an
+    // empty subject too -- the realistic road to ` (#N)`.
+    let root = merge_workspace(MERGE_SUBJECT_POLICY);
     std::fs::write(root.join("empty.txt"), "").unwrap();
     std::fs::write(
         root.join("body.json"),
@@ -8988,27 +8985,23 @@ fn a_merge_through_the_api_with_a_blank_field_is_refused_in_every_field_form() {
         for (fields, says) in [
             (
                 &["-f", "commit_title="][..],
-                "`commit_title` was given as nothing",
+                "`commit_title` was given as nothing.",
             ),
             (
                 &["--raw-field", "commit_title= "][..],
-                "`commit_title` was given as nothing but",
+                "`commit_title` was given as nothing but whitespace",
             ),
             (
                 &["-F", "commit_title="][..],
-                "`commit_title` was given as nothing",
+                "`commit_title` was given as nothing.",
             ),
             (
                 &["--field", "commit_title=@empty.txt"][..],
-                "`commit_title` was given as nothing",
-            ),
-            (
-                &["-f", "commit_title=Fix the parser", "-f", "commit_message="][..],
-                "empty commit body: `commit_message`",
+                "`commit_title` was given as nothing.",
             ),
             (
                 &["--input", "body.json"][..],
-                "`commit_title` was given as nothing",
+                "`commit_title` was given as nothing.",
             ),
         ] {
             let mut args = vec!["gh", "api", "-X", "PUT", endpoint];
@@ -9027,11 +9020,11 @@ fn a_merge_through_the_api_with_a_blank_field_is_refused_in_every_field_form() {
 }
 
 #[test]
-fn a_merge_through_the_api_with_a_message_or_none_runs_and_other_endpoints_are_not_merges() {
-    let root = merge_workspace(MERGE_MESSAGE_POLICY);
+fn a_merge_through_the_api_with_a_title_or_none_runs_whatever_its_body() {
+    let root = merge_workspace(MERGE_SUBJECT_POLICY);
     std::fs::write(
         root.join("body.json"),
-        r#"{"commit_title":"Fix the parser"}"#,
+        r#"{"commit_title":"Fix the parser","commit_message":""}"#,
     )
     .unwrap();
     for endpoint in MERGE_ENDPOINTS {
@@ -9044,8 +9037,10 @@ fn a_merge_through_the_api_with_a_message_or_none_runs_and_other_endpoints_are_n
             ][..],
             &["-F", "commit_title=Fix the parser"][..],
             &["--input", "body.json"][..],
-            // No message field: the forge composes both.
-            &["-f", "merge_method=squash"][..],
+            // An empty body is not judged.
+            &["-f", "commit_title=Fix the parser", "-f", "commit_message="][..],
+            // No title: the forge composes one.
+            &["-f", "merge_method=squash", "-f", "commit_message="][..],
         ] {
             let mut args = vec!["gh", "api", "-X", "PUT", endpoint];
             args.extend(fields);
@@ -9065,36 +9060,92 @@ fn a_merge_through_the_api_with_a_message_or_none_runs_and_other_endpoints_are_n
             "PATCH",
             "repos/example-user/widget/pulls/1",
             "-f",
-            "body=",
+            "title=",
         ],
     );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
 #[test]
-fn uphold_allow_stands_the_merge_message_guard_down_for_one_invocation() {
-    let root = merge_workspace(MERGE_MESSAGE_POLICY);
+fn a_graphql_merge_with_a_blank_headline_is_refused_as_a_literal_or_a_variable() {
+    let root = merge_workspace(MERGE_SUBJECT_POLICY);
+    let literal = |headline: &str| {
+        format!(
+            "query=mutation {{ mergePullRequest(input: {{pullRequestId: \"PR_1\", \
+             mergeMethod: SQUASH, commitHeadline: {headline}}}) {{ clientMutationId }} }}"
+        )
+    };
+    let variable = "query=mutation($id: ID!, $headline: String) { mergePullRequest(input: \
+                    {pullRequestId: $id, commitHeadline: $headline}) { clientMutationId } }";
+    std::fs::write(
+        root.join("graphql.json"),
+        serde_json::json!({
+            "query": variable.trim_start_matches("query="),
+            "variables": {"id": "PR_1", "headline": " "},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    for (fields, expected) in [
+        (vec![literal("\"\"")], 1),
+        (vec![literal("\" \\n \"")], 1),
+        (vec![literal("\"\\u0020\"")], 1),
+        (vec![literal("\"\"\"  \"\"\"")], 1),
+        (vec![literal("\"Fix the parser\"")], 0),
+        (vec![variable.to_owned(), String::from("headline=")], 1),
+        (vec![String::from("headline= "), variable.to_owned()], 1),
+        (
+            vec![variable.to_owned(), String::from("headline=Fix the parser")],
+            0,
+        ),
+        // A variable nobody gave is no headline, and the forge composes one.
+        (vec![variable.to_owned()], 0),
+    ] {
+        let mut args = vec!["gh", "api", "graphql"];
+        for field in &fields {
+            args.extend(["-f", field.as_str()]);
+        }
+        let output = shim(&root, &args);
+        assert_eq!(code(&output), expected, "{fields:?}: {}", stderr(&output));
+        if expected == 1 {
+            assert!(
+                stderr(&output).contains("`commitHeadline"),
+                "{}",
+                stderr(&output)
+            );
+        }
+    }
+    let output = shim(&root, &["gh", "api", "graphql", "--input", "graphql.json"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("`commitHeadline: $headline` was given as nothing but"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn uphold_allow_stands_the_merge_subject_guard_down_for_one_invocation() {
+    let root = merge_workspace(MERGE_SUBJECT_POLICY);
     let output = shim_with(
         &root,
         &[
             "gh",
-            "pr",
-            "merge",
-            "1",
-            "--squash",
-            "--subject",
-            "",
-            "--body",
-            "Why.",
+            "api",
+            "-X",
+            "PUT",
+            "repos/example-user/widget/pulls/1/merge",
+            "-f",
+            "commit_title=",
         ],
-        &[("UPHOLD_ALLOW", "no-empty-merge-message")],
+        &[("UPHOLD_ALLOW", "no-empty-merge-subject")],
     );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(stdout(&output).contains("gh ran:"));
 }
 
 #[test]
-fn the_merge_message_guard_arrives_from_published_text_with_nothing_declared() {
+fn the_merge_subject_guard_arrives_from_published_text_with_nothing_declared() {
     // What a consuming repository writes, and nothing about this rule in it.
     let root = merge_workspace(
         r#"
@@ -9128,14 +9179,14 @@ match = ["push:*"]
             "--repo",
             "example-user/widget",
             "--subject",
-            "",
+            " ",
             "--body",
             "Why.",
         ],
     );
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("no-empty-merge-message [set: published-text]"),
+        stderr(&output).contains("no-empty-merge-subject [set: published-text]"),
         "{}",
         stderr(&output)
     );

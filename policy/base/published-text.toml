@@ -153,7 +153,7 @@ owner_required = true
 command.before = ["gh"]
 command.scope = "always"
 
-# The one question about a merge commit's message no rule above can ask:
+# The one question about a merge commit's subject no rule above can ask:
 # whether there is one. A bulk merge wrote ninety-five squash commits whose
 # whole subject was ` (#N)` -- an empty subject, with the forge's pull-request
 # suffix appended to nothing -- and every text guard here passed each of them,
@@ -161,16 +161,19 @@ command.scope = "always"
 #
 # In the set and not left to each repository to declare, because no
 # repository means it: a declaration nobody would write differently is one
-# nobody should have to write. It refuses only a subject or body that was
-# GIVEN and is blank -- `gh pr merge --subject ""`, `--body " "`, or a
-# `commit_title` or `commit_message` field on a `gh api` call to a pull
-# request's merge endpoint. A flag left off is the forge's to compose, and
-# its default subject is the pull request's title.
+# nobody should have to write. It refuses a subject that was GIVEN and is
+# blank and that the forge would be sent: `commit_title` on a `gh api` call to
+# a pull request's merge endpoint, empty or whitespace, `commitHeadline` on a
+# `gh api graphql` merge, and `gh pr merge --subject " "`. `gh pr merge
+# --subject ""` is not refused, because `gh` sends no headline for an empty
+# one and the forge writes the pull request's title; a flag left off is the
+# same. The body is not judged: an empty squash body is how GitHub's list of
+# the branch's commits is left out of it, and that is deliberate.
 #
 # `command.scope = "always"`, for the reason the rule above gives in its own
 # words: an empty subject on a private repository's default branch is the
 # same defect, and `public-target` would stand the rule down there.
-[rule.no-empty-merge-message]
-builtin = "no-empty-merge-message"
+[rule.no-empty-merge-subject]
+builtin = "no-empty-merge-subject"
 command.before = ["gh"]
 command.scope = "always"

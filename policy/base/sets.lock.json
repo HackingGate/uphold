@@ -833,14 +833,14 @@
     ],
     "rules": [
       {
-        "builtin": "no-empty-merge-message",
+        "builtin": "no-empty-merge-subject",
         "command": {
           "before": [
             "gh"
           ],
           "scope": "always"
         },
-        "id": "no-empty-merge-message"
+        "id": "no-empty-merge-subject"
       },
       {
         "builtin": "text-literals",

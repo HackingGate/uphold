@@ -2093,7 +2093,7 @@ impl Rule {
     /// declaration of a working guard. Without `actor`, the actor guard
     /// compares the credential with nothing. At a git hook or in a scan no `gh`
     /// invocation is about to run. Before a command that is not `gh`, what is
-    /// judged -- a GitHub credential, a GitHub merge message -- is something
+    /// judged -- a GitHub credential, a GitHub merge subject -- is something
     /// that command never sends. And under any scope but `always` the rule
     /// would stand down by the table's `public-target` at a private
     /// destination, where a write under the wrong account and a merge commit
@@ -2110,7 +2110,7 @@ impl Rule {
             )
         } else {
             (
-                "the merge commit message `gh` sends",
+                "the merge commit subject `gh` sends",
                 "A merge commit with no subject is the same defect on a private \
                  repository's default branch as on a public one, and a table's \
                  `public-target` would stand this rule down at every private repository",

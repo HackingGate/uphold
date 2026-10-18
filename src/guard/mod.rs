@@ -16,7 +16,7 @@
 pub(crate) mod actor;
 pub(crate) mod identity;
 pub(crate) mod merge;
-pub(crate) mod merge_message;
+pub(crate) mod merge_subject;
 pub(crate) mod message;
 pub(crate) mod names;
 pub(crate) mod push;
@@ -73,12 +73,12 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     // of the invocation and not of any subject it carries -- and never at a git
     // hook, where no `gh` write is about to happen.
     "prevent-actor-mismatch",
-    // The one question about a merge commit's message no text guard can ask:
+    // The one question about a merge commit's subject no text guard can ask:
     // whether there is one. A guard reads what text says, and an empty
     // subject says nothing, so every text guard passed the ninety-five ` (#N)`
     // subjects a bulk merge wrote. Dispatched with the actor guard, from what
     // the shim read off the invocation.
-    "no-empty-merge-message",
+    "no-empty-merge-subject",
     "no-local-merge",
     "no-merge-commit",
     "no-stale-hook-pins",
@@ -328,18 +328,18 @@ pub(crate) const META_TEXT_GUARDS: &[&str] = &["text-guards", "text-literals"];
 pub(crate) const TARGET_GUARDS: &[&str] = &["prevent-unowned-target"];
 
 /// The guards that judge a `gh` INVOCATION itself, from what the shim read off
-/// it: who it acts as, and whether the merge commit it writes has a message.
+/// it: who it acts as, and whether the merge commit it writes has a subject.
 ///
 /// A third list rather than more entries in [`TARGET_GUARDS`], because they
 /// need different inputs and fail differently: a destination guard is handed a
 /// repository and refuses where it has none, while these read the credential,
-/// the host and the merge message the shim parsed, and have no use for a
+/// the host and the merge subject the shim parsed, and have no use for a
 /// repository -- `gh api graphql` names none and is a write. Consulted once
 /// per run, like a destination guard, and for the same reason: each is a
 /// property of the invocation, not of any one subject it carries. One list
 /// for both, because the seam, the registration and the load-time refusals
 /// are the same, and a list per guard would be a name per value.
-pub(crate) const INVOCATION_GUARDS: &[&str] = &["prevent-actor-mismatch", "no-empty-merge-message"];
+pub(crate) const INVOCATION_GUARDS: &[&str] = &["prevent-actor-mismatch", "no-empty-merge-subject"];
 
 /// What the shim hands an invocation guard: the invocation as a reader names it,
 /// and each fact one of them reads, where the shim established it.
@@ -350,9 +350,9 @@ pub(crate) struct Call<'a> {
     /// The host the invocation reaches. `None` where no rule that reads it was
     /// declared, so a destination nobody asked about is not resolved.
     pub host: Option<&'a str>,
-    /// The merge commit message parts the invocation gave, where it writes a
-    /// merge commit at all; `None` for every invocation that does not.
-    pub merge: Option<&'a [merge_message::Part]>,
+    /// The merge commit subjects the invocation gave, where it writes a merge
+    /// commit at all; `None` for every invocation that does not.
+    pub merge: Option<&'a [merge_subject::Subject]>,
 }
 
 /// One destination-judging guard's verdict over one invocation's destination.
@@ -418,7 +418,7 @@ pub(crate) fn target_refusal(
 ///
 /// The twin of [`target_refusal`] for [`INVOCATION_GUARDS`]: nothing where the
 /// rule is not one of them, or where the invocation is not one it judges -- a
-/// merge-message rule over a call that writes no merge commit -- and otherwise
+/// merge-subject rule over a call that writes no merge commit -- and otherwise
 /// a bypass, a pass, a refusal, or an `Unknown` and an `Err` where it could not
 /// look. The environment and the forge are the process's own, read here and
 /// nowhere else, so [`actor::judge`] is a function of what it is handed and
@@ -434,7 +434,7 @@ pub(crate) fn invocation_refusal(
     if !INVOCATION_GUARDS.contains(&builtin) {
         return Ok(());
     }
-    if builtin == "no-empty-merge-message" && call.merge.is_none() {
+    if builtin == "no-empty-merge-subject" && call.merge.is_none() {
         return Ok(());
     }
     if let Some(allowed) = allowed(&rule.id) {
@@ -463,7 +463,7 @@ pub(crate) fn invocation_refusal(
                 )
             },
         ),
-        "no-empty-merge-message" => Ok(merge_message::judge(
+        "no-empty-merge-subject" => Ok(merge_subject::judge(
             rule,
             call.command,
             call.merge.unwrap_or_default(),
