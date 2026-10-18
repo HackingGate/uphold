@@ -117,6 +117,21 @@ shell-words = "1"
 ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
 # Parse PEP 508 requirements before accepting the closed optional-extra form.
 pyreq = "0.2.0"
+# JUnit XML, for `UPHOLD_JUNIT`: the evidence format the gate tier already
+# writes, publishes and links, so a guard run is read by the same publisher with
+# nothing of uphold's own to parse. A library rather than a hand-rolled writer
+# because the format's escaping and its counts on every suite are what a reader
+# trusts first and a writer gets wrong last. This one is nextest's own, and it
+# writes a `hostname` only when one is put in `extra`, which this crate never
+# does -- `no-running-os-identity-metadata` refuses a machine name in a file a
+# gate publishes. `junit-report` was the alternative and is not used: it writes
+# `hostname="localhost"` on every suite, with no way to leave it out.
+quick-junit = "0.8"
+# Already in the tree under quick-junit. Named here only to turn the clock into
+# the suite's `timestamp`, the one piece of run metadata the file keeps;
+# `std` is the feature that converts a `SystemTime`, and the default features,
+# the local time zone among them, stay off.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 [target.'cfg(unix)'.dependencies]
 # Git discovers hooks with access(X_OK), which checks the caller's permission

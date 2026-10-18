@@ -90,6 +90,7 @@ mod hooks;
 mod init;
 mod install;
 mod invocation;
+mod junit;
 mod out;
 mod pins;
 mod policy;
@@ -104,7 +105,6 @@ mod shim;
 mod sources;
 mod supply;
 mod text;
-mod verdicts;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -168,7 +168,7 @@ exit codes:
   2  the check could not be made (bad policy, missing source, unreadable file)
 
 UPHOLD_ALLOW=<id>,<id> bypasses named guards for one invocation.
-UPHOLD_VERDICTS=FILE appends one JSON line per guard a `guard` run evaluated.
+UPHOLD_JUNIT=/abs/FILE writes what a `guard --stage` run decided as JUnit XML.
 ";
 
 /// The policy file, newest name first.
@@ -752,6 +752,21 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
         index += 1;
     }
 
+    // Judged before a policy is read, so a value that names no usable file is
+    // exit 2 whatever else is wrong with the run.
+    let evidence = junit::requested()?;
+    if evidence.is_some() && text_source.is_some() {
+        // `--text` reaches rules through `text::judged`, which returns refusals
+        // only. A document written from it could name what refused and could
+        // not honestly name what passed, so this seam writes none until it can.
+        return Err(Fatal::new(format!(
+            "{} is set, and `uphold guard --text` does not write evidence yet: \
+             it learns only what refused, never what passed. Unset {} for this run",
+            junit::VARIABLE,
+            junit::VARIABLE
+        )));
+    }
+
     let working = std::env::current_dir()?;
     let (root, policy_path) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
     let policy = config::load(&root, &policy_path)?;
@@ -829,16 +844,23 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
         }
     };
 
+    // Opened last before the first rule is asked: after the policy loaded and
+    // the push was read, because a run that stops before its loop has judged
+    // nothing and leaves no file, and before the loop, because a file that
+    // cannot be written must stop the run while it has judged nothing too.
+    let evidence = evidence.as_deref().map(junit::Sink::create).transpose()?;
+
     guard::run(
         &root,
         &policy,
-        &guard::RunRequest {
+        guard::RunRequest {
             stage,
             message_file: message.as_deref(),
             push_refs: &push.refs,
             push_source: push.source,
             remote_name: push.remote_name.as_deref(),
             remote_url: push.remote_url.as_deref(),
+            evidence,
         },
     )
 }

@@ -28,7 +28,7 @@ use std::path::Path;
 
 use crate::config::{CheckKind, Policy, Rule};
 use crate::error::{Exit, Fatal, Result};
-use crate::verdicts::Outcome;
+use crate::junit::Outcome;
 
 /// Every built-in check this binary carries, and the only list of them.
 ///
@@ -213,13 +213,36 @@ pub(crate) struct Refusal {
 /// into the policy file it would be committed, reviewed once, and permanent --
 /// which is not a bypass, it is a rule that no longer applies.
 pub(crate) fn bypassed(id: &str) -> bool {
-    let Ok(value) = std::env::var("UPHOLD_ALLOW") else {
-        return false;
-    };
-    value
-        .split(',')
-        .map(str::trim)
-        .any(|allowed| allowed == id || allowed == "all")
+    allowed(id).is_some()
+}
+
+/// What in `UPHOLD_ALLOW` switched a rule off.
+///
+/// The bypass is the same either way. What differs is what a reader of the
+/// record may make of it: an id was a decision about this rule, and `all` was a
+/// decision about the run that this rule fell under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Allowed {
+    /// The rule's own id was in the list.
+    Named,
+    /// `all` was in the list.
+    All,
+}
+
+/// Which entry of `UPHOLD_ALLOW` bypasses `id`, if any.
+///
+/// The id wins over `all` when both are listed, because it is the narrower
+/// statement and the one that names this rule.
+pub(crate) fn allowed(id: &str) -> Option<Allowed> {
+    let value = std::env::var("UPHOLD_ALLOW").ok()?;
+    let entries = || value.split(',').map(str::trim);
+    if entries().any(|entry| entry == id) {
+        Some(Allowed::Named)
+    } else if entries().any(|entry| entry == "all") {
+        Some(Allowed::All)
+    } else {
+        None
+    }
 }
 
 /// Is EVERY rule bypassed for this invocation?
@@ -647,14 +670,26 @@ pub(crate) fn parameters(builtin: &str) -> &'static [&'static str] {
 }
 
 /// Run every guard the policy declares that has something to say at `stage`.
-pub(crate) fn run(root: &Path, policy: &Policy, request: &RunRequest<'_>) -> Result<Exit> {
-    // Opened before anything is decided, so a file that cannot be written stops
-    // the run while it has decided nothing. See `verdicts`.
-    let mut verdicts = crate::verdicts::Sink::from_env()?;
-    let stage = request.stage.as_str();
+pub(crate) fn run(root: &Path, policy: &Policy, request: RunRequest<'_>) -> Result<Exit> {
+    let RunRequest {
+        stage,
+        message_file,
+        push_refs,
+        push_source,
+        remote_name,
+        remote_url,
+        evidence,
+    } = request;
+    let stage_name = stage.as_str();
+    // The sink was opened by the caller before this run decided anything; the
+    // suite is built here and written on every way out below, the early one
+    // included, so "ran, nothing declared" is a suite of zero tests and not
+    // the same absence as "never ran".
+    let mut suite = evidence.map(|sink| crate::junit::Suite::new(sink, stage_name));
     // Every rule the CONFIG puts at this hook, and nothing else decides it.
-    let at_hook: Vec<&Rule> = policy.at_hook(stage).collect();
+    let at_hook: Vec<&Rule> = policy.at_hook(stage_name).collect();
     if policy.at_hook_any().next().is_none() {
+        written(suite)?;
         println!("no rule declares a git hook");
         return Ok(Exit::Clean);
     }
@@ -663,13 +698,22 @@ pub(crate) fn run(root: &Path, policy: &Policy, request: &RunRequest<'_>) -> Res
     let mut ran = 0usize;
     let mut bypassed_here = 0usize;
     for rule in at_hook {
-        let set = policy.set_of(&rule.id);
+        let case = crate::junit::Case {
+            id: &rule.id,
+            builtin: rule.builtin(),
+            set: policy.set_of(&rule.id),
+        };
+        let mut record = |outcome| {
+            if let Some(suite) = suite.as_mut() {
+                suite.record(case, outcome);
+            }
+        };
         // Counted where the work happens, not where the loop starts. A bypassed
         // rule did not run, and folding it into the same number reported a
         // deliberately disabled check as one that passed.
-        if bypassed(rule.id.as_str()) {
+        if let Some(allowed) = allowed(rule.id.as_str()) {
             eprintln!("uphold guard: {} bypassed by UPHOLD_ALLOW", rule.id);
-            verdicts.record(stage, &rule.id, set, Outcome::Bypass)?;
+            record(Outcome::Bypass(allowed));
             bypassed_here += 1;
             continue;
         }
@@ -678,32 +722,33 @@ pub(crate) fn run(root: &Path, policy: &Policy, request: &RunRequest<'_>) -> Res
             root,
             rule,
             policy,
-            stage: request.stage,
-            message_file: request.message_file,
-            push_refs: request.push_refs,
-            push_source: request.push_source,
-            remote_name: request.remote_name,
-            remote_url: request.remote_url,
+            stage,
+            message_file,
+            push_refs,
+            push_source,
+            remote_name,
+            remote_url,
         };
         match evaluate(&one) {
             Ok(Some(refusal)) => {
-                verdicts.record(stage, &rule.id, set, Outcome::Refuse)?;
+                record(Outcome::Refuse);
                 refusals.push(refusal);
             }
-            Ok(None) => verdicts.record(stage, &rule.id, set, Outcome::Pass)?,
-            // The rule could not look, and the run ends here with exit 2. The
-            // line says which rule that was; the error the reader acts on is
-            // still the rule's own, with the file's appended if both failed.
+            Ok(None) => record(Outcome::Pass),
+            // The rule could not look, and the run ends here with exit 2. Its
+            // testcase is an error and the rules after it get none; the error
+            // the reader acts on is still the rule's own, with the file's
+            // appended if both failed.
             Err(error) => {
-                return Err(
-                    match verdicts.record(stage, &rule.id, set, Outcome::Unknown) {
-                        Ok(()) => error,
-                        Err(also) => Fatal::new(format!("{error}\n\n{also}")),
-                    },
-                );
+                record(Outcome::Unknown);
+                return Err(match written(suite) {
+                    Ok(()) => error,
+                    Err(also) => Fatal::new(format!("{error}\n\n{also}")),
+                });
             }
         }
     }
+    written(suite)?;
 
     for refusal in &refusals {
         eprintln!("guard refused: {}", refused_by(policy, refusal));
@@ -723,13 +768,19 @@ pub(crate) fn run(root: &Path, policy: &Policy, request: &RunRequest<'_>) -> Res
     }
 
     if bypassed_here > 0 {
-        println!("{ran} guard(s) passed at {stage}, {bypassed_here} bypassed by UPHOLD_ALLOW");
+        println!("{ran} guard(s) passed at {stage_name}, {bypassed_here} bypassed by UPHOLD_ALLOW");
     } else {
-        println!("{ran} guard(s) passed at {stage}");
+        println!("{ran} guard(s) passed at {stage_name}");
     }
     Ok(Exit::Clean)
 }
 
+/// Write the run's `JUnit` document, if one was asked for.
+fn written(suite: Option<crate::junit::Suite<'_>>) -> Result<()> {
+    suite.map_or(Ok(()), crate::junit::Suite::write)
+}
+
+#[derive(Debug)]
 pub(crate) struct RunRequest<'a> {
     pub stage: Stage,
     pub message_file: Option<&'a Path>,
@@ -737,6 +788,10 @@ pub(crate) struct RunRequest<'a> {
     pub push_source: crate::runner::Source,
     pub remote_name: Option<&'a str>,
     pub remote_url: Option<&'a str>,
+    /// Where the run's `JUnit` document goes, opened by the caller before
+    /// anything is decided; `None` when nobody asked for one. A sink and not a
+    /// path, so a test can hand the run a buffer. See `junit`.
+    pub evidence: Option<crate::junit::Sink<'a>>,
 }
 
 #[cfg(test)]

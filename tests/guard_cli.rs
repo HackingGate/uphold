@@ -15,8 +15,11 @@
 
 mod support;
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+
+use quick_junit::{NonSuccessKind, Report, TestCase, TestCaseStatus, TestSuite, XmlString};
 
 fn repository(policy: &str) -> PathBuf {
     let root = support::scratch("guard");
@@ -156,12 +159,16 @@ builtin = "ascii-only-commit-subject"
 hooks = ["commit-msg"]
 "#;
 
-fn guard_with_verdicts(root: &Path, verdicts: &Path, allow: Option<&str>) -> Output {
+// --- UPHOLD_JUNIT: what a run decided, as one JUnit document ----------------
+
+/// `uphold guard` at commit-msg over `msg.txt`, with `UPHOLD_JUNIT` set to
+/// `junit` and `UPHOLD_ALLOW` to `allow` when given.
+fn guard_with_junit(root: &Path, junit: &OsStr, allow: Option<&str>) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
     command
         .args(["guard", "--stage", "commit-msg", "--message", "msg.txt"])
         .current_dir(root)
-        .env("UPHOLD_VERDICTS", verdicts)
+        .env("UPHOLD_JUNIT", junit)
         .env_remove("UPHOLD_ALLOW");
     if let Some(allow) = allow {
         command.env("UPHOLD_ALLOW", allow);
@@ -169,88 +176,377 @@ fn guard_with_verdicts(root: &Path, verdicts: &Path, allow: Option<&str>) -> Out
     command.output().unwrap()
 }
 
-fn verdict_lines(path: &Path) -> Vec<serde_json::Value> {
-    std::fs::read_to_string(path)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
+/// The file read back by the library that wrote it, holding exactly one suite.
+fn the_suite(path: &Path) -> TestSuite {
+    let text = std::fs::read_to_string(path).unwrap();
+    let mut report = Report::deserialize_from_str(&text).unwrap();
+    assert_eq!(report.test_suites.len(), 1, "{text}");
+    report.test_suites.remove(0)
 }
 
-fn outcome_of<'a>(lines: &'a [serde_json::Value], rule: &str) -> Vec<&'a str> {
-    lines
+fn the_case<'s>(suite: &'s TestSuite, id: &str) -> &'s TestCase {
+    let mut found = suite
+        .test_cases
         .iter()
-        .filter(|line| line["rule"] == rule)
-        .map(|line| line["outcome"].as_str().unwrap())
-        .collect()
+        .filter(|case| case.name.as_str() == id);
+    let case = found.next().unwrap();
+    assert!(found.next().is_none(), "{id} twice in {suite:?}");
+    case
+}
+
+fn property<'c>(case: &'c TestCase, name: &str) -> Option<&'c str> {
+    case.properties
+        .iter()
+        .find(|property| property.name.as_str() == name)
+        .map(|property| property.value.as_str())
+}
+
+/// The message a `failure`, `error` or `skipped` carries, and which of the
+/// four states the testcase is in.
+fn state(case: &TestCase) -> (&'static str, Option<&str>) {
+    match &case.status {
+        TestCaseStatus::Success { .. } => ("pass", None),
+        TestCaseStatus::NonSuccess {
+            kind: NonSuccessKind::Failure,
+            message,
+            ..
+        } => ("failure", message.as_ref().map(XmlString::as_str)),
+        TestCaseStatus::NonSuccess {
+            kind: NonSuccessKind::Error,
+            message,
+            ..
+        } => ("error", message.as_ref().map(XmlString::as_str)),
+        TestCaseStatus::Skipped { message, .. } => {
+            ("skipped", message.as_ref().map(XmlString::as_str))
+        }
+    }
 }
 
 #[test]
-fn verdicts_name_each_rules_answer_and_never_the_subject() {
+fn each_rules_answer_is_a_testcase_and_the_subject_is_not_in_the_file() {
     let root = repository(AI_AUTHOR_AND_ASCII_SUBJECT);
     write(&root, "msg.txt", "x\n\nGenerated with Claude Code\n");
-    let verdicts = root.join("verdicts.jsonl");
+    let junit = root.join("commit-msg.xml");
 
-    let output = guard_with_verdicts(&root, &verdicts, None);
+    let output = guard_with_junit(&root, junit.as_os_str(), None);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
-    // A second run appends: the file is the caller's, and what it already
-    // holds is not this run's to replace.
-    let output = guard_with_verdicts(&root, &verdicts, Some("prevent-ai-author"));
-    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    // The report a reader acts on is still on stderr, unchanged.
+    assert!(
+        stderr(&output).contains("guard refused: prevent-ai-author"),
+        "{}",
+        stderr(&output)
+    );
 
-    let lines = verdict_lines(&verdicts);
-    assert_eq!(lines.len(), 4, "{lines:?}");
+    let suite = the_suite(&junit);
+    assert_eq!(suite.name.as_str(), "uphold guard commit-msg");
     assert_eq!(
-        outcome_of(&lines, "prevent-ai-author"),
-        ["refuse", "bypass"]
+        suite.extra.get("package").map(XmlString::as_str),
+        Some("uphold")
     );
     assert_eq!(
-        outcome_of(&lines, "ascii-only-commit-subject"),
-        ["pass", "pass"]
+        (suite.tests, suite.failures, suite.errors, suite.skipped),
+        (2, 1, 0, 0)
     );
-    for line in &lines {
-        assert_eq!(line["schema_version"], 1, "{line}");
-        assert_eq!(line["seam"], "guard", "{line}");
-        assert_eq!(line["stage"], "commit-msg", "{line}");
+    let refused = the_case(&suite, "prevent-ai-author");
+    assert_eq!(
+        state(refused),
+        ("failure", Some("prevent-ai-author refused"))
+    );
+    let passed = the_case(&suite, "ascii-only-commit-subject");
+    assert_eq!(state(passed), ("pass", None));
+    for case in &suite.test_cases {
         assert_eq!(
-            line.get("by").is_some(),
-            line["outcome"] == "bypass",
-            "{line}"
+            case.classname.as_ref().map(XmlString::as_str),
+            Some("local")
         );
+        assert_eq!(property(case, "builtin"), Some(case.name.as_str()));
+        assert_eq!(property(case, "set"), None);
+        assert_eq!(property(case, "stage"), Some("commit-msg"));
+        assert_eq!(property(case, "uphold"), Some(env!("CARGO_PKG_VERSION")));
+        // `allowed` is a bypass's and only a bypass's.
+        assert_eq!(property(case, "allowed"), None);
     }
-    let text = std::fs::read_to_string(&verdicts).unwrap();
+
+    // No subject text, and no machine or person: the fleet's
+    // `no-running-os-identity-metadata` refuses both in a published file.
+    let text = std::fs::read_to_string(&junit).unwrap();
     assert!(!text.contains("Generated"), "{text}");
+    assert!(!text.contains("msg.txt"), "{text}");
+    assert!(!text.contains("hostname"), "{text}");
+    assert!(suite.extra.get("hostname").is_none(), "{suite:?}");
+    assert!(!text.contains("example.test"), "{text}");
+}
+
+/// The document a run writes, held to the rule the fleet holds a published
+/// file to: the scan reads this machine's user name, home path, hostname and
+/// default route and finds none of them in it. Every answer is in the file, so
+/// every branch of the serializer is under the rule.
+#[test]
+fn the_document_carries_no_identity_of_the_machine_that_wrote_it() {
+    let root = repository(&format!(
+        "{AI_AUTHOR_AND_ASCII_SUBJECT}\n\
+         [rule.no-running-os-identity-metadata]\n\
+         message = \"Do not publish host identity.\"\n\
+         forbidden_literals = \"running-os-identity\"\n\
+         files.include = [\"evidence\"]\n\
+         files.word = true\n"
+    ));
+    write(&root, "msg.txt", "x\n\nGenerated with Claude Code\n");
+    std::fs::create_dir_all(root.join("evidence")).unwrap();
+    for (name, allow) in [("refused.xml", None), ("bypassed.xml", Some("all"))] {
+        let junit = root.join("evidence").join(name);
+        let output = guard_with_junit(&root, junit.as_os_str(), allow);
+        assert_ne!(code(&output), 2, "{}", stderr(&output));
+        assert!(junit.exists());
+    }
+    support::git(&root, &["add", "-A"]);
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .arg("scan")
+        .current_dir(&root)
+        .env_remove("UPHOLD_ALLOW")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
 #[test]
-fn a_verdicts_file_that_cannot_be_opened_stops_the_run_before_it_decides() {
+fn a_bypass_is_skipped_and_says_whether_its_id_or_all_switched_it_off() {
+    let root = repository(AI_AUTHOR_AND_ASCII_SUBJECT);
+    write(&root, "msg.txt", "x\n\nGenerated with Claude Code\n");
+    let junit = root.join("commit-msg.xml");
+
+    let output = guard_with_junit(&root, junit.as_os_str(), Some("prevent-ai-author"));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let suite = the_suite(&junit);
+    assert_eq!((suite.tests, suite.skipped), (2, 1));
+    let bypassed = the_case(&suite, "prevent-ai-author");
+    assert_eq!(
+        state(bypassed),
+        ("skipped", Some("bypassed by UPHOLD_ALLOW"))
+    );
+    assert_eq!(property(bypassed, "allowed"), Some("id"));
+    let passed = the_case(&suite, "ascii-only-commit-subject");
+    assert_eq!(state(passed), ("pass", None));
+    assert_eq!(property(passed, "allowed"), None);
+
+    // The same file, run again: replaced, never appended, so the second
+    // document is the second run's alone.
+    let output = guard_with_junit(&root, junit.as_os_str(), Some("all"));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let suite = the_suite(&junit);
+    assert_eq!((suite.tests, suite.skipped), (2, 2));
+    for case in &suite.test_cases {
+        assert_eq!(property(case, "allowed"), Some("all"), "{case:?}");
+    }
+}
+
+/// A rule that could not look is an `error`, and the rules the run never
+/// reached are not in the file at all: absence is not a claim.
+///
+/// Rules run in id order, so the passing one comes first, the one with no
+/// `origin` to ask about second, and the one after it is never asked.
+#[test]
+fn a_rule_that_could_not_look_is_an_error_and_the_rest_are_absent() {
+    let root = repository(
+        "[rule.ascii-only-commit-subject]\nbuiltin = \"ascii-only-commit-subject\"\n\n\
+         [rule.ascii-only-commit-subject.git]\nhooks = [\"commit-msg\"]\n\n\
+         [rule.no-stale-visibility]\nbuiltin = \"no-stale-visibility\"\nvisibility = \"private\"\n\n\
+         [rule.no-stale-visibility.git]\nhooks = [\"commit-msg\"]\n\n\
+         [rule.prevent-ai-author]\nbuiltin = \"prevent-ai-author\"\n\n\
+         [rule.prevent-ai-author.git]\nhooks = [\"commit-msg\"]\n",
+    );
+    write(&root, "msg.txt", "Fix the thing\n");
+    let junit = root.join("commit-msg.xml");
+
+    let output = guard_with_junit(&root, junit.as_os_str(), None);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("has no `origin` remote"),
+        "{}",
+        stderr(&output)
+    );
+    let suite = the_suite(&junit);
+    assert_eq!((suite.tests, suite.errors), (2, 1), "{suite:?}");
+    assert_eq!(
+        state(the_case(&suite, "ascii-only-commit-subject")),
+        ("pass", None)
+    );
+    assert_eq!(
+        state(the_case(&suite, "no-stale-visibility")),
+        ("error", Some("no-stale-visibility could not look"))
+    );
+    assert!(
+        suite
+            .test_cases
+            .iter()
+            .all(|case| case.name.as_str() != "prevent-ai-author"),
+        "{suite:?}"
+    );
+}
+
+#[test]
+fn a_file_that_cannot_be_written_stops_the_run_before_it_decides() {
     let root = repository(AI_AUTHOR);
     write(&root, "msg.txt", "x\n\nGenerated with Claude Code\n");
-    // A directory where the file should be: nothing can append to it.
-    let output = guard_with_verdicts(&root, &root, None);
-    assert_eq!(code(&output), 2, "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("UPHOLD_VERDICTS"),
-        "{}",
-        stderr(&output)
-    );
-    assert!(
-        !stderr(&output).contains("guard refused"),
-        "{}",
-        stderr(&output)
-    );
+    // A path under a file, and a directory where the file should be: neither
+    // can be created.
+    for junit in [root.join("msg.txt/commit-msg.xml"), root.clone()] {
+        let output = guard_with_junit(&root, junit.as_os_str(), None);
+        assert_eq!(code(&output), 2, "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("UPHOLD_JUNIT"),
+            "{}",
+            stderr(&output)
+        );
+        assert!(
+            !stderr(&output).contains("guard refused"),
+            "{}",
+            stderr(&output)
+        );
+    }
 }
 
 #[test]
-fn an_empty_verdicts_variable_is_refused_and_not_read_as_unset() {
+fn an_empty_or_relative_value_is_refused_naming_it() {
     let root = repository(AI_AUTHOR);
-    write(&root, "msg.txt", "Fix the thing\n");
-    let output = guard_with_verdicts(&root, Path::new(""), None);
+    write(&root, "msg.txt", "x\n\nGenerated with Claude Code\n");
+    for (value, named) in [
+        ("", "UPHOLD_JUNIT= is set and names no file"),
+        (
+            "commit-msg.xml",
+            "UPHOLD_JUNIT=commit-msg.xml is a relative path",
+        ),
+    ] {
+        let output = guard_with_junit(&root, OsStr::new(value), None);
+        assert_eq!(code(&output), 2, "{value:?}: {}", stderr(&output));
+        assert!(stderr(&output).contains(named), "{}", stderr(&output));
+        assert!(
+            !stderr(&output).contains("guard refused"),
+            "{}",
+            stderr(&output)
+        );
+    }
+    assert!(!root.join("commit-msg.xml").exists());
+}
+
+/// "Ran, nothing declared here" is a suite of zero tests, which is not the
+/// same absence as "never ran" -- whether other stages declare rules or no
+/// stage does.
+#[test]
+fn a_stage_no_rule_declares_writes_a_suite_with_zero_tests() {
+    for policy in [AI_AUTHOR, ""] {
+        let root = repository(policy);
+        let junit = root.join("pre-commit.xml");
+        let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+            .args(["guard", "--stage", "pre-commit"])
+            .current_dir(&root)
+            .env("UPHOLD_JUNIT", &junit)
+            .env_remove("UPHOLD_ALLOW")
+            .output()
+            .unwrap();
+        assert_eq!(code(&output), 0, "{policy:?}: {}", stderr(&output));
+        let suite = the_suite(&junit);
+        assert_eq!(suite.name.as_str(), "uphold guard pre-commit");
+        assert_eq!(suite.tests, 0, "{policy:?}: {suite:?}");
+    }
+}
+
+/// A run that stops before its first rule has judged nothing, so it leaves no
+/// file; a policy that will not load is one.
+#[test]
+fn a_run_that_stops_before_its_first_rule_leaves_no_file() {
+    let root = repository(
+        "[rule.invent-a-guard]\nbuiltin = \"invent-a-guard\"\n\n[rule.invent-a-guard.git]\nhooks = []\n",
+    );
+    let junit = root.join("pre-commit.xml");
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["guard", "--stage", "pre-commit"])
+        .current_dir(&root)
+        .env("UPHOLD_JUNIT", &junit)
+        .env_remove("UPHOLD_ALLOW")
+        .output()
+        .unwrap();
     assert_eq!(code(&output), 2, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("names no file"),
+        stderr(&output).contains("no built-in is called"),
         "{}",
         stderr(&output)
+    );
+    assert!(!junit.exists());
+}
+
+/// `--text` learns only what refused, so it cannot honestly write a pass, and
+/// it writes nothing rather than a document that reads as complete.
+#[test]
+fn the_text_seam_refuses_to_run_with_the_variable_set() {
+    let root = repository(AI_AUTHOR);
+    let junit = root.join("text.xml");
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["guard", "--text"])
+        .current_dir(&root)
+        .env("UPHOLD_JUNIT", &junit)
+        .env_remove("UPHOLD_ALLOW")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("does not write evidence yet"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!junit.exists());
+}
+
+/// The variable set on a real `git push` reaches a real pre-push hook, which
+/// writes the `pre-push` suite: git passes its environment on to the hook.
+#[cfg(unix)]
+#[test]
+fn a_real_push_writes_the_pre_push_suite() {
+    let root = repository(IN_FILES);
+    let remote = support::scratch("guard-remote");
+    std::fs::create_dir_all(&remote).unwrap();
+    support::git(&remote, &["init", "-q", "--bare"]);
+    support::git(
+        &root,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    write(&root, "a.txt", "one\n");
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
+    write(
+        &root,
+        ".git/hooks/pre-push",
+        &format!(
+            "#!/bin/sh\nexec '{}' guard --stage pre-push --remote \"$1\" --remote-url \"$2\"\n",
+            env!("CARGO_BIN_EXE_uphold")
+        ),
+    );
+    let hook = root.join(".git/hooks/pre-push");
+    let mut mode = std::fs::metadata(&hook).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(&hook, mode).unwrap();
+
+    let junit = root.join("pre-push.xml");
+    let output = support::git_command(&root)
+        .args([
+            "-c",
+            "core.hooksPath=.git/hooks",
+            "push",
+            "-q",
+            "origin",
+            "main",
+        ])
+        .env("UPHOLD_JUNIT", &junit)
+        .env_remove("UPHOLD_ALLOW")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let suite = the_suite(&junit);
+    assert_eq!(suite.name.as_str(), "uphold guard pre-push");
+    assert_eq!(
+        state(the_case(&suite, "prevent-unusual-unicode-in-files")),
+        ("pass", None)
     );
 }
 
