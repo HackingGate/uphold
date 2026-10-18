@@ -115,7 +115,8 @@ const USAGE: &str = "\
 usage:
   uphold scan [--policy PATH]        run the content policy over this repository
   uphold scan --text [FILE|-]        run the host-identity rules over text
-  uphold guard --stage STAGE         run the guards that fire at STAGE
+  uphold guard --stage STAGE [--junit FILE]
+                                     run the guards that fire at STAGE
   uphold guard --text [FILE|-]       run the text-capable guards over text
   uphold check [--json] [--probe]    reconcile claims; optionally measure hook behavior
   uphold check --coverage            which rules run here and carry no principle
@@ -168,7 +169,8 @@ exit codes:
   2  the check could not be made (bad policy, missing source, unreadable file)
 
 UPHOLD_ALLOW=<id>,<id> bypasses named guards for one invocation.
-UPHOLD_JUNIT=/abs/FILE writes what a `guard --stage` run decided as JUnit XML.
+`--junit FILE` writes what a `guard --stage` run decided as JUnit XML.
+UPHOLD_JUNIT=/abs/FILE is the same request from outside a hook's argv; the flag wins.
 ";
 
 /// The policy file, newest name first.
@@ -708,6 +710,7 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
     let mut remote_name: Option<String> = None;
     let mut remote_url: Option<String> = None;
     let mut text_source: Option<String> = None;
+    let mut junit_flag: Option<OsString> = None;
     let mut index = 0;
     while let Some(argument) = arguments.get(index) {
         // A stage name, a remote name, a remote URL and a text source are all
@@ -747,6 +750,15 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
                     None => String::from("-"),
                 });
             }
+            // A path, like `--message`: it does not have to be text to be
+            // created.
+            "--junit" => {
+                index += 1;
+                let path = arguments
+                    .get(index)
+                    .ok_or_else(|| Fatal::new(format!("{} needs a value", junit::FLAG)))?;
+                junit_flag = Some(path.clone());
+            }
             other => return Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}"))),
         }
         index += 1;
@@ -754,15 +766,20 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
 
     // Judged before a policy is read, so a value that names no usable file is
     // exit 2 whatever else is wrong with the run.
-    let evidence = junit::requested()?;
+    let evidence = junit::requested(junit_flag.as_deref())?;
     if evidence.is_some() && text_source.is_some() {
         // `--text` reaches rules through `text::judged`, which returns refusals
         // only. A document written from it could name what refused and could
         // not honestly name what passed, so this seam writes none until it can.
         return Err(Fatal::new(format!(
-            "{} is set, and `uphold guard --text` does not write evidence yet: \
-             it learns only what refused, never what passed. Unset {} for this run",
-            junit::VARIABLE,
+            "{} was asked for, and `uphold guard --text` does not write evidence yet: \
+             it learns only what refused, never what passed. Drop {} and unset {} for this run",
+            if junit_flag.is_some() {
+                junit::FLAG
+            } else {
+                junit::VARIABLE
+            },
+            junit::FLAG,
             junit::VARIABLE
         )));
     }

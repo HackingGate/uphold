@@ -429,6 +429,58 @@ fn an_empty_or_relative_value_is_refused_naming_it() {
     assert!(!root.join("commit-msg.xml").exists());
 }
 
+/// `--junit FILE` is the spelling for a caller who owns the command line. A
+/// relative value means this directory, as it does for any other command, and
+/// the flag wins over a variable that names somewhere else.
+#[test]
+fn the_flag_names_the_file_relative_to_the_caller_and_wins_over_the_variable() {
+    let root = repository(AI_AUTHOR);
+    write(&root, "msg.txt", "plain\n");
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    let elsewhere = root.join("elsewhere.xml");
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args([
+            "guard",
+            "--stage",
+            "commit-msg",
+            "--message",
+            "../msg.txt",
+            "--junit",
+            "commit-msg.xml",
+        ])
+        .current_dir(root.join("sub"))
+        .env("UPHOLD_JUNIT", &elsewhere)
+        .env_remove("UPHOLD_ALLOW")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let suite = the_suite(&root.join("sub").join("commit-msg.xml"));
+    assert_eq!(suite.tests, 1, "{suite:?}");
+    assert!(!elsewhere.exists(), "the variable's file was written too");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args([
+            "guard",
+            "--stage",
+            "commit-msg",
+            "--message",
+            "msg.txt",
+            "--junit",
+            "",
+        ])
+        .current_dir(&root)
+        .env_remove("UPHOLD_JUNIT")
+        .env_remove("UPHOLD_ALLOW")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("--junit names no file"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 /// "Ran, nothing declared here" is a suite of zero tests, which is not the
 /// same absence as "never ran" -- whether other stages declare rules or no
 /// stage does.

@@ -2012,15 +2012,24 @@ once, and permanent.
 ### Recording what a stage decided
 
 ```sh
-UPHOLD_JUNIT=/abs/path/pre-push.xml uphold guard --stage pre-push
+uphold guard --stage manual --junit .test-evidence/check-guards/uphold.xml
+UPHOLD_JUNIT=/abs/path/pre-push.xml git push
 ```
 
-Unset, nothing is written. Set, the run writes one JUnit XML document: one
+Two spellings of one request. `--junit FILE` is the conventional one, as
+`--junitxml` is pytest's, for a caller who owns the command line; a relative
+value means the caller's directory, as it does for any other command. The
+variable is for the caller who does not own it: a hook's command line belongs
+to the hook definition the repository pins, and the environment is the only
+channel that reaches from `git push` through the runner to the guard. The flag
+wins when both are given.
+
+Neither given, nothing is written. Given, the run writes one JUnit XML document: one
 `<testsuite name="uphold guard pre-push">` with `package="uphold"`, and one
 `<testcase>` per rule the stage evaluated. An Allure reader files a testcase by
 its `classname` and the suite by its `package`; it reads no `<properties>`, so
 those are for a machine reader and not the report. The file is created or replaced, never appended, because a
-JUnit document is one tree. That is why the variable names a file per stage and
+JUnit document is one tree. That is why either spelling names a file per stage and
 not one per act. Allure, nextest and pytest read the same format, and an Allure
 publisher reading `.test-evidence/` consumes the file unchanged.
 
@@ -2071,19 +2080,21 @@ was named in `UPHOLD_ALLOW`, `all` when `all` matched.
   that cannot be written is exit `2` with nothing judged. A stage that declares
   no rules writes a suite with zero tests, which tells "ran, nothing declared"
   from "never ran".
-- **The path is absolute.** Git runs a hook from the top of the working tree,
-  and a relative path would land where the caller did not look. A relative
-  value is exit `2` naming it.
-- **An empty value is exit `2`.** This is the opposite reading from
-  `UPHOLD_ALLOW=`, on purpose: there a blank value switched every guard off
-  without a word, and here it refuses one run loudly.
+- **The variable's path is absolute.** Git runs a hook from the top of the
+  working tree, and a relative path would land where the caller did not look.
+  A relative value is exit `2` naming it. The flag has no such rule: it was
+  typed where the caller stands.
+- **An empty value is exit `2`**, for the flag and the variable alike. For the
+  variable this is the opposite reading from `UPHOLD_ALLOW=`, on purpose:
+  there a blank value switched every guard off without a word, and here it
+  refuses one run loudly.
 - **A rule that could not look ends the run.** It gets an `error`, the rules
   after it get no testcase, the file is still written, and the exit is `2`.
   Absence is not a claim about those rules. A failure before the first rule
   runs, such as a push that was told nothing or a policy that will not load,
   leaves the file absent and exits `2`.
 - **`--stage manual` writes like any other stage.**
-- **`uphold guard --text` with the variable set is exit `2`.** That seam
+- **`uphold guard --text` with either given is exit `2`.** That seam
   reaches rules through a path that reports refusals only, so it cannot
   honestly write a pass.
 - **The shim and `uphold hook` do not read the variable**, so one exported

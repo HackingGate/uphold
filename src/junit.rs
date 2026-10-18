@@ -30,6 +30,7 @@
 //! report a reader acts on is still the one on stderr. No hostname and no user
 //! name either; the timestamp is the only run metadata kept.
 
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -43,11 +44,36 @@ use crate::guard::Allowed;
 /// owns the descriptors a hook inherits, and a path survives every one of them.
 pub(crate) const VARIABLE: &str = "UPHOLD_JUNIT";
 
+/// The flag naming the file: the conventional spelling, as `--junitxml` is
+/// pytest's, for a caller who owns the command line.
+pub(crate) const FLAG: &str = "--junit";
+
 /// The file the caller asked for, if they asked.
+///
+/// Two spellings of one request. `--junit FILE` is the one a caller types who
+/// owns the command line. The variable exists for the caller who does not: a
+/// hook's argv is the hook definition's, pinned by the repository, and the
+/// only channel that reaches from `git push` through the runner to the guard
+/// is the environment. The flag wins when both are given, as a flag usually
+/// does over the environment it was typed into.
 ///
 /// Read and judged before anything else the run does, so a value that names no
 /// usable place is exit 2 before a policy is loaded or a rule is asked.
-pub(crate) fn requested() -> Result<Option<PathBuf>> {
+pub(crate) fn requested(flag: Option<&OsStr>) -> Result<Option<PathBuf>> {
+    if let Some(given) = flag {
+        if given.is_empty() {
+            return Err(Fatal::new(format!("{FLAG} names no file")));
+        }
+        let path = PathBuf::from(given);
+        // Typed where the caller stands, so a relative path means what it
+        // means to any other command: this directory. The hook case below is
+        // the one where "this directory" is not the caller's.
+        return Ok(Some(if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()?.join(path)
+        }));
+    }
     let Some(value) = std::env::var_os(VARIABLE) else {
         return Ok(None);
     };

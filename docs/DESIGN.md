@@ -259,7 +259,8 @@ be committed, reviewed once, and permanent, which is not a bypass.
 
 ### uphold decides; it does not record
 
-`UPHOLD_JUNIT` names a file and uphold writes one JUnit document to it. The
+`--junit FILE`, or `UPHOLD_JUNIT` for a run whose command line the caller does
+not own, names a file and uphold writes one JUnit document to it. The
 format is not one of uphold's own because the fleet already has one evidence
 format: a gate writes JUnit XML under `.test-evidence/` and a publisher turns
 the directory into a report. The four testcase states are the four answers a
@@ -272,6 +273,12 @@ hook runner may swallow. A default path in a state directory would be shared by
 every repository and every act on the machine, and would put a write somewhere
 the caller did not choose. A named file lets the caller put it where its
 publisher already looks, outside the tree or inside an ignored directory.
+
+The flag is the conventional spelling and the one a gate task types. The
+variable exists because a hook's command line is the hook definition's, pinned
+by the repository, so a caller running `git push` has no argv to add a flag
+to; the environment is the one channel that reaches through git and the runner
+to the guard, which is also why `UPHOLD_ALLOW` is a variable.
 
 `git commit --no-verify` and `git push --no-verify` run no hook, so no file is
 written. That needs no code here: a verifier that expects evidence on every
