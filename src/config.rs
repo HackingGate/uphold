@@ -3574,35 +3574,46 @@ mod tests {
         }
     }
 
-    /// The merge-subject guard is held to the same seam and scope, and needs
-    /// no parameter at all.
+    /// The merge-subject rule arrives from `published-text` as a pattern rule
+    /// that names the shim and the text seam -- which is what a caller that
+    /// relies on its verdict reads back from `uphold rules --effective`.
     #[test]
-    fn a_merge_subject_declaration_is_held_to_the_shim_seam_and_always() {
-        let declared = |lines: &str| {
-            policy_from(&format!(
-                "[rule.merge-subject]\nbuiltin = \"no-empty-merge-subject\"\n{lines}\n\
-                 [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\n"
-            ))
-        };
-        declared("command.before = [\"gh\"]\ncommand.scope = \"always\"\n")
-            .expect("the set's own declaration");
-        for (lines, says) in [
-            (
-                "command.before = [\"gh\"]\ncommand.scope = \"always\"\ngit.hooks = [\"pre-push\"]\n",
-                "no such write is about to happen",
-            ),
-            (
-                "command.before = [\"gh\"]\n",
-                "`command.scope = \"always\"`",
-            ),
-            (
-                "command.before = [\"gh\"]\ncommand.scope = \"always\"\nactor = \"example-app[bot]\"\n",
-                "read by nothing",
-            ),
-        ] {
-            let error = declared(lines).expect_err(lines).to_string();
-            assert!(error.contains(says), "{lines}\n{error}");
-        }
+    fn the_merge_subject_rule_runs_at_the_shim_and_the_text_seam() {
+        let policy = policy_from(
+            "[inherit]\nsets = [\"published-text\"]\n\n\
+             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\n\n\
+             [[shim]]\ncommand = \"git\"\nmatch = [\"push:*\"]\n",
+        )
+        .unwrap();
+        let rule = policy
+            .rules
+            .iter()
+            .find(|rule| rule.id == "no-empty-merge-subject")
+            .expect("published-text carries the merge-subject rule");
+        assert_eq!(rule.kind(), CheckKind::RequireRegexp);
+        assert_eq!(rule.seams(), ["shim", "text"]);
+        assert!(rule.judged_at(crate::text::Seam::Guard));
+        assert!(!rule.judged_at(crate::text::Seam::Hook));
+    }
+
+    /// A pattern rule names the text seam only by asking: one that does not is
+    /// where it ran before, at the shim alone.
+    #[test]
+    fn a_pattern_rule_reaches_the_text_seam_only_where_it_names_it() {
+        let named = policy_from(
+            "[rule.shape]\nmessage = \"x\"\nregexp = '^zzz[0-9]{9}$'\nseams = [\"shim\", \"text\"]\n\
+             command.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\n",
+        )
+        .unwrap();
+        assert!(named.rules[0].judged_at(crate::text::Seam::Scan));
+        let unnamed = policy_from(
+            "[rule.shape]\nmessage = \"x\"\nregexp = '^zzz[0-9]{9}$'\ncommand.before = [\"gh\"]\n\n\
+             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\n",
+        )
+        .unwrap();
+        assert!(!unnamed.rules[0].judged_at(crate::text::Seam::Scan));
+        assert!(!unnamed.rules[0].judged_at(crate::text::Seam::Guard));
+        assert_eq!(unnamed.rules[0].seams(), ["shim"]);
     }
 
     /// And `actor` is that built-in's alone, as every parameter is its own.
@@ -3975,8 +3986,8 @@ mod tests {
                 "`seams = []`",
             ),
             (
-                "[rule.r]\nmessage = \"x\"\nregexp = 'a'\nseams = [\"text\"]\ncommand.before = [\"gh\"]\n",
-                "cannot run at the seam \"text\"",
+                "[rule.r]\nmessage = \"x\"\nregexp = 'a'\nseams = [\"guard\"]\ncommand.before = [\"gh\"]\n",
+                "cannot run at the seam \"guard\"",
             ),
             (
                 "[rule.r]\nmessage = \"x\"\nprose_regexp = 'a'\nseams = [\"commit\"]\ncommand.before = [\"gh\"]\n",

@@ -1080,9 +1080,8 @@ impl Rule {
     ///   belongs at, and in the other direction: a git hook is handed no
     ///   destination for a command, so `command.before` is the whole of where
     ///   it can run.
-    /// * an INVOCATION-judging built-in -- one that reads what the shim parsed
-    ///   off a `gh` invocation: whose credential it runs under, the message a
-    ///   merge writes. Only a command about to run has either.
+    /// * an INVOCATION-judging built-in -- one that reads whose credential a
+    ///   `gh` invocation runs under. Only a command about to run has one.
     ///
     /// Anything else reads an index, an identity or a push range, and has
     /// nothing to say about a pull-request body.
@@ -2090,33 +2089,23 @@ impl Rule {
     /// load where any of it is missing.
     ///
     /// Each refusal is a rule that would otherwise load and read as the
-    /// declaration of a working guard. Without `actor`, the actor guard
-    /// compares the credential with nothing. At a git hook or in a scan no `gh`
-    /// invocation is about to run. Before a command that is not `gh`, what is
-    /// judged -- a GitHub credential, a GitHub merge subject -- is something
-    /// that command never sends. And under any scope but `always` the rule
-    /// would stand down by the table's `public-target` at a private
-    /// destination, where a write under the wrong account and a merge commit
-    /// with no subject are the same failure they are anywhere else.
+    /// declaration of a working guard. With no `actor` it compares the
+    /// credential with nothing. At a git hook or in a scan no `gh` write is
+    /// about to happen. Before a command that is not `gh`, a GitHub App's login
+    /// would be held against a credential that command never sends. And under
+    /// any scope but `always` it would stand down by the table's
+    /// `public-target` at a private destination -- where a write authored
+    /// under the wrong account is the same failure, and where finding out
+    /// whether the destination is public is itself a forge call made with the
+    /// very credential in question.
     fn validate_invocation_guard(&self, name: &str) -> Result<()> {
         let id = &self.id;
-        let (judges, scope_reason) = if name == "prevent-actor-mismatch" {
-            (
-                "the GitHub credential `gh` sends",
-                "Whose credential a write runs under does not depend on whether the \
-                 destination is public, and a table's `public-target` would stand this \
-                 rule down at every private repository -- after asking the forge, with \
-                 the very credential in question, whether it is public",
-            )
-        } else {
-            (
-                "the merge commit subject `gh` sends",
-                "A merge commit with no subject is the same defect on a private \
-                 repository's default branch as on a public one, and a table's \
-                 `public-target` would stand this rule down at every private repository",
-            )
-        };
-        if name == "prevent-actor-mismatch" && self.actor().is_none() {
+        let judges = "the GitHub credential `gh` sends";
+        let scope_reason = "Whose credential a write runs under does not depend on whether the \
+                            destination is public, and a table's `public-target` would stand \
+                            this rule down at every private repository -- after asking the \
+                            forge, with the very credential in question, whether it is public";
+        if self.actor().is_none() {
             return Err(Fatal::new(format!(
                 "rule {id:?}: {name:?} holds every `gh` write to one GitHub App, and \
                  `actor` is the App: `actor = \"example-app[bot]\"`, the bot login \

@@ -829,18 +829,29 @@
   {
     "commands": [
       "gh",
-      "git push"
+      "git push",
+      "gh pr merge",
+      "gh api"
     ],
     "rules": [
       {
-        "builtin": "no-empty-merge-subject",
         "command": {
           "before": [
-            "gh"
+            "gh pr merge",
+            "gh api"
           ],
           "scope": "always"
         },
-        "id": "no-empty-merge-subject"
+        "id": "no-empty-merge-subject",
+        "message": "Give the merge commit a subject, or leave the subject off so the forge writes\nthe pull request's title. A subject that is empty or whitespace once the\nforge's ` (#N)` is appended writes ` (#N)` and nothing else onto the base\nbranch.\n",
+        "require_regexp": "^\\s*(?:[^\\s(]|\\((?:[^#]|$|#(?:[^0-9]|$|[0-9]+(?:[^0-9)]|$|\\)\\s*\\S))))",
+        "seams": [
+          "shim",
+          "text"
+        ],
+        "subjects": [
+          "title"
+        ]
       },
       {
         "builtin": "text-literals",

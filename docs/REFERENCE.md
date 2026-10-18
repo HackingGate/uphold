@@ -123,7 +123,7 @@ Absent means where the kind runs today:
 | kind | default | may name |
 |---|---|---|
 | `prose_regexp` | `shim`, `hook`, `text` | any of the three |
-| `regexp`, `require_regexp` | `shim` | `shim`, `hook` |
+| `regexp`, `require_regexp` | `shim` | `shim`, `hook`, `text` |
 
 The field needs `command.before`, which is what makes a rule a published-text
 rule, and it is refused on any other kind: a guard and an `exec` checker run
@@ -135,6 +135,14 @@ The case it exists for is the one above. Written as a `prose_regexp` rule so the
 hook would reach it, the rule also ran at `--text`, so a commit message that
 only *mentions* `gh release create` was refused. Leaving `text` out of `seams`
 keeps it at the two seams that publish.
+
+**At the text seam, a pattern rule is handed two subjects**: the text, as kind
+`text`, and its first line, as kind `title` (reported as `in subject line`).
+The first line as git stores it and `git log --format=%B` prints it, so a
+message whose subject is blank is judged as one; a blank line before the
+subject that git's cleanup would drop at `commit-msg` is not dropped here.
+Guards and prose rules at that seam are unchanged: they still read the whole
+text as prose.
 
 **At the hook, a pattern rule is handed two subjects**: the call's strings, as
 kind `text`, and the tool's name, as kind `tool`. The tool name is the hook's
@@ -587,7 +595,7 @@ it refuses** so the name predicts the rule list:
 | `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |
 | `private-names` | a private organization or repository named in a commit message, a staged diff, or the tracked tree of a **public** repository — **installs five stages**, and refuses to run until the repository says whether it is published |
 | `stale-visibility` | a policy declaring `private` over a repository the forge serves as **public** — **installs `pre-push` and `manual`**, and reaches the network. Refuses that one direction only; it can never confirm privacy |
-| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push — and, as `unowned-forge-target`, a `gh` invocation bound for a repository this workspace does not own, which refuses to run until the repository says who it is, and, as `no-empty-merge-subject`, a merge that would write a blank commit subject. **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [the set's command ceiling](#what-a-bundled-set-may-install) |
+| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push — and, as `unowned-forge-target`, a `gh` invocation bound for a repository this workspace does not own, which refuses to run until the repository says who it is, and, as `no-empty-merge-subject`, a merge commit subject that is blank once the forge's ` (#N)` is taken off, at the shim and over a message given to `--text` — see [a merge with no subject](#a-merge-with-no-subject). **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [the set's command ceiling](#what-a-bundled-set-may-install) |
 | `prose-shapes` | four sentence shapes that carry nothing — a sentence announcing what the next one will say, a clause behind a dash restating the one in front of it, a hedge admitting no uncertainty, an objection nobody raised being answered. **Installs no git hook**: its rules run in `uphold scan` and at the shim seam (`gh`, `git push`), and like `published-text` it refuses to load until the repository has declared the `[[shim]]` tables itself. `UPHOLD_ALLOW=<rule-id>` is the waiver for the sentence a rule is wrong about |
 
 The nine sets from `commit-message-residue` through `stale-visibility` install
@@ -1502,7 +1510,6 @@ stamped on it, the range about to be pushed.
 | `prevent-public-push` | a push to somewhere off the allow-list **and off the forge's own answer** — a GitHub destination the allow-list refused is put to `gh`, and a forge that could not be asked is exit `2` |
 | `prevent-unowned-target` | a **command** told to publish to a repository this workspace does not own. The same decision as the row above, reached from the shim seam instead of a hook — so it registers with `command.before` and never `git.hooks`, and a destination it could not resolve is exit `2`. Carried by `published-text` as `unowned-forge-target`, with `owner_required` and `command.scope = "always"` in the bundled declaration |
 | `prevent-actor-mismatch` | a `gh` **write** about to run as anybody but the GitHub App the rule's `actor` names: no token in reach, so `gh` would use the login it stores; a personal token by its prefix; or an installation token the forge says is another App's. Registers with `command.before = ["gh"]` and `command.scope = "always"`, and is opt in: no bundled set declares it. See [who a write runs as](#who-a-write-runs-as) |
-| `no-empty-merge-subject` | a **merge** that would write a commit subject that is empty or whitespace: `commit_title` on a `gh api` call to a pull request's `merge` endpoint, in every field form (`-f`, `-F`, `--raw-field`, `--field`, `--input`); a `commitHeadline` on a `gh api graphql` merge, written in the query or given as a variable; and `gh pr merge --subject " "`. `gh pr merge --subject ""` and a subject left off are allowed, since `gh` sends no headline for either and the forge writes the pull request's title. The body is not judged. Carried by `published-text` with `command.scope = "always"`. See [a merge with no subject](#a-merge-with-no-subject) |
 | `no-local-merge` | a merge that would make a merge commit |
 | `no-merge-commit` | a commit finishing a merge or a squash merge |
 | `no-stale-hook-pins` | a pin naming no ref, or a branch — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree — and a lefthook ref left behind its upstream. Whether a pre-commit `rev:` is the newest tag is `prek update --check`'s, run as the consumer's own `prek-pins-current` hook; a pin it **could not check** is exit `2` |
@@ -2729,51 +2736,54 @@ A bulk merge wrote ninety-five squash commits onto a default branch whose
 whole subject was ` (#N)`: each was handed an empty subject, and the forge
 appended the pull-request number to nothing. Every text guard passed them,
 because a guard judges what text says and an empty string says nothing.
-`no-empty-merge-subject` asks whether there is any subject at all, of the one
-invocation that writes a commit onto the base branch with no local hook in the
-way.
 
-**No declaration.** `published-text` carries it, so every repository that
-inherits that set has it:
+`no-empty-merge-subject` is one pattern rule in `published-text`, reached from
+two seams. Every repository that inherits the set has it, with nothing
+declared:
 
 ```toml
 [rule.no-empty-merge-subject]
-builtin = "no-empty-merge-subject"
-command.before = ["gh"]
+require_regexp = '^\s*(?:[^\s(]|\((?:[^#]|$|#(?:[^0-9]|$|[0-9]+(?:[^0-9)]|$|\)\s*\S))))'
+subjects = ["title"]
+seams = ["shim", "text"]
+command.before = ["gh pr merge", "gh api"]
 command.scope = "always"
 ```
 
-**What it refuses** is a subject the forge would be sent that is empty or ASCII
-whitespace alone. A character that draws nothing is not blank: it is
-`prevent-unusual-unicode`'s to judge, and calling it empty would hide it from
-that rule.
+**The id is a contract.** A caller that relies on this verdict names the rule
+and checks that it is in force: `uphold rules --effective --json` lists it with
+`"seams": ["shim", "text"]`, and a policy that does not inherit `published-text`
+does not have it.
 
-| the invocation | refused when |
+**Blank** is empty or whitespace (Unicode `\s`) once one trailing ` (#N)` is
+taken off, because that suffix is what the forge appends to a squash subject: a
+commit whose subject is ` (#N)` was given nothing. The pattern is a
+`require_regexp`, so an empty subject is judged at all; it reads as alternatives
+on the first character that is not whitespace, which must be one that cannot
+open the suffix, or an `(` that does not go on as `#`, digits and `)` to the end
+of the line. A character that draws nothing is not whitespace and passes; it is
+`prevent-unusual-unicode`'s to judge.
+
+| seam | the subject it judges |
 |---|---|
-| `gh api` to `repos/{owner}/{repo}/pulls/{number}/merge` | `commit_title` is empty or whitespace, by `-f`, `--raw-field`, `-F`, `--field` (a `@file` read whole), or as a top-level string of the `--input` document. The API sends what it is handed, so an empty title is an empty subject; this, or another client, is the likely road the ninety-five took |
-| `gh api graphql` | a `commitHeadline` argument (on `mergePullRequest`, or `enablePullRequestAutoMerge`, which merges with it later) is empty or whitespace, written in the query as a string or block string (escapes decoded, so `"\u0020"` is whitespace), or as a `$variable` given by `-f`/`-F` or by the `variables` of an `--input` document |
-| `gh pr merge` | a title flag of the verb (`-t`, `--subject`, as the `[[shim]]` table names them) is whitespace. An **exactly empty** one is allowed: `gh` sends no headline for it — cli/cli v2.102.0, `pkg/cmd/pr/merge/http.go:68`, `if payload.commitSubject != "" { input.CommitHeadline = ... }` — and the forge writes the pull request's title, as if the flag were absent. Refusing it would guard nothing |
+| the shim, `gh pr merge` | the verb's title flags (`-t`, `--subject`, as the `[[shim]]` table names them), and the subject the forge would compose where none is sent. An **exactly empty** `--subject ""` is not sent and is not judged: cli/cli v2.102.0, `pkg/cmd/pr/merge/http.go:68`, is `if payload.commitSubject != "" { input.CommitHeadline = ... }`, so the forge writes the pull request's title as if the flag were absent. The shim drops it where it reads what `gh` sends; the rule makes no exception for it. A subject of whitespace is sent, and refused |
+| the shim, `gh api` | every title field the call sends: `commit_title` on `repos/{owner}/{repo}/pulls/{number}/merge` in every field form (`-f`, `--raw-field`, `-F`, `--field` with a `@file` read whole, a top-level string of `--input`), sent as written, so an exactly empty one is an empty subject; and a GraphQL `commitHeadline` (on `mergePullRequest`, or `enablePullRequestAutoMerge`) written in the query as a string or block string, escapes decoded, or as a `$variable` given by `-f`/`-F` or an `--input` document's `variables`. The shim's kinds do not tell a pull request's title from a commit's subject, so a blank `title` on any `gh api` call is refused too; the forge refuses a blank title on every object that has one |
+| `uphold guard --text` and `uphold scan --text` | the first line of the text, so `git log -1 --format=%B \| uphold guard --text -` gets the verdict the merge would have got |
 
-**What it allows.** A subject left off: the forge then writes its own, which is
-the pull request's title. **Every body**, empty included: `--body ""`, an empty
-`--body-file`, an empty `commit_message` — an empty squash body is how GitHub's
-list of the branch's commits is left out of it, which is a deliberate and
-routine choice. A call to any other endpoint, such as clearing a pull
-request's title with `-f title=`, which is an edit and writes no merge commit.
+**Never judged:** the body, by any route — `--body ""`, an empty `--body-file`,
+an empty `commit_message` — because an empty squash body is how GitHub's list
+of the branch's commits is left out of it, which is deliberate; and a subject
+left off, which the forge writes as the pull request's title. A
+`commitHeadline` inside a variable holding the whole `input` object
+(`mergePullRequest(input: $input)`) is not read, because binding that variable
+to `input` is a GraphQL parser's job. A merge made in the web interface, by an
+MCP tool, by another API client, or by the real `gh` run by its full path never
+passes the shim, and holding it to a subject is a server-side ruleset's job;
+`--text` is how such a commit is judged after the fact.
 
-**What it does not read.** A `commitHeadline` inside a variable that carries the
-whole `input` object (`mergePullRequest(input: $input)`), since that is a JSON
-value whose binding to `input` only a GraphQL parser knows. A merge made in the
-web interface, by an MCP tool, by another API client, or by the real `gh` run
-by its full path never passes the shim; holding those to a subject is a
-server-side ruleset's job.
-
-The refusal names the invocation and which flag, field or argument gave the
-blank subject, and says to leave it off or write the subject; it ends with
-`Fix the text`, and `UPHOLD_ALLOW=no-empty-merge-subject` stands it down for one
-invocation. At load it is held to the same shape as `prevent-actor-mismatch`:
-`command.before` naming `gh` alone, `command.scope = "always"`, no hook and no
-`files.*`.
+The refusal is a pattern rule's: the rule id, the subject kind and where it was
+found, and the rule's message, ending at the shim with `Fix the text`.
+`UPHOLD_ALLOW=no-empty-merge-subject` stands it down for one invocation.
 
 ### The stand-downs
 

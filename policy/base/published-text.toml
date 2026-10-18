@@ -56,7 +56,10 @@
 # a rule here reaching for a command outside this list is refused at load, so
 # the set cannot quietly widen from `git push` to `git`.
 [set]
-commands = ["gh", "git push"]
+# `gh pr merge` and `gh api` for the merge-subject rule, which is narrower
+# than `gh` on purpose: a title is a merge's subject on those two and nothing
+# else here, and `gh release create --title ""` names a release by its tag.
+commands = ["gh", "git push", "gh pr merge", "gh api"]
 
 # Every literal rule the policy declares, plus the running-host fallback --
 # username, home path, hostname -- searched for in the text. The fallback runs
@@ -159,21 +162,44 @@ command.scope = "always"
 # suffix appended to nothing -- and every text guard here passed each of them,
 # because a guard judges what text says and an empty string says nothing.
 #
-# In the set and not left to each repository to declare, because no
-# repository means it: a declaration nobody would write differently is one
-# nobody should have to write. It refuses a subject that was GIVEN and is
-# blank and that the forge would be sent: `commit_title` on a `gh api` call to
-# a pull request's merge endpoint, empty or whitespace, `commitHeadline` on a
-# `gh api graphql` merge, and `gh pr merge --subject " "`. `gh pr merge
-# --subject ""` is not refused, because `gh` sends no headline for an empty
-# one and the forge writes the pull request's title; a flag left off is the
-# same. The body is not judged: an empty squash body is how GitHub's list of
-# the branch's commits is left out of it, and that is deliberate.
+# ONE RULE BODY, TWO SEAMS. At the shim it reads the title subjects of a merge:
+# `gh pr merge --subject`, and on `gh api` the `commit_title` of a REST merge
+# and the `commitHeadline` of a GraphQL one (and, there, any other title the
+# call carries -- the shim's kinds do not tell a pull request's title from a
+# commit's subject, and the forge refuses a blank title on every object that
+# has one). At `uphold guard --text` and `uphold scan --text` it reads the
+# subject line of the message it is handed, so `git log -1 --format=%B |
+# uphold guard --text -` gets the verdict the merge would have got. The id is
+# a contract: a caller that relies on this verdict names it, and finds it in
+# `uphold rules --effective --json` with `seams` listing `shim` and `text`.
 #
-# `command.scope = "always"`, for the reason the rule above gives in its own
-# words: an empty subject on a private repository's default branch is the
-# same defect, and `public-target` would stand the rule down there.
+# Blank is empty or whitespace once a trailing ` (#N)` is taken off, because
+# that suffix is what the forge appends to a squash subject: a commit whose
+# subject is ` (#N)` was given nothing. `require_regexp`, so an empty subject
+# is judged at all: the subject must have something on it before that suffix.
+# Read as alternatives on the first character that is not whitespace -- a
+# character that cannot open the suffix; or an `(` that does not go on as
+# `#`, digits and `)` to the end of the line.
+#
+# What the forge is not sent is not judged, and the shim takes it out rather
+# than this rule making an exception: `gh pr merge --subject ""` sends no
+# headline (cli/cli v2.102.0, pkg/cmd/pr/merge/http.go:68) and the forge writes
+# the pull request's title. The body is never judged: an empty squash body is
+# how GitHub's list of the branch's commits is left out of it, which is
+# deliberate.
+#
+# In the set and not left to each repository to declare, because no
+# repository means it. `command.scope = "always"`: an empty subject on a
+# private repository's default branch is the same defect.
 [rule.no-empty-merge-subject]
-builtin = "no-empty-merge-subject"
-command.before = ["gh"]
+message = """
+Give the merge commit a subject, or leave the subject off so the forge writes
+the pull request's title. A subject that is empty or whitespace once the
+forge's ` (#N)` is appended writes ` (#N)` and nothing else onto the base
+branch.
+"""
+require_regexp = '^\s*(?:[^\s(]|\((?:[^#]|$|#(?:[^0-9]|$|[0-9]+(?:[^0-9)]|$|\)\s*\S))))'
+subjects = ["title"]
+seams = ["shim", "text"]
+command.before = ["gh pr merge", "gh api"]
 command.scope = "always"

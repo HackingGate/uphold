@@ -425,10 +425,13 @@ and of a forge probe it is handed, so every branch is reached without a
 network; the probe the shim hands it is `gh` itself, which resolves the same
 credential the write will use. A refusal there ends the run: no text or
 destination answer makes a write under the wrong account publishable.
-`guard::merge_subject` is judged at the same point, from the merge subjects
-the shim read off `gh pr merge`, a REST merge call or a GraphQL merge, because
-"would a blank subject be sent" is a question about the invocation's fields,
-and about what `gh` itself drops, not about any text a guard can read.
+The merge-subject check is not code. It is one `require_regexp` rule in
+`published-text`, named at two seams: the shim hands it the title subjects it
+collected, after taking out what `gh` itself does not send, and the text seams
+hand a pattern rule that names them the message's first line as a `title`. So
+the predicate exists once, and a caller that needs the same verdict over a
+commit already written pipes its message to `uphold guard --text` instead of
+copying the pattern.
 
 The command grammar and collection remain in `shim`; they do not evaluate
 policy. `shim::checker` evaluates one selected rule against one subject, with

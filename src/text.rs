@@ -128,8 +128,9 @@ pub(crate) enum Judged {
     /// `regexp` and `require_regexp`. Scoped by `include` and `glob` to
     /// particular paths and file types, so firing one at text that has no path
     /// would be guesswork -- and a guard that guesses gets turned off. The one
-    /// seam that runs them is the shim, where the invocation itself names the
-    /// subject the rule was written about.
+    /// seam that runs them by default is the shim, where the invocation itself
+    /// names the subject the rule was written about; the hook and the text
+    /// seams run one only where its `seams` names them.
     Patterns,
     /// The `exec` checkers: a subject on stdin, an exit status back. Also the
     /// shim's alone, and for the same reason.
@@ -202,12 +203,15 @@ impl Seam {
             // The literal rules because they read the running host, and the
             // prose rules because a shape refused in the pull-request body
             // announcing a commit is refused in the commit message too.
-            Self::Scan => &[Judged::Literals, Judged::Prose],
+            // And the pattern rules whose `seams` names `text`, over the text and
+            // its subject line -- see [`Seam::runs_by_default`] and
+            // `patterns_over`.
+            Self::Scan => &[Judged::Literals, Judged::Prose, Judged::Patterns],
             // The guards, and the prose rules for the same reason. Not the
             // literal rules directly: a policy reaches those from here through
             // the `text-literals` built-in, which is a guard, and running them
             // twice would report each finding under two ids.
-            Self::Guard => &[Judged::Guards, Judged::Prose],
+            Self::Guard => &[Judged::Guards, Judged::Prose, Judged::Patterns],
             // No process to intercept and no `text-literals` declaration to
             // lean on -- this is reached from wherever a session was started,
             // frequently with no policy at all -- so it asks the literal rules
@@ -244,10 +248,11 @@ impl Seam {
     /// front of a command was written about the subjects a shim collects -- a
     /// title, a ref, a command line -- and every such rule written before
     /// `seams` existed ran at the shim alone. Running it over every tool call
-    /// the hook sees would be a refusal nobody asked for on an upgrade, so the
-    /// hook runs a pattern rule only where the rule names it.
+    /// the hook sees, or every message piped to `--text`, would be a refusal
+    /// nobody asked for on an upgrade, so every seam but the shim runs a
+    /// pattern rule only where the rule names it.
     pub(crate) fn runs_by_default(self, judged: Judged) -> bool {
-        self.consults(judged) && !matches!((self, judged), (Self::Hook, Judged::Patterns))
+        self.consults(judged) && (self == Self::Command || judged != Judged::Patterns)
     }
 
     /// What a rule's `seams` list calls this seam. The two `--text` seams are
@@ -535,8 +540,8 @@ pub(crate) fn judged(
                 Ok(())
             }
             Judged::Prose => crate::prose::over_text(policy, seam, whole, &subject, ledger),
-            // Only the hook consults these here, and only the rules whose
-            // `seams` names it -- see `Seam::runs_by_default`.
+            // The hook and the text seams consult these here, and only the
+            // rules whose `seams` names them -- see `Seam::runs_by_default`.
             Judged::Patterns => patterns_over(
                 policy,
                 seam,
@@ -635,9 +640,27 @@ fn patterns_over(
     // The shim runs its pattern rules itself, over the subjects it collected,
     // and never through this function; were it ever handed here, running its
     // rules over one pathless blob is the guess this module exists to refuse.
-    if seam != Seam::Hook {
+    if seam == Seam::Command {
         return Ok(());
     }
+    // At the text seams the text is a message, and its subject line is a
+    // title, as `--subject` is at the shim: what a rule about merge subjects
+    // reads in a commit a squash merge already wrote. The FIRST line, as git
+    // stores it and `git log --format=%B` prints it -- not the first line with
+    // something on it, which is what git's cleanup would make the subject of a
+    // message still being written, but which a stored commit whose subject is
+    // blank does not have. Empty text is an empty subject, judged as one.
+    let subject_line = matches!(seam, Seam::Scan | Seam::Guard).then(|| Headline {
+        label: String::from("subject line"),
+        text: text
+            .unwrap_or_default()
+            .split('\n')
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches('\r')
+            .to_owned(),
+    });
+    let headlines = headlines.iter().chain(subject_line.as_ref());
     // Each with the label a report names it by: the kind alone for the call's
     // own two, the key for a headline, so a finding says which field it was in.
     let mut subjects = Vec::new();
@@ -661,7 +684,7 @@ fn patterns_over(
             },
         ));
     }
-    subjects.extend(headlines.iter().map(|headline| {
+    subjects.extend(headlines.map(|headline| {
         (
             Some(headline.label.as_str()),
             crate::shim::Subject {

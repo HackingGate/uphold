@@ -495,11 +495,19 @@ const CORPUS: &[Case] = &[
 /// Named rather than skipped silently: an uncovered rule that nobody wrote down
 /// is indistinguishable from one somebody forgot, and the completeness check
 /// below reads this list as the whole of the exemption.
-const ELSEWHERE: &[(&str, &str)] = &[(
-    "no-running-os-identity-metadata",
-    "its literals are read off the running machine at scan time, so a committed sample \
+const ELSEWHERE: &[(&str, &str)] = &[
+    (
+        "no-running-os-identity-metadata",
+        "its literals are read off the running machine at scan time, so a committed sample \
          cannot express them -- tests/scan_cli.rs drives it with a planted identity",
-)];
+    ),
+    (
+        "no-empty-merge-subject",
+        "it reads a merge's title subjects at the shim and a message's subject line at \
+         `--text`, and never a file, so a sample the scan reads judges nothing -- \
+         tests/shim_cli.rs drives one table of subjects through both seams",
+    ),
+];
 
 fn repository(policy: &str) -> PathBuf {
     let root = support::scratch("corpus");
