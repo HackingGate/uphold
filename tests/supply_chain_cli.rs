@@ -2277,6 +2277,279 @@ fn a_waiver_without_a_reason_or_a_version_is_refused_at_load() {
     }
 }
 
+// ── a nested repository's own waivers ──
+
+/// guarddog's report on `left-pad` 1.3.0 with one `typosquatting` risk, for
+/// whichever manifest it is run in: every manifest in these fixtures depends
+/// on it, so which of them pass is decided by the waivers alone.
+const GUARDDOG_TYPOSQUAT: &str = "echo '[{\"dependency\":\"left-pad\",\"result\":\
+    {\"errors\":{},\"issues\":1,\"results\":{},\"package_version\":\"1.3.0\",\
+    \"risks\":[{\"name\":\"typosquatting\",\"severity\":\"high\"}]}}]'\nexit 0";
+
+/// A manifest depending on `left-pad` 1.3.0 at `directory`.
+fn depending_on_left_pad(root: &Path, directory: &str) {
+    write(
+        root,
+        &format!("{directory}/package.json"),
+        "{\"name\": \"web\", \"dependencies\": {\"left-pad\": \"1.3.0\"}}\n",
+    );
+}
+
+/// A `[[supply_chain.waive]]` row for `typosquatting` on `package`.
+fn typosquat_waiver(package: &str, reason: &str) -> String {
+    format!(
+        "\n[[supply_chain.waive]]\nscanner = \"guarddog\"\npackage = \"{package}\"\n\
+         check = \"typosquatting\"\nreason = \"{reason}\"\n"
+    )
+}
+
+/// A repository nested in `root` at `directory`, in a submodule's shape: a
+/// `.git` FILE pointing into the superproject, which is what `git submodule`
+/// leaves where a clone has a directory. `policy` is its policy file's text,
+/// at `policy/principles.toml`, or no policy at all.
+fn nested_repository(root: &Path, directory: &str, policy: Option<&str>) {
+    write(
+        root,
+        &format!("{directory}/.git"),
+        &format!("gitdir: ../.git/modules/{directory}\n"),
+    );
+    if let Some(policy) = policy {
+        write(root, &format!("{directory}/policy/principles.toml"), policy);
+    }
+}
+
+/// The `guarddog npm` refusal for a manifest at `directory` under `root`.
+fn refused_at(root: &Path, directory: &str) -> String {
+    format!(
+        "FAILED: guarddog npm: {}: guarddog objected to left-pad@1.3.0",
+        root.join(directory).display()
+    )
+}
+
+/// The live case: a submodule whose own policy waives a confirmed false
+/// positive in its own manifest. Scanned from the superproject, that finding
+/// is judged by the submodule's row, and the line that lets it through names
+/// the submodule's policy file, so whose decision it was is on the line.
+///
+/// A nested repository with no policy changes nothing, which is the first run.
+#[test]
+fn a_nested_repositorys_own_waiver_covers_its_manifests_and_names_its_policy() {
+    let root = repository();
+    depending_on_left_pad(&root, "leaf/web");
+    nested_repository(&root, "leaf", None);
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
+
+    let refused = supply(&root, Some(&tools));
+    assert_eq!(code(&refused), 1, "{}", text(&refused));
+    assert!(
+        text(&refused).contains(&refused_at(&root, "leaf/web")),
+        "{}",
+        text(&refused)
+    );
+
+    nested_repository(
+        &root,
+        "leaf",
+        Some(&typosquat_waiver(
+            "npm:left-pad@1.3.0",
+            "the leaf judged it",
+        )),
+    );
+    let waived = supply(&root, Some(&tools));
+    let said = text(&waived);
+    assert_eq!(code(&waived), 0, "{said}");
+    assert!(
+        said.contains(&format!(
+            "waived (leaf/policy/principles.toml): typosquatting on npm:left-pad@1.3.0 at {} \
+             -- the leaf judged it",
+            root.join("leaf/web").display()
+        )),
+        "{said}"
+    );
+    assert!(!said.contains("waiver matched nothing"), "{said}");
+    assert!(said.contains("all checks passed"), "{said}");
+}
+
+/// The other half of the boundary. The same row that excuses the leaf's own
+/// manifest excuses neither the superproject's nor a sibling submodule's, so
+/// one repository's policy cannot pass a finding in a tree it does not own.
+/// The sibling has a policy of its own, without the row, so what is tested is
+/// whose row it is and not whether a policy is there at all.
+#[test]
+fn a_nested_repositorys_waiver_never_covers_the_superprojects_or_a_siblings_manifests() {
+    let root = repository();
+    for directory in ["web", "leaf/web", "sibling/web"] {
+        depending_on_left_pad(&root, directory);
+    }
+    nested_repository(
+        &root,
+        "leaf",
+        Some(&typosquat_waiver(
+            "npm:left-pad@1.3.0",
+            "the leaf judged it",
+        )),
+    );
+    nested_repository(&root, "sibling", Some("allowed_scripts = [\"Latin\"]\n"));
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
+    let output = supply(&root, Some(&tools));
+    let said = text(&output);
+    assert_eq!(code(&output), 1, "{said}");
+    assert!(said.contains(&refused_at(&root, "web")), "{said}");
+    assert!(said.contains(&refused_at(&root, "sibling/web")), "{said}");
+    assert!(!said.contains(&refused_at(&root, "leaf/web")), "{said}");
+    assert_eq!(
+        said.matches("waived (leaf/policy/principles.toml)").count(),
+        1,
+        "{said}"
+    );
+}
+
+/// `policy/rg-policy.toml` is a policy `uphold` loads, so it is one here too:
+/// the nested repository's file is found by the command's own discovery, not
+/// by a second list of names.
+#[test]
+fn a_nested_repositorys_policy_is_found_under_every_name_uphold_loads() {
+    let root = repository();
+    depending_on_left_pad(&root, "leaf");
+    nested_repository(&root, "leaf", None);
+    write(
+        &root,
+        "leaf/policy/rg-policy.toml",
+        &typosquat_waiver("npm:left-pad@1.3.0", "the leaf judged it"),
+    );
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
+    let output = supply(&root, Some(&tools));
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(
+        said.contains("waived (leaf/policy/rg-policy.toml)"),
+        "{said}"
+    );
+}
+
+/// A root row that only ever repeats the nested repository's own is a copy of
+/// it, and is named as one: the run says which file decides and that the copy
+/// can go, which is what removing the copies fleets made before this needs.
+/// The root's line format for a row that does the work is unchanged.
+#[test]
+fn a_root_row_that_repeats_a_nested_repositorys_own_is_named_as_a_removable_copy() {
+    let root = repository();
+    depending_on_left_pad(&root, "leaf/web");
+    nested_repository(
+        &root,
+        "leaf",
+        Some(&typosquat_waiver(
+            "npm:left-pad@1.3.0",
+            "the leaf judged it",
+        )),
+    );
+    let path = root.join("policy/principles.toml");
+    let policy = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        format!(
+            "{policy}{}",
+            typosquat_waiver("npm:left-pad@1.3.0", "copied up")
+        ),
+    )
+    .unwrap();
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
+    let output = supply(&root, Some(&tools));
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(
+        said.contains("waived (leaf/policy/principles.toml)"),
+        "{said}"
+    );
+    assert!(!said.contains("copied up"), "{said}");
+    assert!(
+        said.contains(
+            "waiver repeats leaf/policy/principles.toml: typosquatting on npm:left-pad@1.3.0 \
+             -- the repository that owns the manifest waives it in its own policy, so this \
+             copy can be removed"
+        ),
+        "{said}"
+    );
+    assert!(!said.contains("waiver matched nothing"), "{said}");
+
+    // Where the same row also does work of its own -- a manifest of the
+    // superproject's -- it is no copy, and nothing is said about it.
+    depending_on_left_pad(&root, "web");
+    let working = supply(&root, Some(&tools));
+    let also = text(&working);
+    assert_eq!(code(&working), 0, "{also}");
+    assert!(
+        also.contains(&format!(
+            "waived: typosquatting on npm:left-pad@1.3.0 at {} -- copied up",
+            root.join("web").display()
+        )),
+        "{also}"
+    );
+    assert!(!also.contains("waiver repeats"), "{also}");
+}
+
+/// A nested repository's row that matched nothing is left to that
+/// repository's own scan, which reports it and is the one that can act on it.
+/// The superproject does not write that file, and a second reporter of the
+/// same stale row is a second voice for one fact.
+#[test]
+fn a_nested_repositorys_unmatched_waiver_is_reported_by_its_own_scan_alone() {
+    let root = repository();
+    depending_on_left_pad(&root, "leaf/web");
+    nested_repository(
+        &root,
+        "leaf",
+        Some(&typosquat_waiver("npm:left-pad@1.2.0", "an older release")),
+    );
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
+
+    let from_above = supply(&root, Some(&tools));
+    let above = text(&from_above);
+    assert_eq!(code(&from_above), 1, "{above}");
+    assert!(above.contains(&refused_at(&root, "leaf/web")), "{above}");
+    assert!(!above.contains("waiver matched nothing"), "{above}");
+
+    let leaf = root.join("leaf");
+    let own = supply(&leaf, Some(&tools));
+    let inside = text(&own);
+    assert_eq!(code(&own), 1, "{inside}");
+    assert!(
+        inside.contains("waiver matched nothing in this run: typosquatting on npm:left-pad@1.2.0"),
+        "{inside}"
+    );
+}
+
+/// A nested policy that will not load leaves its manifests unjudged, as
+/// could-not-look naming the repository and the loader's own refusal. It is
+/// never read as "no waivers", which would refuse on a guess about findings
+/// its owner may have accepted. guarddog is not run there, and a manifest
+/// outside that repository is still judged.
+#[test]
+fn a_nested_policy_that_will_not_load_is_not_checked_rather_than_no_waivers() {
+    let root = repository();
+    depending_on_left_pad(&root, "leaf/web");
+    nested_repository(&root, "leaf", Some("this is not = = toml\n"));
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        ("guarddog", &recording(GUARDDOG_CLEAN)),
+    ]);
+    let output = supply(&root, Some(&tools));
+    let said = text(&output);
+    assert_eq!(code(&output), 2, "{said}");
+    assert!(said.contains("NOT CHECKED"), "{said}");
+    assert!(
+        said.contains(&format!(
+            "the guarddog findings at {} were not judged: {} is a repository with a policy of \
+             its own",
+            root.join("leaf/web").display(),
+            root.join("leaf").display()
+        )),
+        "{said}"
+    );
+    assert!(said.contains("leaf/policy/principles.toml"), "{said}");
+    assert!(!journal(&root).contains("guarddog"), "{}", journal(&root));
+}
+
 // ── direct references: git sources, URLs and paths guarddog cannot look up ──
 
 /// A repository whose policy declares `owner = "example-org"`.

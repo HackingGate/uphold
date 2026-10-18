@@ -3652,6 +3652,33 @@ reason = "compares optional extras against the required dependencies"
   reported without the advice to remove it, because whether that check reaches
   the release's manifest depends on the host's filesystem
   ([above](#where-guarddog-unpacks)); another host may still need it.
+- **A nested repository's own waivers cover its own manifests.** Scanned from
+  a superproject, a manifest inside a submodule, or inside any directory that
+  is a repository root with a policy, is judged against the root's waivers and
+  that repository's `[[supply_chain.waive]]` rows. The policy is the one
+  `uphold` would load if run in that directory: the same `policy/principles.toml`
+  or `policy/rg-policy.toml`, the same boundary at `.git`, the same loader with
+  its `[inherit]`. Where repositories nest, the nearest one with a policy
+  decides; one without a policy is passed over. Its rows never cover the
+  superproject's own manifests or a sibling's. The line names whose row it was:
+
+  ```
+     waived (leaf/policy/principles.toml): typosquatting on npm:left-pad@1.3.0 at <dir> -- <reason>
+  ```
+
+  The nested row is consulted first. A root row that would also have covered
+  the risk is then a copy of it, and where that is all it did, the run says so,
+  rather than calling it a match:
+
+  ```
+     waiver repeats leaf/policy/principles.toml: typosquatting on npm:left-pad@1.3.0 -- the repository that owns the manifest waives it in its own policy, so this copy can be removed
+  ```
+
+  A nested repository's row that matched nothing is not reported by the
+  superproject. That repository's own scan reports it, and that repository is
+  the one that can remove it. A nested policy that does not load leaves its
+  manifests unchecked, which is could-not-look and exit `2` naming the
+  repository and the loader's error. It is never read as having no waivers.
 - `scanner` is `guarddog` alone. The other scanners carry their own
   suppression in their own configuration (`osv-scanner.toml`, `deny.toml`,
   zizmor's config, cargo-vet's audits), and a second list here would be two

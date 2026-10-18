@@ -507,7 +507,25 @@ fn run() -> Result<Exit> {
                 }
                 supply::scope_for_push(&root, &push.refs)?
             };
-            supply::run(&root, &scope, secrets, &loaded)
+            // A repository nested in this tree -- a submodule, a vendored clone
+            // with its own `.git` -- keeps its own waivers for its own
+            // manifests, and they are found here the way `uphold` run inside it
+            // would find them: the same boundary, the same file names, the same
+            // loader with its `[inherit]`. Asked only of a directory that IS a
+            // repository root, because `discover` from anywhere else climbs, and
+            // the climb would land on this root's policy or another
+            // repository's.
+            let nested = |directory: &Path| -> Result<Option<(PathBuf, config::Policy)>> {
+                if !is_repository_root(directory) {
+                    return Ok(None);
+                }
+                discover(directory)
+                    .map(|(own, path)| {
+                        config::load(&own, &path).map(|own_policy| (path, own_policy))
+                    })
+                    .transpose()
+            };
+            supply::run(&root, &scope, secrets, &loaded, &nested)
         }
         "probe" => {
             let usage = || {
