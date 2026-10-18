@@ -162,16 +162,19 @@ command.scope = "always"
 # suffix appended to nothing -- and every text guard here passed each of them,
 # because a guard judges what text says and an empty string says nothing.
 #
-# ONE RULE BODY, TWO SEAMS. At the shim it reads the title subjects of a merge:
-# `gh pr merge --subject`, and on `gh api` the `commit_title` of a REST merge
-# and the `commitHeadline` of a GraphQL one (and, there, any other title the
-# call carries -- the shim's kinds do not tell a pull request's title from a
-# commit's subject, and the forge refuses a blank title on every object that
-# has one). At `uphold guard --text` and `uphold scan --text` it reads the
-# subject line of the message it is handed, so `git log -1 --format=%B |
-# uphold guard --text -` gets the verdict the merge would have got. The id is
-# a contract: a caller that relies on this verdict names it, and finds it in
-# `uphold rules --effective --json` with `seams` listing `shim` and `text`.
+# ONE RULE BODY, THREE SEAMS. At the shim it reads the title subjects of a
+# merge: `gh pr merge --subject`, and on `gh api` the `commit_title` of a REST
+# merge and the `commitHeadline` of a GraphQL one (and, there, any other title
+# the call carries -- the shim's kinds do not tell a pull request's title from
+# a commit's subject, and the forge refuses a blank title on every object that
+# has one). At `uphold hook` it reads the same keys out of an MCP tool call:
+# the `commit_title` of the GitHub MCP server's `merge_pull_request`, and any
+# other `title` or `subject` the call carries, for the same reason. At `uphold
+# guard --text` and `uphold scan --text` it reads the subject line of the
+# message it is handed, so `git log -1 --format=%B | uphold guard --text -`
+# gets the verdict the merge would have got. The id is a contract: a caller
+# that relies on this verdict names it, and finds it in `uphold rules
+# --effective --json` with `seams` listing `shim`, `hook` and `text`.
 #
 # Blank is empty or whitespace once a trailing ` (#N)` is taken off, because
 # that suffix is what the forge appends to a squash subject: a commit whose
@@ -181,12 +184,13 @@ command.scope = "always"
 # character that cannot open the suffix; or an `(` that does not go on as
 # `#`, digits and `)` to the end of the line.
 #
-# What the forge is not sent is not judged, and the shim takes it out rather
+# What the forge is not sent is not judged, and the seam takes it out rather
 # than this rule making an exception: `gh pr merge --subject ""` sends no
-# headline (cli/cli v2.102.0, pkg/cmd/pr/merge/http.go:68) and the forge writes
-# the pull request's title. The body is never judged: an empty squash body is
-# how GitHub's list of the branch's commits is left out of it, which is
-# deliberate.
+# headline (cli/cli v2.102.0, pkg/cmd/pr/merge/http.go:68), and an MCP
+# `commit_title` of "" is not sent either (github/go-github v92.0.0,
+# github/pulls.go:514, `omitempty`), so the forge writes the pull request's
+# title. The body is never judged: an empty squash body is how GitHub's list of
+# the branch's commits is left out of it, which is deliberate.
 #
 # In the set and not left to each repository to declare, because no
 # repository means it. `command.scope = "always"`: an empty subject on a
@@ -200,6 +204,6 @@ branch.
 """
 require_regexp = '^\s*(?:[^\s(]|\((?:[^#]|$|#(?:[^0-9]|$|[0-9]+(?:[^0-9)]|$|\)\s*\S))))'
 subjects = ["title"]
-seams = ["shim", "text"]
+seams = ["shim", "hook", "text"]
 command.before = ["gh pr merge", "gh api"]
 command.scope = "always"
