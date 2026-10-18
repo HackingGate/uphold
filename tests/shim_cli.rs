@@ -95,6 +95,13 @@ fn shim_with(root: &Path, args: &[&str], variables: &[(&str, &str)]) -> Output {
         .env_remove("GH_REPO")
         .env_remove("GH_HOST")
         .env_remove("GITLAB_GROUP")
+        // The credential `gh` would send is the subject of a guard here, so a
+        // token the test runner happens to export -- CI's own -- must not
+        // decide a case that did not set one.
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_ENTERPRISE_TOKEN")
+        .env_remove("GITHUB_ENTERPRISE_TOKEN")
         .envs(variables.iter().copied())
         .output()
         .unwrap()
@@ -8536,4 +8543,313 @@ fn a_refused_body_to_a_private_destination_leaves_no_trace_of_it_in_the_file() {
         .output()
         .unwrap();
     assert_eq!(code(&scan), 0, "{}", stderr(&scan));
+}
+
+// ── who a `gh` write runs as ─────────────────────────────────────────
+
+/// The declaration: every write the `gh` table matches runs as one App.
+///
+/// The table's own scope is `always` so no case needs a forge to say whether
+/// the destination is public; the rule writes `always` itself, as the loader
+/// requires of it.
+const ACTOR_POLICY: &str = r#"
+[rule.app-actor]
+builtin = "prevent-actor-mismatch"
+actor = "example-app[bot]"
+command.before = ["gh"]
+command.scope = "always"
+
+[[shim]]
+command = "gh"
+match = ["pr:create", "pr:comment", "pr:merge", "api:*"]
+text_flags = ["-b", "--body"]
+title_flags = ["-t", "--title"]
+target_flags = ["-R", "--repo"]
+target = "forge-repo"
+scope = "always"
+"#;
+
+/// A `gh` that answers the identity probe by the token in its environment,
+/// writes the probe's argv to `viewer-argv` in the fixture, and otherwise
+/// reports the call instead of making one.
+///
+/// The token decides because that is what the forge does. One per answer:
+/// the declared App, another App, a forge that cannot be reached, and a forge
+/// that answers with no login.
+fn stub_gh_viewer(root: &Path) {
+    stub(
+        root,
+        "gh",
+        &format!(
+            "#!/bin/sh\n\
+             case \"$*\" in\n\
+             *viewer*)\n\
+               printf '%s\\n' \"$*\" >> '{}'\n\
+               token=\"${{GH_TOKEN:-$GITHUB_TOKEN}}\"\n\
+               case \"$token\" in\n\
+               ghs_declared*) echo '{{\"data\":{{\"viewer\":{{\"login\":\"example-app[bot]\"}}}}}}' ;;\n\
+               ghs_other*) echo '{{\"data\":{{\"viewer\":{{\"login\":\"other-app[bot]\"}}}}}}' ;;\n\
+               ghs_garbled*) echo '{{\"data\":{{}}}}' ;;\n\
+               *) echo 'error connecting to api.github.com' >&2; exit 1 ;;\n\
+               esac ;;\n\
+             *) echo \"gh ran: $*\" ;;\n\
+             esac\n",
+            root.join("viewer-argv").display()
+        ),
+    );
+}
+
+/// The fixture for this section: the declaration, the stub, nothing asked yet.
+fn actor_workspace(policy: &str) -> PathBuf {
+    let root = workspace(policy);
+    stub_gh_viewer(&root);
+    root
+}
+
+/// What the identity probe was run with, one line per run.
+fn viewer_argv(root: &Path) -> Vec<String> {
+    std::fs::read_to_string(root.join("viewer-argv"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The write every case below attempts, unless it says otherwise.
+/// Both halves of the message are given, so the forge is not asked what it
+/// would compose: that lookup is the text guards' business, and the stub here
+/// answers only the identity probe.
+const MERGE: &[&str] = &[
+    "gh",
+    "pr",
+    "merge",
+    "1",
+    "--squash",
+    "-t",
+    "Fix the parser",
+    "-b",
+    "Ordinary body",
+];
+
+#[test]
+fn a_write_with_no_token_is_the_stored_personal_login_and_is_refused() {
+    // The incident, as it happened: plain `gh` in a workspace that declared
+    // its App, and `gh` falling back to the login it stores, which is the
+    // operator's. Refused without asking anybody.
+    let root = actor_workspace(ACTOR_POLICY);
+    let output = shim(&root, MERGE);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    let text = stderr(&output);
+    for says in [
+        "app-actor: `gh pr merge` would run as a personal login",
+        "neither GH_TOKEN nor GITHUB_TOKEN",
+        "run as example-app[bot]",
+        "change `actor` on rule \"app-actor\"",
+        "Nothing was published. Fix the credential, or override once with UPHOLD_ALLOW.",
+    ] {
+        assert!(text.contains(says), "{says:?} not in {text}");
+    }
+    assert!(viewer_argv(&root).is_empty(), "the forge was asked");
+}
+
+#[test]
+fn every_personal_token_kind_is_refused_without_asking_the_forge() {
+    let root = actor_workspace(ACTOR_POLICY);
+    for (variable, token, kind) in [
+        (
+            "GH_TOKEN",
+            "ghp_0123456789abcdef",
+            "classic personal access token",
+        ),
+        (
+            "GITHUB_TOKEN",
+            "github_pat_0123456789",
+            "fine-grained personal access token",
+        ),
+        ("GH_TOKEN", "gho_0123456789abcdef", "OAuth token"),
+        ("GH_TOKEN", "ghu_0123456789abcdef", "user-to-server token"),
+    ] {
+        let output = shim_with(&root, MERGE, &[(variable, token)]);
+        assert_eq!(code(&output), 1, "{token}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("gh ran:"));
+        let text = stderr(&output);
+        assert!(text.contains("would run as a personal login"), "{text}");
+        assert!(text.contains(&format!("{variable} holds")), "{text}");
+        assert!(text.contains(kind), "{kind:?} not in {text}");
+        assert!(!text.contains(token), "the token was printed: {text}");
+    }
+    assert!(viewer_argv(&root).is_empty(), "the forge was asked");
+}
+
+#[test]
+fn another_apps_installation_token_is_refused_by_the_login_the_forge_reports() {
+    let root = actor_workspace(ACTOR_POLICY);
+    let token = "ghs_other0123456789";
+    let output = shim_with(&root, MERGE, &[("GH_TOKEN", token)]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"));
+    let text = stderr(&output);
+    assert!(text.contains("would run as other-app[bot]"), "{text}");
+    assert!(text.contains("run as example-app[bot]"), "{text}");
+    assert!(!text.contains(token), "the token was printed: {text}");
+    // Asked once, of `gh`, with the token in its environment and not on its
+    // command line.
+    let asked = viewer_argv(&root);
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    let probe = asked.first().unwrap();
+    assert!(!probe.contains(token), "the token was in argv: {asked:?}");
+    assert!(probe.contains("--hostname github.com"), "{asked:?}");
+}
+
+#[test]
+fn the_declared_apps_installation_token_runs_the_write() {
+    let root = actor_workspace(ACTOR_POLICY);
+    for variable in ["GH_TOKEN", "GITHUB_TOKEN"] {
+        let output = shim_with(&root, MERGE, &[(variable, "ghs_declared0123456789")]);
+        assert_eq!(code(&output), 0, "{variable}: {}", stderr(&output));
+        assert!(
+            stdout(&output).contains("gh ran: pr merge 1"),
+            "{}",
+            stdout(&output)
+        );
+    }
+    let asked = viewer_argv(&root);
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert!(asked.iter().all(|argv| !argv.contains("ghs_")), "{asked:?}");
+}
+
+#[test]
+fn a_forge_that_could_not_say_whose_token_it_is_is_exit_2() {
+    let root = actor_workspace(ACTOR_POLICY);
+    for (token, said) in [
+        (
+            "ghs_offline0123456789",
+            "error connecting to api.github.com",
+        ),
+        ("ghs_garbled0123456789", "no `data.viewer.login`"),
+    ] {
+        let output = shim_with(&root, MERGE, &[("GH_TOKEN", token)]);
+        assert_eq!(code(&output), 2, "{token}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("gh ran:"));
+        let text = stderr(&output);
+        assert!(text.contains("could not be established"), "{text}");
+        assert!(text.contains(said), "{said:?} not in {text}");
+        assert!(text.contains("UPHOLD_ALLOW=app-actor"), "{text}");
+        assert!(!text.contains(token), "the token was printed: {text}");
+    }
+}
+
+#[test]
+fn a_mutating_api_call_is_a_write_and_a_bodyless_get_is_not() {
+    let root = actor_workspace(ACTOR_POLICY);
+    for write in [
+        &[
+            "gh",
+            "api",
+            "-X",
+            "DELETE",
+            "repos/example-user/widget/issues/comments/1",
+        ][..],
+        &["gh", "api", "graphql", "-f", "query=mutation { x }"][..],
+        &["gh", "pr", "comment", "1", "-b", "Ordinary body"][..],
+    ] {
+        let output = shim(&root, write);
+        assert_eq!(code(&output), 1, "{write:?}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("gh ran:"), "{write:?}");
+    }
+    // A read is never guarded: a GET with no field, which is also what this
+    // tool's own lookups run, and a verb the table does not name as a write.
+    for read in [
+        &["gh", "api", "repos/example-user/widget"][..],
+        &["gh", "pr", "view", "1"][..],
+        &["gh", "pr", "list"][..],
+    ] {
+        let output = shim(&root, read);
+        assert_eq!(code(&output), 0, "{read:?}: {}", stderr(&output));
+        assert!(stdout(&output).contains("gh ran:"), "{read:?}");
+    }
+    assert!(viewer_argv(&root).is_empty(), "the forge was asked");
+}
+
+#[test]
+fn a_write_to_another_host_is_exit_2_rather_than_judged_against_github_com() {
+    let root = actor_workspace(ACTOR_POLICY);
+    let output = shim_with(
+        &root,
+        &[
+            "gh",
+            "api",
+            "--hostname",
+            "github.example.com",
+            "-X",
+            "POST",
+            "repos/example-user/widget/issues",
+        ],
+        &[("GH_TOKEN", "ghs_declared0123456789")],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"));
+    assert!(
+        stderr(&output).contains("reaches github.example.com"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(viewer_argv(&root).is_empty(), "the forge was asked");
+}
+
+#[test]
+fn uphold_allow_names_the_rule_and_records_the_bypass() {
+    let root = actor_workspace(ACTOR_POLICY);
+    let junit = evidence(&root);
+    let output = shim_recorded(&root, MERGE, &junit, &[("UPHOLD_ALLOW", "app-actor")]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"));
+    let files = support::junit::files_in(&junit);
+    assert_eq!(files.len(), 1, "{files:?}");
+    let (suite, _) = support::junit::suite(files.first().unwrap());
+    let case = support::junit::case(&suite, "app-actor");
+    assert_eq!(support::junit::state(case).0, "skipped", "{suite:?}");
+    assert_eq!(support::junit::property(case, "allowed"), Some("id"));
+}
+
+#[test]
+fn without_the_declaration_a_write_under_a_personal_login_runs_as_before() {
+    // A repository that is a person's own declares nothing, and nothing here
+    // changes for it: no token, a personal token, and nobody asked.
+    let root = actor_workspace(
+        r#"
+[rule.no-outage-names]
+message = "name a change for the work, not the customer"
+regexp = "acme-outage"
+command.before = ["gh"]
+files.exclude = ["policy/**"]
+
+[[shim]]
+command = "gh"
+match = ["pr:create", "pr:comment", "pr:merge", "api:*"]
+text_flags = ["-b", "--body"]
+title_flags = ["-t", "--title"]
+scope = "always"
+"#,
+    );
+    for variables in [&[][..], &[("GH_TOKEN", "ghp_0123456789abcdef")][..]] {
+        let output = shim_with(&root, MERGE, variables);
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert!(stdout(&output).contains("gh ran: pr merge 1"));
+    }
+    assert!(viewer_argv(&root).is_empty(), "the forge was asked");
+}
+
+#[test]
+fn a_malformed_declaration_is_refused_before_anything_runs() {
+    let root = actor_workspace(&ACTOR_POLICY.replace("example-app[bot]", "example-user"));
+    let output = shim_with(&root, MERGE, &[("GH_TOKEN", "ghs_declared0123456789")]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"));
+    assert!(
+        stderr(&output).contains("is not an App's bot login"),
+        "{}",
+        stderr(&output)
+    );
 }

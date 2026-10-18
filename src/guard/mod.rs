@@ -13,6 +13,7 @@
 //! configuration was environment-only while one machine holds several
 //! workspaces, and a per-workspace file IS the workspace scope.
 
+pub(crate) mod actor;
 pub(crate) mod identity;
 pub(crate) mod merge;
 pub(crate) mod message;
@@ -65,6 +66,12 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     // ours. It is dispatched from `target_refusal` rather than `evaluate`,
     // because a git hook is handed no destination to judge.
     "prevent-unowned-target",
+    // The third question the command seam asks, beside what an invocation
+    // says and where it goes: whose credential it runs under. Dispatched from
+    // `actor_refusal`, once per invocation, because the identity is a property
+    // of the invocation and not of any subject it carries -- and never at a git
+    // hook, where no `gh` write is about to happen.
+    "prevent-actor-mismatch",
     "no-local-merge",
     "no-merge-commit",
     "no-stale-hook-pins",
@@ -313,6 +320,17 @@ pub(crate) const META_TEXT_GUARDS: &[&str] = &["text-guards", "text-literals"];
 /// publishes to somewhere.
 pub(crate) const TARGET_GUARDS: &[&str] = &["prevent-unowned-target"];
 
+/// The guards that judge WHO an invocation acts as.
+///
+/// A third list rather than a second entry in [`TARGET_GUARDS`], because the
+/// question needs a different input and has a different failure: a destination
+/// guard is handed a repository and refuses where it has none, while this one
+/// reads the credential in the environment and the host, and has no use for a
+/// repository at all -- `gh api graphql` names none and is a write. Consulted
+/// once per run, like a destination guard, and for the same reason: the
+/// identity belongs to the invocation, not to any subject it carries.
+pub(crate) const ACTOR_GUARDS: &[&str] = &["prevent-actor-mismatch"];
+
 /// One destination-judging guard's verdict over one invocation's destination.
 ///
 /// The command-seam twin of [`text_refusal`], and it exists for the same
@@ -362,6 +380,45 @@ pub(crate) fn target_refusal(
         None,
         unowned_target(root, policy, rule, builtin, target, forge, hostname, memo),
     )?;
+    ledger.push(Judgment::of(
+        rule,
+        None,
+        found.map_or(Answer::Pass, |refusal| {
+            Answer::Refused(Verdict::Guard(refusal))
+        }),
+    ));
+    Ok(())
+}
+
+/// One actor-judging guard's verdict over one invocation, into `ledger`.
+///
+/// The twin of [`target_refusal`] for [`ACTOR_GUARDS`]: nothing where the rule
+/// judges no actor, a bypass, a pass, a refusal, or an `Unknown` and an `Err`
+/// where the credential's owner could not be established. The environment and
+/// the forge are the process's own, read here and nowhere else, so
+/// [`actor::judge`] is a function of what it is handed and every branch of it
+/// is reached without a network.
+pub(crate) fn actor_refusal(
+    rule: &Rule,
+    attempt: &actor::Attempt<'_>,
+    ledger: &mut Vec<Judgment>,
+) -> Result<()> {
+    let Some(builtin) = rule.builtin() else {
+        return Ok(());
+    };
+    if !ACTOR_GUARDS.contains(&builtin) {
+        return Ok(());
+    }
+    if let Some(allowed) = allowed(&rule.id) {
+        ledger.push(Judgment::of(rule, None, Answer::Bypass(allowed)));
+        return Ok(());
+    }
+    let read = |name: &str| std::env::var(name).ok();
+    let judged = match builtin {
+        "prevent-actor-mismatch" => actor::judge(rule, attempt, &read, &mut actor::viewer_login),
+        other => Err(Fatal::new(format!("no actor guard called {other:?}"))),
+    };
+    let found = asked(ledger, rule, None, judged)?;
     ledger.push(Judgment::of(
         rule,
         None,
@@ -752,6 +809,10 @@ pub(crate) fn parameters(builtin: &str) -> &'static [&'static str] {
         // compares it to the forge, and every other field in the family is
         // about judging names in text, which this one never does.
         "no-stale-visibility" => &["visibility"],
+        // The App's bot login, which is the whole declaration: without it the
+        // rule has nothing to compare a credential with, and `validate`
+        // refuses it.
+        "prevent-actor-mismatch" => &["actor"],
         // One field, two readings. The file guard takes a path glob after the
         // codepoint and lets a fixture earn an invisible; the two message
         // guards take the codepoint alone and admit no invisible whatever is
@@ -907,7 +968,8 @@ mod tests {
         // The whole FILE is read rather than one function, because a built-in
         // is dispatched from the seam that can hand it what it reads --
         // `evaluate` for a git hook, `text_refusal` for a subject,
-        // `target_refusal` for a destination. Which of them carries the arm is
+        // `target_refusal` for a destination, `actor_refusal` for the
+        // credential an invocation runs under. Which of them carries the arm is
         // the built-in's business; that one of them does is this test's.
         let source = include_str!("mod.rs");
         for id in EVERY_BUILTIN {
@@ -921,7 +983,7 @@ mod tests {
                 "{id} is in EVERY_BUILTIN with no dispatch arm"
             );
         }
-        assert_eq!(EVERY_BUILTIN.len(), 21);
+        assert_eq!(EVERY_BUILTIN.len(), 22);
     }
 
     #[test]

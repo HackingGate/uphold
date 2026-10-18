@@ -416,6 +416,16 @@ Local visibility is reused only for a destination selected from origin without
 an ambient host override. A required destination that remains unresolved takes
 the existing explicit unresolved-scope path; it cannot become a clean answer.
 
+Who an invocation acts as is the third fact, beside what it says and where it
+goes, and it is neither a subject nor a destination. `guard::actor` judges it
+once per run, after the destination is resolved (the host decides which token
+`gh` sends) and before any other forge lookup, because every lookup is made
+with the credential in question. The decision is a function of the environment
+and of a forge probe it is handed, so every branch is reached without a
+network; the probe the shim hands it is `gh` itself, which resolves the same
+credential the write will use. A refusal there ends the run: no text or
+destination answer makes a write under the wrong account publishable.
+
 The command grammar and collection remain in `shim`; they do not evaluate
 policy. `shim::checker` evaluates one selected rule against one subject, with
 pattern or subprocess checks and the existing checker exit contract. The shim

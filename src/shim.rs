@@ -858,6 +858,9 @@ struct ApiCall {
     input: Option<String>,
     /// Each `--placeholder name=value`, in the order given.
     placeholders: Vec<(String, String)>,
+    /// What `--hostname` named, where it was given: the host the call goes to,
+    /// which decides which token `gh` sends with it.
+    hostname: Option<String>,
 }
 
 impl ApiCall {
@@ -911,6 +914,8 @@ impl ApiCall {
                 call.fields.push((flag, value));
             } else if API_INPUT_FLAGS.contains(&name) {
                 call.input = Some(value);
+            } else if name == "--hostname" {
+                call.hostname = Some(value);
             } else if API_PLACEHOLDER_FLAGS.contains(&name) {
                 // One with no `=` is refused by the command, and publishes
                 // nothing.
@@ -2851,6 +2856,31 @@ impl Shim {
                 .map(|(_, word)| word.clone())
                 .collect(),
         )
+    }
+
+    /// The host a `gh api` call names with `--hostname`, where it names one.
+    ///
+    /// The one place a `gh` invocation names its host that is not a
+    /// destination: `gh api --hostname H graphql` reaches `H` whatever the
+    /// checkout's remote says, and `gh` picks the token it sends by that host.
+    fn api_hostname(&self, argv: &[String]) -> Option<String> {
+        let rest = self.api_rest(argv)?;
+        ApiCall::of(&self.command, &rest).ok()?.hostname
+    }
+
+    /// What a reader calls this invocation in a refusal: the command and its
+    /// verb and noun, or `<command> api` for the verb whose noun is an endpoint
+    /// that may name a repository. Never an argument, which carries bodies.
+    fn attempted(&self, argv: &[String]) -> String {
+        if self.api_rest(argv).is_some() {
+            return format!("{} api", self.command);
+        }
+        let words = self.verb_words(argv);
+        [self.command.as_str(), &words.verb, &words.noun]
+            .into_iter()
+            .filter(|word| !word.is_empty())
+            .collect::<Vec<&str>>()
+            .join(" ")
     }
 
     /// Whether a matched invocation carries anything to publish at all.
@@ -6033,6 +6063,80 @@ fn hand_off(
     std::process::exit(status.code().unwrap_or(1));
 }
 
+/// Report every refusal one run collected, and the line that says what to fix:
+/// `what` is the text, the destination or the credential, because a reader
+/// sent to reread a body that is fine leaves the real cause as it was.
+fn refused(name: &str, refusals: &[String], what: &str) -> Exit {
+    for refusal in refusals {
+        eprintln!("{name}: {refusal}");
+    }
+    eprintln!("Nothing was published. Fix {what}, or override once with UPHOLD_ALLOW.");
+    Exit::Violations
+}
+
+/// Ask every actor-judging rule this invocation names about the credential it
+/// runs under, and answer with the refusals, each named the way a hook names
+/// one.
+///
+/// Once per run and outside the subject loop, as the destination is: `gh pr
+/// merge --squash` carries no subject and is a write. Which verbs are writes is
+/// the `match` list the caller already read -- the table is the one statement
+/// of it, and `carries_a_body` reads a `gh api` call with a field or a method
+/// other than GET as one.
+fn actor_judged(
+    shim: &Shim,
+    policy: &Policy,
+    words: &[String],
+    checkers: &[&Rule],
+    scopes: &mut CommandContext<'_>,
+    record: &mut Record,
+) -> Result<Vec<String>> {
+    if !checkers.iter().any(|rule| {
+        rule.builtin()
+            .is_some_and(|builtin| crate::guard::ACTOR_GUARDS.contains(&builtin))
+    }) {
+        return Ok(Vec::new());
+    }
+    // The host `gh` will reach: `--hostname` on an api call, then the
+    // destination's own host, then `GH_HOST`, then github.com -- the order `gh`
+    // resolves it in. The destination is the resolver every other guard here
+    // reads, so this cannot disagree with them about which forge an invocation
+    // is on, and one that could not be resolved ends the run here, in the
+    // resolver's own sentence, rather than being read as github.com.
+    let destination_host = scopes.destination()?.hostname.clone();
+    let host = shim
+        .api_hostname(words)
+        .or(destination_host)
+        .or_else(|| nonempty_env("GH_HOST"))
+        .unwrap_or_else(|| String::from("github.com"));
+    let command = shim.attempted(words);
+    let attempt = crate::guard::actor::Attempt {
+        command: &command,
+        host: &host,
+    };
+    let mut refusals = Vec::new();
+    for rule in checkers {
+        if crate::guard::bypassed(&rule.id) {
+            continue;
+        }
+        if !scopes.holds(effective_scope(rule, shim), policy)? {
+            continue;
+        }
+        let start = record.ledger.len();
+        crate::guard::actor_refusal(rule, &attempt, &mut record.ledger)?;
+        if let Some(refusal) =
+            crate::guard::told(policy, rule, record.ledger.get(start..).unwrap_or_default())
+        {
+            refusals.push(format!(
+                "{}: {}",
+                crate::guard::refused_by(policy, &refusal),
+                refusal.report
+            ));
+        }
+    }
+    Ok(refusals)
+}
+
 /// Stand in front of one command.
 ///
 /// argv arrives as bytes and LEAVES as bytes. On Unix an argument is an
@@ -6242,6 +6346,17 @@ pub(crate) fn run(
                  been checked",
                 words.join(" ")
             )));
+        }
+        // Whose credential this write runs under, where a rule declares whose
+        // it must be. Asked before anything else that reaches the forge, at the
+        // earliest point the host is known, and a refusal ends the run here:
+        // every lookup below is made with the same credential, a lookup that
+        // fails would bury this refusal under its own exit 2, and nothing the
+        // text or the destination could say lets a write run as the wrong
+        // account.
+        let actor = actor_judged(shim, policy, &words, &checkers, &mut scopes, record)?;
+        if !actor.is_empty() {
+            return Ok(refused(name, &actor, "the credential"));
         }
         // What the forge holds of this text, before anything judges it.
         composed_read = held_text(shim, name, &words, &checkers, any_applies, &mut collected)?;
@@ -6460,9 +6575,6 @@ pub(crate) fn run(
     }
 
     if crate::text::refusals(&record.ledger) > 0 {
-        for refusal in &refusals {
-            eprintln!("{name}: {refusal}");
-        }
         let what = if destination_refusals == 0 {
             "the text"
         } else if destination_refusals == refusals.len() {
@@ -6470,8 +6582,7 @@ pub(crate) fn run(
         } else {
             "the text and the destination"
         };
-        eprintln!("Nothing was published. Fix {what}, or override once with UPHOLD_ALLOW.");
-        return Ok(Exit::Violations);
+        return Ok(refused(name, &refusals, what));
     }
 
     // Exec through. A shim that checked and then did not run the command is a

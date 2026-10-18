@@ -1501,6 +1501,7 @@ stamped on it, the range about to be pushed.
 | `no-private-repo-names-in-files` | the same, anywhere in what is being introduced — content, **path names**, and at a push the **commit messages** the push publishes |
 | `prevent-public-push` | a push to somewhere off the allow-list **and off the forge's own answer** — a GitHub destination the allow-list refused is put to `gh`, and a forge that could not be asked is exit `2` |
 | `prevent-unowned-target` | a **command** told to publish to a repository this workspace does not own. The same decision as the row above, reached from the shim seam instead of a hook — so it registers with `command.before` and never `git.hooks`, and a destination it could not resolve is exit `2`. Carried by `published-text` as `unowned-forge-target`, with `owner_required` and `command.scope = "always"` in the bundled declaration |
+| `prevent-actor-mismatch` | a `gh` **write** about to run as anybody but the GitHub App the rule's `actor` names: no token in reach, so `gh` would use the login it stores; a personal token by its prefix; or an installation token the forge says is another App's. Registers with `command.before = ["gh"]` and `command.scope = "always"`, and is opt in: no bundled set declares it. See [who a write runs as](#who-a-write-runs-as) |
 | `no-local-merge` | a merge that would make a merge commit |
 | `no-merge-commit` | a commit finishing a merge or a squash merge |
 | `no-stale-hook-pins` | a pin naming no ref, or a branch — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree — and a lefthook ref left behind its upstream. Whether a pre-commit `rev:` is the newest tag is `prek update --check`'s, run as the consumer's own `prek-pins-current` hook; a pin it **could not check** is exit `2` |
@@ -1729,9 +1730,10 @@ enforced and is not.
 | `foreign_hosts` | the `no-private-repo-names` family | host globs carrying no repository this rule needs resolved — replaces the top-level list for this rule, on top of the built-in one |
 | `allow` | `prevent-unusual-unicode-in-files` | codepoints admitted, optionally under one glob — `"U+00A0:docs/captured/**"` |
 | `allow` | `prevent-unusual-unicode`, `ascii-only-commit-subject` | codepoints admitted in a message, the codepoint alone — `"U+0430"`, `"U+2014"`; never one that draws nothing, which is refused at load |
+| `actor` | `prevent-actor-mismatch` | the GitHub App's bot login a `gh` write must run as — `"example-app[bot]"`; required, and held to that form at load |
 
-The "family" is `no-private-repo-names`, `-staged` and `-in-files`. No other
-built-in reads any parameter. The first four rows are **one row twice**:
+The "family" is `no-private-repo-names`, `-staged` and `-in-files`. No
+built-in outside this table reads any parameter. The first four rows are **one row twice**:
 `prevent-public-push` and `prevent-unowned-target` are one decision reached from
 two seams, and who this workspace is means the same thing whether a push or a
 `gh` invocation is asking. `no-stale-visibility` reads `visibility` and
@@ -2637,6 +2639,89 @@ command line, and are exit `2` rather than read: `gh release create
 text on the command line, `--notes`/`-n` for `gh` and `--title`/`-t` and
 `--description`/`-d` for `glab`, where it is judged.
 
+### Who a write runs as
+
+The checks above ask what an invocation publishes and where. Neither asks
+**whose credential** it runs under, and a workspace that requires its GitHub
+App for every write had nothing that refused a write made under a person's own
+login: plain `gh`, with no token in the environment, opens and merges pull
+requests as whoever `gh auth login` stored, and every one of them is authored
+by that person. `prevent-actor-mismatch` is the declaration that writes run as
+one App:
+
+```toml
+[rule.gh-writes-run-as-the-app]
+builtin = "prevent-actor-mismatch"
+actor = "example-app[bot]"        # the App's bot login, `<slug>[bot]`
+command.before = ["gh"]
+command.scope = "always"
+```
+
+**Opt in.** No bundled set carries it, and a repository that declares nothing
+behaves exactly as before; a person's own repository, written under that
+person's login, is the case that should declare nothing.
+
+**Which invocations it judges.** The writes the `gh` table's `match` list
+names, and no others: that list is the statement of which verbs publish, and
+this rule is consulted from it as every `command.before` rule is. A `gh api`
+call is a write when it carries a field or `--input` or names a method other
+than `GET`, the same reading that decides whether its text is checked, so
+`gh api graphql -f query=...` is judged whether the query reads or writes. A
+read — a bodyless `GET`, `gh pr view`, any verb the table does not name — is
+never judged: it publishes nothing, and this tool's own forge lookups are such
+reads. A write verb the table does not name, such as `gh pr ready`, is judged
+once it is added to `match`.
+
+**How it decides**, in this order, and the first answer settles it:
+
+| what `gh` would send to github.com | answer |
+|---|---|
+| no `GH_TOKEN`, no `GITHUB_TOKEN` (empty counts as unset, as it does to `gh`) | refused, exit `1`, offline: `gh` would use its stored login, which is a person's. `gh`'s own credential store is never read |
+| a token starting `ghp_`, `github_pat_`, `gho_` or `ghu_` | refused, exit `1`, offline: a personal token, a fine-grained one, an OAuth token, or a user-to-server token that acts as the person who authorised the App |
+| a token of no prefix GitHub issues | refused, exit `1`, offline |
+| an installation token, `ghs_` | `gh api graphql --hostname github.com` asks for the `viewer`'s login, which for an installation token is the App's bot login: the declared one runs, exit `0`; any other is refused, exit `1`, naming the App the forge reported |
+| an installation token, and the forge could not be asked or answered without a login | exit `2`: who the token belongs to is unknown, and the command does not run |
+
+`GH_TOKEN` is read before `GITHUB_TOKEN`, as `gh help environment` documents.
+The probe is `gh` itself, so the answer is about the credential the write will
+actually use, resolved by the client that will send it. The token reaches it
+through the inherited environment and **never on a command line**; `GH_DEBUG`
+and `DEBUG` are taken off the probe, and nothing this rule prints carries the
+token. The comparison ignores case, as GitHub logins do.
+
+**One host.** `actor` names an App on github.com. A write that reaches another
+host — `gh api --hostname`, a destination on another host, `GH_HOST` — is exit
+`2`: `gh` sends a different token there (`GH_ENTERPRISE_TOKEN`), to a different
+forge with different Apps.
+
+**At load**, each of these is refused, because each would load and then judge
+nothing or judge against an account no token could be: no `actor`; an `actor`
+that is not `<slug>[bot]` — a user login, a slug with a space or a `/`, or a
+commit author's `<id>+<slug>[bot]@users.noreply.github.com`, whose refusal
+names the login it carries; `git.hooks` or `files.*`, where no `gh` write is
+about to happen; a `command.before` entry that is not `gh` or a `gh` command
+line; and any `command.scope` other than `always`, written on the rule. Whose
+credential a write uses does not depend on whether the destination is public,
+and the `public-target` scope a `gh` table usually carries would stand the rule
+down at every private repository, after asking the forge, with the very
+credential in question, whether it was public.
+
+**A refusal** names what was attempted (`gh pr merge`, `gh api` — never the
+arguments), what was found (a personal login, an unidentified token, or the
+App the forge reported), what is declared, and how to comply: run the command
+with an installation token of the declared App in `GH_TOKEN`, as the wrapper
+the repository's instructions name mints one, or change `actor` where the App
+itself changed. It ends the run before any other forge lookup, with the line
+`Nothing was published. Fix the credential, or override once with
+UPHOLD_ALLOW.` `UPHOLD_ALLOW=<rule-id>` stands this rule down for one
+invocation and is recorded as a bypass like any other.
+
+**What it does not cover.** It stands in front of `gh` where the shim does.
+A write made in the forge's web interface, through another client, or with the
+real `gh` invoked by its full path reaches the forge without passing it; holding
+those to the App is a server-side ruleset's job (a branch or repository ruleset
+whose bypass list and required reviews say who may merge), not a shim's.
+
 ### The stand-downs
 
 Four paths through this seam **run the command with nothing checked, exit `0`,
@@ -2700,10 +2785,11 @@ the seam does not publish.
 Everything else this seam cannot establish is exit `2` and no command at all: a
 non-UTF-8 argument on a matched invocation, a body file that is not there, an
 alias that is a shell command, refspecs two readings disagree about, a
-destination `prevent-unowned-target` could not resolve, a scope that could not
-be evaluated under the default `unresolved = "refuse"`, a `current_exe()` the
-editor re-entry cannot be installed from, and a `UPHOLD_SHIM_INNER` deeper than
-`2`.
+destination `prevent-unowned-target` could not resolve, an installation token
+whose owner `prevent-actor-mismatch` could not establish, a write to a host
+other than github.com under that rule, a scope that could not be evaluated
+under the default `unresolved = "refuse"`, a `current_exe()` the editor re-entry
+cannot be installed from, and a `UPHOLD_SHIM_INNER` deeper than `2`.
 
 ### The checker contract
 
