@@ -621,6 +621,128 @@ pub(crate) const API_TITLE_KEYS: &[&str] = &["title", "commit_title", "subject"]
 /// hook too, for the same reason as [`API_TITLE_KEYS`].
 pub(crate) const API_MESSAGE_KEYS: &[&str] = &["squash_commit_message", "merge_commit_message"];
 
+/// The `commitHeadline` arguments a `gh api graphql` call sends, each as the
+/// title subject it is.
+///
+/// A REST merge's `commit_title` is already one -- it is in [`API_TITLE_KEYS`]
+/// -- but GraphQL puts the headline inside the query string, where no field
+/// form names it, so the extraction is this function's: a `commitHeadline`
+/// argument (on `mergePullRequest`, and on `enablePullRequestAutoMerge`, which
+/// merges later with it) written as a string literal, or as a `$variable`
+/// given by a field or by an `--input` body's `variables`. What judges the
+/// subject is whichever rule selects titles, as for any other.
+///
+/// A headline inside a variable that holds the whole `input` object is not
+/// read: that is a JSON value in a field, and reading it means knowing which
+/// variable the query binds to `input`. A variable nobody gave is the forge's
+/// to answer: GraphQL refuses a missing required variable, and an optional one
+/// is no headline, which the forge composes.
+fn graphql_headline_subjects(endpoint: &str, sent: &[(String, String)]) -> Vec<Subject> {
+    if endpoint.trim_start_matches('/') != "graphql" {
+        return Vec::new();
+    }
+    let Some((_, query)) = sent.iter().find(|(key, _)| key == "query") else {
+        return Vec::new();
+    };
+    graphql_headlines(query)
+        .into_iter()
+        .filter_map(|headline| match headline {
+            Headline::Literal(text) => Some(text),
+            Headline::Variable(name) => sent
+                .iter()
+                .rev()
+                .find(|(key, _)| *key == name)
+                .map(|(_, text)| text.clone()),
+        })
+        .map(|value| Subject {
+            kind: Subject::HEADLINE,
+            value,
+            added: None,
+        })
+        .collect()
+}
+
+/// One `commitHeadline` argument in a GraphQL document, as written.
+#[derive(Debug, PartialEq, Eq)]
+enum Headline {
+    /// A string literal, decoded.
+    Literal(String),
+    /// A `$variable`, by its name.
+    Variable(String),
+}
+
+/// Every `commitHeadline:` argument in `query`, in order.
+///
+/// A scanner for exactly this argument rather than a GraphQL parser: a
+/// headline can be written as a string, a block string or a variable, and
+/// those three are read here. A string's escapes are decoded, so that `"\n"`
+/// and `" "` are read as the whitespace they send; a block string is
+/// read between its fences. A longer name that merely contains
+/// `commitHeadline` is some other field and is not this argument.
+fn graphql_headlines(query: &str) -> Vec<Headline> {
+    const NAME: &str = "commitHeadline";
+    let is_name = |character: char| character.is_ascii_alphanumeric() || character == '_';
+    let mut found = Vec::new();
+    let mut rest = query;
+    while let Some(at) = rest.find(NAME) {
+        let before = rest.get(..at).and_then(|head| head.chars().last());
+        rest = rest.get(at + NAME.len()..).unwrap_or_default();
+        if before.is_some_and(is_name) || rest.starts_with(is_name) {
+            continue;
+        }
+        let Some(value) = rest.trim_start().strip_prefix(':') else {
+            continue;
+        };
+        let value = value.trim_start();
+        if let Some(name) = value.strip_prefix('$') {
+            let end = name
+                .find(|character: char| !is_name(character))
+                .unwrap_or(name.len());
+            found.push(Headline::Variable(
+                name.get(..end).unwrap_or_default().to_owned(),
+            ));
+        } else if let Some(block) = value.strip_prefix("\"\"\"") {
+            found.push(Headline::Literal(
+                block.split("\"\"\"").next().unwrap_or_default().to_owned(),
+            ));
+        } else if let Some(string) = value.strip_prefix('"') {
+            found.push(Headline::Literal(graphql_string(string)));
+        }
+    }
+    found
+}
+
+/// The text of a GraphQL string literal whose opening quote was just read, up
+/// to its closing quote, with its escapes decoded.
+fn graphql_string(string: &str) -> String {
+    let mut text = String::new();
+    let mut characters = string.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '"' => break,
+            '\\' => match characters.next() {
+                Some('n') => text.push('\n'),
+                Some('t') => text.push('\t'),
+                Some('r') => text.push('\r'),
+                Some('b') => text.push('\u{8}'),
+                Some('f') => text.push('\u{c}'),
+                Some('u') => {
+                    let hex: String = characters.by_ref().take(4).collect();
+                    if let Some(decoded) =
+                        u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32)
+                    {
+                        text.push(decoded);
+                    }
+                }
+                Some(other) => text.push(other),
+                None => break,
+            },
+            other => text.push(other),
+        }
+    }
+    text
+}
+
 /// The `api` option that names a file holding the whole body.
 const API_INPUT_FLAGS: &[&str] = &["--input"];
 
@@ -858,6 +980,9 @@ struct ApiCall {
     input: Option<String>,
     /// Each `--placeholder name=value`, in the order given.
     placeholders: Vec<(String, String)>,
+    /// What `--hostname` named, where it was given: the host the call goes to,
+    /// which decides which token `gh` sends with it.
+    hostname: Option<String>,
 }
 
 impl ApiCall {
@@ -911,6 +1036,8 @@ impl ApiCall {
                 call.fields.push((flag, value));
             } else if API_INPUT_FLAGS.contains(&name) {
                 call.input = Some(value);
+            } else if name == "--hostname" {
+                call.hostname = Some(value);
             } else if API_PLACEHOLDER_FLAGS.contains(&name) {
                 // One with no `=` is refused by the command, and publishes
                 // nothing.
@@ -2853,6 +2980,77 @@ impl Shim {
         )
     }
 
+    /// The host a `gh api` call names with `--hostname`, where it names one.
+    ///
+    /// The one place a `gh` invocation names its host that is not a
+    /// destination: `gh api --hostname H graphql` reaches `H` whatever the
+    /// checkout's remote says, and `gh` picks the token it sends by that host.
+    fn api_hostname(&self, argv: &[String]) -> Option<String> {
+        let rest = self.api_rest(argv)?;
+        ApiCall::of(&self.command, &rest).ok()?.hostname
+    }
+
+    /// What a reader calls this invocation in a refusal: the command and its
+    /// verb and noun, or `<command> api` for the verb whose noun is an endpoint
+    /// that may name a repository. Never an argument, which carries bodies.
+    fn attempted(&self, argv: &[String]) -> String {
+        if self.api_rest(argv).is_some() {
+            return format!("{} api", self.command);
+        }
+        let words = self.verb_words(argv);
+        [self.command.as_str(), &words.verb, &words.noun]
+            .into_iter()
+            .filter(|word| !word.is_empty())
+            .collect::<Vec<&str>>()
+            .join(" ")
+    }
+
+    /// Take out what was typed and that the command will not send, so no rule
+    /// judges a subject that is never published.
+    ///
+    /// One case: an exactly empty `gh pr merge --subject`. cli/cli v2.102.0,
+    /// pkg/cmd/pr/merge/http.go:68, is `if payload.commitSubject != "" {
+    /// input.CommitHeadline = ... }`, so `--subject ""` sends no headline and
+    /// the forge writes the pull request's title, exactly as if the flag were
+    /// absent -- and a title rule that refused it would be refusing nothing
+    /// that reaches the forge. A subject of whitespace is not empty, is sent,
+    /// and stays. Done here, where the shim reads what the command sends, and
+    /// not in any rule, so every rule that selects titles sees the same thing
+    /// the forge does. The forge's own subject for the merge is then read by
+    /// [`held_text`], as for a merge given no subject at all.
+    fn drop_unsent(&self, argv: &[String], collected: &mut Collected) {
+        if self.command != "gh" {
+            return;
+        }
+        let words = self.verb_words(argv);
+        if (words.verb.as_str(), words.noun.as_str()) != ("pr", "merge") {
+            return;
+        }
+        let unsent =
+            |subject: &Subject| subject.kind == Subject::HEADLINE && subject.value.is_empty();
+        let kept: Vec<usize> = (0..collected.subjects.len())
+            .filter(|index| {
+                collected
+                    .subjects
+                    .get(*index)
+                    .is_some_and(|subject| !unsent(subject))
+            })
+            .collect();
+        if kept.len() == collected.subjects.len() {
+            return;
+        }
+        collected.flagged = collected
+            .flagged
+            .iter()
+            .filter_map(|(index, flag)| {
+                kept.iter()
+                    .position(|kept| kept == index)
+                    .map(|at| (at, flag.clone()))
+            })
+            .collect();
+        collected.subjects.retain(|subject| !unsent(subject));
+    }
+
     /// Whether a matched invocation carries anything to publish at all.
     ///
     /// True for every verb but one. `gh api` and `glab api` are the read side
@@ -2877,6 +3075,11 @@ impl Shim {
     fn collect_api(&self, call: &ApiCall) -> Result<Collected> {
         let mut subjects = Vec::new();
         let mut stdin = None;
+        // Every field as `gh` sends it, by its key, in whichever field form it
+        // arrived: what a GraphQL merge's headline is read from once the whole
+        // call is known, because a variable may be given before the query that
+        // names it.
+        let mut sent: Vec<(String, String)> = Vec::new();
         let placeholders = Placeholders::of(&self.command, &call.placeholders)?;
         let mut current = Current::default();
         for (flag, field) in &call.fields {
@@ -2895,9 +3098,14 @@ impl Shim {
                 } else {
                     value.to_owned()
                 };
+                sent.push((key.to_owned(), value.clone()));
                 field_subjects(&mut subjects, key, value);
                 continue;
             }
+            // A typed value `gh` sends as a string -- an empty one is the
+            // empty string -- is read as written; one it would send as a
+            // number, a boolean or null is no subject text either way.
+            sent.push((key.to_owned(), value.to_owned()));
             let what = format!("`{flag} {key}=...`");
             // `glab` decodes a typed value that starts as JSON does, and puts
             // the placeholders into each string and key of it, so a string
@@ -2963,6 +3171,23 @@ impl Shim {
         }
         if let Some(file) = &call.input {
             let text = self.api_file("--input", file, &mut stdin)?;
+            // The query of a GraphQL request body, and the strings of its
+            // `variables`, which is where the query's `$name` is given. A body
+            // that is not a JSON object has neither.
+            if let Ok(serde_json::Value::Object(fields)) =
+                serde_json::from_str::<serde_json::Value>(&text)
+            {
+                let variables = fields
+                    .get("variables")
+                    .and_then(serde_json::Value::as_object)
+                    .into_iter()
+                    .flatten();
+                for (key, value) in fields.iter().chain(variables) {
+                    if let Some(value) = value.as_str() {
+                        sent.push((key.clone(), value.to_owned()));
+                    }
+                }
+            }
             match json_strings(&text) {
                 Ok(Some(walked)) => walked_subjects(&mut subjects, walked),
                 Ok(None) if self.command == "gh" || text.trim().is_empty() => {
@@ -2983,6 +3208,11 @@ impl Shim {
                     return Err(self.undecoded(&format!("`--input {file}`"), "the forge", &error));
                 }
             }
+        }
+        if self.command == "gh"
+            && let Some(endpoint) = call.positional.first()
+        {
+            subjects.extend(graphql_headline_subjects(endpoint, &sent));
         }
         Ok(Collected {
             subjects,
@@ -3195,6 +3425,7 @@ impl Shim {
         // -- the editor variable, the target, the scope, the collector.
         let effective = self.for_verb(argv);
         let mut collected = effective.collect_flags(argv)?;
+        self.drop_unsent(argv, &mut collected);
         match self.collect {
             Collect::Flags => {}
             Collect::GitRefs => {
@@ -6033,6 +6264,105 @@ fn hand_off(
     std::process::exit(status.code().unwrap_or(1));
 }
 
+/// What a refused run's closing line tells the reader to fix.
+///
+/// Told apart because a reader sent to reread a body that is fine leaves the
+/// real cause as it was.
+#[derive(Clone, Copy)]
+enum Fix {
+    /// The credential: an invocation guard refused the account it runs as,
+    /// and nothing else was asked.
+    Credential,
+    /// The text, the destination, or both, by how many of the refusals were
+    /// about the destination.
+    Counted(usize),
+}
+
+/// Report every refusal one run collected, and the line that says what to fix.
+fn refused(name: &str, refusals: &[String], fix: Fix) -> Exit {
+    for refusal in refusals {
+        eprintln!("{name}: {refusal}");
+    }
+    let what = match fix {
+        Fix::Credential => "the credential",
+        Fix::Counted(0) => "the text",
+        Fix::Counted(destination) if destination == refusals.len() => "the destination",
+        Fix::Counted(_) => "the text and the destination",
+    };
+    eprintln!("Nothing was published. Fix {what}, or override once with UPHOLD_ALLOW.");
+    Exit::Violations
+}
+
+/// Ask every invocation guard this invocation names about it, and answer with
+/// the refusals each gave, named the way a hook names one.
+///
+/// Once per run and outside the subject loop, as the destination is: `gh pr
+/// merge --squash` may carry no subject and is a write. Which verbs are writes
+/// is the `match` list the caller already read -- the table is the one
+/// statement of it, and `carries_a_body` reads a `gh api` call with a field or
+/// a method other than GET as one.
+fn invocation_judged(
+    shim: &Shim,
+    policy: &Policy,
+    words: &[String],
+    checkers: &[&Rule],
+    scopes: &mut CommandContext<'_>,
+    record: &mut Record,
+) -> Result<Vec<String>> {
+    let guards: Vec<&Rule> = checkers
+        .iter()
+        .filter(|rule| {
+            rule.builtin()
+                .is_some_and(|builtin| crate::guard::INVOCATION_GUARDS.contains(&builtin))
+        })
+        .copied()
+        .collect();
+    if guards.is_empty() {
+        return Ok(Vec::new());
+    }
+    // The host `gh` will reach, in the order `gh` resolves it. `gh api` never
+    // infers one from the checkout: `--hostname`, then `GH_HOST`, then
+    // github.com. Every other verb reads the repository's host first -- the
+    // destination resolver every other guard here reads, so this cannot
+    // disagree with them about which forge an invocation is on, and one that
+    // could not be resolved ends the run here, in the resolver's own
+    // sentence, rather than being read as github.com.
+    let named = if shim.api_rest(words).is_some() {
+        shim.api_hostname(words)
+    } else {
+        scopes.destination()?.hostname.clone()
+    };
+    let host = named
+        .or_else(|| nonempty_env("GH_HOST"))
+        .unwrap_or_else(|| String::from("github.com"));
+    let command = shim.attempted(words);
+    let attempt = crate::guard::actor::Attempt {
+        command: &command,
+        host: &host,
+    };
+    let mut refusals = Vec::new();
+    for rule in guards {
+        if crate::guard::bypassed(&rule.id) {
+            continue;
+        }
+        if !scopes.holds(effective_scope(rule, shim), policy)? {
+            continue;
+        }
+        let start = record.ledger.len();
+        crate::guard::invocation_refusal(rule, &attempt, &mut record.ledger)?;
+        if let Some(refusal) =
+            crate::guard::told(policy, rule, record.ledger.get(start..).unwrap_or_default())
+        {
+            refusals.push(format!(
+                "{}: {}",
+                crate::guard::refused_by(policy, &refusal),
+                refusal.report
+            ));
+        }
+    }
+    Ok(refusals)
+}
+
 /// Stand in front of one command.
 ///
 /// argv arrives as bytes and LEAVES as bytes. On Unix an argument is an
@@ -6196,6 +6526,19 @@ pub(crate) fn run(
         }
         collected = shim.collect(root, &words)?;
         let mut scopes = CommandContext::new(shim, root, &collected, &words);
+        // Whose credential this write runs under, where a rule declares whose
+        // it must be. Asked before anything else that reaches the forge -- the
+        // table's own scope included, since `public-target` asks the forge
+        // whether the destination is public, with the very credential in
+        // question -- and a refusal ends the run here: a lookup that failed
+        // would bury it under its own exit 2, and nothing the text or the
+        // destination could say lets a write run as the wrong account. The
+        // actor rule's own scope is `always`, which the loader requires, so
+        // asking it reaches no forge.
+        let credential = invocation_judged(shim, policy, &words, &checkers, &mut scopes, record)?;
+        if !credential.is_empty() {
+            return Ok(refused(name, &credential, Fix::Credential));
+        }
         let in_scope = scopes.holds(&shim.scope, policy)?;
         for rule in &checkers {
             let holds = crate::text::asked(
@@ -6460,18 +6803,7 @@ pub(crate) fn run(
     }
 
     if crate::text::refusals(&record.ledger) > 0 {
-        for refusal in &refusals {
-            eprintln!("{name}: {refusal}");
-        }
-        let what = if destination_refusals == 0 {
-            "the text"
-        } else if destination_refusals == refusals.len() {
-            "the destination"
-        } else {
-            "the text and the destination"
-        };
-        eprintln!("Nothing was published. Fix {what}, or override once with UPHOLD_ALLOW.");
-        return Ok(Exit::Violations);
+        return Ok(refused(name, &refusals, Fix::Counted(destination_refusals)));
     }
 
     // Exec through. A shim that checked and then did not run the command is a

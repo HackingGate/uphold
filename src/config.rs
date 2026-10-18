@@ -3501,6 +3501,140 @@ mod tests {
         assert!(text.contains("allowed_owners"), "{text}");
     }
 
+    /// `prevent-actor-mismatch` in the shape it is declared in, with `lines`
+    /// in place of its own four, beside the `gh` table it stands behind.
+    fn actor_policy(lines: &str) -> Result<Policy> {
+        policy_from(&format!(
+            "[rule.app-actor]\nbuiltin = \"prevent-actor-mismatch\"\n{lines}\n\
+             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\n"
+        ))
+    }
+
+    /// The whole declaration: an App's bot login, in front of `gh`, everywhere.
+    const ACTOR_LINES: &str = "actor = \"example-app[bot]\"\ncommand.before = [\"gh\"]\n\
+                               command.scope = \"always\"\n";
+
+    #[test]
+    fn an_actor_declaration_loads_and_carries_its_app() {
+        let policy = actor_policy(ACTOR_LINES).expect("the documented declaration");
+        let actor = policy.rules[0].actor().expect("the declared App");
+        assert_eq!(actor.as_str(), "example-app[bot]");
+    }
+
+    /// Every way to write the actor guard that would load and then judge
+    /// nothing, or judge against an App no token could be: each is refused at
+    /// load, and the refusal names what to write instead.
+    #[test]
+    fn an_actor_declaration_that_could_never_judge_is_refused_at_load() {
+        for (lines, says) in [
+            // No App to compare with.
+            (
+                "command.before = [\"gh\"]\ncommand.scope = \"always\"\n",
+                "`actor` is the App",
+            ),
+            // A user login: no token this guard passes acts as a user.
+            (
+                &ACTOR_LINES.replace("example-app[bot]", "example-user")[..],
+                "is not an App's bot login",
+            ),
+            // An author address carries the login, and is not one.
+            (
+                &ACTOR_LINES.replace(
+                    "example-app[bot]",
+                    "12345+example-app[bot]@users.noreply.github.com",
+                )[..],
+                "write the login it carries, `example-app[bot]`",
+            ),
+            (
+                &ACTOR_LINES.replace("example-app[bot]", "example app[bot]")[..],
+                "where an App's slug goes",
+            ),
+            // A git hook has no `gh` write about to happen.
+            (
+                &format!("{ACTOR_LINES}git.hooks = [\"pre-push\"]\n"),
+                "no such write is about to happen",
+            ),
+            // `glab` sends no GitHub credential.
+            (
+                &ACTOR_LINES.replace("[\"gh\"]", "[\"gh\", \"glab mr merge\"]"),
+                "\"glab mr merge\", which sends none of it",
+            ),
+            // The table's scope would stand it down at a private repository.
+            (
+                &ACTOR_LINES.replace("command.scope = \"always\"\n", ""),
+                "`command.scope = \"always\"`",
+            ),
+            (
+                &ACTOR_LINES.replace("\"always\"", "\"public-target\""),
+                "`command.scope = \"always\"`",
+            ),
+        ] {
+            let error = actor_policy(lines).expect_err(lines).to_string();
+            assert!(error.contains(says), "{lines}\n{error}");
+        }
+    }
+
+    /// The merge-subject rule arrives from `published-text` as a pattern rule
+    /// that names the shim and the text seam -- which is what a caller that
+    /// relies on its verdict reads back from `uphold rules --effective`.
+    #[test]
+    fn the_merge_subject_rule_runs_at_the_shim_and_the_text_seam() {
+        let policy = policy_from(
+            "[inherit]\nsets = [\"published-text\"]\n\n\
+             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\n\n\
+             [[shim]]\ncommand = \"git\"\nmatch = [\"push:*\"]\n",
+        )
+        .unwrap();
+        let rule = policy
+            .rules
+            .iter()
+            .find(|rule| rule.id == "no-empty-merge-subject")
+            .expect("published-text carries the merge-subject rule");
+        assert_eq!(rule.kind(), CheckKind::RequireRegexp);
+        assert_eq!(rule.seams(), ["shim", "text"]);
+        assert!(rule.judged_at(crate::text::Seam::Guard));
+        assert!(!rule.judged_at(crate::text::Seam::Hook));
+    }
+
+    /// A pattern rule names the text seam only by asking: one that does not is
+    /// where it ran before, at the shim alone.
+    #[test]
+    fn a_pattern_rule_reaches_the_text_seam_only_where_it_names_it() {
+        let named = policy_from(
+            "[rule.shape]\nmessage = \"x\"\nregexp = '^zzz[0-9]{9}$'\nseams = [\"shim\", \"text\"]\n\
+             command.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\n",
+        )
+        .unwrap();
+        assert!(named.rules[0].judged_at(crate::text::Seam::Scan));
+        let unnamed = policy_from(
+            "[rule.shape]\nmessage = \"x\"\nregexp = '^zzz[0-9]{9}$'\ncommand.before = [\"gh\"]\n\n\
+             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\n",
+        )
+        .unwrap();
+        assert!(!unnamed.rules[0].judged_at(crate::text::Seam::Scan));
+        assert!(!unnamed.rules[0].judged_at(crate::text::Seam::Guard));
+        assert_eq!(unnamed.rules[0].seams(), ["shim"]);
+    }
+
+    /// And `actor` is that built-in's alone, as every parameter is its own.
+    #[test]
+    fn an_actor_on_another_builtin_is_refused() {
+        let error = policy_from(
+            r#"
+            [rule.push]
+            builtin = "prevent-public-push"
+            actor = "example-app[bot]"
+
+            [rule.push.git]
+            hooks = ["pre-push"]
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("actor"), "{error}");
+        assert!(error.contains("read by nothing"), "{error}");
+    }
+
     #[test]
     fn a_parameter_its_builtin_reads_is_accepted() {
         let policy = policy_from(
@@ -3852,8 +3986,8 @@ mod tests {
                 "`seams = []`",
             ),
             (
-                "[rule.r]\nmessage = \"x\"\nregexp = 'a'\nseams = [\"text\"]\ncommand.before = [\"gh\"]\n",
-                "cannot run at the seam \"text\"",
+                "[rule.r]\nmessage = \"x\"\nregexp = 'a'\nseams = [\"guard\"]\ncommand.before = [\"gh\"]\n",
+                "cannot run at the seam \"guard\"",
             ),
             (
                 "[rule.r]\nmessage = \"x\"\nprose_regexp = 'a'\nseams = [\"commit\"]\ncommand.before = [\"gh\"]\n",
@@ -4888,6 +5022,7 @@ mod tests {
         assert_eq!(
             arrived,
             [
+                "no-empty-merge-subject",
                 "no-published-host-identity",
                 "no-published-markers",
                 "no-published-private-repo-names",

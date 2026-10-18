@@ -123,7 +123,7 @@ Absent means where the kind runs today:
 | kind | default | may name |
 |---|---|---|
 | `prose_regexp` | `shim`, `hook`, `text` | any of the three |
-| `regexp`, `require_regexp` | `shim` | `shim`, `hook` |
+| `regexp`, `require_regexp` | `shim` | `shim`, `hook`, `text` |
 
 The field needs `command.before`, which is what makes a rule a published-text
 rule, and it is refused on any other kind: a guard and an `exec` checker run
@@ -135,6 +135,14 @@ The case it exists for is the one above. Written as a `prose_regexp` rule so the
 hook would reach it, the rule also ran at `--text`, so a commit message that
 only *mentions* `gh release create` was refused. Leaving `text` out of `seams`
 keeps it at the two seams that publish.
+
+**At the text seam, a pattern rule is handed two subjects**: the text, as kind
+`text`, and its first line, as kind `title` (reported as `in subject line`).
+The first line as git stores it and `git log --format=%B` prints it, so a
+message whose subject is blank is judged as one; a blank line before the
+subject that git's cleanup would drop at `commit-msg` is not dropped here.
+Guards and prose rules at that seam are unchanged: they still read the whole
+text as prose.
 
 **At the hook, a pattern rule is handed two subjects**: the call's strings, as
 kind `text`, and the tool's name, as kind `tool`. The tool name is the hook's
@@ -587,7 +595,7 @@ it refuses** so the name predicts the rule list:
 | `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |
 | `private-names` | a private organization or repository named in a commit message, a staged diff, or the tracked tree of a **public** repository — **installs five stages**, and refuses to run until the repository says whether it is published |
 | `stale-visibility` | a policy declaring `private` over a repository the forge serves as **public** — **installs `pre-push` and `manual`**, and reaches the network. Refuses that one direction only; it can never confirm privacy |
-| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push — and, as `unowned-forge-target`, a `gh` invocation bound for a repository this workspace does not own, which refuses to run until the repository says who it is. **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [the set's command ceiling](#what-a-bundled-set-may-install) |
+| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push — and, as `unowned-forge-target`, a `gh` invocation bound for a repository this workspace does not own, which refuses to run until the repository says who it is, and, as `no-empty-merge-subject`, a merge commit subject that is blank once the forge's ` (#N)` is taken off, at the shim and over a message given to `--text` — see [a merge with no subject](#a-merge-with-no-subject). **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [the set's command ceiling](#what-a-bundled-set-may-install) |
 | `prose-shapes` | four sentence shapes that carry nothing — a sentence announcing what the next one will say, a clause behind a dash restating the one in front of it, a hedge admitting no uncertainty, an objection nobody raised being answered. **Installs no git hook**: its rules run in `uphold scan` and at the shim seam (`gh`, `git push`), and like `published-text` it refuses to load until the repository has declared the `[[shim]]` tables itself. `UPHOLD_ALLOW=<rule-id>` is the waiver for the sentence a rule is wrong about |
 
 The nine sets from `commit-message-residue` through `stale-visibility` install
@@ -1501,6 +1509,7 @@ stamped on it, the range about to be pushed.
 | `no-private-repo-names-in-files` | the same, anywhere in what is being introduced — content, **path names**, and at a push the **commit messages** the push publishes |
 | `prevent-public-push` | a push to somewhere off the allow-list **and off the forge's own answer** — a GitHub destination the allow-list refused is put to `gh`, and a forge that could not be asked is exit `2` |
 | `prevent-unowned-target` | a **command** told to publish to a repository this workspace does not own. The same decision as the row above, reached from the shim seam instead of a hook — so it registers with `command.before` and never `git.hooks`, and a destination it could not resolve is exit `2`. Carried by `published-text` as `unowned-forge-target`, with `owner_required` and `command.scope = "always"` in the bundled declaration |
+| `prevent-actor-mismatch` | a `gh` **write** about to run as anybody but the GitHub App the rule's `actor` names: no token in reach, so `gh` would use the login it stores; a personal token by its prefix; or an installation token the forge says is another App's. Registers with `command.before = ["gh"]` and `command.scope = "always"`, and is opt in: no bundled set declares it. See [who a write runs as](#who-a-write-runs-as) |
 | `no-local-merge` | a merge that would make a merge commit |
 | `no-merge-commit` | a commit finishing a merge or a squash merge |
 | `no-stale-hook-pins` | a pin naming no ref, or a branch — in `.pre-commit-config.yaml` **and** lefthook `remotes:`, at any depth in the tree — and a lefthook ref left behind its upstream. Whether a pre-commit `rev:` is the newest tag is `prek update --check`'s, run as the consumer's own `prek-pins-current` hook; a pin it **could not check** is exit `2` |
@@ -1729,9 +1738,10 @@ enforced and is not.
 | `foreign_hosts` | the `no-private-repo-names` family | host globs carrying no repository this rule needs resolved — replaces the top-level list for this rule, on top of the built-in one |
 | `allow` | `prevent-unusual-unicode-in-files` | codepoints admitted, optionally under one glob — `"U+00A0:docs/captured/**"` |
 | `allow` | `prevent-unusual-unicode`, `ascii-only-commit-subject` | codepoints admitted in a message, the codepoint alone — `"U+0430"`, `"U+2014"`; never one that draws nothing, which is refused at load |
+| `actor` | `prevent-actor-mismatch` | the GitHub App's bot login a `gh` write must run as — `"example-app[bot]"`; required, and held to that form at load |
 
-The "family" is `no-private-repo-names`, `-staged` and `-in-files`. No other
-built-in reads any parameter. The first four rows are **one row twice**:
+The "family" is `no-private-repo-names`, `-staged` and `-in-files`. No
+built-in outside this table reads any parameter. The first four rows are **one row twice**:
 `prevent-public-push` and `prevent-unowned-target` are one decision reached from
 two seams, and who this workspace is means the same thing whether a push or a
 `gh` invocation is asking. `no-stale-visibility` reads `visibility` and
@@ -2637,6 +2647,152 @@ command line, and are exit `2` rather than read: `gh release create
 text on the command line, `--notes`/`-n` for `gh` and `--title`/`-t` and
 `--description`/`-d` for `glab`, where it is judged.
 
+### Who a write runs as
+
+The checks above ask what an invocation publishes and where. Neither asks
+**whose credential** it runs under, and a workspace that requires its GitHub
+App for every write had nothing that refused a write made under a person's own
+login: plain `gh`, with no token in the environment, opens and merges pull
+requests as whoever `gh auth login` stored, and every one of them is authored
+by that person. `prevent-actor-mismatch` is the declaration that writes run as
+one App:
+
+```toml
+[rule.gh-writes-run-as-the-app]
+builtin = "prevent-actor-mismatch"
+actor = "example-app[bot]"        # the App's bot login, `<slug>[bot]`
+command.before = ["gh"]
+command.scope = "always"
+```
+
+**Opt in.** No bundled set carries it, and a repository that declares nothing
+behaves exactly as before; a person's own repository, written under that
+person's login, is the case that should declare nothing.
+
+**Which invocations it judges.** The writes the `gh` table's `match` list
+names, and no others: that list is the statement of which verbs publish, and
+this rule is consulted from it as every `command.before` rule is. A `gh api`
+call is a write when it carries a field or `--input` or names a method other
+than `GET`, the same reading that decides whether its text is checked, so
+`gh api graphql -f query=...` is judged whether the query reads or writes. A
+read — a bodyless `GET`, `gh pr view`, any verb the table does not name — is
+never judged: it publishes nothing, and this tool's own forge lookups are such
+reads. A write verb the table does not name, such as `gh pr ready`, is judged
+once it is added to `match`.
+
+**How it decides**, in this order, and the first answer settles it:
+
+| what `gh` would send to github.com | answer |
+|---|---|
+| no `GH_TOKEN`, no `GITHUB_TOKEN` (empty counts as unset, as it does to `gh`) | refused, exit `1`, offline: `gh` would use its stored login, which is a person's. `gh`'s own credential store is never read |
+| a token starting `ghp_`, `github_pat_`, `gho_` or `ghu_` | refused, exit `1`, offline: a personal token, a fine-grained one, an OAuth token, or a user-to-server token that acts as the person who authorised the App |
+| a token of no prefix GitHub issues | refused, exit `1`, offline |
+| an installation token, `ghs_` | `gh api graphql --hostname github.com` asks for the `viewer`'s login, which for an installation token is the App's bot login: the declared one runs, exit `0`; any other is refused, exit `1`, naming the App the forge reported |
+| an installation token, and the forge could not be asked or answered without a login | exit `2`: who the token belongs to is unknown, and the command does not run |
+
+`GH_TOKEN` is read before `GITHUB_TOKEN`, as `gh help environment` documents.
+The probe is `gh` itself, so the answer is about the credential the write will
+actually use, resolved by the client that will send it. The token reaches it
+through the inherited environment and **never on a command line**; `GH_DEBUG`
+and `DEBUG` are taken off the probe, and nothing this rule prints carries the
+token. The comparison ignores case, as GitHub logins do.
+
+**One host.** `actor` names an App on github.com. A write that reaches another
+host is exit `2`: `gh` sends a different token there (`GH_ENTERPRISE_TOKEN`), to
+a different forge with different Apps. The host is read the way `gh` reads it:
+for `gh api`, `--hostname`, then `GH_HOST`, then github.com — never the
+checkout's remote, which `gh api` does not consult; for every other verb, the
+destination's own host, then `GH_HOST`, then github.com.
+
+**First.** The rule is asked before anything else that reaches the forge, the
+`[[shim]]` table's own `public-target` scope included: that scope asks the forge
+whether the destination is public with the credential in question, and a forge
+that could not answer would otherwise end the run with exit `2` over a refusal
+nobody saw.
+
+**At load**, each of these is refused, because each would load and then judge
+nothing or judge against an account no token could be: no `actor`; an `actor`
+that is not `<slug>[bot]` — a user login, a slug with a space or a `/`, or a
+commit author's `<id>+<slug>[bot]@users.noreply.github.com`, whose refusal
+names the login it carries; `git.hooks` or `files.*`, where no `gh` write is
+about to happen; a `command.before` entry that is not `gh` or a `gh` command
+line; and any `command.scope` other than `always`, written on the rule. Whose
+credential a write uses does not depend on whether the destination is public,
+and the `public-target` scope a `gh` table usually carries would stand the rule
+down at every private repository, after asking the forge, with the very
+credential in question, whether it was public.
+
+**A refusal** names what was attempted (`gh pr merge`, `gh api` — never the
+arguments), what was found (a personal login, an unidentified token, or the
+App the forge reported), what is declared, and how to comply: run the command
+with an installation token of the declared App in `GH_TOKEN`, as the wrapper
+the repository's instructions name mints one, or change `actor` where the App
+itself changed. It ends the run before any other forge lookup, with the line
+`Nothing was published. Fix the credential, or override once with
+UPHOLD_ALLOW.` `UPHOLD_ALLOW=<rule-id>` stands this rule down for one
+invocation and is recorded as a bypass like any other.
+
+**What it does not cover.** It stands in front of `gh` where the shim does.
+A write made in the forge's web interface, through another client, or with the
+real `gh` invoked by its full path reaches the forge without passing it; holding
+those to the App is a server-side ruleset's job (a branch or repository ruleset
+whose bypass list and required reviews say who may merge), not a shim's.
+
+### A merge with no subject
+
+A bulk merge wrote ninety-five squash commits onto a default branch whose
+whole subject was ` (#N)`: each was handed an empty subject, and the forge
+appended the pull-request number to nothing. Every text guard passed them,
+because a guard judges what text says and an empty string says nothing.
+
+`no-empty-merge-subject` is one pattern rule in `published-text`, reached from
+two seams. Every repository that inherits the set has it, with nothing
+declared:
+
+```toml
+[rule.no-empty-merge-subject]
+require_regexp = '^\s*(?:[^\s(]|\((?:[^#]|$|#(?:[^0-9]|$|[0-9]+(?:[^0-9)]|$|\)\s*\S))))'
+subjects = ["title"]
+seams = ["shim", "text"]
+command.before = ["gh pr merge", "gh api"]
+command.scope = "always"
+```
+
+**The id is a contract.** A caller that relies on this verdict names the rule
+and checks that it is in force: `uphold rules --effective --json` lists it with
+`"seams": ["shim", "text"]`, and a policy that does not inherit `published-text`
+does not have it.
+
+**Blank** is empty or whitespace (Unicode `\s`) once one trailing ` (#N)` is
+taken off, because that suffix is what the forge appends to a squash subject: a
+commit whose subject is ` (#N)` was given nothing. The pattern is a
+`require_regexp`, so an empty subject is judged at all; it reads as alternatives
+on the first character that is not whitespace, which must be one that cannot
+open the suffix, or an `(` that does not go on as `#`, digits and `)` to the end
+of the line. A character that draws nothing is not whitespace and passes; it is
+`prevent-unusual-unicode`'s to judge.
+
+| seam | the subject it judges |
+|---|---|
+| the shim, `gh pr merge` | the verb's title flags (`-t`, `--subject`, as the `[[shim]]` table names them), and the subject the forge would compose where none is sent. An **exactly empty** `--subject ""` is not sent and is not judged: cli/cli v2.102.0, `pkg/cmd/pr/merge/http.go:68`, is `if payload.commitSubject != "" { input.CommitHeadline = ... }`, so the forge writes the pull request's title as if the flag were absent. The shim drops it where it reads what `gh` sends; the rule makes no exception for it. A subject of whitespace is sent, and refused |
+| the shim, `gh api` | every title field the call sends: `commit_title` on `repos/{owner}/{repo}/pulls/{number}/merge` in every field form (`-f`, `--raw-field`, `-F`, `--field` with a `@file` read whole, a top-level string of `--input`), sent as written, so an exactly empty one is an empty subject; and a GraphQL `commitHeadline` (on `mergePullRequest`, or `enablePullRequestAutoMerge`) written in the query as a string or block string, escapes decoded, or as a `$variable` given by `-f`/`-F` or an `--input` document's `variables`. The shim's kinds do not tell a pull request's title from a commit's subject, so a blank `title` on any `gh api` call is refused too; the forge refuses a blank title on every object that has one |
+| `uphold guard --text` and `uphold scan --text` | the first line of the text, so `git log -1 --format=%B \| uphold guard --text -` gets the verdict the merge would have got |
+
+**Never judged:** the body, by any route — `--body ""`, an empty `--body-file`,
+an empty `commit_message` — because an empty squash body is how GitHub's list
+of the branch's commits is left out of it, which is deliberate; and a subject
+left off, which the forge writes as the pull request's title. A
+`commitHeadline` inside a variable holding the whole `input` object
+(`mergePullRequest(input: $input)`) is not read, because binding that variable
+to `input` is a GraphQL parser's job. A merge made in the web interface, by an
+MCP tool, by another API client, or by the real `gh` run by its full path never
+passes the shim, and holding it to a subject is a server-side ruleset's job;
+`--text` is how such a commit is judged after the fact.
+
+The refusal is a pattern rule's: the rule id, the subject kind and where it was
+found, and the rule's message, ending at the shim with `Fix the text`.
+`UPHOLD_ALLOW=no-empty-merge-subject` stands it down for one invocation.
+
 ### The stand-downs
 
 Four paths through this seam **run the command with nothing checked, exit `0`,
@@ -2700,10 +2856,11 @@ the seam does not publish.
 Everything else this seam cannot establish is exit `2` and no command at all: a
 non-UTF-8 argument on a matched invocation, a body file that is not there, an
 alias that is a shell command, refspecs two readings disagree about, a
-destination `prevent-unowned-target` could not resolve, a scope that could not
-be evaluated under the default `unresolved = "refuse"`, a `current_exe()` the
-editor re-entry cannot be installed from, and a `UPHOLD_SHIM_INNER` deeper than
-`2`.
+destination `prevent-unowned-target` could not resolve, an installation token
+whose owner `prevent-actor-mismatch` could not establish, a write to a host
+other than github.com under that rule, a scope that could not be evaluated
+under the default `unresolved = "refuse"`, a `current_exe()` the editor re-entry
+cannot be installed from, and a `UPHOLD_SHIM_INNER` deeper than `2`.
 
 ### The checker contract
 

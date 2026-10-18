@@ -210,6 +210,7 @@ pub(crate) struct Written {
     pub allowed_repos: Option<Vec<String>>,
     pub visibility_required: Option<bool>,
     pub allow: Option<Vec<String>>,
+    pub actor: Option<String>,
 }
 
 /// The literals a `forbidden_literals` rule searches for, and where they come
@@ -327,6 +328,13 @@ pub(crate) struct Parameters {
     /// the list safe to extend without re-reading it: adding a line cannot
     /// tighten the check on anybody else's file.
     pub allow: Option<Vec<String>>,
+    /// The GitHub App's bot login a `gh` write must run as, for
+    /// `prevent-actor-mismatch`: `"example-app[bot]"`.
+    ///
+    /// Parsed into an [`crate::guard::actor::Actor`] where the file is read,
+    /// so a value no installation token could answer to -- a user login, an
+    /// author address -- never reaches a loaded rule.
+    pub actor: Option<crate::guard::actor::Actor>,
     /// links-resolve: refuse a selection that yields no links at all.
     pub require_any_link: Option<bool>,
     /// links-resolve: let a link resolve outside the repository.
@@ -387,6 +395,7 @@ impl Parameters {
                 .is_some()
                 .then_some("visibility_required"),
             self.allow.is_some().then_some("allow"),
+            self.actor.is_some().then_some("actor"),
         ]
         .into_iter()
         .flatten()
@@ -749,6 +758,14 @@ impl Check {
             allowed_repos: written.allowed_repos.take(),
             visibility_required: written.visibility_required.take(),
             allow: written.allow.take(),
+            actor: written
+                .actor
+                .take()
+                .map(|actor| {
+                    crate::guard::actor::Actor::parse(&actor)
+                        .map_err(|why| Fatal::new(format!("rule {id:?}: `actor` = {why}")))
+                })
+                .transpose()?,
             require_any_link: written.require_any_link.take(),
             allow_outside_repo: written.allow_outside_repo.take(),
             require_any_anchor: written.require_any_anchor.take(),
@@ -1063,6 +1080,8 @@ impl Rule {
     ///   belongs at, and in the other direction: a git hook is handed no
     ///   destination for a command, so `command.before` is the whole of where
     ///   it can run.
+    /// * an INVOCATION-judging built-in -- one that reads whose credential a
+    ///   `gh` invocation runs under. Only a command about to run has one.
     ///
     /// Anything else reads an index, an identity or a push range, and has
     /// nothing to say about a pull-request body.
@@ -1073,6 +1092,7 @@ impl Rule {
         ) || self.builtin().is_some_and(|builtin| {
             crate::guard::TEXT_GUARDS.contains(&builtin)
                 || crate::guard::TARGET_GUARDS.contains(&builtin)
+                || crate::guard::INVOCATION_GUARDS.contains(&builtin)
         })
     }
 
@@ -1177,6 +1197,13 @@ impl Rule {
         self.parameters()
             .and_then(|parameters| parameters.allow.as_deref())
             .unwrap_or(&[])
+    }
+
+    /// The App `prevent-actor-mismatch` holds a `gh` write to. No default:
+    /// `validate` refuses that built-in without one.
+    pub(crate) fn actor(&self) -> Option<&crate::guard::actor::Actor> {
+        self.parameters()
+            .and_then(|parameters| parameters.actor.as_ref())
     }
 
     pub(crate) fn require_any_link(&self) -> bool {
@@ -1650,11 +1677,13 @@ impl Rule {
             let built_in_note = if check == CheckKind::Builtin {
                 format!(
                     "\nThe built-ins that can judge the text a command publishes are {}, \
-                     and the ones that can judge where it publishes are {}; any other reads \
-                     an index, an identity or a push range, and has nothing to say about a \
+                     the ones that can judge where it publishes are {}, and the ones that \
+                     judge a `gh` invocation itself are {}; any other reads an \
+                     index, an identity or a push range, and has nothing to say about a \
                      pull-request body.",
                     crate::guard::TEXT_GUARDS.join(", "),
-                    crate::guard::TARGET_GUARDS.join(", ")
+                    crate::guard::TARGET_GUARDS.join(", "),
+                    crate::guard::INVOCATION_GUARDS.join(", ")
                 )
             } else {
                 String::new()
@@ -2048,6 +2077,73 @@ impl Rule {
                  it exists for; declare that and nothing else, and use \
                  `prevent-public-push` for a push",
                 self.id
+            )));
+        }
+        if crate::guard::INVOCATION_GUARDS.contains(&name) {
+            self.validate_invocation_guard(name)?;
+        }
+        Ok(())
+    }
+
+    /// What an invocation-judging built-in needs to mean anything, refused at
+    /// load where any of it is missing.
+    ///
+    /// Each refusal is a rule that would otherwise load and read as the
+    /// declaration of a working guard. With no `actor` it compares the
+    /// credential with nothing. At a git hook or in a scan no `gh` write is
+    /// about to happen. Before a command that is not `gh`, a GitHub App's login
+    /// would be held against a credential that command never sends. And under
+    /// any scope but `always` it would stand down by the table's
+    /// `public-target` at a private destination -- where a write authored
+    /// under the wrong account is the same failure, and where finding out
+    /// whether the destination is public is itself a forge call made with the
+    /// very credential in question.
+    fn validate_invocation_guard(&self, name: &str) -> Result<()> {
+        let id = &self.id;
+        let judges = "the GitHub credential `gh` sends";
+        let scope_reason = "Whose credential a write runs under does not depend on whether the \
+                            destination is public, and a table's `public-target` would stand \
+                            this rule down at every private repository -- after asking the \
+                            forge, with the very credential in question, whether it is public";
+        if self.actor().is_none() {
+            return Err(Fatal::new(format!(
+                "rule {id:?}: {name:?} holds every `gh` write to one GitHub App, and \
+                 `actor` is the App: `actor = \"example-app[bot]\"`, the bot login \
+                 GitHub reports for that App's installation token. Without it there is \
+                 nothing to compare a credential with"
+            )));
+        }
+        if self.git.is_some() || self.files.is_some() {
+            return Err(Fatal::new(format!(
+                "rule {id:?}: {name:?} judges {judges} for a `gh` write about to run, and \
+                 at a git hook or in a scan no such write is about to happen -- there \
+                 this rule would look at nothing and report clean. \
+                 `command.before = [\"gh\"]` is the seam it exists for; declare that and \
+                 nothing else"
+            )));
+        }
+        let Some(where_) = self.command.as_ref() else {
+            return Err(Fatal::new(format!(
+                "rule {id:?}: {name:?} runs where a `[[shim]]` stands in front of `gh`, \
+                 and nothing here says so: write `command.before = [\"gh\"]` and \
+                 `command.scope = \"always\"`"
+            )));
+        };
+        if let Some(other) = where_
+            .before
+            .iter()
+            .find(|line| line.split_whitespace().next() != Some("gh"))
+        {
+            return Err(Fatal::new(format!(
+                "rule {id:?}: {name:?} judges {judges}, and `command.before` names \
+                 {other:?}, which sends none of it. Name `gh`, or the `gh` command lines \
+                 this rule stands in front of, and nothing else"
+            )));
+        }
+        if !matches!(where_.scope, Some(crate::shim::Scope::Always)) {
+            return Err(Fatal::new(format!(
+                "rule {id:?}: {name:?} needs `command.scope = \"always\"` written beside \
+                 it. {scope_reason}"
             )));
         }
         Ok(())

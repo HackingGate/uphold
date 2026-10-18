@@ -95,6 +95,13 @@ fn shim_with(root: &Path, args: &[&str], variables: &[(&str, &str)]) -> Output {
         .env_remove("GH_REPO")
         .env_remove("GH_HOST")
         .env_remove("GITLAB_GROUP")
+        // The credential `gh` would send is the subject of a guard here, so a
+        // token the test runner happens to export -- CI's own -- must not
+        // decide a case that did not set one.
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_ENTERPRISE_TOKEN")
+        .env_remove("GITHUB_ENTERPRISE_TOKEN")
         .envs(variables.iter().copied())
         .output()
         .unwrap()
@@ -8536,4 +8543,765 @@ fn a_refused_body_to_a_private_destination_leaves_no_trace_of_it_in_the_file() {
         .output()
         .unwrap();
     assert_eq!(code(&scan), 0, "{}", stderr(&scan));
+}
+
+// ── who a `gh` write runs as ─────────────────────────────────────────
+
+/// The declaration: every write the `gh` table matches runs as one App.
+///
+/// The table's own scope is `always` so no case needs a forge to say whether
+/// the destination is public; the rule writes `always` itself, as the loader
+/// requires of it.
+const ACTOR_POLICY: &str = r#"
+[rule.app-actor]
+builtin = "prevent-actor-mismatch"
+actor = "example-app[bot]"
+command.before = ["gh"]
+command.scope = "always"
+
+[[shim]]
+command = "gh"
+match = ["pr:create", "pr:comment", "pr:merge", "api:*"]
+text_flags = ["-b", "--body"]
+title_flags = ["-t", "--title"]
+target_flags = ["-R", "--repo"]
+target = "forge-repo"
+scope = "always"
+"#;
+
+/// A `gh` that answers the identity probe by the token in its environment,
+/// writes the probe's argv to `viewer-argv` in the fixture, and otherwise
+/// reports the call instead of making one.
+///
+/// The token decides because that is what the forge does. One per answer:
+/// the declared App, another App, a forge that cannot be reached, and a forge
+/// that answers with no login.
+fn stub_gh_viewer(root: &Path) {
+    stub(
+        root,
+        "gh",
+        &format!(
+            "#!/bin/sh\n\
+             case \"$*\" in\n\
+             *viewer*)\n\
+               printf '%s\\n' \"$*\" >> '{}'\n\
+               token=\"${{GH_TOKEN:-$GITHUB_TOKEN}}\"\n\
+               case \"$token\" in\n\
+               ghs_declared*) echo '{{\"data\":{{\"viewer\":{{\"login\":\"example-app[bot]\"}}}}}}' ;;\n\
+               ghs_other*) echo '{{\"data\":{{\"viewer\":{{\"login\":\"other-app[bot]\"}}}}}}' ;;\n\
+               ghs_garbled*) echo '{{\"data\":{{}}}}' ;;\n\
+               *) echo 'error connecting to api.github.com' >&2; exit 1 ;;\n\
+               esac ;;\n\
+             *) echo \"gh ran: $*\" ;;\n\
+             esac\n",
+            root.join("viewer-argv").display()
+        ),
+    );
+}
+
+/// The fixture for this section: the declaration, the stub, nothing asked yet.
+fn actor_workspace(policy: &str) -> PathBuf {
+    let root = workspace(policy);
+    stub_gh_viewer(&root);
+    root
+}
+
+/// What the identity probe was run with, one line per run.
+fn viewer_argv(root: &Path) -> Vec<String> {
+    std::fs::read_to_string(root.join("viewer-argv"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The write every case below attempts, unless it says otherwise.
+/// Both halves of the message are given, so the forge is not asked what it
+/// would compose: that lookup is the text guards' business, and the stub here
+/// answers only the identity probe.
+const MERGE: &[&str] = &[
+    "gh",
+    "pr",
+    "merge",
+    "1",
+    "--squash",
+    "-t",
+    "Fix the parser",
+    "-b",
+    "Ordinary body",
+];
+
+#[test]
+fn a_write_with_no_token_is_the_stored_personal_login_and_is_refused() {
+    // The incident, as it happened: plain `gh` in a workspace that declared
+    // its App, and `gh` falling back to the login it stores, which is the
+    // operator's. Refused without asking anybody.
+    let root = actor_workspace(ACTOR_POLICY);
+    let output = shim(&root, MERGE);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"), "{}", stdout(&output));
+    let text = stderr(&output);
+    for says in [
+        "app-actor: `gh pr merge` would run as a personal login",
+        "neither GH_TOKEN nor GITHUB_TOKEN",
+        "run as example-app[bot]",
+        "change `actor` on rule \"app-actor\"",
+        "Nothing was published. Fix the credential, or override once with UPHOLD_ALLOW.",
+    ] {
+        assert!(text.contains(says), "{says:?} not in {text}");
+    }
+    assert!(viewer_argv(&root).is_empty(), "the forge was asked");
+}
+
+#[test]
+fn every_personal_token_kind_is_refused_without_asking_the_forge() {
+    let root = actor_workspace(ACTOR_POLICY);
+    for (variable, token, kind) in [
+        (
+            "GH_TOKEN",
+            "ghp_0123456789abcdef",
+            "classic personal access token",
+        ),
+        (
+            "GITHUB_TOKEN",
+            "github_pat_0123456789",
+            "fine-grained personal access token",
+        ),
+        ("GH_TOKEN", "gho_0123456789abcdef", "OAuth token"),
+        ("GH_TOKEN", "ghu_0123456789abcdef", "user-to-server token"),
+    ] {
+        let output = shim_with(&root, MERGE, &[(variable, token)]);
+        assert_eq!(code(&output), 1, "{token}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("gh ran:"));
+        let text = stderr(&output);
+        assert!(text.contains("would run as a personal login"), "{text}");
+        assert!(text.contains(&format!("{variable} holds")), "{text}");
+        assert!(text.contains(kind), "{kind:?} not in {text}");
+        assert!(!text.contains(token), "the token was printed: {text}");
+    }
+    assert!(viewer_argv(&root).is_empty(), "the forge was asked");
+}
+
+#[test]
+fn another_apps_installation_token_is_refused_by_the_login_the_forge_reports() {
+    let root = actor_workspace(ACTOR_POLICY);
+    let token = "ghs_other0123456789";
+    let output = shim_with(&root, MERGE, &[("GH_TOKEN", token)]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"));
+    let text = stderr(&output);
+    assert!(text.contains("would run as other-app[bot]"), "{text}");
+    assert!(text.contains("run as example-app[bot]"), "{text}");
+    assert!(!text.contains(token), "the token was printed: {text}");
+    // Asked once, of `gh`, with the token in its environment and not on its
+    // command line.
+    let asked = viewer_argv(&root);
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    let probe = asked.first().unwrap();
+    assert!(!probe.contains(token), "the token was in argv: {asked:?}");
+    assert!(probe.contains("--hostname github.com"), "{asked:?}");
+}
+
+#[test]
+fn the_declared_apps_installation_token_runs_the_write() {
+    let root = actor_workspace(ACTOR_POLICY);
+    for variable in ["GH_TOKEN", "GITHUB_TOKEN"] {
+        let output = shim_with(&root, MERGE, &[(variable, "ghs_declared0123456789")]);
+        assert_eq!(code(&output), 0, "{variable}: {}", stderr(&output));
+        assert!(
+            stdout(&output).contains("gh ran: pr merge 1"),
+            "{}",
+            stdout(&output)
+        );
+    }
+    let asked = viewer_argv(&root);
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert!(asked.iter().all(|argv| !argv.contains("ghs_")), "{asked:?}");
+}
+
+#[test]
+fn a_forge_that_could_not_say_whose_token_it_is_is_exit_2() {
+    let root = actor_workspace(ACTOR_POLICY);
+    for (token, said) in [
+        (
+            "ghs_offline0123456789",
+            "error connecting to api.github.com",
+        ),
+        ("ghs_garbled0123456789", "no `data.viewer.login`"),
+    ] {
+        let output = shim_with(&root, MERGE, &[("GH_TOKEN", token)]);
+        assert_eq!(code(&output), 2, "{token}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("gh ran:"));
+        let text = stderr(&output);
+        assert!(text.contains("could not be established"), "{text}");
+        assert!(text.contains(said), "{said:?} not in {text}");
+        assert!(text.contains("UPHOLD_ALLOW=app-actor"), "{text}");
+        assert!(!text.contains(token), "the token was printed: {text}");
+    }
+}
+
+#[test]
+fn a_mutating_api_call_is_a_write_and_a_bodyless_get_is_not() {
+    let root = actor_workspace(ACTOR_POLICY);
+    for write in [
+        &[
+            "gh",
+            "api",
+            "-X",
+            "DELETE",
+            "repos/example-user/widget/issues/comments/1",
+        ][..],
+        &["gh", "api", "graphql", "-f", "query=mutation { x }"][..],
+        &["gh", "pr", "comment", "1", "-b", "Ordinary body"][..],
+    ] {
+        let output = shim(&root, write);
+        assert_eq!(code(&output), 1, "{write:?}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("gh ran:"), "{write:?}");
+    }
+    // A read is never guarded: a GET with no field, which is also what this
+    // tool's own lookups run, and a verb the table does not name as a write.
+    for read in [
+        &["gh", "api", "repos/example-user/widget"][..],
+        &["gh", "pr", "view", "1"][..],
+        &["gh", "pr", "list"][..],
+    ] {
+        let output = shim(&root, read);
+        assert_eq!(code(&output), 0, "{read:?}: {}", stderr(&output));
+        assert!(stdout(&output).contains("gh ran:"), "{read:?}");
+    }
+    assert!(viewer_argv(&root).is_empty(), "the forge was asked");
+}
+
+#[test]
+fn a_write_to_another_host_is_exit_2_rather_than_judged_against_github_com() {
+    let root = actor_workspace(ACTOR_POLICY);
+    let output = shim_with(
+        &root,
+        &[
+            "gh",
+            "api",
+            "--hostname",
+            "github.example.com",
+            "-X",
+            "POST",
+            "repos/example-user/widget/issues",
+        ],
+        &[("GH_TOKEN", "ghs_declared0123456789")],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"));
+    assert!(
+        stderr(&output).contains("reaches github.example.com"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(viewer_argv(&root).is_empty(), "the forge was asked");
+}
+
+#[test]
+fn gh_api_reaches_gh_host_and_not_the_checkouts_remote() {
+    // `gh api` takes its host from `--hostname`, then `GH_HOST`, and never from
+    // the remote: read off the remote, this write to another host was judged
+    // as a github.com one, against a token `gh` does not send there.
+    let root = actor_workspace(ACTOR_POLICY);
+    support::git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example-user/widget.git",
+        ],
+    );
+    let output = shim_with(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/example-user/widget/issues",
+            "-f",
+            "title=x",
+        ],
+        &[
+            ("GH_TOKEN", "ghs_declared0123456789"),
+            ("GH_HOST", "github.example.com"),
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"));
+    assert!(
+        stderr(&output).contains("reaches github.example.com"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(viewer_argv(&root).is_empty(), "the forge was asked");
+}
+
+#[test]
+fn the_actor_refusal_is_given_before_the_tables_scope_asks_the_forge() {
+    // A `public-target` table asks the forge whether the destination is
+    // public, with the credential in question. Asked first, a forge that could
+    // not answer ended the run with exit 2 and the actor refusal was never
+    // seen.
+    let root = workspace(&ACTOR_POLICY.replace(
+        "target = \"forge-repo\"\nscope = \"always\"",
+        "target = \"forge-repo\"\nscope = \"public-target\"",
+    ));
+    support::git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example-user/widget.git",
+        ],
+    );
+    stub(
+        &root,
+        "gh",
+        &format!(
+            "#!/bin/sh\n\
+             case \"$*\" in\n\
+             *visibility*) echo \"$*\" >> '{}'; echo 'error connecting to api.github.com' >&2; exit 1 ;;\n\
+             *) echo \"gh ran: $*\" ;;\n\
+             esac\n",
+            root.join("visibility-asked").display()
+        ),
+    );
+    let output = shim(&root, MERGE);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("would run as a personal login"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !root.join("visibility-asked").exists(),
+        "the forge was asked first"
+    );
+}
+
+#[test]
+fn uphold_allow_names_the_rule_and_records_the_bypass() {
+    let root = actor_workspace(ACTOR_POLICY);
+    let junit = evidence(&root);
+    let output = shim_recorded(&root, MERGE, &junit, &[("UPHOLD_ALLOW", "app-actor")]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"));
+    let files = support::junit::files_in(&junit);
+    assert_eq!(files.len(), 1, "{files:?}");
+    let (suite, _) = support::junit::suite(files.first().unwrap());
+    let case = support::junit::case(&suite, "app-actor");
+    assert_eq!(support::junit::state(case).0, "skipped", "{suite:?}");
+    assert_eq!(support::junit::property(case, "allowed"), Some("id"));
+}
+
+#[test]
+fn without_the_declaration_a_write_under_a_personal_login_runs_as_before() {
+    // A repository that is a person's own declares nothing, and nothing here
+    // changes for it: no token, a personal token, and nobody asked.
+    let root = actor_workspace(
+        r#"
+[rule.no-outage-names]
+message = "name a change for the work, not the customer"
+regexp = "acme-outage"
+command.before = ["gh"]
+files.exclude = ["policy/**"]
+
+[[shim]]
+command = "gh"
+match = ["pr:create", "pr:comment", "pr:merge", "api:*"]
+text_flags = ["-b", "--body"]
+title_flags = ["-t", "--title"]
+scope = "always"
+"#,
+    );
+    for variables in [&[][..], &[("GH_TOKEN", "ghp_0123456789abcdef")][..]] {
+        let output = shim_with(&root, MERGE, variables);
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert!(stdout(&output).contains("gh ran: pr merge 1"));
+    }
+    assert!(viewer_argv(&root).is_empty(), "the forge was asked");
+}
+
+#[test]
+fn a_malformed_declaration_is_refused_before_anything_runs() {
+    let root = actor_workspace(&ACTOR_POLICY.replace("example-app[bot]", "example-user"));
+    let output = shim_with(&root, MERGE, &[("GH_TOKEN", "ghs_declared0123456789")]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"));
+    assert!(
+        stderr(&output).contains("is not an App's bot login"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+// ── a merge commit with no subject ───────────────────────────────────
+
+/// A consuming repository: the inherit line, an owner, a remote, and its own
+/// shim tables. The merge-subject rule is the set's and nowhere in this file,
+/// so every case below is judged by the one rule body that ships.
+const MERGE_SUBJECT_POLICY: &str = r#"
+owner = "example-user"
+
+[inherit]
+sets = ["published-text"]
+
+[[shim]]
+command = "gh"
+match = ["pr:merge", "api:*"]
+text_flags = ["-b", "--body"]
+title_flags = ["-t", "--subject"]
+file_flags = ["-F", "--body-file"]
+target_flags = ["-R", "--repo"]
+target = "forge-repo"
+scope = "always"
+
+[[shim]]
+command = "git"
+match = ["push:*"]
+"#;
+
+/// The rule's id: a contract, since a caller that relies on this verdict names
+/// it and checks that it is in force.
+const MERGE_SUBJECT_RULE: &str = "no-empty-merge-subject";
+
+/// The fixture: the policy, a remote the destination guard owns, and a `gh`
+/// that can say what the forge would compose for a merge whose subject was not
+/// given, which is the forge's to write and is allowed.
+fn merge_workspace() -> PathBuf {
+    let root = workspace(MERGE_SUBJECT_POLICY);
+    support::git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example-user/widget.git",
+        ],
+    );
+    forge_stub(&root);
+    root
+}
+
+/// `gh pr merge 1 --squash` with `extra` after it.
+fn merge_with(extra: &[&str]) -> Vec<String> {
+    ["gh", "pr", "merge", "1", "--squash"]
+        .iter()
+        .chain(extra)
+        .map(|word| (*word).to_owned())
+        .collect()
+}
+
+fn run_merge(root: &Path, args: &[String]) -> Output {
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    shim(root, &args)
+}
+
+/// `uphold guard --text -` over `message`, in `root`.
+fn guard_text(root: &Path, message: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["guard", "--text", "-"])
+        .current_dir(root)
+        .env_remove("UPHOLD_ALLOW")
+        .env_remove("UPHOLD_JUNIT")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), message.as_bytes()).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+/// The merge endpoint as a path.
+const MERGE_ENDPOINT: &str = "repos/example-user/widget/pulls/1/merge";
+
+/// The merge endpoint, in the two spellings an agent writes.
+const MERGE_ENDPOINTS: &[&str] = &[
+    MERGE_ENDPOINT,
+    "https://api.github.com/repos/example-user/widget/pulls/1/merge",
+];
+
+#[test]
+fn one_rule_gives_one_verdict_at_the_shim_and_at_the_text_seam() {
+    // The same subjects through both seams. At the shim, the REST merge sends
+    // `commit_title` as written; at the text seam, the same subject is the
+    // first line of the message the squash merge would have stored -- with the
+    // forge's ` (#N)` already on it, which is the case the suffix is for.
+    let root = merge_workspace();
+    for (subject, refused) in [
+        ("", true),
+        (" ", true),
+        ("\t", true),
+        (" (#12)", true),
+        ("(#12)", true),
+        ("  (#12)  ", true),
+        ("Fix x (#12)", false),
+        ("Fix x", false),
+        ("(#12) Fix x", false),
+        ("(wip) Fix x", false),
+    ] {
+        let expected = i32::from(refused);
+        let field = format!("commit_title={subject}");
+        let at_shim = shim(
+            &root,
+            &["gh", "api", "-X", "PUT", MERGE_ENDPOINT, "-f", &field],
+        );
+        assert_eq!(
+            code(&at_shim),
+            expected,
+            "shim {subject:?}: {}",
+            stderr(&at_shim)
+        );
+        assert_eq!(
+            !stdout(&at_shim).contains("gh ran:"),
+            refused,
+            "{subject:?}"
+        );
+        for message in [
+            subject.to_owned(),
+            format!("{subject}\n\nWhy it changed.\n"),
+        ] {
+            let at_text = guard_text(&root, &message);
+            assert_eq!(
+                code(&at_text),
+                expected,
+                "text {message:?}: {}",
+                stderr(&at_text)
+            );
+        }
+        if refused {
+            let text = stderr(&at_shim);
+            assert!(
+                text.contains(&format!("{MERGE_SUBJECT_RULE}: the title subject")),
+                "{text}"
+            );
+            assert!(
+                text.contains("the title subject does not satisfy"),
+                "{text}"
+            );
+            assert!(
+                stderr(&guard_text(&root, subject)).contains("(in subject line)"),
+                "{subject:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_rule_is_listed_as_in_force_at_both_seams() {
+    // What a caller that relies on the verdict reads to fail closed when the
+    // rule is missing: the id, and the seams it runs at.
+    let root = merge_workspace();
+    let listed = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["rules", "--effective", "--json"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_eq!(code(&listed), 0, "{}", stderr(&listed));
+    let rules: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    let rule = rules
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rule| rule["id"] == MERGE_SUBJECT_RULE)
+        .unwrap();
+    assert_eq!(rule["seams"], serde_json::json!(["shim", "text"]), "{rule}");
+}
+
+#[test]
+fn a_merge_given_a_whitespace_subject_is_refused() {
+    // `gh` sends a subject of whitespace as the headline, and the forge then
+    // writes ` (#N)` -- or a line of spaces before it -- onto the base branch.
+    let root = merge_workspace();
+    for extra in [
+        &["--subject", " "][..],
+        &["--subject= \t"][..],
+        &["-t", "   ", "--body", "Why."][..],
+        &["--subject", " (#12)"][..],
+    ] {
+        let output = run_merge(&root, &merge_with(extra));
+        assert_eq!(code(&output), 1, "{extra:?}: {}", stderr(&output));
+        assert!(!stdout(&output).contains("gh ran:"), "{extra:?}");
+        let text = stderr(&output);
+        assert!(text.contains(MERGE_SUBJECT_RULE), "{text}");
+        assert!(
+            text.contains("Nothing was published. Fix the text"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_merge_given_an_empty_subject_a_written_one_or_none_runs() {
+    let root = merge_workspace();
+    for extra in [
+        // Exactly empty: `gh` sends no headline for it (cli/cli v2.102.0,
+        // pkg/cmd/pr/merge/http.go:68), so the forge writes the pull request's
+        // title, as if the flag were absent, and the shim reads that instead.
+        &["--subject", ""][..],
+        &["--subject="][..],
+        // Written.
+        &["--subject", "Fix the parser", "--body", "Why it was wrong."][..],
+        // Absent: the forge writes the subject, which is the pull request's
+        // title, and the body.
+        &[][..],
+        // An empty body is not judged. It is how the list of the branch's
+        // commits is kept out of a squash commit.
+        &["-t", "Fix the parser", "--body", ""][..],
+        &["-t", "Fix the parser", "-b", " "][..],
+    ] {
+        let output = run_merge(&root, &merge_with(extra));
+        assert_eq!(code(&output), 0, "{extra:?}: {}", stderr(&output));
+        assert!(stdout(&output).contains("gh ran: pr merge 1"), "{extra:?}");
+    }
+    std::fs::write(root.join("empty.md"), "").unwrap();
+    let output = run_merge(
+        &root,
+        &merge_with(&["-t", "Fix the parser", "-F", "empty.md"]),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn a_merge_through_the_api_with_an_empty_or_blank_title_is_refused_in_every_field_form() {
+    // The API sends what it is handed, so here an exactly empty title is an
+    // empty subject too -- the realistic road to ` (#N)`.
+    let root = merge_workspace();
+    std::fs::write(root.join("empty.txt"), "").unwrap();
+    std::fs::write(
+        root.join("body.json"),
+        r#"{"commit_title":"","merge_method":"squash"}"#,
+    )
+    .unwrap();
+    for endpoint in MERGE_ENDPOINTS {
+        for fields in [
+            &["-f", "commit_title="][..],
+            &["--raw-field", "commit_title= "][..],
+            &["-F", "commit_title="][..],
+            &["--field", "commit_title=@empty.txt"][..],
+            &["--input", "body.json"][..],
+        ] {
+            let mut args = vec!["gh", "api", "-X", "PUT", endpoint];
+            args.extend(fields);
+            let output = shim(&root, &args);
+            assert_eq!(code(&output), 1, "{args:?}: {}", stderr(&output));
+            assert!(!stdout(&output).contains("gh ran:"), "{args:?}");
+            assert!(
+                stderr(&output).contains(MERGE_SUBJECT_RULE),
+                "{}",
+                stderr(&output)
+            );
+        }
+    }
+}
+
+#[test]
+fn a_merge_through_the_api_with_a_title_or_none_runs_whatever_its_body() {
+    let root = merge_workspace();
+    std::fs::write(
+        root.join("body.json"),
+        r#"{"commit_title":"Fix the parser","commit_message":""}"#,
+    )
+    .unwrap();
+    for endpoint in MERGE_ENDPOINTS {
+        for fields in [
+            &[
+                "-f",
+                "commit_title=Fix the parser",
+                "-f",
+                "commit_message=Why.",
+            ][..],
+            &["-F", "commit_title=Fix the parser"][..],
+            &["--input", "body.json"][..],
+            // An empty body is not judged.
+            &["-f", "commit_title=Fix the parser", "-f", "commit_message="][..],
+            // No title: the forge composes one.
+            &["-f", "merge_method=squash", "-f", "commit_message="][..],
+        ] {
+            let mut args = vec!["gh", "api", "-X", "PUT", endpoint];
+            args.extend(fields);
+            let output = shim(&root, &args);
+            assert_eq!(code(&output), 0, "{args:?}: {}", stderr(&output));
+            assert!(stdout(&output).contains("gh ran: api"), "{args:?}");
+        }
+    }
+}
+
+#[test]
+fn a_graphql_merge_with_a_blank_headline_is_refused_as_a_literal_or_a_variable() {
+    let root = merge_workspace();
+    let literal = |headline: &str| {
+        format!(
+            "query=mutation {{ mergePullRequest(input: {{pullRequestId: \"PR_1\", \
+             mergeMethod: SQUASH, commitHeadline: {headline}}}) {{ clientMutationId }} }}"
+        )
+    };
+    let variable = "query=mutation($id: ID!, $headline: String) { mergePullRequest(input: \
+                    {pullRequestId: $id, commitHeadline: $headline}) { clientMutationId } }";
+    std::fs::write(
+        root.join("graphql.json"),
+        serde_json::json!({
+            "query": variable.trim_start_matches("query="),
+            "variables": {"id": "PR_1", "headline": " "},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    for (fields, expected) in [
+        (vec![literal("\"\"")], 1),
+        (vec![literal("\" \\n \"")], 1),
+        (vec![literal("\"\\u0020\"")], 1),
+        (vec![literal("\"\"\"  \"\"\"")], 1),
+        (vec![literal("\" (#12)\"")], 1),
+        (vec![literal("\"Fix the parser\"")], 0),
+        (vec![variable.to_owned(), String::from("headline=")], 1),
+        (vec![String::from("headline= "), variable.to_owned()], 1),
+        (
+            vec![variable.to_owned(), String::from("headline=Fix the parser")],
+            0,
+        ),
+        // A variable nobody gave is no headline, and the forge composes one.
+        (vec![variable.to_owned()], 0),
+    ] {
+        let mut args = vec!["gh", "api", "graphql"];
+        for field in &fields {
+            args.extend(["-f", field.as_str()]);
+        }
+        let output = shim(&root, &args);
+        assert_eq!(code(&output), expected, "{fields:?}: {}", stderr(&output));
+        if expected == 1 {
+            assert!(
+                stderr(&output).contains(MERGE_SUBJECT_RULE),
+                "{}",
+                stderr(&output)
+            );
+        }
+    }
+    let output = shim(&root, &["gh", "api", "graphql", "--input", "graphql.json"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+}
+
+#[test]
+fn uphold_allow_stands_the_merge_subject_rule_down_for_one_invocation() {
+    let root = merge_workspace();
+    let output = shim_with(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "PUT",
+            "repos/example-user/widget/pulls/1/merge",
+            "-f",
+            "commit_title=",
+        ],
+        &[("UPHOLD_ALLOW", MERGE_SUBJECT_RULE)],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("gh ran:"));
 }
