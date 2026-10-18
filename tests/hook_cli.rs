@@ -926,3 +926,156 @@ fn a_message_key_is_prose_so_a_lookalike_passes_and_an_invisible_character_does_
     assert!(reason.contains("prevent-unusual-unicode"), "{reason}");
     assert!(reason.contains("U+200B"), "{reason}");
 }
+
+// -- UPHOLD_JUNIT: what a call decided, as one JUnit document ---------------
+
+/// [`hook`], with `args` after `hook` and `UPHOLD_JUNIT` set to `junit` when
+/// given.
+fn hook_recorded(root: &Path, args: &[&str], stdin: &str, junit: Option<&Path>) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command
+        .arg("hook")
+        .args(args)
+        .current_dir(root)
+        .env_remove("UPHOLD_ALLOW")
+        .env_remove("UPHOLD_JUNIT")
+        .env("HOME", "/home/example-user")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(junit) = junit {
+        command.env("UPHOLD_JUNIT", junit);
+    }
+    let mut child = command.spawn().unwrap();
+    if let Err(error) = child.stdin.as_mut().unwrap().write_all(stdin.as_bytes()) {
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
+    }
+    child.wait_with_output().unwrap()
+}
+
+/// Every call writes its own document into the directory, refused or not:
+/// a seam that wrote only on a refusal would make an absent file mean "passed
+/// or never ran". Each rule the call consulted is a testcase under the
+/// `uphold hook <harness>` suite, its subject is the tool's name, and the body
+/// it judged is in no file.
+#[test]
+fn every_call_writes_one_document_naming_each_rule_and_never_the_body() {
+    let root = workspace(
+        "hook-junit",
+        Some(&format!("{POLICY}\n{PROSE_POLICY}{SHIMS}")),
+    );
+    let evidence = root.join("evidence");
+    std::fs::create_dir_all(&evidence).unwrap();
+    let tool = "mcp__github__create_pull_request";
+
+    let refused = hook_recorded(
+        &root,
+        &["claude-code"],
+        &event(tool, "Arguably fine.\n\nGenerated with Claude Code"),
+        Some(&evidence),
+    );
+    assert_eq!(code(&refused), 0, "{}", stderr(&refused));
+    assert!(stdout(&refused).contains("deny"), "{}", stdout(&refused));
+    let clean = hook_recorded(
+        &root,
+        &["claude-code"],
+        &event(tool, "An ordinary change."),
+        Some(&evidence),
+    );
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert!(stdout(&clean).is_empty(), "{}", stdout(&clean));
+
+    let files = support::junit::files_in(&evidence);
+    assert_eq!(files.len(), 2, "{files:?}");
+    for path in &files {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("uphold-hook-claude-code-"), "{name}");
+    }
+    let (first, text) = support::junit::suite(files.first().unwrap());
+    assert_eq!(first.name.as_str(), "uphold hook claude-code");
+    assert_eq!(support::junit::package(&first), Some("uphold"));
+    let ai = support::junit::case(&first, "prevent-ai-author");
+    assert_eq!(
+        support::junit::state(ai),
+        ("failure", Some("prevent-ai-author refused"))
+    );
+    assert_eq!(
+        support::junit::property(ai, "builtin"),
+        Some("prevent-ai-author")
+    );
+    let hedge = support::junit::case(&first, "no-empty-hedge-here");
+    assert_eq!(
+        support::junit::state(hedge),
+        ("failure", Some("no-empty-hedge-here refused"))
+    );
+    // A prose rule names no built-in.
+    assert_eq!(support::junit::property(hedge, "builtin"), None);
+    let identity = support::junit::case(&first, "no-running-os-identity-metadata");
+    assert_eq!(support::junit::state(identity), ("pass", None));
+    for case in &first.test_cases {
+        assert_eq!(support::junit::properties(case, "subject"), [tool]);
+        assert_eq!(support::junit::property(case, "seam"), Some("hook"));
+    }
+    assert!(!text.contains("Arguably"), "{text}");
+    assert!(!text.contains("Generated"), "{text}");
+
+    let (second, _) = support::junit::suite(files.last().unwrap());
+    assert_eq!((second.tests, second.failures), (3, 0), "{second:?}");
+}
+
+/// The hook runs once per publishing call, so one file would keep only the
+/// last; a value naming anything but an existing directory is exit 2, named,
+/// before the call is judged.
+#[test]
+fn a_value_that_is_not_a_directory_is_refused_naming_it() {
+    let root = workspace("hook-junit-file", Some(POLICY));
+    let file = root.join("hook.xml");
+    let output = hook_recorded(
+        &root,
+        &["claude-code"],
+        &event("publish", "Generated with Claude Code"),
+        Some(&file),
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains(&format!("UPHOLD_JUNIT={}", file.display())),
+        "{}",
+        stderr(&output)
+    );
+    assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+    assert!(!file.exists());
+
+    let flagged = hook_recorded(
+        &root,
+        &["claude-code", "--junit", "hook.xml"],
+        &event("publish", "Generated with Claude Code"),
+        None,
+    );
+    assert_eq!(code(&flagged), 2, "{}", stderr(&flagged));
+    assert!(
+        stderr(&flagged).contains("--junit="),
+        "{}",
+        stderr(&flagged)
+    );
+    assert!(!file.exists());
+}
+
+/// `--junit DIR` is the spelling for the harness's settings file, before or
+/// after the harness name, and a relative value is the directory the hook
+/// runs in.
+#[test]
+fn the_flag_names_the_directory_on_either_side_of_the_harness() {
+    let root = workspace("hook-junit-flag", Some(POLICY));
+    std::fs::create_dir_all(root.join("evidence")).unwrap();
+    for args in [
+        ["--junit", "evidence", "codex"],
+        ["codex", "--junit", "evidence"],
+    ] {
+        let output = hook_recorded(&root, &args, &event("publish", "plain"), None);
+        assert_eq!(code(&output), 0, "{args:?}: {}", stderr(&output));
+    }
+    let files = support::junit::files_in(&root.join("evidence"));
+    assert_eq!(files.len(), 2, "{files:?}");
+    let (suite, _) = support::junit::suite(files.first().unwrap());
+    assert_eq!(suite.name.as_str(), "uphold hook codex");
+}

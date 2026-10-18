@@ -28,7 +28,7 @@ use crate::comments::{self, Language};
 use crate::config::{CheckKind, Policy};
 use crate::error::{Fatal, Result};
 use crate::report::Failure;
-use crate::text::Seam;
+use crate::text::{Answer, Judgment, Seam, Verdict, asked};
 
 /// One run of prose, unwrapped.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -401,8 +401,16 @@ pub(crate) fn compile(pattern: &str, id: &str) -> Result<Regex> {
 /// And only the rules whose `seams`, where given, names `seam`: a rule written
 /// to refuse a command through the shim and the hook is not asked about a
 /// commit message that merely mentions the command.
-pub(crate) fn over_text(policy: &Policy, seam: Seam, text: &str) -> Result<Vec<Failure>> {
-    let mut failures = Vec::new();
+///
+/// Each rule asked answers into `ledger`, under `recorded`, the kind of
+/// subject the seam calls this text.
+pub(crate) fn over_text(
+    policy: &Policy,
+    seam: Seam,
+    text: &str,
+    recorded: &str,
+    ledger: &mut Vec<Judgment>,
+) -> Result<()> {
     for rule in policy.of_check(CheckKind::ProseRegexp) {
         if rule
             .command
@@ -418,11 +426,17 @@ pub(crate) fn over_text(policy: &Policy, seam: Seam, text: &str) -> Result<Vec<F
         // is a judgement about a sentence, and the sentence it is wrong about
         // is one invocation's -- which is what `UPHOLD_ALLOW` is for, and why
         // it stays in the environment rather than becoming a field.
-        if crate::guard::bypassed(&rule.id) {
+        if let Some(allowed) = crate::guard::allowed(&rule.id) {
             eprintln!("uphold: {} bypassed by UPHOLD_ALLOW", rule.id);
+            ledger.push(Judgment::of(rule, Some(recorded), Answer::Bypass(allowed)));
             continue;
         }
-        let matcher = compile(rule.prose_regexp().unwrap_or_default(), &rule.id)?;
+        let matcher = asked(
+            ledger,
+            rule,
+            Some(recorded),
+            compile(rule.prose_regexp().unwrap_or_default(), &rule.id),
+        )?;
         let body = of_text(text)
             .into_iter()
             .filter(|span| matcher.is_match(&span.text))
@@ -435,12 +449,17 @@ pub(crate) fn over_text(policy: &Policy, seam: Seam, text: &str) -> Result<Vec<F
             })
             .collect::<Vec<String>>()
             .join("\n");
-        if body.is_empty() {
-            continue;
-        }
-        failures.push(Failure::new(&rule.id, rule.message(), body));
+        ledger.push(Judgment::of(
+            rule,
+            Some(recorded),
+            if body.is_empty() {
+                Answer::Pass
+            } else {
+                Answer::Refused(Verdict::Rule(Failure::new(&rule.id, rule.message(), body)))
+            },
+        ));
     }
-    Ok(failures)
+    Ok(())
 }
 
 #[cfg(test)]

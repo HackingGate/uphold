@@ -132,6 +132,13 @@ quick-junit = "0.8"
 # `std` is the feature that converts a `SystemTime`, and the default features,
 # the local time zone among them, stay off.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+# Already in the tree under quick-junit. Names the one file each invocation
+# writes into a directory `UPHOLD_JUNIT` names, so two `gh` calls in one act
+# never pick the same name. `v8` and not `v4` or `v7`: those draw on a random
+# source and bring `getrandom` with them, while this one is built from the
+# clock, the process id and a counter, which is unique by construction on one
+# machine and adds no crate.
+uuid = { version = "1", default-features = false, features = ["v8"] }
 
 [target.'cfg(unix)'.dependencies]
 # Git discovers hooks with access(X_OK), which checks the caller's permission

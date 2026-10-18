@@ -263,8 +263,8 @@ be committed, reviewed once, and permanent, which is not a bypass.
 not own, names a file and uphold writes one JUnit document to it. The
 format is not one of uphold's own because the fleet already has one evidence
 format: a gate writes JUnit XML under `.test-evidence/` and a publisher turns
-the directory into a report. The four testcase states are the four answers a
-guard already gives, so publishers and report tools read the file with no glue
+the directory into a report. The testcase states are the answers a
+guard already gives, and one more for a rule stood down at a destination, so publishers and report tools read the file with no glue
 and nothing downstream learns a second schema.
 
 The caller names the file, rather than uphold printing to stdout or keeping a
@@ -279,6 +279,22 @@ variable exists because a hook's command line is the hook definition's, pinned
 by the repository, so a caller running `git push` has no argv to add a flag
 to; the environment is the one channel that reaches through git and the runner
 to the guard, which is also why `UPHOLD_ALLOW` is a variable.
+
+A seam that runs many times in one act cannot share one file that is replaced
+each time: two `gh` calls would leave the second call's record and lose the
+first. So the same request may name a directory, and each invocation writes its
+own file there. That is the results-directory convention JUnit tooling already
+has, and a publisher that reads every XML under `.test-evidence/` needs no
+change to read them. The shim and the hook accept only the directory form,
+because for them the single file is a way to lose evidence without a word.
+
+A rule stood down at a destination is recorded as a skipped testcase, while a
+rule a stage never declared is not recorded at all. The second is a fact about
+the policy: nothing aimed the rule there, and a reader can look that up. The
+first is a decision made at run time about one invocation, and the question a
+reader of a bypass log asks is whether the check ran on that body or not. The
+file answers it without a second source. Leaving it out would make absence mean
+"set aside, passed or never ran", the ambiguity the file exists to remove.
 
 `git commit --no-verify` and `git push --no-verify` run no hook, so no file is
 written. That needs no code here: a verifier that expects evidence on every
