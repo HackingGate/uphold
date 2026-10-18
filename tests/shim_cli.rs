@@ -8799,6 +8799,91 @@ fn a_write_to_another_host_is_exit_2_rather_than_judged_against_github_com() {
 }
 
 #[test]
+fn gh_api_reaches_gh_host_and_not_the_checkouts_remote() {
+    // `gh api` takes its host from `--hostname`, then `GH_HOST`, and never from
+    // the remote: read off the remote, this write to another host was judged
+    // as a github.com one, against a token `gh` does not send there.
+    let root = actor_workspace(ACTOR_POLICY);
+    support::git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example-user/widget.git",
+        ],
+    );
+    let output = shim_with(
+        &root,
+        &[
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            "repos/example-user/widget/issues",
+            "-f",
+            "title=x",
+        ],
+        &[
+            ("GH_TOKEN", "ghs_declared0123456789"),
+            ("GH_HOST", "github.example.com"),
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("gh ran:"));
+    assert!(
+        stderr(&output).contains("reaches github.example.com"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(viewer_argv(&root).is_empty(), "the forge was asked");
+}
+
+#[test]
+fn the_actor_refusal_is_given_before_the_tables_scope_asks_the_forge() {
+    // A `public-target` table asks the forge whether the destination is
+    // public, with the credential in question. Asked first, a forge that could
+    // not answer ended the run with exit 2 and the actor refusal was never
+    // seen.
+    let root = workspace(&ACTOR_POLICY.replace(
+        "target = \"forge-repo\"\nscope = \"always\"",
+        "target = \"forge-repo\"\nscope = \"public-target\"",
+    ));
+    support::git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example-user/widget.git",
+        ],
+    );
+    stub(
+        &root,
+        "gh",
+        &format!(
+            "#!/bin/sh\n\
+             case \"$*\" in\n\
+             *visibility*) echo \"$*\" >> '{}'; echo 'error connecting to api.github.com' >&2; exit 1 ;;\n\
+             *) echo \"gh ran: $*\" ;;\n\
+             esac\n",
+            root.join("visibility-asked").display()
+        ),
+    );
+    let output = shim(&root, MERGE);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("would run as a personal login"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !root.join("visibility-asked").exists(),
+        "the forge was asked first"
+    );
+}
+
+#[test]
 fn uphold_allow_names_the_rule_and_records_the_bypass() {
     let root = actor_workspace(ACTOR_POLICY);
     let junit = evidence(&root);

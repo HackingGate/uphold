@@ -6320,16 +6320,19 @@ fn invocation_judged(
     if guards.is_empty() {
         return Ok(Vec::new());
     }
-    // The host `gh` will reach: `--hostname` on an api call, then the
-    // destination's own host, then `GH_HOST`, then github.com -- the order `gh`
-    // resolves it in. The destination is the resolver every other guard here
-    // reads, so this cannot disagree with them about which forge an invocation
-    // is on, and one that could not be resolved ends the run here, in the
-    // resolver's own sentence, rather than being read as github.com.
-    let destination_host = scopes.destination()?.hostname.clone();
-    let host = shim
-        .api_hostname(words)
-        .or(destination_host)
+    // The host `gh` will reach, in the order `gh` resolves it. `gh api` never
+    // infers one from the checkout: `--hostname`, then `GH_HOST`, then
+    // github.com. Every other verb reads the repository's host first -- the
+    // destination resolver every other guard here reads, so this cannot
+    // disagree with them about which forge an invocation is on, and one that
+    // could not be resolved ends the run here, in the resolver's own
+    // sentence, rather than being read as github.com.
+    let named = if shim.api_rest(words).is_some() {
+        shim.api_hostname(words)
+    } else {
+        scopes.destination()?.hostname.clone()
+    };
+    let host = named
         .or_else(|| nonempty_env("GH_HOST"))
         .unwrap_or_else(|| String::from("github.com"));
     let command = shim.attempted(words);
@@ -6523,6 +6526,19 @@ pub(crate) fn run(
         }
         collected = shim.collect(root, &words)?;
         let mut scopes = CommandContext::new(shim, root, &collected, &words);
+        // Whose credential this write runs under, where a rule declares whose
+        // it must be. Asked before anything else that reaches the forge -- the
+        // table's own scope included, since `public-target` asks the forge
+        // whether the destination is public, with the very credential in
+        // question -- and a refusal ends the run here: a lookup that failed
+        // would bury it under its own exit 2, and nothing the text or the
+        // destination could say lets a write run as the wrong account. The
+        // actor rule's own scope is `always`, which the loader requires, so
+        // asking it reaches no forge.
+        let credential = invocation_judged(shim, policy, &words, &checkers, &mut scopes, record)?;
+        if !credential.is_empty() {
+            return Ok(refused(name, &credential, Fix::Credential));
+        }
         let in_scope = scopes.holds(&shim.scope, policy)?;
         for rule in &checkers {
             let holds = crate::text::asked(
@@ -6569,17 +6585,6 @@ pub(crate) fn run(
                  been checked",
                 words.join(" ")
             )));
-        }
-        // Whose credential this write runs under, where a rule declares whose
-        // it must be. Asked before anything else that reaches the forge, at the
-        // earliest point the host is known, and a refusal ends the run here:
-        // every lookup below is made with the same credential, a lookup that
-        // fails would bury this refusal under its own exit 2, and nothing the
-        // text or the destination could say lets a write run as the wrong
-        // account.
-        let credential = invocation_judged(shim, policy, &words, &checkers, &mut scopes, record)?;
-        if !credential.is_empty() {
-            return Ok(refused(name, &credential, Fix::Credential));
         }
         // What the forge holds of this text, before anything judges it.
         composed_read = held_text(shim, name, &words, &checkers, any_applies, &mut collected)?;

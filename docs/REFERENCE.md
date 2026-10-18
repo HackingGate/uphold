@@ -2698,9 +2698,17 @@ and `DEBUG` are taken off the probe, and nothing this rule prints carries the
 token. The comparison ignores case, as GitHub logins do.
 
 **One host.** `actor` names an App on github.com. A write that reaches another
-host — `gh api --hostname`, a destination on another host, `GH_HOST` — is exit
-`2`: `gh` sends a different token there (`GH_ENTERPRISE_TOKEN`), to a different
-forge with different Apps.
+host is exit `2`: `gh` sends a different token there (`GH_ENTERPRISE_TOKEN`), to
+a different forge with different Apps. The host is read the way `gh` reads it:
+for `gh api`, `--hostname`, then `GH_HOST`, then github.com — never the
+checkout's remote, which `gh api` does not consult; for every other verb, the
+destination's own host, then `GH_HOST`, then github.com.
+
+**First.** The rule is asked before anything else that reaches the forge, the
+`[[shim]]` table's own `public-target` scope included: that scope asks the forge
+whether the destination is public with the credential in question, and a forge
+that could not answer would otherwise end the run with exit `2` over a refusal
+nobody saw.
 
 **At load**, each of these is refused, because each would load and then judge
 nothing or judge against an account no token could be: no `actor`; an `actor`
