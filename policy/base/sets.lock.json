@@ -833,6 +833,16 @@
     ],
     "rules": [
       {
+        "builtin": "no-empty-merge-message",
+        "command": {
+          "before": [
+            "gh"
+          ],
+          "scope": "always"
+        },
+        "id": "no-empty-merge-message"
+      },
+      {
         "builtin": "text-literals",
         "command": {
           "before": [

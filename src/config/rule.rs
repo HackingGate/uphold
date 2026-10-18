@@ -1080,8 +1080,9 @@ impl Rule {
     ///   belongs at, and in the other direction: a git hook is handed no
     ///   destination for a command, so `command.before` is the whole of where
     ///   it can run.
-    /// * an ACTOR-judging built-in -- one that reads whose credential the
-    ///   invocation runs under. Only a command about to run has one.
+    /// * an INVOCATION-judging built-in -- one that reads what the shim parsed
+    ///   off a `gh` invocation: whose credential it runs under, the message a
+    ///   merge writes. Only a command about to run has either.
     ///
     /// Anything else reads an index, an identity or a push range, and has
     /// nothing to say about a pull-request body.
@@ -1092,7 +1093,7 @@ impl Rule {
         ) || self.builtin().is_some_and(|builtin| {
             crate::guard::TEXT_GUARDS.contains(&builtin)
                 || crate::guard::TARGET_GUARDS.contains(&builtin)
-                || crate::guard::ACTOR_GUARDS.contains(&builtin)
+                || crate::guard::INVOCATION_GUARDS.contains(&builtin)
         })
     }
 
@@ -1678,12 +1679,12 @@ impl Rule {
                 format!(
                     "\nThe built-ins that can judge the text a command publishes are {}, \
                      the ones that can judge where it publishes are {}, and the ones that \
-                     can judge whose credential it runs under are {}; any other reads an \
+                     judge a `gh` invocation itself are {}; any other reads an \
                      index, an identity or a push range, and has nothing to say about a \
                      pull-request body.",
                     crate::guard::TEXT_GUARDS.join(", "),
                     crate::guard::TARGET_GUARDS.join(", "),
-                    crate::guard::ACTOR_GUARDS.join(", ")
+                    crate::guard::INVOCATION_GUARDS.join(", ")
                 )
             } else {
                 String::new()
@@ -2079,28 +2080,43 @@ impl Rule {
                 self.id
             )));
         }
-        if crate::guard::ACTOR_GUARDS.contains(&name) {
-            self.validate_actor_guard(name)?;
+        if crate::guard::INVOCATION_GUARDS.contains(&name) {
+            self.validate_invocation_guard(name)?;
         }
         Ok(())
     }
 
-    /// What an actor-judging built-in needs to mean anything, refused at load
-    /// where any of it is missing.
+    /// What an invocation-judging built-in needs to mean anything, refused at
+    /// load where any of it is missing.
     ///
     /// Each refusal is a rule that would otherwise load and read as the
-    /// declaration of a working guard. With no `actor` it compares the
-    /// credential with nothing. At a git hook or in a scan no `gh` write is
-    /// about to happen. Before a command that is not `gh`, a GitHub App's login
-    /// would be held against a credential that command never sends. And under
-    /// any scope but `always` it would stand down by the table's
-    /// `public-target` at a private destination -- where a write authored
-    /// under the wrong account is the same failure, and where finding out
-    /// whether the destination is public is itself a forge call made with the
-    /// very credential in question.
-    fn validate_actor_guard(&self, name: &str) -> Result<()> {
+    /// declaration of a working guard. Without `actor`, the actor guard
+    /// compares the credential with nothing. At a git hook or in a scan no `gh`
+    /// invocation is about to run. Before a command that is not `gh`, what is
+    /// judged -- a GitHub credential, a GitHub merge message -- is something
+    /// that command never sends. And under any scope but `always` the rule
+    /// would stand down by the table's `public-target` at a private
+    /// destination, where a write under the wrong account and a merge commit
+    /// with no subject are the same failure they are anywhere else.
+    fn validate_invocation_guard(&self, name: &str) -> Result<()> {
         let id = &self.id;
-        if self.actor().is_none() {
+        let (judges, scope_reason) = if name == "prevent-actor-mismatch" {
+            (
+                "the GitHub credential `gh` sends",
+                "Whose credential a write runs under does not depend on whether the \
+                 destination is public, and a table's `public-target` would stand this \
+                 rule down at every private repository -- after asking the forge, with \
+                 the very credential in question, whether it is public",
+            )
+        } else {
+            (
+                "the merge commit message `gh` sends",
+                "A merge commit with no subject is the same defect on a private \
+                 repository's default branch as on a public one, and a table's \
+                 `public-target` would stand this rule down at every private repository",
+            )
+        };
+        if name == "prevent-actor-mismatch" && self.actor().is_none() {
             return Err(Fatal::new(format!(
                 "rule {id:?}: {name:?} holds every `gh` write to one GitHub App, and \
                  `actor` is the App: `actor = \"example-app[bot]\"`, the bot login \
@@ -2110,9 +2126,9 @@ impl Rule {
         }
         if self.git.is_some() || self.files.is_some() {
             return Err(Fatal::new(format!(
-                "rule {id:?}: {name:?} judges the credential a `gh` write is about to run \
-                 under, and at a git hook or in a scan no such write is about to happen \
-                 -- there this rule would look at nothing and report clean. \
+                "rule {id:?}: {name:?} judges {judges} for a `gh` write about to run, and \
+                 at a git hook or in a scan no such write is about to happen -- there \
+                 this rule would look at nothing and report clean. \
                  `command.before = [\"gh\"]` is the seam it exists for; declare that and \
                  nothing else"
             )));
@@ -2130,18 +2146,15 @@ impl Rule {
             .find(|line| line.split_whitespace().next() != Some("gh"))
         {
             return Err(Fatal::new(format!(
-                "rule {id:?}: {name:?} judges the GitHub credential `gh` sends, and \
-                 `command.before` names {other:?}, which sends none of it. Name `gh`, or \
-                 the `gh` command lines this rule stands in front of, and nothing else"
+                "rule {id:?}: {name:?} judges {judges}, and `command.before` names \
+                 {other:?}, which sends none of it. Name `gh`, or the `gh` command lines \
+                 this rule stands in front of, and nothing else"
             )));
         }
         if !matches!(where_.scope, Some(crate::shim::Scope::Always)) {
             return Err(Fatal::new(format!(
                 "rule {id:?}: {name:?} needs `command.scope = \"always\"` written beside \
-                 it. Whose credential a write runs under does not depend on whether the \
-                 destination is public, and a table's `public-target` would stand this \
-                 rule down at every private repository -- after asking the forge, with \
-                 the very credential in question, whether it is public"
+                 it. {scope_reason}"
             )));
         }
         Ok(())

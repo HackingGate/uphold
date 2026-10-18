@@ -152,3 +152,25 @@ builtin = "prevent-unowned-target"
 owner_required = true
 command.before = ["gh"]
 command.scope = "always"
+
+# The one question about a merge commit's message no rule above can ask:
+# whether there is one. A bulk merge wrote ninety-five squash commits whose
+# whole subject was ` (#N)` -- an empty subject, with the forge's pull-request
+# suffix appended to nothing -- and every text guard here passed each of them,
+# because a guard judges what text says and an empty string says nothing.
+#
+# In the set and not left to each repository to declare, because no
+# repository means it: a declaration nobody would write differently is one
+# nobody should have to write. It refuses only a subject or body that was
+# GIVEN and is blank -- `gh pr merge --subject ""`, `--body " "`, or a
+# `commit_title` or `commit_message` field on a `gh api` call to a pull
+# request's merge endpoint. A flag left off is the forge's to compose, and
+# its default subject is the pull request's title.
+#
+# `command.scope = "always"`, for the reason the rule above gives in its own
+# words: an empty subject on a private repository's default branch is the
+# same defect, and `public-target` would stand the rule down there.
+[rule.no-empty-merge-message]
+builtin = "no-empty-merge-message"
+command.before = ["gh"]
+command.scope = "always"

@@ -3574,6 +3574,37 @@ mod tests {
         }
     }
 
+    /// The merge-message guard is held to the same seam and scope, and needs
+    /// no parameter at all.
+    #[test]
+    fn a_merge_message_declaration_is_held_to_the_shim_seam_and_always() {
+        let declared = |lines: &str| {
+            policy_from(&format!(
+                "[rule.merge-message]\nbuiltin = \"no-empty-merge-message\"\n{lines}\n\
+                 [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\n"
+            ))
+        };
+        declared("command.before = [\"gh\"]\ncommand.scope = \"always\"\n")
+            .expect("the set's own declaration");
+        for (lines, says) in [
+            (
+                "command.before = [\"gh\"]\ncommand.scope = \"always\"\ngit.hooks = [\"pre-push\"]\n",
+                "no such write is about to happen",
+            ),
+            (
+                "command.before = [\"gh\"]\n",
+                "`command.scope = \"always\"`",
+            ),
+            (
+                "command.before = [\"gh\"]\ncommand.scope = \"always\"\nactor = \"example-app[bot]\"\n",
+                "read by nothing",
+            ),
+        ] {
+            let error = declared(lines).expect_err(lines).to_string();
+            assert!(error.contains(says), "{lines}\n{error}");
+        }
+    }
+
     /// And `actor` is that built-in's alone, as every parameter is its own.
     #[test]
     fn an_actor_on_another_builtin_is_refused() {
@@ -4980,6 +5011,7 @@ mod tests {
         assert_eq!(
             arrived,
             [
+                "no-empty-merge-message",
                 "no-published-host-identity",
                 "no-published-markers",
                 "no-published-private-repo-names",

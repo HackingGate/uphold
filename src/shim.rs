@@ -621,6 +621,27 @@ pub(crate) const API_TITLE_KEYS: &[&str] = &["title", "commit_title", "subject"]
 /// hook too, for the same reason as [`API_TITLE_KEYS`].
 pub(crate) const API_MESSAGE_KEYS: &[&str] = &["squash_commit_message", "merge_commit_message"];
 
+/// The fields of GitHub's merge endpoint that carry the merge commit's message:
+/// its subject and its body. `PUT repos/{owner}/{repo}/pulls/{number}/merge`.
+const API_MERGE_MESSAGE_KEYS: &[&str] = &["commit_title", "commit_message"];
+
+/// Whether a `gh api` endpoint is a pull request's merge, in any spelling the
+/// path half of [`repo_in_api_path`] reads: a bare path, a leading `/`, a whole
+/// URL, a query string. Placeholders occupy whole segments, so `{owner}` and
+/// `:repo` stand where the names do and change nothing about the shape.
+fn merges_a_pull_request(endpoint: &str) -> bool {
+    let path = endpoint.split(['?', '#']).next().unwrap_or(endpoint);
+    let path = match path.split_once("://") {
+        Some((_, rest)) => rest.split_once('/').map_or("", |(_, rest)| rest),
+        None => path,
+    };
+    let segments: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    matches!(
+        segments.as_slice(),
+        [.., "repos", _, _, "pulls", _, "merge"]
+    )
+}
+
 /// The `api` option that names a file holding the whole body.
 const API_INPUT_FLAGS: &[&str] = &["--input"];
 
@@ -2883,6 +2904,49 @@ impl Shim {
             .join(" ")
     }
 
+    /// The merge commit message parts this invocation gives, where it writes a
+    /// merge commit: `gh pr merge`, and `gh api` to a pull request's merge
+    /// endpoint. `None` for every other invocation.
+    ///
+    /// On `gh pr merge` the parts are the subjects collected off the table's
+    /// flags for the verb -- a title subject is the commit subject, a body
+    /// subject the commit body -- so which flags carry them is the table's to
+    /// say and not a list here. A part the invocation did not give is not in
+    /// the list, and the forge composes it.
+    fn merge_message(
+        &self,
+        argv: &[String],
+        collected: &Collected,
+    ) -> Option<Vec<crate::guard::merge_message::Part>> {
+        if self.command != "gh" {
+            return None;
+        }
+        if self.api_rest(argv).is_some() {
+            return collected.api_merge.clone();
+        }
+        let words = self.verb_words(argv);
+        if (words.verb.as_str(), words.noun.as_str()) != ("pr", "merge") {
+            return None;
+        }
+        Some(
+            collected
+                .flagged
+                .iter()
+                .filter_map(|(index, flag)| {
+                    let subject = collected.subjects.get(*index)?;
+                    let headline = subject.kind == Subject::HEADLINE;
+                    (headline || subject.kind == "text").then(|| {
+                        crate::guard::merge_message::Part {
+                            given_by: flag.clone(),
+                            subject: headline,
+                            text: subject.value.clone(),
+                        }
+                    })
+                })
+                .collect(),
+        )
+    }
+
     /// Whether a matched invocation carries anything to publish at all.
     ///
     /// True for every verb but one. `gh api` and `glab api` are the read side
@@ -2907,6 +2971,25 @@ impl Shim {
     fn collect_api(&self, call: &ApiCall) -> Result<Collected> {
         let mut subjects = Vec::new();
         let mut stdin = None;
+        // Each merge message field as `gh` sends it, in whichever field form it
+        // arrived, where the endpoint is a pull request's merge.
+        let mut api_merge = (self.command == "gh"
+            && call
+                .positional
+                .first()
+                .is_some_and(|endpoint| merges_a_pull_request(endpoint)))
+        .then(Vec::new);
+        let mut merge_field = |key: &str, value: &str| {
+            if let Some(parts) = api_merge.as_mut()
+                && API_MERGE_MESSAGE_KEYS.contains(&key)
+            {
+                parts.push(crate::guard::merge_message::Part {
+                    given_by: key.to_owned(),
+                    subject: key == "commit_title",
+                    text: value.to_owned(),
+                });
+            }
+        };
         let placeholders = Placeholders::of(&self.command, &call.placeholders)?;
         let mut current = Current::default();
         for (flag, field) in &call.fields {
@@ -2925,9 +3008,14 @@ impl Shim {
                 } else {
                     value.to_owned()
                 };
+                merge_field(key, &value);
                 field_subjects(&mut subjects, key, value);
                 continue;
             }
+            // A typed value `gh` sends as a string -- an empty one is the
+            // empty string -- is read as written; one it would send as a
+            // number, a boolean or null is no subject text either way.
+            merge_field(key, value);
             let what = format!("`{flag} {key}=...`");
             // `glab` decodes a typed value that starts as JSON does, and puts
             // the placeholders into each string and key of it, so a string
@@ -2993,6 +3081,17 @@ impl Shim {
         }
         if let Some(file) = &call.input {
             let text = self.api_file("--input", file, &mut stdin)?;
+            // The top-level fields of the request body, which is where a merge
+            // reads its message from; a body that is not a JSON object has none.
+            if let Ok(serde_json::Value::Object(fields)) =
+                serde_json::from_str::<serde_json::Value>(&text)
+            {
+                for (key, value) in &fields {
+                    if let Some(value) = value.as_str() {
+                        merge_field(key, value);
+                    }
+                }
+            }
             match json_strings(&text) {
                 Ok(Some(walked)) => walked_subjects(&mut subjects, walked),
                 Ok(None) if self.command == "gh" || text.trim().is_empty() => {
@@ -3022,6 +3121,7 @@ impl Shim {
             withheld: Withheld::Nothing,
             stdin,
             flagged: Vec::new(),
+            api_merge,
         })
     }
 
@@ -3277,6 +3377,11 @@ pub(crate) struct Collected {
     /// The flag each flag-collected subject came through, by its index in
     /// `subjects`.
     pub flagged: Vec<(usize, String)>,
+    /// The merge commit message fields of a `gh api` call to a pull request's
+    /// `merge` endpoint, as sent; `None` for a call to any other endpoint. Kept
+    /// apart from `subjects` because a subject knows its kind and not its key,
+    /// and a merge's other fields -- `merge_method`, `sha` -- are prose there.
+    pub api_merge: Option<Vec<crate::guard::merge_message::Part>>,
 }
 
 /// The forges whose questions this tool knows how to ask.
@@ -6063,59 +6168,95 @@ fn hand_off(
     std::process::exit(status.code().unwrap_or(1));
 }
 
-/// Report every refusal one run collected, and the line that says what to fix:
-/// `what` is the text, the destination or the credential, because a reader
-/// sent to reread a body that is fine leaves the real cause as it was.
-fn refused(name: &str, refusals: &[String], what: &str) -> Exit {
+/// What a refused run's closing line tells the reader to fix.
+///
+/// Told apart because a reader sent to reread a body that is fine leaves the
+/// real cause as it was.
+#[derive(Clone, Copy)]
+enum Fix {
+    /// The credential: an invocation guard refused the account it runs as,
+    /// and nothing else was asked.
+    Credential,
+    /// The text, the destination, or both, by how many of the refusals were
+    /// about the destination.
+    Counted(usize),
+}
+
+/// Report every refusal one run collected, and the line that says what to fix.
+fn refused(name: &str, refusals: &[String], fix: Fix) -> Exit {
     for refusal in refusals {
         eprintln!("{name}: {refusal}");
     }
+    let what = match fix {
+        Fix::Credential => "the credential",
+        Fix::Counted(0) => "the text",
+        Fix::Counted(destination) if destination == refusals.len() => "the destination",
+        Fix::Counted(_) => "the text and the destination",
+    };
     eprintln!("Nothing was published. Fix {what}, or override once with UPHOLD_ALLOW.");
     Exit::Violations
 }
 
-/// Ask every actor-judging rule this invocation names about the credential it
-/// runs under, and answer with the refusals, each named the way a hook names
-/// one.
+/// Ask every invocation guard this invocation names about it, and answer with
+/// the refusals each gave, named the way a hook names one: the actor guard's
+/// first, about the credential, then the merge-message guard's, about the text.
 ///
 /// Once per run and outside the subject loop, as the destination is: `gh pr
-/// merge --squash` carries no subject and is a write. Which verbs are writes is
-/// the `match` list the caller already read -- the table is the one statement
-/// of it, and `carries_a_body` reads a `gh api` call with a field or a method
-/// other than GET as one.
-fn actor_judged(
+/// merge --squash` may carry no subject and is a write. Which verbs are writes
+/// is the `match` list the caller already read -- the table is the one
+/// statement of it, and `carries_a_body` reads a `gh api` call with a field or
+/// a method other than GET as one.
+fn invocation_judged(
     shim: &Shim,
     policy: &Policy,
     words: &[String],
     checkers: &[&Rule],
+    collected: &Collected,
     scopes: &mut CommandContext<'_>,
     record: &mut Record,
-) -> Result<Vec<String>> {
-    if !checkers.iter().any(|rule| {
-        rule.builtin()
-            .is_some_and(|builtin| crate::guard::ACTOR_GUARDS.contains(&builtin))
-    }) {
-        return Ok(Vec::new());
+) -> Result<(Vec<String>, Vec<String>)> {
+    let judged = |rule: &&&Rule, builtin: &str| rule.builtin() == Some(builtin);
+    let guards: Vec<&Rule> = checkers
+        .iter()
+        .filter(|rule| {
+            rule.builtin()
+                .is_some_and(|builtin| crate::guard::INVOCATION_GUARDS.contains(&builtin))
+        })
+        .copied()
+        .collect();
+    if guards.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
     }
-    // The host `gh` will reach: `--hostname` on an api call, then the
-    // destination's own host, then `GH_HOST`, then github.com -- the order `gh`
-    // resolves it in. The destination is the resolver every other guard here
-    // reads, so this cannot disagree with them about which forge an invocation
-    // is on, and one that could not be resolved ends the run here, in the
-    // resolver's own sentence, rather than being read as github.com.
-    let destination_host = scopes.destination()?.hostname.clone();
-    let host = shim
-        .api_hostname(words)
-        .or(destination_host)
-        .or_else(|| nonempty_env("GH_HOST"))
-        .unwrap_or_else(|| String::from("github.com"));
-    let command = shim.attempted(words);
-    let attempt = crate::guard::actor::Attempt {
-        command: &command,
-        host: &host,
+    // The host `gh` will reach, resolved only where a rule reads it:
+    // `--hostname` on an api call, then the destination's own host, then
+    // `GH_HOST`, then github.com -- the order `gh` resolves it in. The
+    // destination is the resolver every other guard here reads, so this cannot
+    // disagree with them about which forge an invocation is on, and one that
+    // could not be resolved ends the run here, in the resolver's own sentence,
+    // rather than being read as github.com.
+    let host = if guards
+        .iter()
+        .any(|rule| judged(&rule, "prevent-actor-mismatch"))
+    {
+        let destination_host = scopes.destination()?.hostname.clone();
+        Some(
+            shim.api_hostname(words)
+                .or(destination_host)
+                .or_else(|| nonempty_env("GH_HOST"))
+                .unwrap_or_else(|| String::from("github.com")),
+        )
+    } else {
+        None
     };
-    let mut refusals = Vec::new();
-    for rule in checkers {
+    let merge = shim.merge_message(words, collected);
+    let command = shim.attempted(words);
+    let call = crate::guard::Call {
+        command: &command,
+        host: host.as_deref(),
+        merge: merge.as_deref(),
+    };
+    let (mut credential, mut message) = (Vec::new(), Vec::new());
+    for rule in guards {
         if crate::guard::bypassed(&rule.id) {
             continue;
         }
@@ -6123,18 +6264,23 @@ fn actor_judged(
             continue;
         }
         let start = record.ledger.len();
-        crate::guard::actor_refusal(rule, &attempt, &mut record.ledger)?;
+        crate::guard::invocation_refusal(rule, &call, &mut record.ledger)?;
         if let Some(refusal) =
             crate::guard::told(policy, rule, record.ledger.get(start..).unwrap_or_default())
         {
-            refusals.push(format!(
+            let into = if rule.builtin() == Some("prevent-actor-mismatch") {
+                &mut credential
+            } else {
+                &mut message
+            };
+            into.push(format!(
                 "{}: {}",
                 crate::guard::refused_by(policy, &refusal),
                 refusal.report
             ));
         }
     }
-    Ok(refusals)
+    Ok((credential, message))
 }
 
 /// Stand in front of one command.
@@ -6354,10 +6500,19 @@ pub(crate) fn run(
         // fails would bury this refusal under its own exit 2, and nothing the
         // text or the destination could say lets a write run as the wrong
         // account.
-        let actor = actor_judged(shim, policy, &words, &checkers, &mut scopes, record)?;
-        if !actor.is_empty() {
-            return Ok(refused(name, &actor, "the credential"));
+        let (credential, message) = invocation_judged(
+            shim,
+            policy,
+            &words,
+            &checkers,
+            &collected,
+            &mut scopes,
+            record,
+        )?;
+        if !credential.is_empty() {
+            return Ok(refused(name, &credential, Fix::Credential));
         }
+        refusals.extend(message);
         // What the forge holds of this text, before anything judges it.
         composed_read = held_text(shim, name, &words, &checkers, any_applies, &mut collected)?;
         // Where a checker judges the DESTINATION rather than the text.
@@ -6575,14 +6730,7 @@ pub(crate) fn run(
     }
 
     if crate::text::refusals(&record.ledger) > 0 {
-        let what = if destination_refusals == 0 {
-            "the text"
-        } else if destination_refusals == refusals.len() {
-            "the destination"
-        } else {
-            "the text and the destination"
-        };
-        return Ok(refused(name, &refusals, what));
+        return Ok(refused(name, &refusals, Fix::Counted(destination_refusals)));
     }
 
     // Exec through. A shim that checked and then did not run the command is a

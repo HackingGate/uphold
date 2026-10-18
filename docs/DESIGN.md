@@ -425,6 +425,10 @@ and of a forge probe it is handed, so every branch is reached without a
 network; the probe the shim hands it is `gh` itself, which resolves the same
 credential the write will use. A refusal there ends the run: no text or
 destination answer makes a write under the wrong account publishable.
+`guard::merge_message` is judged at the same point, from the merge message
+parts the shim read off `gh pr merge` or a `gh api` merge call, because
+"was a subject given and left blank" is a question about the invocation's
+fields and not about any text a guard can read.
 
 The command grammar and collection remain in `shim`; they do not evaluate
 policy. `shim::checker` evaluates one selected rule against one subject, with

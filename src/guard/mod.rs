@@ -16,6 +16,7 @@
 pub(crate) mod actor;
 pub(crate) mod identity;
 pub(crate) mod merge;
+pub(crate) mod merge_message;
 pub(crate) mod message;
 pub(crate) mod names;
 pub(crate) mod push;
@@ -72,6 +73,12 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     // of the invocation and not of any subject it carries -- and never at a git
     // hook, where no `gh` write is about to happen.
     "prevent-actor-mismatch",
+    // The one question about a merge commit's message no text guard can ask:
+    // whether there is one. A guard reads what text says, and an empty
+    // subject says nothing, so every text guard passed the ninety-five ` (#N)`
+    // subjects a bulk merge wrote. Dispatched with the actor guard, from what
+    // the shim read off the invocation.
+    "no-empty-merge-message",
     "no-local-merge",
     "no-merge-commit",
     "no-stale-hook-pins",
@@ -320,16 +327,33 @@ pub(crate) const META_TEXT_GUARDS: &[&str] = &["text-guards", "text-literals"];
 /// publishes to somewhere.
 pub(crate) const TARGET_GUARDS: &[&str] = &["prevent-unowned-target"];
 
-/// The guards that judge WHO an invocation acts as.
+/// The guards that judge a `gh` INVOCATION itself, from what the shim read off
+/// it: who it acts as, and whether the merge commit it writes has a message.
 ///
-/// A third list rather than a second entry in [`TARGET_GUARDS`], because the
-/// question needs a different input and has a different failure: a destination
-/// guard is handed a repository and refuses where it has none, while this one
-/// reads the credential in the environment and the host, and has no use for a
-/// repository at all -- `gh api graphql` names none and is a write. Consulted
-/// once per run, like a destination guard, and for the same reason: the
-/// identity belongs to the invocation, not to any subject it carries.
-pub(crate) const ACTOR_GUARDS: &[&str] = &["prevent-actor-mismatch"];
+/// A third list rather than more entries in [`TARGET_GUARDS`], because they
+/// need different inputs and fail differently: a destination guard is handed a
+/// repository and refuses where it has none, while these read the credential,
+/// the host and the merge message the shim parsed, and have no use for a
+/// repository -- `gh api graphql` names none and is a write. Consulted once
+/// per run, like a destination guard, and for the same reason: each is a
+/// property of the invocation, not of any one subject it carries. One list
+/// for both, because the seam, the registration and the load-time refusals
+/// are the same, and a list per guard would be a name per value.
+pub(crate) const INVOCATION_GUARDS: &[&str] = &["prevent-actor-mismatch", "no-empty-merge-message"];
+
+/// What the shim hands an invocation guard: the invocation as a reader names it,
+/// and each fact one of them reads, where the shim established it.
+pub(crate) struct Call<'a> {
+    /// `gh pr merge`, `gh api` -- never the arguments, which carry bodies and
+    /// names.
+    pub command: &'a str,
+    /// The host the invocation reaches. `None` where no rule that reads it was
+    /// declared, so a destination nobody asked about is not resolved.
+    pub host: Option<&'a str>,
+    /// The merge commit message parts the invocation gave, where it writes a
+    /// merge commit at all; `None` for every invocation that does not.
+    pub merge: Option<&'a [merge_message::Part]>,
+}
 
 /// One destination-judging guard's verdict over one invocation's destination.
 ///
@@ -390,23 +414,27 @@ pub(crate) fn target_refusal(
     Ok(())
 }
 
-/// One actor-judging guard's verdict over one invocation, into `ledger`.
+/// One invocation guard's verdict over one `gh` invocation, into `ledger`.
 ///
-/// The twin of [`target_refusal`] for [`ACTOR_GUARDS`]: nothing where the rule
-/// judges no actor, a bypass, a pass, a refusal, or an `Unknown` and an `Err`
-/// where the credential's owner could not be established. The environment and
-/// the forge are the process's own, read here and nowhere else, so
-/// [`actor::judge`] is a function of what it is handed and every branch of it
-/// is reached without a network.
-pub(crate) fn actor_refusal(
+/// The twin of [`target_refusal`] for [`INVOCATION_GUARDS`]: nothing where the
+/// rule is not one of them, or where the invocation is not one it judges -- a
+/// merge-message rule over a call that writes no merge commit -- and otherwise
+/// a bypass, a pass, a refusal, or an `Unknown` and an `Err` where it could not
+/// look. The environment and the forge are the process's own, read here and
+/// nowhere else, so [`actor::judge`] is a function of what it is handed and
+/// every branch of it is reached without a network.
+pub(crate) fn invocation_refusal(
     rule: &Rule,
-    attempt: &actor::Attempt<'_>,
+    call: &Call<'_>,
     ledger: &mut Vec<Judgment>,
 ) -> Result<()> {
     let Some(builtin) = rule.builtin() else {
         return Ok(());
     };
-    if !ACTOR_GUARDS.contains(&builtin) {
+    if !INVOCATION_GUARDS.contains(&builtin) {
+        return Ok(());
+    }
+    if builtin == "no-empty-merge-message" && call.merge.is_none() {
         return Ok(());
     }
     if let Some(allowed) = allowed(&rule.id) {
@@ -415,8 +443,32 @@ pub(crate) fn actor_refusal(
     }
     let read = |name: &str| std::env::var(name).ok();
     let judged = match builtin {
-        "prevent-actor-mismatch" => actor::judge(rule, attempt, &read, &mut actor::viewer_login),
-        other => Err(Fatal::new(format!("no actor guard called {other:?}"))),
+        "prevent-actor-mismatch" => call.host.map_or_else(
+            || {
+                Err(Fatal::new(format!(
+                    "rule {:?}: the host `{}` reaches was not resolved, so whose credential \
+                     it sends there could not be asked. Nothing was published",
+                    rule.id, call.command
+                )))
+            },
+            |host| {
+                actor::judge(
+                    rule,
+                    &actor::Attempt {
+                        command: call.command,
+                        host,
+                    },
+                    &read,
+                    &mut actor::viewer_login,
+                )
+            },
+        ),
+        "no-empty-merge-message" => Ok(merge_message::judge(
+            rule,
+            call.command,
+            call.merge.unwrap_or_default(),
+        )),
+        other => Err(Fatal::new(format!("no invocation guard called {other:?}"))),
     };
     let found = asked(ledger, rule, None, judged)?;
     ledger.push(Judgment::of(
@@ -968,8 +1020,8 @@ mod tests {
         // The whole FILE is read rather than one function, because a built-in
         // is dispatched from the seam that can hand it what it reads --
         // `evaluate` for a git hook, `text_refusal` for a subject,
-        // `target_refusal` for a destination, `actor_refusal` for the
-        // credential an invocation runs under. Which of them carries the arm is
+        // `target_refusal` for a destination, `invocation_refusal` for what
+        // the shim read off a `gh` invocation. Which of them carries the arm is
         // the built-in's business; that one of them does is this test's.
         let source = include_str!("mod.rs");
         for id in EVERY_BUILTIN {
@@ -983,7 +1035,7 @@ mod tests {
                 "{id} is in EVERY_BUILTIN with no dispatch arm"
             );
         }
-        assert_eq!(EVERY_BUILTIN.len(), 22);
+        assert_eq!(EVERY_BUILTIN.len(), 23);
     }
 
     #[test]
