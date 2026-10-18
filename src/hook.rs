@@ -130,6 +130,30 @@ fn refusal_document(shape: &Shape, report: &str) -> Result<String> {
     })
 }
 
+/// Take out what the call carries and the server will not send, so no rule
+/// judges a subject that is never published.
+///
+/// One case: an exactly empty `commit_title`. The GitHub MCP server's
+/// `merge_pull_request` (github/github-mcp-server v2.0.2,
+/// pkg/github/pullrequests.go:1743 and :1761) reads it untrimmed and hands it to
+/// go-github, whose merge request field is `CommitTitle string` tagged
+/// `json:"commit_title,omitempty"` (github/go-github v92.0.0,
+/// github/pulls.go:514), so `""` is left out of the request and the forge
+/// writes the pull request's title, as if the argument were absent. That is
+/// the shim's `gh pr merge --subject ""`, and it is taken out here for the
+/// shim's reason: in the extraction, not in a rule, so every rule that selects
+/// titles sees what the forge does. Whitespace is sent, and stays.
+///
+/// Not `title`: the same server's `update_pull_request` sends an empty one as
+/// written (pkg/github/pullrequests.go:1039), so it is a subject that reaches the
+/// forge. And not `walk_strings`, which also reads a `gh api --input` document,
+/// where an empty `commit_title` is sent as written.
+fn drop_unsent(collected: &mut Walked) {
+    collected
+        .headlines
+        .retain(|(key, text)| !(key == "commit_title" && text.is_empty()));
+}
+
 /// Judge one pending tool call, read from stdin in the harness's own shape.
 ///
 /// `found` is the policy where the call was made, and it is an `Option` here
@@ -231,6 +255,7 @@ pub(crate) fn run(
     if let Some(subject) = subject {
         walk_strings(subject, None, &mut collected);
     }
+    drop_unsent(&mut collected);
     let has_text = !collected.prose.is_empty() || !collected.headlines.is_empty();
     let text = collected.prose.join("\n");
     let headlines: Vec<text::Headline> = collected

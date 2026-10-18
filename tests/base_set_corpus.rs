@@ -503,9 +503,9 @@ const ELSEWHERE: &[(&str, &str)] = &[
     ),
     (
         "no-empty-merge-subject",
-        "it reads a merge's title subjects at the shim and a message's subject line at \
-         `--text`, and never a file, so a sample the scan reads judges nothing -- \
-         tests/shim_cli.rs drives one table of subjects through both seams",
+        "it reads a merge's title subjects at the shim and the hook and a message's subject \
+         line at `--text`, and never a file, so a sample the scan reads judges nothing -- \
+         tests/shim_cli.rs drives one table of subjects through all three seams",
     ),
 ];
 

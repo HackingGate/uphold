@@ -9017,6 +9017,55 @@ fn guard_text(root: &Path, message: &str) -> Output {
     child.wait_with_output().unwrap()
 }
 
+/// The GitHub MCP server's merge tool, as Claude Code names it.
+const MCP_MERGE_TOOL: &str = "mcp__github__merge_pull_request";
+
+/// `uphold hook claude-code` over a pending call of `tool` with `input`, in
+/// `root`. The verdict is the harness's document: a refusal is a `deny` on
+/// stdout at exit 0, and a pass is exit 0 and nothing on stdout.
+fn hook_call(root: &Path, tool: &str, input: &serde_json::Value) -> Output {
+    let event = serde_json::json!({"tool_name": tool, "tool_input": input}).to_string();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["hook", "claude-code"])
+        .current_dir(root)
+        .env_remove("UPHOLD_ALLOW")
+        .env_remove("UPHOLD_JUNIT")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), event.as_bytes()).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+/// Whether the harness was told to deny the call. Exit 0 either way: exit 1
+/// is a failure of the hook, which the harness lets the call through on.
+fn hook_denied(output: &Output) -> bool {
+    assert_eq!(code(output), 0, "{}", stderr(output));
+    if output.stdout.is_empty() {
+        return false;
+    }
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    document.pointer("/hookSpecificOutput/permissionDecision") == Some(&serde_json::json!("deny"))
+}
+
+/// A pending `merge_pull_request` call: the arguments the tool takes, and
+/// `extra` beside them.
+fn mcp_merge(extra: &serde_json::Value) -> serde_json::Value {
+    let mut input = serde_json::json!({
+        "owner": "example-user",
+        "repo": "widget",
+        "pullNumber": 1,
+        "merge_method": "squash",
+    });
+    input
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    input
+}
+
 /// The merge endpoint as a path.
 const MERGE_ENDPOINT: &str = "repos/example-user/widget/pulls/1/merge";
 
@@ -9027,11 +9076,15 @@ const MERGE_ENDPOINTS: &[&str] = &[
 ];
 
 #[test]
-fn one_rule_gives_one_verdict_at_the_shim_and_at_the_text_seam() {
-    // The same subjects through both seams. At the shim, the REST merge sends
-    // `commit_title` as written; at the text seam, the same subject is the
-    // first line of the message the squash merge would have stored -- with the
-    // forge's ` (#N)` already on it, which is the case the suffix is for.
+fn one_rule_gives_one_verdict_at_the_shim_the_hook_and_the_text_seam() {
+    // The same subjects through every seam. At the shim, the REST merge sends
+    // `commit_title` as written; at the hook, the GitHub MCP server's merge
+    // tool sends it untrimmed and leaves an exactly empty one out (go-github
+    // v92.0.0, github/pulls.go:514, `omitempty`), so the forge writes the pull
+    // request's title and the hook judges nothing; at the text seam, the same
+    // subject is the first line of the message the squash merge would have
+    // stored -- with the forge's ` (#N)` already on it, which is the case the
+    // suffix is for.
     let root = merge_workspace();
     for (subject, refused) in [
         ("", true),
@@ -9062,6 +9115,18 @@ fn one_rule_gives_one_verdict_at_the_shim_and_at_the_text_seam() {
             refused,
             "{subject:?}"
         );
+        let at_hook = hook_call(
+            &root,
+            MCP_MERGE_TOOL,
+            &mcp_merge(&serde_json::json!({"commit_title": subject})),
+        );
+        let sent_by_the_server = !subject.is_empty();
+        assert_eq!(
+            hook_denied(&at_hook),
+            refused && sent_by_the_server,
+            "hook {subject:?}: {}",
+            stderr(&at_hook)
+        );
         for message in [
             subject.to_owned(),
             format!("{subject}\n\nWhy it changed.\n"),
@@ -9089,11 +9154,79 @@ fn one_rule_gives_one_verdict_at_the_shim_and_at_the_text_seam() {
                 "{subject:?}"
             );
         }
+        if refused && sent_by_the_server {
+            let text = stderr(&at_hook);
+            assert!(
+                text.contains(&format!("{MERGE_SUBJECT_RULE}: the title subject")),
+                "{text}"
+            );
+            assert!(
+                text.contains(&format!("{MCP_MERGE_TOOL} commit_title")),
+                "{text}"
+            );
+        }
     }
 }
 
 #[test]
-fn the_rule_is_listed_as_in_force_at_both_seams() {
+fn an_mcp_merge_is_judged_on_its_subject_and_never_on_its_body() {
+    let root = merge_workspace();
+    for (extra, refused) in [
+        // An empty or blank body is how the list of the branch's commits is
+        // kept out of a squash commit, by any route.
+        (
+            serde_json::json!({"commit_title": "Fix x", "commit_message": ""}),
+            false,
+        ),
+        (
+            serde_json::json!({"commit_title": "Fix x", "commit_message": " "}),
+            false,
+        ),
+        // Left off: the forge writes the pull request's title.
+        (serde_json::json!({}), false),
+        (serde_json::json!({"commit_message": ""}), false),
+        // Exactly empty is left out by the server, whatever the body says.
+        (
+            serde_json::json!({"commit_title": "", "commit_message": ""}),
+            false,
+        ),
+        (
+            serde_json::json!({"commit_title": " ", "commit_message": "Why."}),
+            true,
+        ),
+    ] {
+        let output = hook_call(&root, MCP_MERGE_TOOL, &mcp_merge(&extra));
+        assert_eq!(
+            hook_denied(&output),
+            refused,
+            "{extra}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn an_empty_title_the_mcp_server_sends_is_still_judged() {
+    // Only `commit_title` is taken out when empty: `update_pull_request` sends
+    // an empty `title` as written (github-mcp-server v2.0.2,
+    // pkg/github/pullrequests.go:1039), and the pull request's title is what a
+    // squash merge left without a subject is given.
+    let root = merge_workspace();
+    let output = hook_call(
+        &root,
+        "mcp__github__update_pull_request",
+        &serde_json::json!({"owner": "example-user", "repo": "widget", "pullNumber": 1, "title": ""}),
+    );
+    assert!(hook_denied(&output), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("mcp__github__update_pull_request title"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn the_rule_is_listed_as_in_force_at_every_seam() {
     // What a caller that relies on the verdict reads to fail closed when the
     // rule is missing: the id, and the seams it runs at.
     let root = merge_workspace();
@@ -9110,7 +9243,11 @@ fn the_rule_is_listed_as_in_force_at_both_seams() {
         .iter()
         .find(|rule| rule["id"] == MERGE_SUBJECT_RULE)
         .unwrap();
-    assert_eq!(rule["seams"], serde_json::json!(["shim", "text"]), "{rule}");
+    assert_eq!(
+        rule["seams"],
+        serde_json::json!(["shim", "hook", "text"]),
+        "{rule}"
+    );
 }
 
 #[test]

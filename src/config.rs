@@ -3578,7 +3578,7 @@ mod tests {
     /// that names the shim and the text seam -- which is what a caller that
     /// relies on its verdict reads back from `uphold rules --effective`.
     #[test]
-    fn the_merge_subject_rule_runs_at_the_shim_and_the_text_seam() {
+    fn the_merge_subject_rule_runs_at_the_shim_the_hook_and_the_text_seam() {
         let policy = policy_from(
             "[inherit]\nsets = [\"published-text\"]\n\n\
              [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\n\n\
@@ -3591,9 +3591,9 @@ mod tests {
             .find(|rule| rule.id == "no-empty-merge-subject")
             .expect("published-text carries the merge-subject rule");
         assert_eq!(rule.kind(), CheckKind::RequireRegexp);
-        assert_eq!(rule.seams(), ["shim", "text"]);
+        assert_eq!(rule.seams(), ["shim", "hook", "text"]);
         assert!(rule.judged_at(crate::text::Seam::Guard));
-        assert!(!rule.judged_at(crate::text::Seam::Hook));
+        assert!(rule.judged_at(crate::text::Seam::Hook));
     }
 
     /// A pattern rule names the text seam only by asking: one that does not is
