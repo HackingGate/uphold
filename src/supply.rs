@@ -192,8 +192,15 @@ pub(crate) const SECRETS_SET: &str = "credentials";
 ///
 /// `policy` is read by the guarddog section alone: its `[[supply_chain.waive]]`
 /// entries, and the declared owner that decides which git dependencies are
-/// first party.
-pub(crate) fn run(root: &Path, scope: &Scope, secrets: bool, policy: &Policy) -> Result<Exit> {
+/// first party. `nested` is read by that section too, and for the waivers
+/// alone: see [`NestedPolicy`].
+pub(crate) fn run(
+    root: &Path,
+    scope: &Scope,
+    secrets: bool,
+    policy: &Policy,
+    nested: NestedPolicy<'_>,
+) -> Result<Exit> {
     let manifests_moved = !matches!(scope, Scope::Changed(paths, _) if paths.is_empty());
     if !manifests_moved && !secrets {
         println!(
@@ -204,7 +211,7 @@ pub(crate) fn run(root: &Path, scope: &Scope, secrets: bool, policy: &Policy) ->
     }
     let mut failed = 0_usize;
     let mut unread = 0_usize;
-    let guarded = |at: &Path, over: &Scope| guarddog(at, over, policy);
+    let guarded = |at: &Path, over: &Scope| guarddog(at, over, policy, nested);
     let mut sections: Vec<SectionRun<'_>> = Vec::new();
     if manifests_moved {
         let dependencies: [SectionRun<'_>; 5] = [
@@ -1540,9 +1547,11 @@ enum Read {
 /// printed as tolerated, naming each, and is not held against the run.
 ///
 /// A risk a waiver covers is printed as waived, with the waiver's reason, and
-/// is not held against the run; the index of each waiver that matched is
+/// is not held against the run; the index of each root waiver that matched is
 /// recorded in the ledger, with every package a report named, so the section
-/// can report the waivers that did not.
+/// can report the waivers that did not. A nested repository's waiver is named
+/// on its line by that repository's policy file, so whose decision let the
+/// risk through is on the line that says it was let through.
 #[expect(
     clippy::too_many_arguments,
     reason = "scan inputs and subprocess output meet at this reader"
@@ -1551,7 +1560,7 @@ fn guarddog_read(
     at: &str,
     ecosystem: &str,
     expected: &BTreeSet<String>,
-    waivers: &[Waiver],
+    waivers: &Waivers<'_>,
     ledger: &mut Ledger,
     code: Option<i32>,
     stdout: &str,
@@ -1658,19 +1667,42 @@ fn guarddog_read(
                 );
                 continue;
             }
-            let waiver = waivers
-                .iter()
-                .position(|waiver| waiver.covers(ecosystem, name, version, rule));
-            match waiver {
-                Some(index) => {
-                    ledger.matched.insert(index);
-                    let reason = waivers
-                        .get(index)
-                        .map_or("", |covering| covering.reason.as_str());
-                    println!(
-                        "   waived: {rule} on {ecosystem}:{name}@{version} at {at} -- {reason}"
-                    );
+            // The innermost repository's rows first, then each one out, then
+            // the root's. The first to cover the risk lets it through and is
+            // named on the line; every later row that also covers it is a
+            // repeat of that one, recorded so the stale report can say so.
+            let mut covering: Option<(Option<&str>, &str)> = None;
+            for (source, rows) in waivers.in_order() {
+                let Some((index, row)) = rows
+                    .iter()
+                    .enumerate()
+                    .find(|(_, row)| row.covers(ecosystem, name, version, rule))
+                else {
+                    continue;
+                };
+                let key = (source.map(str::to_owned), index);
+                match covering {
+                    None => {
+                        ledger.matched.insert(key);
+                        covering = Some((source, row.reason.as_str()));
+                    }
+                    Some((first, _)) => {
+                        ledger.duplicated.entry(key).or_insert_with(|| Repeat {
+                            of: first.unwrap_or_default().to_owned(),
+                            check: row.check.clone(),
+                            package: row.package.clone(),
+                        });
+                    }
                 }
+            }
+            match covering {
+                Some((Some(source), reason)) => println!(
+                    "   waived ({source}): {rule} on {ecosystem}:{name}@{version} at {at} \
+                     -- {reason}"
+                ),
+                Some((None, reason)) => println!(
+                    "   waived: {rule} on {ecosystem}:{name}@{version} at {at} -- {reason}"
+                ),
                 None => risks += 1,
             }
         }
@@ -1702,11 +1734,165 @@ fn guarddog_read(
     }
 }
 
+/// How the guarddog section finds the policy of a repository nested inside the
+/// scan root: handed a directory under the root, it answers that directory's
+/// own policy file and the policy loaded from it where the directory is a
+/// repository root carrying one, and `None` everywhere else.
+///
+/// Handed in rather than written here because which file `uphold` loads at a
+/// directory is the command's discovery, not this section's: a second walk
+/// written here would be a second answer to "whose policy is this", free to
+/// disagree with the one every other entry point gives -- over
+/// `policy/principles.toml` against `policy/rg-policy.toml`, over where a
+/// repository begins, and over `[inherit]`. A load that fails is an error and
+/// never `None`: a policy that would not load has said nothing about which
+/// findings its owner accepted, and reading it as "no waivers" would refuse on
+/// a guess, or worse, if the run ever read it the other way, pass on one.
+pub(crate) type NestedPolicy<'a> = &'a dyn Fn(&Path) -> Result<Option<(PathBuf, Policy)>>;
+
+/// A nested repository's own waivers, as the guarddog section reads them.
+struct Nested {
+    /// Its policy file, relative to the scan root, which is how every line
+    /// that applies one of its waivers names whose decision it was.
+    source: String,
+    /// Its `[[supply_chain.waive]]` rows.
+    waive: Vec<Waiver>,
+}
+
+/// The waivers one manifest is judged against.
+///
+/// The scan root's rows cover every manifest in the tree, as they always have:
+/// the root's policy is the one the run was started under. Each nested
+/// repository's rows cover the manifests in that repository's tree and nothing
+/// else, because they are that repository's decisions about the dependencies
+/// it carries -- its own and its submodules', the same tree `uphold` run there
+/// would judge. The superproject's manifests and a sibling's are somebody
+/// else's, and a submodule able to waive them would be a repository excusing a
+/// tree it does not own, under the superproject's name.
+#[derive(Default)]
+struct Waivers<'a> {
+    /// The scan root's own.
+    root: &'a [Waiver],
+    /// Every enclosing nested repository's that has a policy, innermost first.
+    nested: &'a [std::rc::Rc<Nested>],
+}
+
+impl Waivers<'_> {
+    /// Each owner's rows in the order a risk is put to them: the innermost
+    /// repository first, each one out after it, the root last, each named by
+    /// its policy file (`None` for the root's, whose lines have always carried
+    /// no name).
+    ///
+    /// Innermost first because the repository closest to a manifest is the
+    /// one whose dependency it is most directly; an outer row covering the
+    /// same risk is then a repeat of the inner one, which is what the stale
+    /// report needs to know to say a copy may go.
+    fn in_order(&self) -> impl Iterator<Item = (Option<&str>, &[Waiver])> {
+        self.nested
+            .iter()
+            .map(|owner| (Some(owner.source.as_str()), owner.waive.as_slice()))
+            .chain(std::iter::once((None, self.root)))
+    }
+}
+
+/// What the nested-repository walk found, by directory, so a repository with
+/// many manifests is loaded once. A load that failed is kept as the loader's
+/// error, because the same repository is the same refusal for each of its
+/// manifests.
+type NestedFound =
+    std::collections::BTreeMap<PathBuf, std::result::Result<Option<std::rc::Rc<Nested>>, String>>;
+
+/// The nested repositories whose waivers also cover a manifest in
+/// `directory`, innermost first: every directory between it and `root` --
+/// `directory` itself included, `root` excluded -- that `nested` answers a
+/// policy for.
+///
+/// Every one, and not only the nearest, because each repository's policy
+/// speaks for its whole tree: a repository scanned on its own judges its
+/// submodules' manifests against its own rows, and a superproject that read
+/// only the innermost repository's would refuse what the repository between
+/// them accepts. A repository with no policy of its own adds nothing and is
+/// passed over, for the reason `uphold` run there refuses to borrow one.
+///
+/// The walk is `directory`'s own ancestors and nothing else, which is the
+/// whole of the boundary: the root's own manifests have no nested repository
+/// above them, a repository's rows never reach a manifest outside it, and a
+/// sibling submodule is never an ancestor. Any enclosing policy that did not
+/// load is an error for the manifest, whatever the others said: the rows it
+/// would have contributed are unknown, so the findings they cover are too.
+fn nested_waivers(
+    root: &Path,
+    directory: &Path,
+    nested: NestedPolicy<'_>,
+    found: &mut NestedFound,
+) -> std::result::Result<Vec<std::rc::Rc<Nested>>, String> {
+    let mut owners = Vec::new();
+    for ancestor in directory
+        .ancestors()
+        .take_while(|ancestor| *ancestor != root && ancestor.starts_with(root))
+    {
+        let answer = found
+            .entry(ancestor.to_path_buf())
+            .or_insert_with(|| load_nested(root, ancestor, nested));
+        match answer {
+            Ok(Some(owner)) => owners.push(std::rc::Rc::clone(owner)),
+            Ok(None) => {}
+            Err(error) => {
+                return Err(format!(
+                    "the guarddog findings at {} were not judged: {} is a repository with a \
+                     policy of its own, which decides waivers for the manifests in its tree, \
+                     and that policy did not load: {error}",
+                    directory.display(),
+                    ancestor.display()
+                ));
+            }
+        }
+    }
+    Ok(owners)
+}
+
+/// One directory's answer for [`nested_waivers`].
+fn load_nested(
+    root: &Path,
+    ancestor: &Path,
+    nested: NestedPolicy<'_>,
+) -> std::result::Result<Option<std::rc::Rc<Nested>>, String> {
+    match nested(ancestor) {
+        Ok(Some((path, policy))) => Ok(Some(std::rc::Rc::new(Nested {
+            source: path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .display()
+                .to_string(),
+            waive: policy.supply_chain.waive,
+        }))),
+        Ok(None) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// One waiver row: its policy file, as [`Waivers::in_order`] names it (`None`
+/// for the scan root's), and its index there.
+type Row = (Option<String>, usize);
+
+/// An outer row that covered a risk an inner row had already covered.
+struct Repeat {
+    /// The policy file whose row covered it first.
+    of: String,
+    /// The repeating row's `check` and `package`, as its line names them.
+    check: String,
+    package: String,
+}
+
 /// What the guarddog reports of one run said about the waivers.
 #[derive(Default)]
 struct Ledger {
-    /// The waivers, by index, that covered a risk.
-    matched: BTreeSet<usize>,
+    /// The rows that covered a risk first.
+    matched: BTreeSet<Row>,
+    /// The rows that would have covered a risk an inner repository's row
+    /// covered first: the copies superprojects made before nested waivers
+    /// were read, which the stale report names so they can go.
+    duplicated: std::collections::BTreeMap<Row, Repeat>,
     /// Every `(ecosystem, package)` a report named.
     seen: BTreeSet<(String, String)>,
     /// The ecosystems a report was read for at all.
@@ -1739,8 +1925,14 @@ fn npm_locks(directory: &Path, root: &Path) -> Vec<String> {
         .collect()
 }
 
-fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
+fn guarddog(
+    root: &Path,
+    scope: &Scope,
+    policy: &Policy,
+    nested: NestedPolicy<'_>,
+) -> Result<Section> {
     let waivers = policy.supply_chain.waive.as_slice();
+    let mut found = NestedFound::new();
     let (python, npm) = match scope {
         Scope::Whole => (
             find_named(root, "uv.lock")?,
@@ -1805,6 +1997,15 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
             continue;
         }
         let at = directory.display().to_string();
+        // Before guarddog is asked: a manifest whose owner's policy did not
+        // load has findings nothing here can tell from the accepted ones.
+        let owners = match nested_waivers(root, directory, nested, &mut found) {
+            Ok(owners) => owners,
+            Err(said) => {
+                unrun = unrun.or(Some(said));
+                continue;
+            }
+        };
         let sorted = references::sort(
             &String::from_utf8_lossy(&exported.stdout),
             directory,
@@ -1847,7 +2048,10 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
             &at,
             "pypi",
             &sorted.expected,
-            waivers,
+            &Waivers {
+                root: waivers,
+                nested: &owners,
+            },
             &mut ledger,
             status.status.code(),
             &String::from_utf8_lossy(&status.stdout),
@@ -1876,6 +2080,15 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
         let directory = manifest.parent().unwrap_or(root);
         checked += 1;
         let at = directory.display().to_string();
+        // Before guarddog is asked: a manifest whose owner's policy did not
+        // load has findings nothing here can tell from the accepted ones.
+        let owners = match nested_waivers(root, directory, nested, &mut found) {
+            Ok(owners) => owners,
+            Err(said) => {
+                unrun = unrun.or(Some(said));
+                continue;
+            }
+        };
         let sorted = std::fs::read_to_string(&manifest)
             .map(|text| references::sort_npm(&text, &npm_locks(directory, root), include_dev))
             .unwrap_or_default();
@@ -1926,7 +2139,10 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
             &at,
             "npm",
             &sorted.expected,
-            waivers,
+            &Waivers {
+                root: waivers,
+                nested: &owners,
+            },
             &mut ledger,
             status.status.code(),
             &String::from_utf8_lossy(&status.stdout),
@@ -1948,22 +2164,70 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
         }
     }
     println!("   {checked} Python/npm manifest(s) checked");
-    // A waiver that matched nothing, where the run could have matched it, is
-    // one whose version moved or whose finding went away. "Could have" is the
-    // package appearing in a report, or, over the whole tree, its ecosystem
-    // being read at all -- a range scan reads only the manifests that moved,
-    // and a waiver about one that did not is not stale for it. Reported and
-    // not refused: the push it would have excused is not less safe for it,
-    // and the line that names it is the prompt to delete it.
+    report_unmatched(waivers, &ledger, scope);
+    // A finding outranks an unrun rule, which is this crate's own ranking: a
+    // refusal is something somebody looked at and objected to. The unrun rules
+    // are printed either way, so the red that does appear says what was
+    // still not asked.
+    if let Some(ref reason) = unrun {
+        println!("   {reason}");
+    }
+    if refused {
+        return Ok(Section::Failed);
+    }
+    if let Some(reason) = unrun {
+        return Ok(Section::CouldNotLook(reason));
+    }
+    Ok(Section::Clean)
+}
+
+/// What a row that only repeats an inner repository's is told.
+const REPEAT_ADVICE: &str = "a repository nearer the manifest waives it in its own policy, so \
+                             this copy can be removed";
+
+/// A waiver that matched nothing, where the run could have matched it, is
+/// one whose version moved or whose finding went away. "Could have" is the
+/// package appearing in a report, or, over the whole tree, its ecosystem
+/// being read at all -- a range scan reads only the manifests that moved,
+/// and a waiver about one that did not is not stale for it. Reported and
+/// not refused: the push it would have excused is not less safe for it,
+/// and the line that names it is the prompt to delete it.
+///
+/// The scan root's waivers only. A nested repository's row that matched
+/// nothing here is reported by that repository's own scan, which is the
+/// one that can act on it -- the row is in its policy, and a superproject
+/// that printed it too would be a second reporter of one fact, naming a
+/// file the superproject does not write.
+///
+/// A row -- the root's or an outer nested repository's -- that covered risks
+/// only where an inner repository's row had already covered them is a copy of
+/// that row, and over the whole tree is named as one. A range scan reads only
+/// the manifests that moved, so it cannot tell a copy from a row that also
+/// covers a manifest it did not read, and says nothing about either: the row
+/// did cover a risk, so it is not stale either.
+fn report_unmatched(waivers: &[Waiver], ledger: &Ledger, scope: &Scope) {
+    let whole = matches!(scope, Scope::Whole);
     for (index, waiver) in waivers.iter().enumerate() {
         let Some((ecosystem, name, _)) = waiver.parts() else {
             continue;
         };
+        let row = (None, index);
+        if !ledger.matched.contains(&row)
+            && let Some(repeat) = ledger.duplicated.get(&row)
+        {
+            if whole {
+                println!(
+                    "   waiver repeats {}: {} on {} -- {REPEAT_ADVICE}",
+                    repeat.of, waiver.check, waiver.package
+                );
+            }
+            continue;
+        }
         let could = ledger
             .seen
             .contains(&(ecosystem.to_owned(), name.to_owned()))
             || (matches!(scope, Scope::Whole) && ledger.read.contains(ecosystem));
-        if could && !ledger.matched.contains(&index) {
+        if could && !ledger.matched.contains(&row) {
             // Except where whether the finding appears is the host's: a pypi
             // `metadata_mismatch` reaches the release's manifest on some
             // filesystems and not others (`guarddog_unpacks_under`), so its
@@ -1980,20 +2244,19 @@ fn guarddog(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
             );
         }
     }
-    // A finding outranks an unrun rule, which is this crate's own ranking: a
-    // refusal is something somebody looked at and objected to. The unrun rules
-    // are printed either way, so the red that does appear says what was
-    // still not asked.
-    if let Some(ref reason) = unrun {
-        println!("   {reason}");
+    if !whole {
+        return;
     }
-    if refused {
-        return Ok(Section::Failed);
+    for (row, repeat) in &ledger.duplicated {
+        if let (Some(source), _) = row
+            && !ledger.matched.contains(row)
+        {
+            println!(
+                "   waiver in {source} repeats {}: {} on {} -- {REPEAT_ADVICE}",
+                repeat.of, repeat.check, repeat.package
+            );
+        }
     }
-    if let Some(reason) = unrun {
-        return Ok(Section::CouldNotLook(reason));
-    }
-    Ok(Section::Clean)
 }
 
 /// The gitleaks release this binary is tested against.
@@ -2246,13 +2509,17 @@ mod tempfile_guard {
 
 #[cfg(test)]
 mod tests {
-    use super::{BTreeSet, Ledger, Read, guarddog_read, tolerated};
+    use super::{
+        BTreeSet, Ledger, Nested, NestedFound, NestedPolicy, Read, Waivers, guarddog_read,
+        nested_waivers, tolerated,
+    };
     use super::{
         DENY_FLOOR, Floor, GITLEAKS_DEFAULT, GITLEAKS_FOUND, GITLEAKS_VERSION, GUARDDOG_FLOOR,
         OSV_FLOOR, PRUNE, Scope, VET_FLOOR, Version, ZIZMOR_FLOOR, against_floor, find_named,
         find_workflow_dirs, gitleaks_could_not_look, guarddog_unpacks_under, interesting,
         parse_version, unscanned_ci,
     };
+    use crate::config::{Policy, Waiver};
 
     /// guarddog 3.2.0's reports, recorded against the public registries with
     /// only the unpack path rewritten: react-dom 19.2.0, whose registry
@@ -2287,7 +2554,7 @@ mod tests {
             "web",
             ecosystem,
             &BTreeSet::new(),
-            &[],
+            &Waivers::default(),
             &mut Ledger::default(),
             Some(0),
             report,
@@ -2487,7 +2754,7 @@ mod tests {
                 "project",
                 "pypi",
                 &BTreeSet::from([String::from("pandas")]),
-                &[],
+                &Waivers::default(),
                 &mut Ledger::default(),
                 Some(0),
                 &report.to_string(),
@@ -2507,7 +2774,7 @@ mod tests {
             "project",
             "pypi",
             &BTreeSet::new(),
-            &[],
+            &Waivers::default(),
             &mut Ledger::default(),
             Some(0),
             &report.to_string(),
@@ -2535,7 +2802,7 @@ mod tests {
                 "project",
                 "pypi",
                 &BTreeSet::from([String::from("pandas")]),
-                &[],
+                &Waivers::default(),
                 &mut Ledger::default(),
                 Some(0),
                 &report.to_string(),
@@ -2550,6 +2817,258 @@ mod tests {
             assert_eq!(matches!(read, Read::Risks(..)), other_risk);
             assert_eq!(matches!(read, Read::Clean), !other_risk);
         }
+    }
+
+    // ── a nested repository's own waivers ──
+
+    /// A waiver as a policy file would carry it.
+    fn waiver(package: &str, check: &str, reason: &str) -> Waiver {
+        Waiver {
+            scanner: String::from("guarddog"),
+            package: String::from(package),
+            check: String::from(check),
+            reason: String::from(reason),
+        }
+    }
+
+    /// A scan root that exists only as a path: the walk is lexical, and every
+    /// question it asks of the disk goes through the loader.
+    const SUPER: &str = "/srv/example/superproject";
+
+    /// A loader standing in for `uphold`'s discovery: a policy carrying one
+    /// `typosquatting` waiver on `npm:left-pad@1.3.0` at each directory in
+    /// `owners`, a load that fails at each in `broken`, and nothing elsewhere.
+    /// Every directory it is asked about is recorded, so a test can assert
+    /// where the walk went as well as what it found.
+    fn loader<'a>(
+        owners: &'a [&'a str],
+        broken: &'a [&'a str],
+        asked: &'a std::cell::RefCell<Vec<std::path::PathBuf>>,
+    ) -> impl Fn(&std::path::Path) -> crate::error::Result<Option<(std::path::PathBuf, Policy)>> + 'a
+    {
+        move |directory| {
+            asked.borrow_mut().push(directory.to_path_buf());
+            let relative = directory.strip_prefix(SUPER).unwrap_or(directory);
+            let path = directory.join("policy/principles.toml");
+            if broken.iter().any(|at| std::path::Path::new(at) == relative) {
+                return Err(crate::error::Fatal::at(&path, "is not valid TOML"));
+            }
+            if !owners.iter().any(|at| std::path::Path::new(at) == relative) {
+                return Ok(None);
+            }
+            let mut policy = Policy::default();
+            policy.supply_chain.waive = vec![waiver(
+                "npm:left-pad@1.3.0",
+                "typosquatting",
+                &format!("judged by {}", relative.display()),
+            )];
+            Ok(Some((path, policy)))
+        }
+    }
+
+    /// The policy files whose waivers `nested_waivers` gave a manifest in
+    /// `directory`, innermost first; empty where it gave only the root's.
+    fn owners_of(directory: &str, nested: NestedPolicy<'_>) -> Result<Vec<String>, String> {
+        let root = std::path::Path::new(SUPER);
+        nested_waivers(root, &root.join(directory), nested, &mut NestedFound::new())
+            .map(|found| found.iter().map(|owner| owner.source.clone()).collect())
+    }
+
+    /// The boundary, in both directions. A nested repository's waivers reach
+    /// the manifests in its own tree and none outside it: not the scan root's
+    /// own, not a sibling's, and not a directory whose name merely begins with
+    /// the repository's -- `Path::starts_with` is by component, and this is
+    /// the case that would break if it were ever done on text.
+    #[test]
+    fn a_nested_repositorys_waivers_reach_its_own_tree_and_nothing_outside_it() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let nested = loader(&["leaf"], &[], &asked);
+        let leaf = || vec![String::from("leaf/policy/principles.toml")];
+        for (directory, expected) in [
+            ("leaf", leaf()),
+            ("leaf/web", leaf()),
+            ("leaf/packages/ui", leaf()),
+            ("web", vec![]),
+            ("", vec![]),
+            ("sibling", vec![]),
+            ("sibling/web", vec![]),
+            ("leaf-two/web", vec![]),
+        ] {
+            assert_eq!(owners_of(directory, &nested), Ok(expected), "{directory:?}");
+        }
+        // The root is never asked: its policy is the one the run was started
+        // under, and answering it again as a "nested" one would print the
+        // root's own rows under a second name.
+        assert!(
+            asked
+                .borrow()
+                .iter()
+                .all(|at| at != std::path::Path::new(SUPER)),
+            "{:?}",
+            asked.borrow()
+        );
+    }
+
+    /// Every enclosing repository with a policy contributes, innermost first,
+    /// and each contributes only to its own tree: the outer repository reaches
+    /// the inner one's manifests, never the other way round. A repository
+    /// without a policy is passed over rather than stopped at.
+    #[test]
+    fn every_enclosing_repository_with_a_policy_contributes_innermost_first() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let nested = loader(&["outer", "outer/inner"], &[], &asked);
+        let outer = "outer/policy/principles.toml";
+        let inner = "outer/inner/policy/principles.toml";
+        for (directory, expected) in [
+            ("outer/inner/web", vec![inner, outer]),
+            ("outer/web", vec![outer]),
+            // `outer/bare` stands for a repository root with no policy: the
+            // loader answers `None` there as `uphold`'s discovery does.
+            ("outer/bare/web", vec![outer]),
+            ("outer/inner/bare/web", vec![inner, outer]),
+        ] {
+            assert_eq!(
+                owners_of(directory, &nested),
+                Ok(expected.into_iter().map(String::from).collect()),
+                "{directory:?}"
+            );
+        }
+    }
+
+    /// A nested policy that will not load is an error naming the manifest and
+    /// the repository, never "no waivers": the findings it would have judged
+    /// cannot be told apart from the ones it accepted. That holds at every
+    /// level -- an outer policy that will not load fails the manifest even
+    /// where the inner one loaded -- and the error names each manifest, not
+    /// the first one that met the broken repository.
+    #[test]
+    fn a_nested_policy_that_will_not_load_is_an_error_and_never_no_waivers() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let inner_broken = loader(&["leaf"], &["leaf/inner"], &asked);
+        let said = owners_of("leaf/inner/web", &inner_broken).unwrap_err();
+        assert!(
+            said.contains("/srv/example/superproject/leaf/inner/web"),
+            "{said}"
+        );
+        assert!(said.contains("did not load"), "{said}");
+        assert!(said.contains("is not valid TOML"), "{said}");
+        // A sibling of the broken repository is judged as before.
+        assert_eq!(
+            owners_of("leaf/web", &inner_broken),
+            Ok(vec![String::from("leaf/policy/principles.toml")])
+        );
+
+        let outer_broken = loader(&["leaf/inner"], &["leaf"], &asked);
+        let root = std::path::Path::new(SUPER);
+        let mut found = NestedFound::new();
+        for directory in ["leaf/inner/web", "leaf/inner/api"] {
+            let refused = nested_waivers(root, &root.join(directory), &outer_broken, &mut found)
+                .map(|_| ())
+                .unwrap_err();
+            assert!(
+                refused.contains(&root.join(directory).display().to_string()),
+                "{refused}"
+            );
+            assert!(
+                refused.contains(&format!("{} is a repository", root.join("leaf").display())),
+                "{refused}"
+            );
+        }
+    }
+
+    /// A report naming one `typosquatting` risk on `left-pad` at `version`.
+    fn typosquat(version: &str) -> String {
+        serde_json::json!([{
+            "dependency": "left-pad",
+            "result": {
+                "errors": {}, "issues": 1, "results": {}, "package_version": version,
+                "risks": [{"name": "typosquatting", "threat_rule": "typosquatting"}],
+            },
+        }])
+        .to_string()
+    }
+
+    /// `guarddog_read` over [`typosquat`] at `version`, against the root's
+    /// `root` and the enclosing repositories' `nested`, innermost first, and
+    /// what it recorded.
+    fn judged(version: &str, root: &[Waiver], nested: &[std::rc::Rc<Nested>]) -> (Read, Ledger) {
+        let mut ledger = Ledger::default();
+        let read = guarddog_read(
+            "outer/inner/web",
+            "npm",
+            &BTreeSet::from([String::from("left-pad")]),
+            &Waivers { root, nested },
+            &mut ledger,
+            Some(0),
+            &typosquat(version),
+            "",
+            &mut |_, _| Err(String::from("no registry evidence in this fixture")),
+        );
+        (read, ledger)
+    }
+
+    /// A nested repository at `source` waiving `left-pad` 1.3.0 for `reason`.
+    fn owning(source: &str, reason: &str) -> std::rc::Rc<Nested> {
+        std::rc::Rc::new(Nested {
+            source: String::from(source),
+            waive: vec![waiver("npm:left-pad@1.3.0", "typosquatting", reason)],
+        })
+    }
+
+    /// The innermost row covers the risk, and every outer row that also
+    /// covers it -- a nested repository's or the root's -- is recorded as its
+    /// repeat rather than as a match, so the stale report can say the copy may
+    /// go.
+    #[test]
+    fn the_innermost_waiver_covers_first_and_every_outer_row_for_the_same_risk_repeats_it() {
+        let inner = owning("outer/inner/policy/principles.toml", "the inner's");
+        let outer = owning("outer/policy/principles.toml", "the outer's");
+        let root = [waiver("npm:left-pad@1.3.0", "typosquatting", "the copy")];
+        let (all, copied) = judged("1.3.0", &root, &[inner.clone(), outer.clone()]);
+        assert!(matches!(all, Read::Clean));
+        assert_eq!(
+            copied.matched,
+            BTreeSet::from([(Some(inner.source.clone()), 0)])
+        );
+        let repeats: Vec<(Option<&str>, &str)> = copied
+            .duplicated
+            .iter()
+            .map(|((source, _), repeat)| (source.as_deref(), repeat.of.as_str()))
+            .collect();
+        assert_eq!(
+            repeats,
+            vec![
+                (None, "outer/inner/policy/principles.toml"),
+                (
+                    Some("outer/policy/principles.toml"),
+                    "outer/inner/policy/principles.toml"
+                ),
+            ]
+        );
+
+        // An outer repository's row covers what the inner one has no row for.
+        let bare = std::rc::Rc::new(Nested {
+            source: String::from("outer/inner/policy/principles.toml"),
+            waive: vec![],
+        });
+        let (through, outer_only) = judged("1.3.0", &[], &[bare, outer.clone()]);
+        assert!(matches!(through, Read::Clean));
+        assert_eq!(
+            outer_only.matched,
+            BTreeSet::from([(Some(outer.source.clone()), 0)])
+        );
+
+        // Keyed on the version as a root row is: the next release is read
+        // fresh, whoever wrote the row.
+        let (next, fresh) = judged("1.3.1", &[], &[inner, outer]);
+        assert!(matches!(next, Read::Risks(..)));
+        assert!(fresh.matched.is_empty() && fresh.duplicated.is_empty());
+
+        // And with no nested repository, the root's row is the match it was.
+        let (alone, rooted) = judged("1.3.0", &root, &[]);
+        assert!(matches!(alone, Read::Clean));
+        assert_eq!(rooted.matched, BTreeSet::from([(None, 0)]));
+        assert!(rooted.duplicated.is_empty());
     }
 
     /// guarddog unpacks under the cache directory, whatever `TMPDIR` says: the
