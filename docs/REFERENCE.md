@@ -3652,33 +3652,42 @@ reason = "compares optional extras against the required dependencies"
   reported without the advice to remove it, because whether that check reaches
   the release's manifest depends on the host's filesystem
   ([above](#where-guarddog-unpacks)); another host may still need it.
-- **A nested repository's own waivers cover its own manifests.** Scanned from
-  a superproject, a manifest inside a submodule, or inside any directory that
-  is a repository root with a policy, is judged against the root's waivers and
-  that repository's `[[supply_chain.waive]]` rows. The policy is the one
-  `uphold` would load if run in that directory: the same `policy/principles.toml`
-  or `policy/rg-policy.toml`, the same boundary at `.git`, the same loader with
-  its `[inherit]`. Where repositories nest, the nearest one with a policy
-  decides; one without a policy is passed over. Its rows never cover the
-  superproject's own manifests or a sibling's. The line names whose row it was:
+- **A nested repository's own waivers cover its own tree.** Scanned from a
+  superproject, a manifest inside a submodule, or inside any directory that is
+  a repository root with a policy, is judged against the root's waivers and the
+  `[[supply_chain.waive]]` rows of every enclosing repository with a policy,
+  between the root and the manifest. Each policy is the one `uphold` would
+  load if run in that directory: the same `policy/principles.toml` or
+  `policy/rg-policy.toml`, the same boundary at `.git`, the same loader with
+  its `[inherit]`. A repository's rows cover its whole tree, its submodules'
+  manifests included, as they do when it is scanned on its own; a repository
+  without a policy adds nothing. They never cover a manifest outside that
+  tree: not the superproject's own, not a sibling's, and not the repository's
+  around it. The line names the policy whose row matched:
 
   ```
      waived (leaf/policy/principles.toml): typosquatting on npm:left-pad@1.3.0 at <dir> -- <reason>
   ```
 
-  The nested row is consulted first. A root row that would also have covered
-  the risk is then a copy of it, and where that is all it did, the run says so,
-  rather than calling it a match:
+  The innermost repository's rows are consulted first, then each one outward,
+  then the root's. An outer row, nested or the root's, that would also have
+  covered the risk is a repeat of the row that matched. Over the whole tree, a
+  row that only ever repeated an inner one is named as a copy, rather than
+  called a match:
 
   ```
-     waiver repeats leaf/policy/principles.toml: typosquatting on npm:left-pad@1.3.0 -- the repository that owns the manifest waives it in its own policy, so this copy can be removed
+     waiver repeats leaf/policy/principles.toml: typosquatting on npm:left-pad@1.3.0 -- a repository nearer the manifest waives it in its own policy, so this copy can be removed
+     waiver in outer/policy/principles.toml repeats outer/leaf/policy/principles.toml: ...
   ```
 
+  A range scan reads only the manifests that moved, so it cannot tell a copy
+  from a row that also covers a manifest it did not read, and says neither.
   A nested repository's row that matched nothing is not reported by the
   superproject. That repository's own scan reports it, and that repository is
-  the one that can remove it. A nested policy that does not load leaves its
-  manifests unchecked, which is could-not-look and exit `2` naming the
-  repository and the loader's error. It is never read as having no waivers.
+  the one that can remove it. An enclosing policy that does not load leaves
+  the manifests in its tree unchecked, which is could-not-look and exit `2`
+  naming the manifest, the repository and the loader's error. It is never
+  read as having no waivers.
 - `scanner` is `guarddog` alone. The other scanners carry their own
   suppression in their own configuration (`osv-scanner.toml`, `deny.toml`,
   zizmor's config, cargo-vet's audits), and a second list here would be two

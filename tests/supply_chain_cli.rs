@@ -2465,8 +2465,8 @@ fn a_root_row_that_repeats_a_nested_repositorys_own_is_named_as_a_removable_copy
     assert!(
         said.contains(
             "waiver repeats leaf/policy/principles.toml: typosquatting on npm:left-pad@1.3.0 \
-             -- the repository that owns the manifest waives it in its own policy, so this \
-             copy can be removed"
+             -- a repository nearer the manifest waives it in its own policy, so this copy can \
+             be removed"
         ),
         "{said}"
     );
@@ -2486,6 +2486,163 @@ fn a_root_row_that_repeats_a_nested_repositorys_own_is_named_as_a_removable_copy
         "{also}"
     );
     assert!(!also.contains("waiver repeats"), "{also}");
+}
+
+/// Three levels: the scan root, `outer` inside it, `inner` inside that. A row
+/// in `outer`'s policy about a manifest in `inner`'s tree applies from the
+/// root, because `outer` scanned on its own judges that manifest against that
+/// row, and a superproject that read only the innermost policy would refuse
+/// what the repository between them accepts. `inner` has a policy without the
+/// row, so what is tested is that an inner policy does not end the walk.
+#[test]
+fn an_outer_repositorys_waiver_covers_a_manifest_in_a_repository_inside_it() {
+    let root = repository();
+    depending_on_left_pad(&root, "outer/inner/web");
+    nested_repository(
+        &root,
+        "outer",
+        Some(&typosquat_waiver("npm:left-pad@1.3.0", "outer judged it")),
+    );
+    nested_repository(
+        &root,
+        "outer/inner",
+        Some("allowed_scripts = [\"Latin\"]\n"),
+    );
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
+    let output = supply(&root, Some(&tools));
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(
+        said.contains(&format!(
+            "waived (outer/policy/principles.toml): typosquatting on npm:left-pad@1.3.0 at {} \
+             -- outer judged it",
+            root.join("outer/inner/web").display()
+        )),
+        "{said}"
+    );
+}
+
+/// The same three levels the other way round: `inner`'s row covers its own
+/// manifest and never `outer`'s, which lies outside `inner`'s tree.
+#[test]
+fn an_inner_repositorys_waiver_never_covers_the_repository_around_it() {
+    let root = repository();
+    depending_on_left_pad(&root, "outer/web");
+    depending_on_left_pad(&root, "outer/inner/web");
+    nested_repository(&root, "outer", Some("allowed_scripts = [\"Latin\"]\n"));
+    nested_repository(
+        &root,
+        "outer/inner",
+        Some(&typosquat_waiver("npm:left-pad@1.3.0", "inner judged it")),
+    );
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
+    let output = supply(&root, Some(&tools));
+    let said = text(&output);
+    assert_eq!(code(&output), 1, "{said}");
+    assert!(said.contains(&refused_at(&root, "outer/web")), "{said}");
+    assert!(
+        !said.contains(&refused_at(&root, "outer/inner/web")),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!(
+            "waived (outer/inner/policy/principles.toml): typosquatting on npm:left-pad@1.3.0 \
+             at {}",
+            root.join("outer/inner/web").display()
+        )),
+        "{said}"
+    );
+}
+
+/// An outer nested repository's row that only repeats the inner one's is
+/// named as a copy too, under its own file, and the innermost row is the one
+/// on the line that lets the risk through.
+#[test]
+fn an_outer_repositorys_row_that_repeats_an_inner_one_is_named_as_a_removable_copy() {
+    let root = repository();
+    depending_on_left_pad(&root, "outer/inner/web");
+    nested_repository(
+        &root,
+        "outer",
+        Some(&typosquat_waiver("npm:left-pad@1.3.0", "copied up")),
+    );
+    nested_repository(
+        &root,
+        "outer/inner",
+        Some(&typosquat_waiver("npm:left-pad@1.3.0", "inner judged it")),
+    );
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
+    let output = supply(&root, Some(&tools));
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(
+        said.contains("waived (outer/inner/policy/principles.toml)"),
+        "{said}"
+    );
+    assert!(!said.contains("copied up"), "{said}");
+    assert!(
+        said.contains(
+            "waiver in outer/policy/principles.toml repeats outer/inner/policy/principles.toml: \
+             typosquatting on npm:left-pad@1.3.0 -- a repository nearer the manifest waives it \
+             in its own policy, so this copy can be removed"
+        ),
+        "{said}"
+    );
+}
+
+/// The pushed-range form reaches a nested repository's waiver too: a bumped
+/// submodule pointer expands into the member's own diff, and the manifest that
+/// moved there is judged against the member's policy. A root row repeating it
+/// is not called a copy here, because a range scan reads only what moved and
+/// cannot tell a copy from a row that also covers a manifest it did not read;
+/// it is not called stale either, because it did cover the risk.
+#[test]
+fn a_pushed_range_judges_a_moved_submodule_manifest_against_the_submodules_own_waiver() {
+    let root = tracked();
+    let path = root.join("policy/principles.toml");
+    let policy = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        format!(
+            "{policy}{}",
+            typosquat_waiver("npm:left-pad@1.3.0", "copied up")
+        ),
+    )
+    .unwrap();
+    support::submodule(
+        &root,
+        "leaf",
+        &[
+            (
+                "policy/principles.toml",
+                &typosquat_waiver("npm:left-pad@1.3.0", "the leaf judged it"),
+            ),
+            ("web/package.json", "{\"name\": \"web\"}\n"),
+        ],
+    );
+    let before = commit(&root, "track the member");
+    let member = root.join("leaf");
+    depending_on_left_pad(&member, "web");
+    commit(&member, "the member's manifest moves");
+    let after = commit(&root, "bump the pointer");
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        ("guarddog", &recording(GUARDDOG_TYPOSQUAT)),
+    ]);
+    let output = pushed(&root, &tools, &before, &after);
+    let said = text(&output);
+    assert_eq!(code(&output), 0, "{said}");
+    assert!(
+        said.contains(&format!(
+            "waived (leaf/policy/principles.toml): typosquatting on npm:left-pad@1.3.0 at {} \
+             -- the leaf judged it",
+            member.join("web").display()
+        )),
+        "{said}"
+    );
+    assert!(!said.contains("waiver repeats"), "{said}");
+    assert!(!said.contains("waiver matched nothing"), "{said}");
+    assert!(journal(&root).contains("guarddog"), "{}", journal(&root));
 }
 
 /// A nested repository's row that matched nothing is left to that
