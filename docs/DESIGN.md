@@ -257,6 +257,39 @@ in the environment and is deliberately not a rule field: a bypass belongs to one
 invocation by whoever is running it, and written into the policy file it would
 be committed, reviewed once, and permanent, which is not a bypass.
 
+### uphold decides; it does not record
+
+`--junit FILE`, or `UPHOLD_JUNIT` for a run whose command line the caller does
+not own, names a file and uphold writes one JUnit document to it. The
+format is not one of uphold's own because the fleet already has one evidence
+format: a gate writes JUnit XML under `.test-evidence/` and a publisher turns
+the directory into a report. The four testcase states are the four answers a
+guard already gives, so publishers and report tools read the file with no glue
+and nothing downstream learns a second schema.
+
+The caller names the file, rather than uphold printing to stdout or keeping a
+file in a state directory. Stdout is already the prose a person reads and a
+hook runner may swallow. A default path in a state directory would be shared by
+every repository and every act on the machine, and would put a write somewhere
+the caller did not choose. A named file lets the caller put it where its
+publisher already looks, outside the tree or inside an ignored directory.
+
+The flag is the conventional spelling and the one a gate task types. The
+variable exists because a hook's command line is the hook definition's, pinned
+by the repository, so a caller running `git push` has no argv to add a flag
+to; the environment is the one channel that reaches through git and the runner
+to the guard, which is also why `UPHOLD_ALLOW` is a variable.
+
+`git commit --no-verify` and `git push --no-verify` run no hook, so no file is
+written. That needs no code here: a verifier that expects evidence on every
+pushed commit sees the absence, held on the remote and out of reach of the
+machine that skipped the hooks.
+
+"Evidence" here means what it means in `.test-evidence/`. Inside uphold the word
+also names a provider's facts to a policy, described in the section "Evidence:
+what a provider reports and what a policy may read", and the two meanings do
+not meet.
+
 ## What an external provider must establish
 
 A trustworthy provider claim has a verifiable rule name, a demonstrated

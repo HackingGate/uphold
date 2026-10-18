@@ -2009,44 +2009,100 @@ history and in a CI log. It stays in the environment and is deliberately not a
 rule field: a bypass written into the policy file would be committed, reviewed
 once, and permanent.
 
-### Recording what a run decided
+### Recording what a stage decided
 
 ```sh
-UPHOLD_VERDICTS=/path/run.jsonl uphold guard --stage pre-push
+uphold guard --stage manual --junit .test-evidence/check-guards/uphold.xml
+UPHOLD_JUNIT=/abs/path/pre-push.xml git push
 ```
 
-With the variable set, each rule the stage evaluated appends one JSON line to
-the file it names. Unset, nothing is written.
+Two spellings of one request. `--junit FILE` is the conventional one, as
+`--junitxml` is pytest's, for a caller who owns the command line; a relative
+value means the caller's directory, as it does for any other command. The
+variable is for the caller who does not own it: a hook's command line belongs
+to the hook definition the repository pins, and the environment is the only
+channel that reaches from `git push` through the runner to the guard. The flag
+wins when both are given.
 
-```json
-{"schema_version":1,"seam":"guard","stage":"pre-push","rule":"prevent-public-push","set":"unowned-push","outcome":"pass"}
-{"schema_version":1,"seam":"guard","stage":"pre-push","rule":"no-local-merge","set":"unreviewed-history","outcome":"bypass","by":"UPHOLD_ALLOW"}
+Neither given, nothing is written. Given, the run writes one JUnit XML document: one
+`<testsuite name="uphold guard pre-push">` with `package="uphold"`, and one
+`<testcase>` per rule the stage evaluated. An Allure reader files a testcase by
+its `classname` and the suite by its `package`; it reads no `<properties>`, so
+those are for a machine reader and not the report. The file is created or replaced, never appended, because a
+JUnit document is one tree. That is why either spelling names a file per stage and
+not one per act. Allure, nextest and pytest read the same format, and an Allure
+publisher reading `.test-evidence/` consumes the file unchanged.
+
+| the guard | the testcase | exit |
+|---|---|---|
+| pass | `<testcase>` with no child | `0` |
+| refuse | `<failure>` | `1` |
+| could not look | `<error>` | `2` |
+| bypass | `<skipped message="bypassed by UPHOLD_ALLOW">` | `0` |
+
+```xml
+<testsuites name="uphold guard">
+<testsuite name="uphold guard pre-push" package="uphold" tests="2" failures="0" errors="0" skipped="1" timestamp="2026-10-18T09:00:00Z">
+  <testcase name="prevent-public-push" classname="unowned-push">
+    <properties>
+      <property name="builtin" value="prevent-public-push"/>
+      <property name="set" value="unowned-push"/>
+      <property name="stage" value="pre-push"/>
+      <property name="uphold" value="1.32.0"/>
+    </properties>
+  </testcase>
+  <testcase name="no-local-merge" classname="unreviewed-history">
+    <properties>
+      <property name="builtin" value="no-local-merge"/>
+      <property name="set" value="unreviewed-history"/>
+      <property name="stage" value="pre-push"/>
+      <property name="uphold" value="1.32.0"/>
+      <property name="allowed" value="id"/>
+    </properties>
+    <skipped message="bypassed by UPHOLD_ALLOW"/>
+  </testcase>
+</testsuite>
+</testsuites>
 ```
 
-| field | holds |
-|---|---|
-| `schema_version` | `1`. Bumped when a field changes meaning or goes away, never when one is added |
-| `seam` | `guard` |
-| `stage` | the stage the run was told it is at |
-| `rule` | the rule's id |
-| `set` | the bundled set the rule came from; absent for a rule the policy declares itself |
-| `outcome` | `pass`, `refuse`, `bypass` or `unknown` |
-| `by` | `UPHOLD_ALLOW`, on a bypass and only there |
+The testcase `name` is the rule id and `classname` is the bundled set, or
+`local` for a rule the policy declares itself. The properties are `builtin`
+(the dispatch name, since a repository may call a rule anything), `set`,
+`stage` and `uphold` (the binary's version, because a bundled set's contents
+belong to the binary). A bypass also carries `allowed`: `id` when the rule's id
+was named in `UPHOLD_ALLOW`, `all` when `all` matched.
 
-- **No subject.** A line never carries the message, the diff or the refs the
-  rule read, so the file never holds the text a refusal was protecting.
-- **Appended, never replaced.** The file belongs to the caller; two runs
-  sharing it interleave whole lines.
-- **`unknown` is the last line.** A rule that could not look ends the run with
-  exit `2`, and its line says which rule that was.
-- **A file that cannot be written is exit `2`**, checked before any rule runs.
-  So is a variable set to nothing: a caller who asked for verdicts and got
-  none must not read the absence as a clean run.
+- **No subject text.** A `failure` or `error` message is the rule id and the
+  word; the report stays on stderr. No commit message, path or argv enters the
+  file, and neither does a hostname or a user name. A timestamp is the only run
+  metadata kept.
+- **Opened first.** The file is opened before the first guard runs, so a path
+  that cannot be written is exit `2` with nothing judged. A stage that declares
+  no rules writes a suite with zero tests, which tells "ran, nothing declared"
+  from "never ran".
+- **The variable's path is absolute.** Git runs a hook from the top of the
+  working tree, and a relative path would land where the caller did not look.
+  A relative value is exit `2` naming it. The flag has no such rule: it was
+  typed where the caller stands.
+- **An empty value is exit `2`**, for the flag and the variable alike. For the
+  variable this is the opposite reading from `UPHOLD_ALLOW=`, on purpose:
+  there a blank value switched every guard off without a word, and here it
+  refuses one run loudly.
+- **A rule that could not look ends the run.** It gets an `error`, the rules
+  after it get no testcase, the file is still written, and the exit is `2`.
+  Absence is not a claim about those rules. A failure before the first rule
+  runs, such as a push that was told nothing or a policy that will not load,
+  leaves the file absent and exits `2`.
+- **`--stage manual` writes like any other stage.**
+- **`uphold guard --text` with either given is exit `2`.** That seam
+  reaches rules through a path that reports refusals only, so it cannot
+  honestly write a pass.
+- **The shim and `uphold hook` do not read the variable**, so one exported
+  around a whole act does not trip them.
 
-uphold records nothing itself. Signing the lines, storing them beside the
-commit and publishing them belong to whatever ran the gate. A commit pushed
-with `--no-verify` ran no hook and so has no lines, which a verifier
-expecting a record on every pushed commit sees as the record's absence.
+stdout and stderr are unchanged; the file is additive. uphold decides and
+records nothing beyond this one file. Signing it, storing it and publishing it
+belong to whatever runs the gate.
 
 ## `uphold shim` — the shims
 
