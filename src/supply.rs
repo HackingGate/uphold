@@ -86,6 +86,13 @@
 //! back indistinguishable from a clean one -- this command's third verdict
 //! imported as a silent pass. Named here, not run.
 //!
+//! NOTHING HERE WRITES A LOCKFILE INTO THE TREE IT SCANS. Every scanner that
+//! resolves -- cargo-deny, cargo-vet, `uv export`, and the `cargo metadata`
+//! the cargo-deny section asks -- runs `--locked`, so a lock that is missing
+//! or out of step is that tool's refusal. A lock written for the scan is an
+//! untracked file after every sweep and a verdict on versions nobody builds,
+//! which is the shape this command exists to refuse.
+//!
 //! What the run looks at is a RANGE, not a tree. Every scanner here reaches the
 //! network, and a push that changes no lockfile, manifest or workflow was
 //! paying for all five: the whole-tree form is now `--all`, and the pre-push
@@ -1002,22 +1009,63 @@ fn deny(root: &Path, scope: &Scope) -> Result<Section> {
             found
         }
     };
-    let mut checked = 0_usize;
-    let mut refused = false;
-    for manifest in manifests {
-        // Only crate and workspace roots. A member's Cargo.toml is checked
-        // through its workspace, and handing it to cargo-deny alone repeats
-        // the workspace's findings once per member.
-        let text = std::fs::read_to_string(&manifest).unwrap_or_default();
-        if !text
+    // Only crate and workspace roots. A manifest declaring neither -- a
+    // fragment, a template -- is not a thing cargo-deny can be pointed at.
+    let crates = manifests.into_iter().filter(|manifest| {
+        std::fs::read_to_string(manifest)
+            .unwrap_or_default()
             .lines()
             .any(|line| line == "[workspace]" || line == "[package]")
-        {
+    });
+    // A CRATE WITH NO LOCK OF ITS OWN IS NOT HANDED OVER BLIND. cargo-deny
+    // resolves through `cargo metadata`, and pointed at a crate with no
+    // Cargo.lock that cargo would use, cargo resolves a fresh one and writes
+    // it into the scanned tree. Both halves are wrong: every sweep leaves an
+    // untracked file behind, and the versions judged are ones nobody builds --
+    // a vendored path-dependency crate without its own lockfile resolved
+    // alone came out at different versions from the lock that ships it for
+    // half its graph. So each one is first asked of the locks that are here:
+    // see `pinned_by` for what each answer means.
+    let mut parents = Parents::default();
+    let mut run: Vec<PathBuf> = Vec::new();
+    let mut through: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut unpinned: Vec<String> = Vec::new();
+    for manifest in crates {
+        if manifest.with_file_name("Cargo.lock").is_file() {
+            run.push(manifest);
             continue;
         }
+        let candidates = parents.candidates(root)?;
+        match pinned_by(&manifest, &candidates, &mut |parent| {
+            parents.ask(root, parent)
+        }) {
+            Pinned::Member => run.push(manifest),
+            Pinned::Through(parent) => through.push((manifest, parent)),
+            Pinned::Unpinned(reason) => {
+                unpinned.push(format!("{}: {reason}", manifest.display()));
+            }
+        }
+    }
+    // The crate a path dependency is checked through is run whether or not
+    // the range moved it: a range that changed only the dependency changed
+    // what that crate resolves, and "checked through" has to be true.
+    for (_, parent) in &through {
+        run.push(parent.clone());
+    }
+    run.sort();
+    run.dedup();
+    let mut checked = 0_usize;
+    let mut refused = false;
+    for manifest in run {
         checked += 1;
+        // `--locked`: THE LOCK IS READ, NEVER WRITTEN. Everything above keeps
+        // a crate cargo would resolve afresh from reaching this line, and this
+        // is the layer that holds if that reasoning is ever wrong: a lock that
+        // is missing or out of step with its manifest is cargo's refusal --
+        // an empty stdout, so could-not-look below -- instead of a file
+        // written into the tree under scan.
         let output = Command::new("cargo")
-            .args(["deny", "--config"])
+            .args(["deny", "--locked", "--config"])
             .arg(&config)
             .arg("--manifest-path")
             .arg(&manifest)
@@ -1076,9 +1124,31 @@ fn deny(root: &Path, scope: &Scope) -> Result<Section> {
         }
         println!("   FAILED: cargo-deny: {}", manifest.display());
     }
+    // Printed after the runs, so the line is only ever shown beside a check
+    // of its parent that happened: a parent cargo-deny could not read returned
+    // above, and took this claim with it.
+    for (manifest, parent) in &through {
+        println!(
+            "   {}: checked through {}",
+            manifest.display(),
+            parent.display()
+        );
+    }
+    // Counted as checked: the versions that ship were judged, by the run
+    // through the lock that pins them. The count still says what a sweep
+    // covered, and a crate counted before this split is counted after it.
+    checked += through.len();
     println!("   {checked} crate(s) checked");
     if refused {
+        // The section has one verdict, and a refusal outranks could-not-look,
+        // so the crates nobody looked at are named here rather than lost.
+        for reason in &unpinned {
+            eprintln!("   NOT CHECKED: {reason}");
+        }
         return Ok(Section::Failed);
+    }
+    if !unpinned.is_empty() {
+        return Ok(Section::CouldNotLook(unpinned.join("; ")));
     }
     if checked == 0 {
         return Ok(Section::Nothing(String::from(match scope {
@@ -1087,6 +1157,197 @@ fn deny(root: &Path, scope: &Scope) -> Result<Section> {
         })));
     }
     Ok(Section::Clean)
+}
+
+/// What the locks here say about a crate root with no Cargo.lock beside it.
+#[derive(Debug, PartialEq, Eq)]
+enum Pinned {
+    /// A member of a workspace whose root holds a lock. cargo resolves it
+    /// through that lock and writes nothing, and it is run on its own as
+    /// before: cargo-deny pointed at a workspace root that is also a package
+    /// roots its graph at that package alone, so a member's own run is the
+    /// only one whose graph is rooted at the member.
+    Member,
+    /// A path dependency, and not a member, of the crate at this manifest,
+    /// whose lock pins its versions. Not run alone: the versions that ship
+    /// are judged by that crate's run.
+    Through(PathBuf),
+    /// No lock here pins it, so there is no set of versions anybody builds to
+    /// judge; the reason says why, and the crate is not checked.
+    Unpinned(String),
+}
+
+/// One package a lock pins with no `source` -- a workspace member or a path
+/// dependency -- as `cargo metadata` names it.
+#[derive(Clone)]
+struct PathPackage {
+    manifest: PathBuf,
+    member: bool,
+}
+
+/// What the crate at a manifest answered, or why it could not answer.
+type Answer = std::result::Result<Vec<PathPackage>, String>;
+
+/// The crates here with a lock beside them, and what each lock pins.
+///
+/// Both halves are lazy and asked at most once a run: a tree whose every
+/// crate has its own lock never runs `cargo metadata` at all, and one with
+/// many lockless members asks each parent once rather than once per member.
+#[derive(Default)]
+struct Parents {
+    candidates: Option<Vec<PathBuf>>,
+    answers: std::collections::BTreeMap<PathBuf, Answer>,
+}
+
+impl Parents {
+    /// Every `Cargo.toml` beside a `Cargo.lock`, over the whole tree whatever
+    /// the scope: in a range, the crate that pins a moved path dependency is
+    /// the one that has to answer for it, and it need not have moved.
+    fn candidates(&mut self, root: &Path) -> Result<Vec<PathBuf>> {
+        if let Some(found) = &self.candidates {
+            return Ok(found.clone());
+        }
+        let found: Vec<PathBuf> = find_named(root, "Cargo.lock")?
+            .into_iter()
+            .map(|lock| lock.with_file_name("Cargo.toml"))
+            .filter(|manifest| manifest.is_file())
+            .collect();
+        self.candidates = Some(found.clone());
+        Ok(found)
+    }
+
+    fn ask(&mut self, root: &Path, parent: &Path) -> Answer {
+        self.answers
+            .entry(parent.to_path_buf())
+            .or_insert_with(|| path_packages(root, parent))
+            .clone()
+    }
+}
+
+/// Which lock, if any, pins the crate root at `manifest`.
+///
+/// `ask` is `cargo metadata` of one parent. Parents are asked nearest
+/// enclosing first, because a member sits under its workspace root and a
+/// vendored crate under the crate that vendors it, so the usual answer costs
+/// one question; the rest are asked only while nothing has answered.
+///
+/// WHY `cargo metadata` AND NOT THE LOCK'S OWN TEXT. A Cargo.lock lists a path
+/// package by name and version with no `source`, and so does it list every
+/// workspace member: the lock alone cannot tell the vendored crate, which must
+/// not be run alone, from a member, which must, and a name and version are
+/// not a path, so a second crate of the same name would be answered for by
+/// the first. `cargo metadata` names each package by its manifest path and
+/// lists the workspace's members, which is cargo's own answer to both. It is
+/// asked `--locked`, so it reads the lock it is asked about and never writes
+/// one either.
+///
+/// A parent that could not answer is named in the reason when no other one
+/// claims the crate: "nothing pins it" would otherwise be said on the
+/// strength of a question that was never answered.
+fn pinned_by(
+    manifest: &Path,
+    parents: &[PathBuf],
+    ask: &mut impl FnMut(&Path) -> Answer,
+) -> Pinned {
+    let wanted = canonical(manifest);
+    let mut order: Vec<&PathBuf> = parents
+        .iter()
+        .filter(|parent| parent.as_path() != manifest)
+        .collect();
+    order.sort_by_key(|parent| {
+        let directory = parent.parent().unwrap_or(parent);
+        (
+            !manifest.starts_with(directory),
+            std::cmp::Reverse(directory.components().count()),
+            (*parent).clone(),
+        )
+    });
+    let mut unanswered: Vec<String> = Vec::new();
+    for parent in order {
+        match ask(parent) {
+            Ok(packages) => {
+                if let Some(package) = packages.iter().find(|package| package.manifest == wanted) {
+                    return if package.member {
+                        Pinned::Member
+                    } else {
+                        Pinned::Through(parent.clone())
+                    };
+                }
+            }
+            Err(error) => unanswered.push(format!("{}: {error}", parent.display())),
+        }
+    }
+    let reason = "no Cargo.lock: cargo-deny would resolve versions nobody builds";
+    if unanswered.is_empty() {
+        return Pinned::Unpinned(String::from(reason));
+    }
+    Pinned::Unpinned(format!(
+        "{reason}, and a lock that may pin it could not be read ({})",
+        unanswered.join("; ")
+    ))
+}
+
+/// The packages the lock beside `parent` pins with no `source`, by manifest.
+///
+/// `--locked` rather than `--frozen`: offline, a cold cache -- the normal
+/// state of a scheduled CI sweep -- fails on every crate not yet downloaded,
+/// and the downloads are the ones cargo-deny makes next for the same graph.
+/// `--all-features` because cargo-deny is run with it, and an optional path
+/// dependency is pinned by the lock whether or not a default build turns it
+/// on.
+fn path_packages(root: &Path, parent: &Path) -> Answer {
+    let output = Command::new("cargo")
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--locked",
+            "--all-features",
+            "--manifest-path",
+        ])
+        .arg(parent)
+        .current_dir(root)
+        .output()
+        .map_err(|error| format!("could not run cargo metadata: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cargo metadata failed: {}",
+            first_said(&String::from_utf8_lossy(&output.stderr))
+        ));
+    }
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("cargo metadata printed no metadata: {error}"))?;
+    let members: BTreeSet<&str> = metadata
+        .get("workspace_members")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    let Some(packages) = metadata
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Err(String::from("cargo metadata listed no packages"));
+    };
+    Ok(packages
+        .iter()
+        .filter(|package| package.get("source").is_none_or(serde_json::Value::is_null))
+        .filter_map(|package| {
+            let manifest = package.get("manifest_path")?.as_str()?;
+            let id = package.get("id")?.as_str()?;
+            Some(PathPackage {
+                manifest: canonical(Path::new(manifest)),
+                member: members.contains(id),
+            })
+        })
+        .collect())
+}
+
+/// One spelling of a path, so a manifest the walk found and the same one
+/// cargo names compare equal. A path that will not resolve is kept as given.
+fn canonical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// cargo-vet's floor: the stdout-versus-stderr split below was measured by
@@ -1941,10 +2202,26 @@ fn guarddog(
         // A directory, not a file: guarddog is run with the working directory
         // set to the manifest's own, and `pyproject.toml` moving is a dependency
         // change whether or not the lock moved with it.
+        //
+        // A directory with no `uv.lock` is left out, as the whole-tree walk
+        // leaves it out by finding no lock there: `uv export` in it would
+        // resolve and write one, which is a file in the tree under scan and a
+        // set of versions nobody pinned. Said, so a moved `pyproject.toml`
+        // is not silently unread.
         Scope::Changed(paths, _) => (
             directories_of(&selected(root, paths, &["uv.lock", "pyproject.toml"]))
                 .into_iter()
                 .map(|directory| directory.join("uv.lock"))
+                .filter(|lock| {
+                    let locked = lock.is_file();
+                    if !locked {
+                        println!(
+                            "   {}: no uv.lock beside it, so guarddog has no pinned set to read",
+                            lock.with_file_name("pyproject.toml").display()
+                        );
+                    }
+                    locked
+                })
                 .collect(),
             selected(root, paths, &["package.json"]),
         ),
@@ -1977,9 +2254,14 @@ fn guarddog(
                 "uv is not on PATH, so the Python manifests were not exported for guarddog",
             )));
         }
+        // `--locked`: the lock is read, never written. Without it `uv export`
+        // relocks a `uv.lock` that is out of step with its `pyproject.toml`
+        // and rewrites the file in the tree under scan, then exports versions
+        // nobody has built. With it that is uv's refusal, reported below.
         let exported = Command::new("uv")
             .args([
                 "export",
+                "--locked",
                 "--no-hashes",
                 "--no-dev",
                 "--format",
@@ -1992,6 +2274,10 @@ fn guarddog(
             println!(
                 "   FAILED: guarddog: uv export failed in {}",
                 directory.display()
+            );
+            println!(
+                "   {}",
+                first_said(&String::from_utf8_lossy(&exported.stderr))
             );
             refused = true;
             continue;
@@ -3508,5 +3794,114 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "a config\n");
         drop(made);
         assert!(!path.exists(), "the file outlived the guard");
+    }
+
+    // ── which lock pins a crate with none of its own ──────────────────
+
+    fn package(manifest: &str, member: bool) -> super::PathPackage {
+        super::PathPackage {
+            manifest: std::path::PathBuf::from(manifest),
+            member,
+        }
+    }
+
+    fn parents(manifests: &[&str]) -> Vec<std::path::PathBuf> {
+        manifests.iter().map(std::path::PathBuf::from).collect()
+    }
+
+    /// The lock enclosing the crate is asked first, and the answer stops the
+    /// questions: a superproject with many crates and one lockless member
+    /// must not run `cargo metadata` on every crate in it.
+    #[test]
+    fn the_nearest_enclosing_lock_is_asked_first_and_the_first_answer_ends_the_search() {
+        let mut asked: Vec<std::path::PathBuf> = Vec::new();
+        let pinned = super::pinned_by(
+            std::path::Path::new("/t/app/third_party/vendored/Cargo.toml"),
+            &parents(&["/t/Cargo.toml", "/t/aside/Cargo.toml", "/t/app/Cargo.toml"]),
+            &mut |parent| {
+                asked.push(parent.to_path_buf());
+                Ok(vec![package(
+                    "/t/app/third_party/vendored/Cargo.toml",
+                    false,
+                )])
+            },
+        );
+        assert_eq!(
+            pinned,
+            super::Pinned::Through(std::path::PathBuf::from("/t/app/Cargo.toml"))
+        );
+        assert_eq!(asked, parents(&["/t/app/Cargo.toml"]));
+    }
+
+    /// A member is run on its own; a path dependency that is not a member is
+    /// checked through the crate whose lock pins it.
+    ///
+    /// The lock's own text cannot make this split -- both are listed with no
+    /// `source` -- and the wrong answer either way is a gap: a member checked
+    /// only through a root that is also a package is never the root of a
+    /// graph, and a path dependency run alone resolves afresh.
+    #[test]
+    fn a_workspace_member_is_run_and_a_path_dependency_is_checked_through_its_parent() {
+        let mut ask = |_: &std::path::Path| {
+            Ok(vec![
+                package("/t/Cargo.toml", true),
+                package("/t/member/Cargo.toml", true),
+                package("/t/vendored/Cargo.toml", false),
+            ])
+        };
+        let roots = parents(&["/t/Cargo.toml"]);
+        assert_eq!(
+            super::pinned_by(
+                std::path::Path::new("/t/member/Cargo.toml"),
+                &roots,
+                &mut ask
+            ),
+            super::Pinned::Member
+        );
+        assert_eq!(
+            super::pinned_by(
+                std::path::Path::new("/t/vendored/Cargo.toml"),
+                &roots,
+                &mut ask
+            ),
+            super::Pinned::Through(std::path::PathBuf::from("/t/Cargo.toml"))
+        );
+    }
+
+    /// Nothing pinning the crate and a lock that could not be asked are
+    /// different reasons, and the second names the lock and what cargo said.
+    #[test]
+    fn an_unpinned_crate_names_every_lock_that_could_not_answer() {
+        let manifest = std::path::Path::new("/t/standalone/Cargo.toml");
+        let unpinned = super::pinned_by(manifest, &parents(&["/t/Cargo.toml"]), &mut |_| {
+            Ok(vec![package("/t/Cargo.toml", true)])
+        });
+        assert_eq!(
+            unpinned,
+            super::Pinned::Unpinned(String::from(
+                "no Cargo.lock: cargo-deny would resolve versions nobody builds"
+            ))
+        );
+        let unanswered = super::pinned_by(
+            manifest,
+            &parents(&["/t/Cargo.toml", "/t/other/Cargo.toml"]),
+            &mut |parent| {
+                if parent.starts_with("/t/other") {
+                    Ok(Vec::new())
+                } else {
+                    Err(String::from("cargo metadata failed: the lock is stale"))
+                }
+            },
+        );
+        let reason = match unanswered {
+            super::Pinned::Unpinned(reason) => reason,
+            other => format!("not unpinned: {other:?}"),
+        };
+        assert!(reason.starts_with("no Cargo.lock:"), "{reason}");
+        assert!(
+            reason.contains("/t/Cargo.toml: cargo metadata failed: the lock is stale"),
+            "{reason}"
+        );
+        assert!(!reason.contains("/t/other"), "{reason}");
     }
 }
