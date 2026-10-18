@@ -3224,6 +3224,31 @@ through `uv export`, less the direct references it cannot look up (see
 section with nothing to read says so — "no workflows here" and "checked and
 clean" must never look the same.
 
+**No scanner writes a lockfile into the tree it scans.** cargo-deny, the
+`cargo metadata` below, cargo-vet and `uv export` all run with `--locked`, so a
+lock that is missing or out of step with its manifest is the tool's refusal
+rather than a file resolved and written for the scan. A crate root with no
+`Cargo.lock` beside it is asked of the locks that are here before cargo-deny
+is pointed at it, by `cargo metadata --locked` of each crate that has one,
+nearest enclosing first:
+
+- a **workspace member** of a crate whose lock lists it is run on its own, as
+  before, through that lock;
+- a **path dependency** that is not a member, such as a vendored
+  path-dependency crate without its own lockfile, is not run alone, because
+  resolved alone it comes out at versions nobody builds. The versions that
+  ship are judged by the run of the crate whose lock pins it, and the line
+  says so: `<manifest>: checked through <parent manifest>`. It is counted in
+  `N crate(s) checked`;
+- **anything else** is not checked, which is could-not-look (exit `2`):
+  `NOT CHECKED: <manifest>: no Cargo.lock: cargo-deny would resolve versions
+  nobody builds`. Where a lock that might pin it could not be asked, the reason
+  names that lock and what cargo said.
+
+The parent is asked through `cargo metadata` rather than read out of its
+`Cargo.lock`, because a lock lists a member and a path dependency the same
+way, by name and version with no `source`, and only the first may be run.
+
 zizmor is handed the repository's own `zizmor.yml` where one exists, and a
 **bundled default** (`ref-pin`) where none does. `--config` is always named
 explicitly: zizmor resolves a discovered config relative to a single input path
@@ -3375,9 +3400,11 @@ A range holding none of them runs none of the first five scanners and says so
 in one line; where gitleaks is not asked for either, that is the whole run and
 it exits `0`. Per scanner: osv-scanner is handed the changed
 lockfiles by path; zizmor the changed workflow files; cargo-deny each crate
-root whose `Cargo.toml` or `Cargo.lock` moved; cargo-vet only where a
-`Cargo.lock` moved and a store exists; guarddog pypi each directory whose
-`uv.lock` or `pyproject.toml` moved and guarddog npm each changed
+root whose `Cargo.toml` or `Cargo.lock` moved, and the crate whose lock pins a
+moved path dependency; cargo-vet only where a
+`Cargo.lock` moved and a store exists; guarddog pypi each directory with a
+`uv.lock` whose `uv.lock` or `pyproject.toml` moved (one with no `uv.lock` is
+named and left out, as the whole-tree walk leaves it out) and guarddog npm each changed
 `package.json`; gitleaks each pushed range as `--log-opts=FROM..TO`, whatever
 files it touched.
 

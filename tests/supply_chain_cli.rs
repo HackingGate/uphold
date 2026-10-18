@@ -437,6 +437,7 @@ fn cargo_deny_headlines_are_printed_and_the_config_only_classes_are_not() {
     let root = repository();
     std::fs::write(root.join("deny.toml"), "[bans]\n").unwrap();
     std::fs::write(root.join("Cargo.toml"), "[package]\nname = 'fixture'\n").unwrap();
+    std::fs::write(root.join("Cargo.lock"), "version = 4\n").unwrap();
     let tools = stubs(&[
         ("osv-scanner", "exit 0"),
         (
@@ -469,6 +470,7 @@ fn a_cargo_deny_that_is_not_installed_is_could_not_look_rather_than_a_finding() 
     let root = repository();
     std::fs::write(root.join("deny.toml"), "[bans]\n").unwrap();
     std::fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+    std::fs::write(root.join("Cargo.lock"), "version = 4\n").unwrap();
     let tools = stubs(&[
         ("osv-scanner", "exit 0"),
         (
@@ -824,20 +826,347 @@ fn a_section_with_work_and_no_tool_installed_names_the_tool_and_is_not_a_pass() 
 /// filter that matched nothing produces the same silent green as a workspace
 /// cargo-deny approved, and the two must not read alike. This is the section's
 /// success path, which every other cargo-deny test here deliberately fails.
+///
+/// The member has no lock beside it and is still run on its own, through its
+/// workspace's lock: cargo-deny pointed at a root that is also a package roots
+/// its graph there, and the member's run is the one rooted at the member.
 #[test]
 fn a_cargo_deny_that_finds_nothing_is_clean_and_says_how_many_crates_it_read() {
     let root = repository();
     std::fs::write(root.join("deny.toml"), "[bans]\n").unwrap();
     std::fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = ['a']\n").unwrap();
+    std::fs::write(root.join("Cargo.lock"), "version = 4\n").unwrap();
     std::fs::create_dir_all(root.join("a")).unwrap();
     std::fs::write(root.join("a/Cargo.toml"), "[package]\nname = 'a'\n").unwrap();
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("cargo", "exit 0")]);
+    let cargo = recording(&format!(
+        "[ \"$1\" = metadata ] && {{ printf '%s\\n' '{}'; exit 0; }}\nexit 0",
+        metadata_of(&root, &[("a", true)])
+    ));
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("cargo", &cargo)]);
     let output = supply(&root, Some(&tools));
     assert_eq!(code(&output), 0, "{}", text(&output));
     let said = text(&output);
     assert!(said.contains("2 crate(s) checked"), "{said}");
     assert!(said.contains("all checks passed"), "{said}");
     assert!(!said.contains("no crate to hold to it"), "{said}");
+    assert!(!said.contains("checked through"), "{said}");
+    let member = root.join("a/Cargo.toml").display().to_string();
+    assert!(
+        journal(&root)
+            .lines()
+            .any(|line| line.contains(" deny ") && line.contains(&member)),
+        "{}",
+        journal(&root)
+    );
+}
+
+// ── a crate with no lock of its own ──────────────────────────────────
+//
+// cargo-deny pointed at a crate with no Cargo.lock that cargo would use made
+// cargo resolve one and write it into the tree under scan, at versions nobody
+// builds. These pin both halves: no file appears, and a crate some lock here
+// pins is reported as checked through that lock rather than run alone.
+
+/// What `cargo metadata` of a crate prints, reduced to what the section reads:
+/// each package the lock pins with no `source`, by manifest, and which of them
+/// are members of the workspace. The crate at the root is always one, and a
+/// member of its own workspace.
+fn metadata_of(root: &Path, packages: &[(&str, bool)]) -> String {
+    let mut listed = vec![("", true)];
+    listed.extend_from_slice(packages);
+    let id = |directory: &str| format!("path+file://{}", root.join(directory).display());
+    serde_json::json!({
+        "packages": listed
+            .iter()
+            .map(|(directory, _)| serde_json::json!({
+                "id": id(directory),
+                "source": null,
+                "manifest_path": root.join(directory).join("Cargo.toml"),
+            }))
+            .collect::<Vec<_>>(),
+        "workspace_members": listed
+            .iter()
+            .filter(|(_, member)| *member)
+            .map(|(directory, _)| id(directory))
+            .collect::<Vec<_>>(),
+    })
+    .to_string()
+}
+
+/// A cargo that does what cargo does about a missing lock.
+///
+/// Handed `--manifest-path` with no Cargo.lock beside it, it writes one -- the
+/// defect, modelled -- unless `--locked` is among its arguments, when it
+/// refuses on stderr with stdout empty, as cargo does. `metadata` then prints
+/// `metadata`, and anything else passes. Every call is recorded.
+fn lock_writing_cargo(metadata: &str) -> String {
+    recording(&format!(
+        "manifest=; locked=; previous=\n\
+         for argument do\n\
+         [ \"$previous\" = --manifest-path ] && manifest=$argument\n\
+         [ \"$argument\" = --locked ] && locked=yes\n\
+         previous=$argument\n\
+         done\n\
+         if [ -n \"$manifest\" ] && [ ! -f \"$(dirname \"$manifest\")/Cargo.lock\" ]; then\n\
+         [ -n \"$locked\" ] && {{ echo \"error: cannot create the lock file because --locked \
+         was passed to prevent this\" >&2; exit 101; }}\n\
+         echo '# resolved afresh' > \"$(dirname \"$manifest\")/Cargo.lock\"\n\
+         fi\n\
+         [ \"$1\" = metadata ] && {{ printf '%s\\n' '{metadata}'; exit 0; }}\n\
+         exit 0"
+    ))
+}
+
+/// Every file under the fixture and its bytes, less the journal the stubs
+/// write there.
+fn tree(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut found = std::collections::BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path != root.join("stub.log") {
+                found.insert(path.clone(), std::fs::read(&path).unwrap());
+            }
+        }
+    }
+    found
+}
+
+/// A crate at the root with its lock, and a deny.toml to hold it to.
+fn locked_crate(root: &Path) {
+    write(root, "deny.toml", "[bans]\n");
+    write(root, "Cargo.toml", "[package]\nname = 'app'\n");
+    write(root, "Cargo.lock", "version = 4\n");
+}
+
+/// The cargo-deny calls in a journal, one line each.
+fn deny_runs(root: &Path) -> Vec<String> {
+    journal(root)
+        .lines()
+        .filter(|line| line.contains(" deny ") && !line.contains("--version"))
+        .map(String::from)
+        .collect()
+}
+
+/// A vendored path-dependency crate without its own lockfile is checked
+/// through the lock that pins it, and the sweep writes nothing.
+///
+/// Run alone, cargo resolved the crate afresh and wrote a Cargo.lock beside
+/// it: an untracked file after every sweep, and a verdict on versions the
+/// build never uses. The versions that ship are the parent's, so the parent's
+/// run is the check, and the line names it.
+#[test]
+fn a_path_dependency_without_its_own_lock_is_checked_through_the_lock_that_pins_it() {
+    let root = repository();
+    locked_crate(&root);
+    write(
+        &root,
+        "third_party/vendored/Cargo.toml",
+        "[package]\nname = 'vendored'\n",
+    );
+    let cargo = lock_writing_cargo(&metadata_of(&root, &[("third_party/vendored", false)]));
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("cargo", &cargo)]);
+    let before = tree(&root);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(tree(&root), before, "the sweep wrote into the tree");
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let said = text(&output);
+    assert!(
+        said.contains(&format!(
+            "{}: checked through {}",
+            root.join("third_party/vendored/Cargo.toml").display(),
+            root.join("Cargo.toml").display()
+        )),
+        "{said}"
+    );
+    assert!(said.contains("2 crate(s) checked"), "{said}");
+    let runs = deny_runs(&root);
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert!(runs.iter().all(|run| !run.contains("vendored")), "{runs:?}");
+    // Every cargo call that could resolve is asked not to write.
+    let ran = journal(&root);
+    assert!(
+        ran.lines()
+            .filter(|line| line.contains(" deny ") || line.contains(" metadata "))
+            .filter(|line| !line.contains("--version"))
+            .all(|line| line.contains("--locked")),
+        "{ran}"
+    );
+}
+
+/// A crate with no lock that no lock here pins is not checked, and no lock is
+/// written for it.
+///
+/// There is no set of versions anybody builds for it, so there is nothing to
+/// hold to deny.toml: a resolution made for the scan would be judged in place
+/// of one that does not exist. That is could-not-look, exit 2, never a pass --
+/// and the crate beside it that has a lock is still checked.
+#[test]
+fn a_crate_without_a_lock_that_nothing_pins_is_not_checked_and_no_file_appears() {
+    let root = repository();
+    locked_crate(&root);
+    write(
+        &root,
+        "standalone/Cargo.toml",
+        "[package]\nname = 'standalone'\n",
+    );
+    let cargo = lock_writing_cargo(&metadata_of(&root, &[]));
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("cargo", &cargo)]);
+    let before = tree(&root);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(tree(&root), before, "the sweep wrote into the tree");
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    let said = text(&output);
+    assert!(
+        said.contains(&format!(
+            "NOT CHECKED: {}: no Cargo.lock: cargo-deny would resolve versions nobody builds",
+            root.join("standalone/Cargo.toml").display()
+        )),
+        "{said}"
+    );
+    assert!(said.contains("1 crate(s) checked"), "{said}");
+    assert!(!said.contains("checked through"), "{said}");
+    let runs = deny_runs(&root);
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert!(
+        runs.iter().all(|run| !run.contains("standalone")),
+        "{runs:?}"
+    );
+}
+
+/// A lone crate with no lock anywhere is not checked, and cargo is never
+/// pointed at it.
+///
+/// With no lock in the tree there is nobody to ask, so `cargo metadata` is not
+/// run either, and the section is could-not-look rather than the "no crate to
+/// hold to it" a tree without crates gets.
+#[test]
+fn a_lone_crate_with_no_lock_is_not_checked_and_cargo_resolves_nothing() {
+    let root = repository();
+    write(&root, "deny.toml", "[bans]\n");
+    write(&root, "Cargo.toml", "[package]\nname = 'app'\n");
+    let cargo = lock_writing_cargo("{}");
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("cargo", &cargo)]);
+    let before = tree(&root);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(tree(&root), before, "the sweep wrote into the tree");
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("no Cargo.lock: cargo-deny"), "{said}");
+    assert!(said.contains("0 crate(s) checked"), "{said}");
+    assert!(!said.contains("no crate to hold to it"), "{said}");
+    let ran = journal(&root);
+    assert!(!ran.contains(" metadata "), "{ran}");
+    assert!(deny_runs(&root).is_empty(), "{ran}");
+}
+
+/// A lock that could not be asked is named, never read as pinning nothing.
+///
+/// "No lock here pins it" said because `cargo metadata` failed would be a
+/// claim made on a question nobody answered, so the reason carries what cargo
+/// said about the lock it could not read.
+#[test]
+fn a_lock_that_could_not_be_asked_is_named_in_the_reason() {
+    let root = repository();
+    locked_crate(&root);
+    write(
+        &root,
+        "third_party/vendored/Cargo.toml",
+        "[package]\nname = 'vendored'\n",
+    );
+    let cargo = recording(
+        "[ \"$1\" = metadata ] && { echo 'error: failed to parse lock file at: Cargo.lock' >&2; \
+         exit 101; }\nexit 0",
+    );
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("cargo", &cargo)]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    let said = text(&output);
+    assert!(
+        said.contains("a lock that may pin it could not be read"),
+        "{said}"
+    );
+    assert!(said.contains("failed to parse lock file"), "{said}");
+}
+
+/// A refusal elsewhere outranks could-not-look, and the unchecked crate is
+/// still named.
+///
+/// The section answers one verdict and a finding is the higher one, so the
+/// crate nobody looked at would vanish from the output under it. It is printed
+/// beside the refusal instead.
+#[test]
+fn an_unchecked_crate_beside_a_refusal_is_named_and_the_run_is_a_failure() {
+    let root = repository();
+    locked_crate(&root);
+    write(
+        &root,
+        "standalone/Cargo.toml",
+        "[package]\nname = 'standalone'\n",
+    );
+    let cargo = recording(&format!(
+        "[ \"$1\" = metadata ] && {{ printf '%s\\n' '{}'; exit 0; }}\n\
+         echo 'error[vulnerability]: RUSTSEC-0000-0001 in left-pad'\nexit 1",
+        metadata_of(&root, &[])
+    ));
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("cargo", &cargo)]);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(code(&output), 1, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("RUSTSEC-0000-0001"), "{said}");
+    assert!(
+        said.contains(&format!(
+            "NOT CHECKED: {}: no Cargo.lock",
+            root.join("standalone/Cargo.toml").display()
+        )),
+        "{said}"
+    );
+}
+
+/// A range that moves only a path dependency runs the crate whose lock pins
+/// it.
+///
+/// The parent did not move, and a scan narrowed to what moved would not run
+/// it -- but the dependency's manifest is part of what the parent resolves, so
+/// "checked through" is only true if the parent is run.
+#[test]
+fn a_range_moving_only_a_path_dependency_runs_the_crate_that_pins_it() {
+    let root = tracked();
+    locked_crate(&root);
+    write(
+        &root,
+        "third_party/vendored/Cargo.toml",
+        "[package]\nname = 'vendored'\n",
+    );
+    let before = commit(&root, "a crate and the path dependency it vendors");
+    write(
+        &root,
+        "third_party/vendored/Cargo.toml",
+        "[package]\nname = 'vendored'\n\n[dependencies]\nleft-pad = '1'\n",
+    );
+    let after = commit(&root, "the vendored crate gains a dependency");
+    let cargo = lock_writing_cargo(&metadata_of(&root, &[("third_party/vendored", false)]));
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("cargo", &cargo)]);
+    let output = pushed(&root, &tools, &before, &after);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("checked through"), "{said}");
+    let runs = deny_runs(&root);
+    let parent = format!("--manifest-path {}", root.join("Cargo.toml").display());
+    assert!(runs.iter().any(|run| run.contains(&parent)), "{runs:?}");
+    assert!(runs.iter().all(|run| !run.contains("vendored")), "{runs:?}");
+    let status = support::git_command(&root)
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .output()
+        .unwrap();
+    let status = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        status.lines().all(|line| line.ends_with("stub.log")),
+        "{status}"
+    );
 }
 
 // ── the range, and what it selects ───────────────────────────────────
@@ -958,11 +1287,53 @@ fn a_changed_python_lock_runs_guarddog_in_that_directory_and_not_the_others() {
     assert!(!ran.contains("other"), "{ran}");
     // The lock is handed to osv-scanner by path, not scanned for by a walk.
     assert!(ran.contains("-L"), "{ran}");
+    // And read, never rewritten: a lock out of step is uv's refusal.
+    assert!(ran.contains("export --locked"), "{ran}");
     assert!(
         text(&output).contains("1 lockfile(s) in this range"),
         "{}",
         text(&output)
     );
+}
+
+/// A moved `pyproject.toml` with no `uv.lock` beside it is not exported, and
+/// no lock is written.
+///
+/// `uv export` in such a directory resolves the project and writes a
+/// `uv.lock` into the tree under scan. The whole-tree walk never reaches the
+/// directory, because it looks for locks; the range leaves it out the same
+/// way, and says so rather than reading as nothing having moved.
+#[test]
+fn a_moved_pyproject_with_no_uv_lock_is_not_exported_and_no_lock_is_written() {
+    let root = tracked();
+    let before = head(&root);
+    write(
+        &root,
+        "tooling/pyproject.toml",
+        "[project]\nname = 'tooling'\n",
+    );
+    let after = commit(&root, "a project with no lock");
+    let tools = stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        (
+            "uv",
+            &recording("echo '# resolved afresh' > uv.lock\necho 'requests==2.0.0'"),
+        ),
+        ("guarddog", &recording(&clean_dependencies(&["requests"]))),
+    ]);
+    let output = pushed(&root, &tools, &before, &after);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(!root.join("tooling/uv.lock").exists());
+    let said = text(&output);
+    assert!(
+        said.contains(&format!(
+            "{}: no uv.lock beside it",
+            root.join("tooling/pyproject.toml").display()
+        )),
+        "{said}"
+    );
+    let ran = journal(&root);
+    assert!(!ran.lines().any(|line| line.starts_with("uv ")), "{ran}");
 }
 
 /// A changed workflow reaches zizmor as a FILE, and its neighbours do not.
@@ -1424,6 +1795,7 @@ fn cargo_deny_that_never_reached_a_check_is_could_not_look_not_an_advisory() {
     let root = repository();
     std::fs::write(root.join("deny.toml"), "[bans]\n").unwrap();
     std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"f\"\n").unwrap();
+    std::fs::write(root.join("Cargo.lock"), "version = 4\n").unwrap();
     let tools = stubs(&[
         ("osv-scanner", "exit 0"),
         (
