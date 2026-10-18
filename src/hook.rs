@@ -52,6 +52,7 @@ use serde_json::Value;
 use crate::error::{Exit, Fatal, Result};
 use crate::guard;
 use crate::invocation::{Invocation, Observed};
+use crate::junit::{Place, Record, Run};
 use crate::shim::{Walked, walk_strings};
 use crate::text::{self, Verdict};
 
@@ -137,7 +138,18 @@ fn refusal_document(shape: &Shape, report: &str) -> Result<String> {
 /// without one is the host-identity half, which carries its own fallback for
 /// exactly this case; the guards do not, and their absence is reported rather
 /// than counted as a pass.
-pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<Exit> {
+///
+/// `evidence` is the directory a `JUnit` document goes into, one per call,
+/// where one was asked for. Written on every call that got as far as judging,
+/// refused or not: a hook that wrote only on a refusal would make an absent
+/// file mean "passed or never ran", which is the ambiguity the record exists
+/// to remove. Which calls arrive is the harness's matcher's decision, so the
+/// volume is the volume of publishing calls.
+pub(crate) fn run(
+    harness: &str,
+    found: Option<&(PathBuf, PathBuf)>,
+    evidence: Option<PathBuf>,
+) -> Result<Exit> {
     let shape = SHAPES
         .iter()
         .find(|shape| shape.names.contains(&harness))
@@ -232,6 +244,13 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
 
     let mut report = String::new();
 
+    // Opened before the first rule is asked, so a directory that cannot be
+    // written into stops the call while it has decided nothing.
+    let mut record = Record::new(
+        evidence.map(Place::Directory),
+        Run::Hook(harness.to_owned()),
+    );
+    record.open()?;
     let invocation = Invocation::text(
         text::Seam::Hook,
         label,
@@ -242,7 +261,12 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
         },
         &headlines,
     );
-    for verdict in text::judged(&invocation, &root, &policy)? {
+    let verdicts = match text::judged(&invocation, &root, &policy, &mut record.ledger) {
+        Ok(verdicts) => verdicts,
+        Err(error) => return record.finish(Err(error)),
+    };
+    record.write(false)?;
+    for verdict in verdicts {
         match verdict {
             // The message as well as the finding. At the shim and at `--text`
             // the message is what tells the author what to do instead; here the
@@ -275,7 +299,7 @@ pub(crate) fn run(harness: &str, found: Option<&(PathBuf, PathBuf)>) -> Result<E
         );
     }
 
-    if report.is_empty() {
+    if text::refusals(&record.ledger) == 0 {
         return Ok(Exit::Clean);
     }
 

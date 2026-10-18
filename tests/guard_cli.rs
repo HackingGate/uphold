@@ -388,9 +388,13 @@ fn a_rule_that_could_not_look_is_an_error_and_the_rest_are_absent() {
 fn a_file_that_cannot_be_written_stops_the_run_before_it_decides() {
     let root = repository(AI_AUTHOR);
     write(&root, "msg.txt", "x\n\nGenerated with Claude Code\n");
-    // A path under a file, and a directory where the file should be: neither
-    // can be created.
-    for junit in [root.join("msg.txt/commit-msg.xml"), root.clone()] {
+    // A path under a file, and a path under a directory that does not exist:
+    // neither can be created. An existing directory is not this case -- it is
+    // the directory form, and gets a file of its own inside it.
+    for junit in [
+        root.join("msg.txt/commit-msg.xml"),
+        root.join("missing/commit-msg.xml"),
+    ] {
         let output = guard_with_junit(&root, junit.as_os_str(), None);
         assert_eq!(code(&output), 2, "{}", stderr(&output));
         assert!(
@@ -527,27 +531,35 @@ fn a_run_that_stops_before_its_first_rule_leaves_no_file() {
     assert!(!junit.exists());
 }
 
-/// `--text` learns only what refused, so it cannot honestly write a pass, and
-/// it writes nothing rather than a document that reads as complete.
+/// A directory is one file per run inside it, named for the suite, so two
+/// runs of one stage leave two documents and neither replaces the other.
 #[test]
-fn the_text_seam_refuses_to_run_with_the_variable_set() {
-    let root = repository(AI_AUTHOR);
-    let junit = root.join("text.xml");
-    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
-        .args(["guard", "--text"])
-        .current_dir(&root)
-        .env("UPHOLD_JUNIT", &junit)
-        .env_remove("UPHOLD_ALLOW")
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert_eq!(code(&output), 2, "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("does not write evidence yet"),
-        "{}",
-        stderr(&output)
-    );
-    assert!(!junit.exists());
+fn a_directory_gets_one_file_per_run() {
+    let root = repository(AI_AUTHOR_AND_ASCII_SUBJECT);
+    write(&root, "msg.txt", "x\n\nGenerated with Claude Code\n");
+    let evidence = root.join("evidence");
+    std::fs::create_dir_all(&evidence).unwrap();
+    for _ in 0..2 {
+        let output = guard_with_junit(&root, evidence.as_os_str(), None);
+        assert_eq!(code(&output), 1, "{}", stderr(&output));
+    }
+    let mut written: Vec<PathBuf> = std::fs::read_dir(&evidence)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    written.sort();
+    assert_eq!(written.len(), 2, "{written:?}");
+    for path in &written {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with("uphold-guard-commit-msg-")
+                && path.extension().is_some_and(|extension| extension == "xml"),
+            "{name}"
+        );
+        let suite = the_suite(path);
+        assert_eq!(suite.name.as_str(), "uphold guard commit-msg");
+        assert_eq!((suite.tests, suite.failures), (2, 1));
+    }
 }
 
 /// The variable set on a real `git push` reaches a real pre-push hook, which

@@ -42,6 +42,7 @@ fn scan_text(root: &Path, stdin: &[u8], home: &str) -> Output {
         .args(["scan", "--text", "-"])
         .current_dir(root)
         .env_remove("UPHOLD_ALLOW")
+        .env_remove("UPHOLD_JUNIT")
         .env("HOME", home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -271,6 +272,7 @@ fn guard_text(root: &Path, stdin: &[u8], home: &str, allow: Option<&str>) -> Out
     command
         .args(["guard", "--text", "-"])
         .current_dir(root)
+        .env_remove("UPHOLD_JUNIT")
         .env("HOME", home)
         .env(
             "PATH",
@@ -767,4 +769,112 @@ fn an_invisible_on_the_allow_list_is_refused_at_load() {
     let report = stderr(&output);
     assert!(report.contains("U+200B"), "{report}");
     assert!(report.contains("draws nothing"), "{report}");
+}
+
+// ── what `guard --text` decided, as one JUnit document ───────────────
+
+/// [`PROSE_POLICY`] with a text guard beside the prose rule, and a built-in
+/// that judges no text, which is not asked and so not recorded.
+const RECORDED_POLICY: &str = r#"
+[rule.prevent-ai-author]
+builtin = "prevent-ai-author"
+git.hooks = ["commit-msg"]
+
+[rule.no-merge-commit]
+builtin = "no-merge-commit"
+git.hooks = ["pre-commit"]
+"#;
+
+/// `uphold guard --text -` with `extra` after it and `UPHOLD_JUNIT` set to
+/// `junit` when given.
+fn guard_text_recorded(root: &Path, extra: &[&str], stdin: &[u8], junit: Option<&Path>) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command
+        .args(["guard", "--text", "-"])
+        .args(extra)
+        .current_dir(root)
+        .env_remove("UPHOLD_ALLOW")
+        .env_remove("UPHOLD_JUNIT")
+        .env("HOME", EXAMPLE_HOME)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(junit) = junit {
+        command.env("UPHOLD_JUNIT", junit);
+    }
+    let mut child = command.spawn().unwrap();
+    if let Err(error) = child.stdin.as_mut().unwrap().write_all(stdin) {
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
+    }
+    child.wait_with_output().unwrap()
+}
+
+/// `--text` with `--junit FILE` writes the document a stage writes: one
+/// testcase per rule it consulted, the report on stderr unchanged, and none of
+/// the text it judged in the file. It used to refuse to run, because it could
+/// name what refused and not what passed; it can name both now.
+#[test]
+fn guard_text_with_a_file_writes_one_testcase_per_rule_consulted() {
+    let root = workspace(&format!("{RECORDED_POLICY}{PROSE_POLICY}"));
+    let body = b"Arguably the count is right.\n\nGenerated with Claude Code\n";
+    let output = guard_text_recorded(&root, &["--junit", "text.xml"], body, None);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("guard refused: prevent-ai-author"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("guard refused: no-empty-hedge"),
+        "{}",
+        stderr(&output)
+    );
+
+    let (suite, text) = support::junit::suite(&root.join("text.xml"));
+    assert_eq!(suite.name.as_str(), "uphold guard --text");
+    assert_eq!(support::junit::package(&suite), Some("uphold"));
+    assert_eq!((suite.tests, suite.failures), (2, 2), "{suite:?}");
+    let ai = support::junit::case(&suite, "prevent-ai-author");
+    assert_eq!(
+        support::junit::state(ai),
+        ("failure", Some("prevent-ai-author refused"))
+    );
+    assert_eq!(
+        support::junit::property(ai, "builtin"),
+        Some("prevent-ai-author")
+    );
+    let hedge = support::junit::case(&suite, "no-empty-hedge");
+    assert_eq!(support::junit::property(hedge, "builtin"), None);
+    for case in &suite.test_cases {
+        assert_eq!(support::junit::properties(case, "subject"), ["text"]);
+        assert_eq!(support::junit::property(case, "seam"), Some("text"));
+        assert_eq!(support::junit::property(case, "stage"), None);
+    }
+    assert!(!text.contains("Arguably"), "{text}");
+    assert!(!text.contains("Generated"), "{text}");
+    assert!(!text.contains("no-merge-commit"), "{text}");
+
+    // A file is replaced, as a stage's is: a clean run leaves its own suite.
+    let again = guard_text_recorded(&root, &["--junit", "text.xml"], b"Plain.\n", None);
+    assert_eq!(code(&again), 0, "{}", stderr(&again));
+    let (replaced, _) = support::junit::suite(&root.join("text.xml"));
+    assert_eq!((replaced.tests, replaced.failures), (2, 0), "{replaced:?}");
+}
+
+/// The variable naming a directory is one file per run inside it.
+#[test]
+fn guard_text_with_a_directory_writes_a_file_per_run() {
+    let root = workspace(RECORDED_POLICY);
+    let evidence = root.join("evidence");
+    std::fs::create_dir_all(&evidence).unwrap();
+    for _ in 0..2 {
+        let output = guard_text_recorded(&root, &[], b"Plain.\n", Some(&evidence));
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+    }
+    let files = support::junit::files_in(&evidence);
+    assert_eq!(files.len(), 2, "{files:?}");
+    for path in &files {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("uphold-guard-text-"), "{name}");
+    }
 }

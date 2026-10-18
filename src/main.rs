@@ -118,6 +118,7 @@ usage:
   uphold guard --stage STAGE [--junit FILE]
                                      run the guards that fire at STAGE
   uphold guard --text [FILE|-]       run the text-capable guards over text
+               [--junit FILE|DIR]
   uphold check [--json] [--probe]    reconcile claims; optionally measure hook behavior
   uphold check --coverage            which rules run here and carry no principle
   uphold audit --for-publication     what a private->public flip would republish
@@ -140,6 +141,7 @@ usage:
   uphold rules --effective [--json]  every rule this repository resolves to, and
                                      the git hooks each one fires at
   uphold hook claude-code|codex      judge a pending agent tool call, read on stdin
+              [--junit DIR]
   uphold shim <command> [args...]     check what a command would publish, then run it
   uphold shim --install [COMMAND...]  link this binary under each command's name
   uphold shim --status                what is linked, and whether PATH reaches it
@@ -171,6 +173,8 @@ exit codes:
 UPHOLD_ALLOW=<id>,<id> bypasses named guards for one invocation.
 `--junit FILE` writes what a `guard --stage` run decided as JUnit XML.
 UPHOLD_JUNIT=/abs/FILE is the same request from outside a hook's argv; the flag wins.
+An existing directory instead gets one file per invocation. `guard --text` writes
+the same document; the shim and `uphold hook` take only a directory.
 ";
 
 /// The policy file, newest name first.
@@ -562,8 +566,14 @@ fn run() -> Result<Exit> {
                  uphold rules --effective [--json]\n\n{USAGE}"
             ))),
         },
-        "hook" => match rest {
-            [harness] => {
+        "hook" => match hook_arguments(rest)? {
+            (Some(harness), junit_flag) => {
+                // Before the harness is looked up or the event read, as every
+                // seam judges it: a value that cannot be honoured is exit 2 while
+                // nothing has been decided. A directory only, since a harness
+                // calls this once per publishing call and one file would keep
+                // only the last.
+                let evidence = junit::directory_requested(junit_flag, "uphold hook")?;
                 let working = std::env::current_dir()?;
                 // Not `ok_or_else(no_policy_here)`, which is what every other
                 // seam here does. A tool call is made from wherever the session
@@ -574,10 +584,10 @@ fn run() -> Result<Exit> {
                 // everywhere and get the hook switched off within a day. What
                 // still runs without a policy, and what does not, is
                 // `hook::run`'s to do and to report.
-                hook::run(text_of(harness)?, discover(&working).as_ref())
+                hook::run(text_of(harness)?, discover(&working).as_ref(), evidence)
             }
-            _ => Err(Fatal::new(format!(
-                "usage: uphold hook {}\n\n{USAGE}",
+            (None, _) => Err(Fatal::new(format!(
+                "usage: uphold hook {} [--junit DIR]\n\n{USAGE}",
                 hook::known()
             ))),
         },
@@ -704,6 +714,31 @@ fn scan_command(arguments: &[OsString]) -> Result<Exit> {
     Ok(exit)
 }
 
+/// The harness `uphold hook` was named, and the `--junit` value beside it.
+///
+/// The flag is accepted here and not at the shim because this command line is
+/// the harness's settings file, which the operator writes. `None` for the
+/// harness where there is not exactly one, which the caller answers with usage.
+fn hook_arguments(rest: &[OsString]) -> Result<(Option<&OsString>, Option<&OsStr>)> {
+    let mut harness = None;
+    let mut junit_flag = None;
+    let mut extra = false;
+    let mut words = rest.iter();
+    while let Some(word) = words.next() {
+        if word == junit::FLAG {
+            let value = words
+                .next()
+                .ok_or_else(|| Fatal::new(format!("{} needs a value", junit::FLAG)))?;
+            junit_flag = Some(value.as_os_str());
+        } else if harness.is_none() {
+            harness = Some(word);
+        } else {
+            extra = true;
+        }
+    }
+    Ok((harness.filter(|_| !extra), junit_flag))
+}
+
 fn guard_command(arguments: &[OsString]) -> Result<Exit> {
     let mut stage: Option<guard::Stage> = None;
     let mut message: Option<PathBuf> = None;
@@ -767,22 +802,6 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
     // Judged before a policy is read, so a value that names no usable file is
     // exit 2 whatever else is wrong with the run.
     let evidence = junit::requested(junit_flag.as_deref())?;
-    if evidence.is_some() && text_source.is_some() {
-        // `--text` reaches rules through `text::judged`, which returns refusals
-        // only. A document written from it could name what refused and could
-        // not honestly name what passed, so this seam writes none until it can.
-        return Err(Fatal::new(format!(
-            "{} was asked for, and `uphold guard --text` does not write evidence yet: \
-             it learns only what refused, never what passed. Drop {} and unset {} for this run",
-            if junit_flag.is_some() {
-                junit::FLAG
-            } else {
-                junit::VARIABLE
-            },
-            junit::FLAG,
-            junit::VARIABLE
-        )));
-    }
 
     let working = std::env::current_dir()?;
     let (root, policy_path) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
@@ -809,10 +828,13 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
         // and a seam that consulted one and not the other would be the same
         // rule with two answers.
         //
-        // Both arms become a refusal, because that is the word this command
-        // reports in: a finding reached through `--text` and one reached
-        // through a guard are the same verdict on the same text.
-        let refusals: Vec<guard::Refusal> = text::judged(
+        // Every rule's answer goes into the record, and the report below and
+        // the exit are read back off it, so the file a caller asked for and
+        // the refusals on stderr cannot disagree. Opened before the first rule
+        // is asked, as a stage's is.
+        let mut record = junit::Record::new(evidence, junit::Run::Text);
+        record.open()?;
+        let judged = text::judged(
             &invocation::Invocation::text(
                 text::Seam::Guard,
                 &source,
@@ -821,21 +843,31 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
             ),
             &root,
             &policy,
-        )?
-        .into_iter()
-        .map(|verdict| match verdict {
-            text::Verdict::Guard(refusal) => refusal,
-            text::Verdict::Rule(failure) => guard::Refusal {
-                report: failure.report(),
-                id: failure.label,
-            },
-        })
-        .collect();
+            &mut record.ledger,
+        );
+        let verdicts = match judged {
+            Ok(verdicts) => verdicts,
+            Err(error) => return record.finish(Err(error)),
+        };
+        record.write(false)?;
+        // Both arms become a refusal, because that is the word this command
+        // reports in: a finding reached through `--text` and one reached
+        // through a guard are the same verdict on the same text.
+        let refusals: Vec<guard::Refusal> = verdicts
+            .into_iter()
+            .map(|verdict| match verdict {
+                text::Verdict::Guard(refusal) => refusal,
+                text::Verdict::Rule(failure) => guard::Refusal {
+                    report: failure.report(),
+                    id: failure.label,
+                },
+            })
+            .collect();
         for refusal in &refusals {
             eprintln!("guard refused: {}", guard::refused_by(&policy, refusal));
             eprintln!("{}", refusal.report.trim_end());
         }
-        let exit = verdict(refusals.len(), 0);
+        let exit = verdict(text::refusals(&record.ledger), 0);
         if exit == Exit::Clean {
             println!("text checks passed");
         }
@@ -865,7 +897,10 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
     // the push was read, because a run that stops before its loop has judged
     // nothing and leaves no file, and before the loop, because a file that
     // cannot be written must stop the run while it has judged nothing too.
-    let evidence = evidence.as_deref().map(junit::Sink::create).transpose()?;
+    let evidence = evidence
+        .as_ref()
+        .map(|place| junit::Sink::open(place, &junit::Run::Stage(stage.as_str().to_owned())))
+        .transpose()?;
 
     guard::run(
         &root,
@@ -1285,6 +1320,28 @@ fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result
     {
         return Ok(exit);
     }
+    // Judged next, and before anything this invocation decides or runs: a
+    // value the shim cannot honour is exit 2 with the wrapped command not run,
+    // as every other exit 2 here is. The variable and not a flag, because the
+    // argv is the wrapped command's and the shim owns none of it.
+    let place = junit::directory_requested(None, "uphold shim")?;
+    let mut record = junit::Record::new(
+        place.map(junit::Place::Directory),
+        junit::Run::Shim(name.to_owned()),
+    );
+    // Written on every way out: by the hand-off, before the process becomes
+    // the real command, and here for every run that returns instead.
+    let judged = shim_judged(name, argv, invoked, &mut record);
+    record.finish(judged)
+}
+
+/// [`shim_command`] once the evidence it writes is settled.
+fn shim_judged(
+    name: &str,
+    argv: &[OsString],
+    invoked: shim::Invoked,
+    record: &mut junit::Record,
+) -> Result<Exit> {
     let working = std::env::current_dir()?;
     // No policy where the command was typed means no repository here declares
     // anything to stand in front of it. Run as the command, that is almost
@@ -1311,7 +1368,7 @@ fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result
     // command.
     let Some((root, policy_path)) = discover(&working) else {
         return match invoked {
-            shim::Invoked::AsTheCommand => shim::run_without_policy(&working, name, argv),
+            shim::Invoked::AsTheCommand => shim::run_without_policy(&working, name, argv, record),
             shim::Invoked::ByName => Err(no_policy_here(&working)),
             // Re-entered as an editor with no policy to read. The no-policy
             // reading of `gh` installs this editor itself, for a body bound for
@@ -1331,7 +1388,7 @@ fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result
                         working.display()
                     )))
                 },
-                |policy| shim::run(&working, &policy, name, argv, invoked),
+                |policy| shim::run(&working, &policy, name, argv, invoked, record),
             ),
         };
     };
@@ -1350,13 +1407,16 @@ fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result
     //
     // It is still not a pass. Nothing is checked here and nothing pretends to
     // be: the line below says so on stderr, every time, so a bypass that became
-    // habit is visible in a shell history and in a CI log.
+    // habit is visible in a shell history and in a CI log -- and the record
+    // says so too, as a suite of no rules that carries `allowed=all`, so "ran
+    // unchecked" is a document and not an absence.
     if guard::bypassed_entirely() {
         eprintln!(
             "uphold shim: {name} ran unchecked, by UPHOLD_ALLOW=all. Nothing here looked at \
              what it publishes."
         );
-        return shim::exec_through(name, argv);
+        record.allowed_all();
+        return shim::exec_through(name, argv, record);
     }
     // A policy that exists and cannot be read is fatal, and the refusal names
     // the way out. Without that line the reader is holding a broken declaration
@@ -1377,7 +1437,7 @@ fn shim_command(name: &str, argv: &[OsString], invoked: shim::Invoked) -> Result
     // command that runs is the command that was typed. Where the shim has
     // something to CHECK, it refuses the untranslatable argument itself, in the
     // words of what it could not read.
-    shim::run(&root, &policy, name, argv, invoked)
+    shim::run(&root, &policy, name, argv, invoked, record)
 }
 
 fn main() {

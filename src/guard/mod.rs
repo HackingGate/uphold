@@ -29,6 +29,7 @@ use std::path::Path;
 use crate::config::{CheckKind, Policy, Rule};
 use crate::error::{Exit, Fatal, Result};
 use crate::junit::Outcome;
+use crate::text::{Answer, Judgment, Verdict, asked};
 
 /// Every built-in check this binary carries, and the only list of them.
 ///
@@ -193,7 +194,7 @@ pub(crate) struct Request<'a> {
 
 /// What a guard concluded. A refusal carries the whole report, because a guard
 /// that says only "refused" makes the reader go and find out what it saw.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Refusal {
     pub id: String,
     pub report: String,
@@ -320,14 +321,21 @@ pub(crate) const TARGET_GUARDS: &[&str] = &["prevent-unowned-target"];
 /// -- is this destination one this workspace owns -- and [`push::unowned`] is
 /// the single place it is made.
 ///
-/// `None` where the rule judges no destination, or is bypassed, or found
-/// nothing. `Err` where the rule is in scope and there was no destination to
-/// look at, which is the third answer and never a pass.
+/// The answer goes into `ledger`, as [`text_refusal`]'s does: nothing where
+/// the rule judges no destination, a bypass, a pass, a refusal, or -- where the
+/// rule is in scope and there was no destination to look at -- an `Unknown`
+/// and an `Err`, which is the third answer and never a pass. No subject is
+/// recorded: what this reads is where the text goes, and the record never
+/// says where that is.
 ///
 /// `forge` is which forge the invocation publishes to, as the shim already
 /// knows it from the command's own name, and `asked` is the memo for the
 /// question that reaches it -- both passed straight through to [`push::unowned`],
 /// which decides whether either is consulted.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the destination guard's own inputs and the list it answers into, from the one caller"
+)]
 pub(crate) fn target_refusal(
     root: &Path,
     policy: &Policy,
@@ -335,14 +343,51 @@ pub(crate) fn target_refusal(
     target: Option<&str>,
     forge: Option<crate::shim::Forge>,
     hostname: Option<&str>,
+    memo: &mut BTreeMap<String, push::Owned>,
+    ledger: &mut Vec<Judgment>,
+) -> Result<()> {
+    let Some(builtin) = rule.builtin() else {
+        return Ok(());
+    };
+    if !TARGET_GUARDS.contains(&builtin) {
+        return Ok(());
+    }
+    if let Some(allowed) = allowed(&rule.id) {
+        ledger.push(Judgment::of(rule, None, Answer::Bypass(allowed)));
+        return Ok(());
+    }
+    let found = asked(
+        ledger,
+        rule,
+        None,
+        unowned_target(root, policy, rule, builtin, target, forge, hostname, memo),
+    )?;
+    ledger.push(Judgment::of(
+        rule,
+        None,
+        found.map_or(Answer::Pass, |refusal| {
+            Answer::Refused(Verdict::Guard(refusal))
+        }),
+    ));
+    Ok(())
+}
+
+/// The body of [`target_refusal`] once the rule is known to judge a
+/// destination and to be switched on.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the destination guard's own inputs, passed straight through from the one caller"
+)]
+fn unowned_target(
+    root: &Path,
+    policy: &Policy,
+    rule: &Rule,
+    builtin: &str,
+    target: Option<&str>,
+    forge: Option<crate::shim::Forge>,
+    hostname: Option<&str>,
     asked: &mut BTreeMap<String, push::Owned>,
 ) -> Result<Option<Refusal>> {
-    let Some(builtin) = rule.builtin() else {
-        return Ok(None);
-    };
-    if !TARGET_GUARDS.contains(&builtin) || bypassed(&rule.id) {
-        return Ok(None);
-    }
     // In scope, and nothing to judge. Exit 2 rather than a pass, and rather
     // than a refusal: nothing was found to be wrong, the subject could not be
     // looked at -- `explicit-unknown`, the same reading the editor pass and the
@@ -406,13 +451,16 @@ pub(crate) type ScopeAsk<'a> = &'a mut dyn FnMut(&Rule) -> Result<bool>;
 /// One piece of published text, as a text guard is handed it.
 ///
 /// `label` is what the report calls it -- the shim's subject kind, the tool
-/// name at the hook, the source at `--text`. `headline` says the text is a
+/// name at the hook, the source at `--text`. `kind` is what a record calls it,
+/// which is the same but at `--text`, where the label is a file name and a
+/// record carries no path. `headline` says the text is a
 /// SUBJECT rather than prose: a title the shim collected, which a forge-side
 /// squash merge makes a commit subject on the default branch with no local
 /// hook in the way. It is set from the shim's subject kind and never read off
 /// the label.
 pub(crate) struct Published<'a> {
     pub label: &'a str,
+    pub kind: &'a str,
     pub text: &'a str,
     /// The part of `text` an edit adds to a body the forge already stores,
     /// where the shim knows it. `prevent-unusual-unicode` reads this instead
@@ -433,39 +481,51 @@ pub(crate) struct Published<'a> {
 ///
 /// `destination` is the repository the text is published to, where the caller
 /// resolved one -- passed through to [`text_refusal`].
+///
+/// Each text guard's answer goes into `ledger`, and a guard whose own scope
+/// did not hold goes in as out of scope rather than being left out: it was
+/// seen and set aside, and a reader of the record asking whether it ran on
+/// this body is owed that answer. A built-in that judges no text is not asked
+/// and not recorded; neither are the consultations, which this is the loop of.
 pub(crate) fn over_text(
     root: &Path,
     policy: &Policy,
     destination: Option<&str>,
     published: &Published<'_>,
     in_scope: ScopeAsk<'_>,
-) -> Result<Vec<Refusal>> {
-    let mut refusals = Vec::new();
+    ledger: &mut Vec<Judgment>,
+) -> Result<()> {
     for rule in policy.of_check(CheckKind::Builtin) {
-        if rule
-            .builtin()
-            .is_some_and(|builtin| META_TEXT_GUARDS.contains(&builtin))
-        {
+        if rule.builtin().is_none_or(|builtin| {
+            META_TEXT_GUARDS.contains(&builtin) || !TEXT_GUARDS.contains(&builtin)
+        }) {
             continue;
         }
-        if !in_scope(rule)? {
+        if !asked(ledger, rule, Some(published.kind), in_scope(rule))? {
+            ledger.push(Judgment::of(rule, Some(published.kind), Answer::OutOfScope));
             continue;
         }
-        if let Some(refusal) = text_refusal(root, policy, rule, destination, published, in_scope)? {
-            refusals.push(refusal);
-        }
+        text_refusal(root, policy, rule, destination, published, in_scope, ledger)?;
     }
-    Ok(refusals)
+    Ok(())
 }
 
-/// One text-capable guard's verdict over one piece of text.
+/// One text-capable guard's verdict over one piece of text, into `ledger`.
 ///
-/// `None` where the rule is not a text guard, or is bypassed, or found nothing
-/// -- three different reasons a caller does not have to tell apart, because a
-/// guard with nothing to say about a pull-request body is not a guard that
-/// passed it. Extracted so the shim seam consults exactly the same dispatch
-/// `uphold guard --text` does: a text guard that judged a commit message one
-/// way and a PR body another would be two rules under one id.
+/// Nothing where the rule is not a text guard, since it was not asked. A
+/// bypass, a pass or a refusal under the rule's own id where it is one, and
+/// an `Unknown` before the error where it could not look -- the three reasons
+/// a caller used to receive as one `None`, told apart because a record of
+/// what ran cannot be written without them. Extracted so the shim seam
+/// consults exactly the same dispatch `uphold guard --text` does: a text guard
+/// that judged a commit message one way and a PR body another would be two
+/// rules under one id.
+///
+/// A consultation records the rules it ran, each under its own id, and
+/// nothing under its own: it is dispatch rather than judgment, and an entry
+/// for both would count one refusal twice. It is recorded under its own id
+/// only where it did not run -- bypassed -- since then there is nothing else
+/// to say so. What the caller reports for it is [`told`].
 ///
 /// `destination` is the repository the text is published to, where the caller
 /// resolved one. Only the shim has one; every other seam passes `None` and is
@@ -477,42 +537,54 @@ pub(crate) fn text_refusal(
     destination: Option<&str>,
     published: &Published<'_>,
     in_scope: ScopeAsk<'_>,
-) -> Result<Option<Refusal>> {
+    ledger: &mut Vec<Judgment>,
+) -> Result<()> {
     let &Published {
         label,
+        kind,
         text,
         added,
         headline,
     } = published;
     let Some(builtin) = rule.builtin() else {
-        return Ok(None);
+        return Ok(());
     };
-    if !TEXT_GUARDS.contains(&builtin) || bypassed(&rule.id) {
-        return Ok(None);
+    if !TEXT_GUARDS.contains(&builtin) {
+        return Ok(());
     }
-    Ok(match builtin {
-        "prevent-ai-author" => message::ai_author_in(rule, label, text),
+    if let Some(allowed) = allowed(&rule.id) {
+        ledger.push(Judgment::of(rule, Some(kind), Answer::Bypass(allowed)));
+        return Ok(());
+    }
+    let mut single = |found: Result<Option<Refusal>>| -> Result<()> {
+        let found = asked(ledger, rule, Some(kind), found)?;
+        ledger.push(Judgment::of(
+            rule,
+            Some(kind),
+            found.map_or(Answer::Pass, |refusal| {
+                Answer::Refused(Verdict::Guard(refusal))
+            }),
+        ));
+        Ok(())
+    };
+    match builtin {
+        "prevent-ai-author" => single(Ok(message::ai_author_in(rule, label, text))),
         // The one guard whose question is what this invocation types: an
         // edit that resubmits a stored body is judged on the lines it adds,
         // so a character typed into the body long ago does not hold every
         // later edit hostage.
-        "prevent-unusual-unicode" => {
-            message::unusual_unicode_in(rule, label, added.unwrap_or(text), headline)?
+        "prevent-unusual-unicode" => single(message::unusual_unicode_in(
+            rule,
+            label,
+            added.unwrap_or(text),
+            headline,
+        )),
+        "no-private-repo-names" => {
+            single(names::in_text(root, policy, rule, destination, label, text))
         }
-        "no-private-repo-names" => names::in_text(root, policy, rule, destination, label, text)?,
-        // The consultations. Each folds what it ran into one refusal under this
-        // rule's id, naming each inner rule, so the reader is told which check
-        // refused and not only that the consultation did. `over_text` skips the
-        // meta guards, so the recursion is one level deep by construction.
-        "text-guards" => {
-            let inner = over_text(root, policy, destination, published, in_scope)?;
-            fold(
-                rule,
-                inner
-                    .into_iter()
-                    .map(|refusal| format!("{}: {}", refused_by(policy, &refusal), refusal.report)),
-            )
-        }
+        // The consultations. `over_text` skips the meta guards, so the
+        // recursion is one level deep by construction.
+        "text-guards" => over_text(root, policy, destination, published, in_scope, ledger),
         // No scope question fans out here. The literal rules are not a kind the
         // shim ever dispatches directly -- `Seam::Command` does not consult
         // `Judged::Literals`, it reaches them only through this built-in -- so
@@ -521,25 +593,48 @@ pub(crate) fn text_refusal(
         // not a policy rule at all. Gating them on the table's scope would only
         // stand the identity check down for private destinations, which is the
         // arrangement `command.scope = "always"` on this rule exists to undo.
-        "text-literals" => {
-            let failures = crate::text::failures_in(root, policy, text)?;
-            fold(
-                rule,
-                failures.into_iter().map(|failure| {
+        "text-literals" => crate::text::failures_in(root, policy, text, Some(kind), ledger),
+        _ => Ok(()),
+    }
+}
+
+/// What a caller reports for `rule`, read off the entries one call to
+/// [`text_refusal`] or [`target_refusal`] put in the list.
+///
+/// A single check's report is its own refusal. A consultation's is one
+/// refusal under its own id carrying every inner one, naming each inner rule,
+/// so the reader is told which check refused and not only that the
+/// consultation did -- and one rather than many, because the caller
+/// attributes what it gets back to the rule it asked about.
+pub(crate) fn told(policy: &Policy, rule: &Rule, answered: &[Judgment]) -> Option<Refusal> {
+    let mut refused = answered.iter().filter_map(Judgment::refused);
+    if rule
+        .builtin()
+        .is_some_and(|builtin| META_TEXT_GUARDS.contains(&builtin))
+    {
+        return fold(
+            rule,
+            refused.map(|verdict| match verdict {
+                Verdict::Guard(refusal) => {
+                    format!("{}: {}", refused_by(policy, refusal), refusal.report)
+                }
+                Verdict::Rule(failure) => {
                     format!("{}: {}\n{}", failure.label, failure.message, failure.body)
-                }),
-            )
-        }
-        _ => None,
+                }
+            }),
+        );
+    }
+    refused.next().map(|verdict| match verdict {
+        Verdict::Guard(refusal) => refusal.clone(),
+        Verdict::Rule(failure) => Refusal {
+            id: failure.label.clone(),
+            report: failure.report(),
+        },
     })
 }
 
 /// What a consultation answers with: one refusal carrying every inner one.
-///
-/// One rather than many, because the caller attributes what it gets back to
-/// the rule it asked about -- a consultation returning three refusals under
-/// three other ids would be three reports from rules the caller never
-/// consulted. `None` for none, exactly as a single check answers.
+/// `None` for none, exactly as a single check answers.
 fn fold(rule: &Rule, reports: impl Iterator<Item = String>) -> Option<Refusal> {
     let joined = reports.collect::<Vec<String>>().join("\n");
     if joined.is_empty() {
@@ -685,7 +780,9 @@ pub(crate) fn run(root: &Path, policy: &Policy, request: RunRequest<'_>) -> Resu
     // suite is built here and written on every way out below, the early one
     // included, so "ran, nothing declared" is a suite of zero tests and not
     // the same absence as "never ran".
-    let mut suite = evidence.map(|sink| crate::junit::Suite::new(sink, stage_name));
+    let mut suite = evidence.map(|sink| {
+        crate::junit::Suite::new(sink, crate::junit::Run::Stage(stage_name.to_owned()))
+    });
     // Every rule the CONFIG puts at this hook, and nothing else decides it.
     let at_hook: Vec<&Rule> = policy.at_hook(stage_name).collect();
     if policy.at_hook_any().next().is_none() {
@@ -702,6 +799,7 @@ pub(crate) fn run(root: &Path, policy: &Policy, request: RunRequest<'_>) -> Resu
             id: &rule.id,
             builtin: rule.builtin(),
             set: policy.set_of(&rule.id),
+            subjects: &[],
         };
         let mut record = |outcome| {
             if let Some(suite) = suite.as_mut() {

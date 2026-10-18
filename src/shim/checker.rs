@@ -111,6 +111,12 @@ pub(super) fn consult(root: &Path, rule: &Rule, subject: &Subject) -> Result<Opt
         .arg(run)
         .current_dir(root)
         .env("UPHOLD_KIND", subject.kind)
+        // The checker's answer is recorded under this rule's id in the shim's
+        // own document. A checker that is `uphold guard --text` would
+        // otherwise write a second document about the same body, and one
+        // refusal would be counted twice -- the reason a consultation records
+        // the rules it ran and not itself.
+        .env_remove(crate::junit::VARIABLE)
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())

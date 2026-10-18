@@ -2009,11 +2009,12 @@ history and in a CI log. It stays in the environment and is deliberately not a
 rule field: a bypass written into the policy file would be committed, reviewed
 once, and permanent.
 
-### Recording what a stage decided
+### Recording what a run decided
 
 ```sh
 uphold guard --stage manual --junit .test-evidence/check-guards/uphold.xml
 UPHOLD_JUNIT=/abs/path/pre-push.xml git push
+UPHOLD_JUNIT=/abs/dir gh pr create --body-file body.md
 ```
 
 Two spellings of one request. `--junit FILE` is the conventional one, as
@@ -2024,25 +2025,62 @@ to the hook definition the repository pins, and the environment is the only
 channel that reaches from `git push` through the runner to the guard. The flag
 wins when both are given.
 
-Neither given, nothing is written. Given, the run writes one JUnit XML document: one
-`<testsuite name="uphold guard pre-push">` with `package="uphold"`, and one
-`<testcase>` per rule the stage evaluated. An Allure reader files a testcase by
-its `classname` and the suite by its `package`; it reads no `<properties>`, so
-those are for a machine reader and not the report. The file is created or replaced, never appended, because a
-JUnit document is one tree. That is why either spelling names a file per stage and
-not one per act. Allure, nextest and pytest read the same format, and an Allure
-publisher reading `.test-evidence/` consumes the file unchanged.
+Three seams evaluate rules, and each writes the same document. The suite name
+says which one ran:
 
-| the guard | the testcase | exit |
+| the seam | the suite | the flag |
+|---|---|---|
+| a stage | `uphold guard <stage>` | `--junit` |
+| the shim | `uphold shim <command>` | none |
+| a harness hook | `uphold hook <harness>` | `--junit` |
+| `uphold guard --text` | `uphold guard --text` | `--junit` |
+
+The shim has no flag because its argv is the command it stands in front of, and
+`--junit` cannot be typed into a `gh` call the shim does not own. It reads the
+variable alone.
+
+Neither given, nothing is written. Given, the run writes one JUnit XML document: one
+`<testsuite>` with `package="uphold"`, and one `<testcase>` per rule the seam
+evaluated. An Allure reader files a testcase by
+its `classname` and the suite by its `package`; it reads no `<properties>`, so
+those are for a machine reader and not the report. Allure, nextest and pytest
+read the same format, and an Allure publisher reading `.test-evidence/`
+consumes the file unchanged.
+
+### A file or a directory
+
+`UPHOLD_JUNIT` and `--junit` name either.
+
+- **A file** is created or replaced, never appended, because a JUnit document is
+  one tree. That is why a file names one stage and not one act.
+- **An existing directory** gets one file per invocation, named
+  `<suite>-<id>.xml`, where `<id>` is unique to the invocation. This is JUnit's
+  own results-directory convention, as nextest and pytest-split write. Two `gh`
+  calls in one act leave two files, and a publisher that reads every XML under a
+  directory reads both.
+- **The shim and the hook accept only a directory.** Each runs many times in one
+  act, and a file replaced on every call would keep the last and lose the rest.
+  A file there is exit `2` naming the value.
+
+| the outcome | the testcase | exit |
 |---|---|---|
 | pass | `<testcase>` with no child | `0` |
 | refuse | `<failure>` | `1` |
 | could not look | `<error>` | `2` |
 | bypass | `<skipped message="bypassed by UPHOLD_ALLOW">` | `0` |
+| out of scope at this destination | `<skipped message="out of scope at this destination">` with property `scope=destination` | `0` |
+
+The fifth outcome is a rule that has a scope of its own, such as a private
+destination, and whose scope did not hold for this invocation. It neither ran
+nor was bypassed. It is written rather than left out: a rule a stage never
+declared is absent because the policy never aimed it there, a fact a reader can
+look up, but a rule stood down here was set aside at run time for this
+invocation, and the file answers "did that check run on this body" without a
+second source.
 
 ```xml
 <testsuites name="uphold guard">
-<testsuite name="uphold guard pre-push" package="uphold" tests="2" failures="0" errors="0" skipped="1" timestamp="2026-10-18T09:00:00Z">
+<testsuite name="uphold guard pre-push" package="uphold" tests="3" failures="0" errors="0" skipped="2" timestamp="2026-10-18T09:00:00Z">
   <testcase name="prevent-public-push" classname="unowned-push">
     <properties>
       <property name="builtin" value="prevent-public-push"/>
@@ -2061,25 +2099,49 @@ publisher reading `.test-evidence/` consumes the file unchanged.
     </properties>
     <skipped message="bypassed by UPHOLD_ALLOW"/>
   </testcase>
+  <testcase name="no-private-repo-names" classname="local">
+    <properties>
+      <property name="set" value="local"/>
+      <property name="stage" value="pre-push"/>
+      <property name="uphold" value="1.32.0"/>
+      <property name="scope" value="destination"/>
+    </properties>
+    <skipped message="out of scope at this destination"/>
+  </testcase>
 </testsuite>
 </testsuites>
 ```
 
 The testcase `name` is the rule id and `classname` is the bundled set, or
 `local` for a rule the policy declares itself. The properties are `builtin`
-(the dispatch name, since a repository may call a rule anything), `set`,
-`stage` and `uphold` (the binary's version, because a bundled set's contents
-belong to the binary). A bypass also carries `allowed`: `id` when the rule's id
-was named in `UPHOLD_ALLOW`, `all` when `all` matched.
+(the dispatch name, since a repository may call a rule anything; a prose or
+literal rule has none), `set`, `stage` where the seam is a stage, and `uphold`
+(the binary's version, because a bundled set's contents belong to the binary).
+A bypass also carries `allowed`: `id` when the rule's id was named in
+`UPHOLD_ALLOW`, `all` when `all` matched. A shim or hook testcase carries
+`subject`, the kind of thing it collected, such as `pr-body`, `issue-title` or
+`release-note`. It holds the kind and never the content.
 
 - **No subject text.** A `failure` or `error` message is the rule id and the
-  word; the report stays on stderr. No commit message, path or argv enters the
-  file, and neither does a hostname or a user name. A timestamp is the only run
-  metadata kept.
-- **Opened first.** The file is opened before the first guard runs, so a path
-  that cannot be written is exit `2` with nothing judged. A stage that declares
+  word; the report stays on stderr. No commit message, path, body or argv enters
+  the file, and neither does a hostname or a user name. A timestamp is the only
+  run metadata kept.
+- **No destination.** The file holds no owner, repository, URL or branch name.
+  The repository a shim invocation publishes to is what `prevent-unowned-target`
+  protects, and a private name in a file a publisher renders is the leak that
+  rule exists to stop.
+- **Consultations write their inner rules, not themselves.** `text-guards` and
+  `text-literals` are dispatch, not judgment. Each inner rule they ran gets its
+  own testcase and the consultation gets none, so one refusal is counted once.
+- **Opened first.** The file is opened before the first rule runs, so a path
+  that cannot be written is exit `2` with nothing judged. A seam that declares
   no rules writes a suite with zero tests, which tells "ran, nothing declared"
   from "never ran".
+- **The hook writes on every invocation.** The harness calls it only for the
+  tool names its own matcher selects, so the volume is that of publishing calls,
+  and one small file per call is the cost of a record that never decides whether
+  a call was interesting. Absence would otherwise mean "passed or never ran".
+  Retention is the caller's.
 - **The variable's path is absolute.** Git runs a hook from the top of the
   working tree, and a relative path would land where the caller did not look.
   A relative value is exit `2` naming it. The flag has no such rule: it was
@@ -2094,15 +2156,17 @@ was named in `UPHOLD_ALLOW`, `all` when `all` matched.
   runs, such as a push that was told nothing or a policy that will not load,
   leaves the file absent and exits `2`.
 - **`--stage manual` writes like any other stage.**
-- **`uphold guard --text` with either given is exit `2`.** That seam
-  reaches rules through a path that reports refusals only, so it cannot
-  honestly write a pass.
-- **The shim and `uphold hook` do not read the variable**, so one exported
-  around a whole act does not trip them.
+- **`UPHOLD_ALLOW=all` at the shim** runs the command unchecked before the
+  policy is read, so it knows no rules. It writes a suite with zero tests and the
+  suite property `allowed=all`, so "ran unchecked" is a document and not an
+  absence. Allure reads no suite properties; the machine reader does.
+- **`uphold guard --text` writes a document**, the same one a stage does, with
+  one testcase per rule consulted.
 
-stdout and stderr are unchanged; the file is additive. uphold decides and
-records nothing beyond this one file. Signing it, storing it and publishing it
-belong to whatever runs the gate.
+stdout and stderr are unchanged; the file is additive, and the exit code and the
+report on stderr are computed from the same list of outcomes the file is, so
+they cannot disagree. uphold decides and records nothing beyond this file.
+Signing it, storing it and publishing it belong to whatever runs the gate.
 
 ## `uphold shim` — the shims
 

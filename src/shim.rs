@@ -44,6 +44,8 @@ use crate::config::{Policy, Rule};
 use crate::error::{Exit, Fatal, Result};
 use crate::git;
 use crate::invocation::Invocation;
+use crate::junit::Record;
+use crate::text::{Answer, Judgment, Verdict};
 
 mod checker;
 mod destination;
@@ -542,6 +544,7 @@ impl Subject {
     pub(crate) fn published(&self) -> crate::guard::Published<'_> {
         crate::guard::Published {
             label: self.kind,
+            kind: self.kind,
             text: &self.value,
             added: self.added.as_deref(),
             headline: self.kind == Self::HEADLINE,
@@ -5301,8 +5304,10 @@ fn identity_of_token(token: &str) -> Option<Identity> {
 /// loop is named and nothing runs, because a probe that got that far is not
 /// answering a question.
 pub(crate) fn inner_passthrough(name: &str, argv: &[OsString]) -> Result<Option<Exit>> {
+    // uphold's own probe, or its own hand-off coming back: not the operator's
+    // invocation, so it writes no record of its own.
     if handed_back(name).is_some() {
-        return exec_through(name, argv).map(Some);
+        return exec_through(name, argv, &mut Record::unrequested()).map(Some);
     }
     let Some(depth) = inner_depth() else {
         return Ok(None);
@@ -5320,7 +5325,7 @@ pub(crate) fn inner_passthrough(name: &str, argv: &[OsString]) -> Result<Option<
          publishes. uphold sets this on the {name} it runs for its own probes; exported by hand \
          it is UPHOLD_ALLOW=all under another name."
     );
-    exec_through(name, argv).map(Some)
+    exec_through(name, argv, &mut Record::unrequested()).map(Some)
 }
 
 /// Run the command with nothing standing in front of it.
@@ -5335,7 +5340,10 @@ pub(crate) fn inner_passthrough(name: &str, argv: &[OsString]) -> Result<Option<
 /// checking path, and a command whose text nothing here reads must be handed
 /// the descriptor it was given rather than a copy of what this process drained
 /// out of it.
-pub(crate) fn exec_through(name: &str, argv: &[OsString]) -> Result<Exit> {
+///
+/// `record` is written before the hand-off, since nothing runs after it: a
+/// run that judged nothing writes a suite of no rules, which says it ran.
+pub(crate) fn exec_through(name: &str, argv: &[OsString], record: &mut Record) -> Result<Exit> {
     let own = std::env::current_exe().ok();
     let Some(real) = real_command(name, own.as_deref()) else {
         return Err(Fatal::new(format!(
@@ -5344,7 +5352,7 @@ pub(crate) fn exec_through(name: &str, argv: &[OsString]) -> Result<Exit> {
     };
     let mut command = handing_off(&real, name);
     command.args(argv);
-    hand_off(&mut command, name, None)
+    hand_off(&mut command, name, None, record)
 }
 
 /// What the policy built for a command typed where none is in reach is called
@@ -5407,9 +5415,14 @@ pub(crate) fn without_policy(root: &Path, name: &str) -> Result<Option<Policy>> 
 /// exists to avoid. What the table names goes through [`run`], scope and all, so a
 /// private destination stands down there exactly as it does in a repository
 /// that declared the same table.
-pub(crate) fn run_without_policy(root: &Path, name: &str, argv: &[OsString]) -> Result<Exit> {
+pub(crate) fn run_without_policy(
+    root: &Path,
+    name: &str,
+    argv: &[OsString],
+    record: &mut Record,
+) -> Result<Exit> {
     let Some(policy) = without_policy(root, name)? else {
-        return exec_through(name, argv);
+        return exec_through(name, argv, record);
     };
     let words: Vec<String> = argv
         .iter()
@@ -5422,9 +5435,9 @@ pub(crate) fn run_without_policy(root: &Path, name: &str, argv: &[OsString]) -> 
             && shim.carries_a_body(&words)
     });
     if !publishes {
-        return exec_through(name, argv);
+        return exec_through(name, argv, record);
     }
-    run(root, &policy, name, argv, Invoked::AsTheCommand)
+    run(root, &policy, name, argv, Invoked::AsTheCommand, record)
 }
 
 /// The real command, found by walking PATH past ourselves.
@@ -5691,7 +5704,13 @@ fn install_editor(
 /// Refusing here is what makes it a checkpoint rather than a report: `gh` and
 /// `glab` abandon what they were doing when their editor exits non-zero,
 /// exactly as git abandons a commit when `commit-msg` does.
-fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> Result<Exit> {
+fn edit_and_check(
+    root: &Path,
+    policy: &Policy,
+    name: &str,
+    argv: &[String],
+    record: &mut Record,
+) -> Result<Exit> {
     // The command appends the file it wants written to the editor command line,
     // so the last word is that path however this process was routed back here.
     let Some(file) = argv.last() else {
@@ -5792,8 +5811,18 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
             let shim = *shim;
             let mut kept: Vec<&Rule> = Vec::new();
             for rule in &named {
-                if scopes.holds(effective_scope(rule, shim), policy)? {
+                let holds = crate::text::asked(
+                    &mut record.ledger,
+                    rule,
+                    Some(subject.kind),
+                    scopes.holds(effective_scope(rule, shim), policy),
+                )?;
+                if holds {
                     kept.push(*rule);
+                } else {
+                    record
+                        .ledger
+                        .push(Judgment::of(rule, Some(subject.kind), Answer::OutOfScope));
                 }
             }
             if kept.is_empty() {
@@ -5817,7 +5846,12 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
     let invocation = Invocation::command(name, std::slice::from_ref(&subject));
     let mut refusals: Vec<String> = Vec::new();
     for rule in checkers {
-        if crate::guard::bypassed(&rule.id) {
+        if let Some(allowed) = crate::guard::allowed(&rule.id) {
+            record.ledger.push(Judgment::of(
+                rule,
+                Some(subject.kind),
+                Answer::Bypass(allowed),
+            ));
             continue;
         }
         if !rule.selects_subject(subject.kind) {
@@ -5834,11 +5868,15 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
         if !rule.judged_at(invocation.seam) {
             continue;
         }
+        let start = record.ledger.len();
         match kind {
             crate::text::Judged::Prose | crate::text::Judged::Patterns => {
-                if let Some(refusal) = pattern_refusal(rule, &subject)? {
-                    refusals.push(refusal);
-                }
+                answered(
+                    &mut record.ledger,
+                    rule,
+                    subject.kind,
+                    pattern_refusal(rule, &subject),
+                )?;
             }
             crate::text::Judged::Guards => {
                 // As in `run`: a rule this consultation reaches keeps its own
@@ -5853,29 +5891,37 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
                     // scope to judge under and nothing to stand down for.
                     None => Ok(true),
                 };
-                if let Some(refusal) = crate::guard::text_refusal(
+                crate::guard::text_refusal(
                     root,
                     policy,
                     rule,
                     destination.as_deref(),
                     &subject.published(),
                     &mut in_scope,
-                )? {
-                    refusals.push(refusal.report);
-                }
+                    &mut record.ledger,
+                )?;
             }
             crate::text::Judged::Consultation => {
-                if let Some(refusal) = consult(root, rule, &subject)? {
-                    refusals.push(format!("{refusal}\n{}", rule.message()));
-                }
+                answered(
+                    &mut record.ledger,
+                    rule,
+                    subject.kind,
+                    consult(root, rule, &subject)
+                        .map(|found| found.map(|refusal| format!("{refusal}\n{}", rule.message()))),
+                )?;
             }
             // Not consulted here, and skipped above: a policy reaches the
             // literal rules from this seam through the `text-literals`
             // built-in, which arrives as `Guards`.
             crate::text::Judged::Literals => {}
         }
+        if let Some(refusal) =
+            crate::guard::told(policy, rule, record.ledger.get(start..).unwrap_or_default())
+        {
+            refusals.push(refusal.report);
+        }
     }
-    if refusals.is_empty() {
+    if crate::text::refusals(&record.ledger) == 0 {
         return Ok(Exit::Clean);
     }
     for refusal in &refusals {
@@ -5888,6 +5934,30 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
     Ok(Exit::Violations)
 }
 
+/// One rule's answer about one subject, put in the list: a pass, or a
+/// refusal carrying the report the shim prints for it. The kinds the shim
+/// renders itself -- a pattern, a program it consults -- arrive here already
+/// worded; a guard's answer goes in through `guard::text_refusal`.
+fn answered(
+    ledger: &mut Vec<Judgment>,
+    rule: &Rule,
+    subject: &str,
+    found: Result<Option<String>>,
+) -> Result<()> {
+    let found = crate::text::asked(ledger, rule, Some(subject), found)?;
+    ledger.push(Judgment::of(
+        rule,
+        Some(subject),
+        found.map_or(Answer::Pass, |report| {
+            Answer::Refused(Verdict::Guard(crate::guard::Refusal {
+                id: rule.id.clone(),
+                report,
+            }))
+        }),
+    ));
+    Ok(())
+}
+
 /// Hand the process over to the real command.
 ///
 /// A real `exec`, not a spawn and a wait. The shim is not a supervisor: exec
@@ -5897,9 +5967,18 @@ fn edit_and_check(root: &Path, policy: &Policy, name: &str, argv: &[String]) -> 
 /// `exit(status.code().unwrap_or(1))` loses all of it -- `code()` is `None` for
 /// every death by a signal, so a command killed by SIGINT reported a plain exit
 /// 1, which in this tool's own vocabulary is a policy violation.
+///
+/// The record is written first, because after `exec` there is no process left
+/// to write it.
 #[cfg(unix)]
-fn hand_off(command: &mut Command, name: &str, stdin: Option<&[u8]>) -> Result<Exit> {
+fn hand_off(
+    command: &mut Command,
+    name: &str,
+    stdin: Option<&[u8]>,
+    record: &mut Record,
+) -> Result<Exit> {
     use std::os::unix::process::CommandExt;
+    record.write(false)?;
     // A file rather than a pipe, and only here. After `exec` there is no process
     // left to feed a pipe, so the bytes have to be somewhere the kernel can hand
     // over on its own -- and the file is unlinked while still open, which leaves
@@ -5914,7 +5993,15 @@ fn hand_off(command: &mut Command, name: &str, stdin: Option<&[u8]>) -> Result<E
 }
 
 #[cfg(not(unix))]
-fn hand_off(command: &mut Command, name: &str, stdin: Option<&[u8]>) -> Result<Exit> {
+fn hand_off(
+    command: &mut Command,
+    name: &str,
+    stdin: Option<&[u8]>,
+    record: &mut Record,
+) -> Result<Exit> {
+    // Before the spawn, for the reason the Unix branch writes before `exec`:
+    // this branch leaves by `process::exit`, and nothing after it runs.
+    record.write(false)?;
     // A pipe rather than a file, and for a reason that is not symmetry: this
     // branch does not exec, it spawns and waits, so there IS a process left to
     // write the bytes -- and unlink-on-open is a Unix property. Windows refuses
@@ -5960,12 +6047,17 @@ fn hand_off(command: &mut Command, name: &str, stdin: Option<&[u8]>) -> Result<E
 /// the exec. The two cannot disagree about a decision, because every string
 /// this shim compares against is ASCII, and lossy conversion only ever replaces
 /// a sequence that was not text to begin with.
+///
+/// Every rule's answer goes into `record`, and the refusals printed and the
+/// exit are read back off that list, so the report on stderr and the file a
+/// publisher renders are two readings of one thing.
 pub(crate) fn run(
     root: &Path,
     policy: &Policy,
     name: &str,
     argv: &[OsString],
     invoked: Invoked,
+    record: &mut Record,
 ) -> Result<Exit> {
     let words: Vec<String> = argv
         .iter()
@@ -5976,7 +6068,7 @@ pub(crate) fn run(
     // else: in this pass argv is an editor's argv -- one file path -- and none
     // of the flag reading below applies to it.
     if invoked == Invoked::AsEditor {
-        return edit_and_check(root, policy, name, &words);
+        return edit_and_check(root, policy, name, &words, record);
     }
 
     let shims: BTreeMap<&str, &Shim> = policy
@@ -6004,7 +6096,7 @@ pub(crate) fn run(
         // front of anything, and the caller is entitled to hear that rather
         // than watch a typo run.
         return match invoked {
-            Invoked::AsTheCommand => exec_through(name, argv),
+            Invoked::AsTheCommand => exec_through(name, argv, record),
             Invoked::ByName => Err(Fatal::new(format!(
                 "no shim declares the command {name:?}; this policy declares {}",
                 if shims.is_empty() {
@@ -6106,8 +6198,28 @@ pub(crate) fn run(
         let mut scopes = CommandContext::new(shim, root, &collected, &words);
         let in_scope = scopes.holds(&shim.scope, policy)?;
         for rule in &checkers {
-            if scopes.holds(effective_scope(rule, shim), policy)? {
+            let holds = crate::text::asked(
+                &mut record.ledger,
+                rule,
+                None,
+                scopes.holds(effective_scope(rule, shim), policy),
+            )?;
+            if holds {
                 any_applies = true;
+            }
+            // Recorded here, once per rule, for the two reasons a rule below
+            // is passed over without being asked: switched off, or stood down
+            // at this destination. Neither is a pass and neither is an
+            // absence -- the rule was seen and set aside, and a reader asking
+            // whether the private-name check ran on this body is owed that.
+            if let Some(allowed) = crate::guard::allowed(&rule.id) {
+                record
+                    .ledger
+                    .push(Judgment::of(rule, None, Answer::Bypass(allowed)));
+            } else if !holds {
+                record
+                    .ledger
+                    .push(Judgment::of(rule, None, Answer::OutOfScope));
             }
         }
         // A `[[shim]]` that named this invocation and a policy with no rule
@@ -6182,7 +6294,8 @@ pub(crate) fn run(
                 if !scopes.holds(effective_scope(rule, shim), policy)? {
                     continue;
                 }
-                if let Some(refusal) = crate::guard::target_refusal(
+                let start = record.ledger.len();
+                crate::guard::target_refusal(
                     root,
                     policy,
                     rule,
@@ -6190,7 +6303,11 @@ pub(crate) fn run(
                     forge,
                     hostname.as_deref(),
                     &mut asked,
-                )? {
+                    &mut record.ledger,
+                )?;
+                if let Some(refusal) =
+                    crate::guard::told(policy, rule, record.ledger.get(start..).unwrap_or_default())
+                {
                     destination_refusals += 1;
                     // Named the way a hook names a refusal, set and all. This
                     // rule ships in `published-text`, so the reader who greps
@@ -6264,11 +6381,15 @@ pub(crate) fn run(
                     if !rule.judged_at(invocation.seam) {
                         continue;
                     }
+                    let start = record.ledger.len();
                     match kind {
                         crate::text::Judged::Prose | crate::text::Judged::Patterns => {
-                            if let Some(refusal) = pattern_refusal(rule, subject)? {
-                                refusals.push(refusal);
-                            }
+                            answered(
+                                &mut record.ledger,
+                                rule,
+                                subject.kind,
+                                pattern_refusal(rule, subject),
+                            )?;
                         }
                         // A subject that was named and left empty is still a
                         // published subject, and a pattern rule judges it above
@@ -6300,32 +6421,45 @@ pub(crate) fn run(
                                 }
                                 scopes.holds(effective_scope(inner, shim), policy)
                             };
-                            if let Some(refusal) = crate::guard::text_refusal(
+                            crate::guard::text_refusal(
                                 root,
                                 policy,
                                 rule,
                                 destination.as_deref(),
                                 &subject.published(),
                                 &mut inner_in_scope,
-                            )? {
-                                refusals.push(refusal.report);
-                            }
+                                &mut record.ledger,
+                            )?;
                         }
                         crate::text::Judged::Consultation => {
-                            if let Some(refusal) = consult(root, rule, subject)? {
-                                refusals.push(format!("{refusal}\n{}", rule.message()));
-                            }
+                            answered(
+                                &mut record.ledger,
+                                rule,
+                                subject.kind,
+                                consult(root, rule, subject).map(|found| {
+                                    found.map(|refusal| format!("{refusal}\n{}", rule.message()))
+                                }),
+                            )?;
                         }
                         // See the editor pass: reached from here through the
                         // `text-literals` built-in, which arrives as `Guards`.
                         crate::text::Judged::Literals => {}
+                    }
+                    // The report is read back off what this rule just answered,
+                    // so it cannot say anything the record does not.
+                    if let Some(refusal) = crate::guard::told(
+                        policy,
+                        rule,
+                        record.ledger.get(start..).unwrap_or_default(),
+                    ) {
+                        refusals.push(refusal.report);
                     }
                 }
             }
         }
     }
 
-    if !refusals.is_empty() {
+    if crate::text::refusals(&record.ledger) > 0 {
         for refusal in &refusals {
             eprintln!("{name}: {refusal}");
         }
@@ -6386,7 +6520,7 @@ pub(crate) fn run(
             EditorPath::Closed => {}
         }
     }
-    hand_off(&mut command, name, collected.stdin.as_deref())
+    hand_off(&mut command, name, collected.stdin.as_deref(), record)
 }
 
 #[cfg(test)]
@@ -7735,9 +7869,13 @@ mod tests {
         // The transparent path still has to be a path. A link left behind
         // after the real command was uninstalled has nothing to exec, and
         // exiting 0 there is a shim reporting a command ran when none did.
-        let report = exec_through("uphold-no-such-command-4b1f", &[])
-            .unwrap_err()
-            .to_string();
+        let report = exec_through(
+            "uphold-no-such-command-4b1f",
+            &[],
+            &mut Record::unrequested(),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(
             report.contains("nothing here stands in front of"),
             "{report}"

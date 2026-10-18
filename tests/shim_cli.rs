@@ -90,6 +90,7 @@ fn shim_with(root: &Path, args: &[&str], variables: &[(&str, &str)]) -> Output {
         .current_dir(root)
         .env("PATH", path)
         .env_remove("UPHOLD_ALLOW")
+        .env_remove("UPHOLD_JUNIT")
         .env_remove("UPHOLD_SHIM_INNER")
         .env_remove("GH_REPO")
         .env_remove("GH_HOST")
@@ -8201,4 +8202,338 @@ fn glab_work_items_group_environment_requires_a_project_override() {
         assert_eq!(code(&output), 0, "{}", stderr(&output));
         assert!(stdout(&output).contains("glab ran:"));
     }
+}
+
+// ── UPHOLD_JUNIT: what one invocation decided, as one JUnit document ──
+
+/// [`shim_with`], with `UPHOLD_JUNIT` naming `junit`.
+fn shim_recorded(root: &Path, args: &[&str], junit: &Path, variables: &[(&str, &str)]) -> Output {
+    let mut all = vec![("UPHOLD_JUNIT", junit.to_str().unwrap())];
+    all.extend_from_slice(variables);
+    shim_with(root, args, &all)
+}
+
+/// The evidence directory of a fixture, made.
+fn evidence(root: &Path) -> PathBuf {
+    let directory = root.join("evidence");
+    std::fs::create_dir_all(&directory).unwrap();
+    directory
+}
+
+/// The shim runs many times in one act, so a directory gets one file per
+/// invocation -- two `faux` calls leave two documents, and neither replaced
+/// the other. Each is the `uphold shim <command>` suite, one testcase per rule
+/// with the kind of subject it read, and the answer the stderr report gave.
+#[test]
+fn each_invocation_writes_its_own_document_and_two_leave_two() {
+    let root = workspace(BUILTIN_CHECKER);
+    let directory = evidence(&root);
+    let refused = shim_recorded(
+        &root,
+        &[
+            "faux",
+            "pr",
+            "create",
+            "-b",
+            "this fixes acme-private/thing",
+        ],
+        &directory,
+        &[],
+    );
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    let clean = shim_recorded(
+        &root,
+        &["faux", "pr", "create", "-b", "an ordinary change"],
+        &directory,
+        &[],
+    );
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
+    assert!(stdout(&clean).contains("faux ran"), "{}", stdout(&clean));
+
+    let files = support::junit::files_in(&directory);
+    assert_eq!(files.len(), 2, "{files:?}");
+    let mut states = Vec::new();
+    for path in &files {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with("uphold-shim-faux-")
+                && path.extension().is_some_and(|extension| extension == "xml"),
+            "{name}"
+        );
+        let (suite, text) = support::junit::suite(path);
+        assert_eq!(suite.name.as_str(), "uphold shim faux");
+        assert_eq!(support::junit::package(&suite), Some("uphold"));
+        assert_eq!(suite.tests, 1, "{suite:?}");
+        let case = support::junit::case(&suite, "no-private-repo-names");
+        assert_eq!(
+            support::junit::property(case, "builtin"),
+            Some("no-private-repo-names")
+        );
+        assert_eq!(support::junit::properties(case, "subject"), ["text"]);
+        assert_eq!(support::junit::property(case, "seam"), Some("shim"));
+        assert!(!text.contains("acme-private"), "{text}");
+        assert!(!text.contains("ordinary"), "{text}");
+        states.push(support::junit::state(case).0);
+    }
+    states.sort_unstable();
+    assert_eq!(states, ["failure", "pass"]);
+}
+
+/// A program the shim consults is the shim's own dispatch, and its answer is
+/// a testcase under the rule that named it. The program here is `uphold guard
+/// --text`, which would write a document of its own about the same body if
+/// it inherited the variable -- one refusal, counted twice.
+#[test]
+fn a_consulted_checker_writes_no_document_of_its_own() {
+    let root = workspace(POLICY);
+    let directory = evidence(&root);
+    let output = shim_recorded(
+        &root,
+        &["faux", "pr", "create", "-t", "Generated with Claude Code"],
+        &directory,
+        &[],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let files = support::junit::files_in(&directory);
+    assert_eq!(files.len(), 1, "{files:?}");
+    let (suite, _) = support::junit::suite(files.first().unwrap());
+    assert_eq!(suite.name.as_str(), "uphold shim faux");
+    let case = support::junit::case(&suite, "no-published-markers");
+    assert_eq!(
+        support::junit::state(case),
+        ("failure", Some("no-published-markers refused"))
+    );
+    assert_eq!(support::junit::property(case, "builtin"), None);
+}
+
+/// An exit 2 no one rule owns -- here, a body nothing stands in front of --
+/// still leaves a document, and the document does not read as a pass: it
+/// carries an error testcase for the run itself.
+#[test]
+fn an_exit_two_no_rule_owns_is_an_error_in_the_document() {
+    let root = workspace(NARROWED_CHECKER);
+    let directory = evidence(&root);
+    let output = shim_recorded(
+        &root,
+        &["faux", "issue", "create", "-t", "An ordinary title"],
+        &directory,
+        &[],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let files = support::junit::files_in(&directory);
+    assert_eq!(files.len(), 1, "{files:?}");
+    let (suite, _) = support::junit::suite(files.first().unwrap());
+    assert_eq!((suite.tests, suite.errors), (1, 1), "{suite:?}");
+    assert_eq!(
+        support::junit::state(support::junit::case(&suite, "uphold")),
+        ("error", Some("uphold could not look"))
+    );
+}
+
+/// A file value at the shim would be replaced by every `gh` call in one act,
+/// so it is exit 2 naming the value -- refused before the wrapped command
+/// runs, as every other exit 2 here is, and nothing is written.
+#[test]
+fn a_file_value_is_exit_two_and_the_command_never_runs() {
+    let root = workspace(BUILTIN_CHECKER);
+    let file = root.join("shim.xml");
+    let output = shim_recorded(
+        &root,
+        &["faux", "pr", "create", "-b", "an ordinary change"],
+        &file,
+        &[],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains(&format!("UPHOLD_JUNIT={}", file.display())),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("faux ran"), "{}", stdout(&output));
+    assert!(!file.exists());
+}
+
+/// `UPHOLD_ALLOW=all` runs the command before a rule is read, so there is no
+/// rule to give a testcase. The suite still says what happened: no tests, and
+/// a suite property `allowed=all`, so "ran unchecked" is a document rather
+/// than an absence.
+#[test]
+fn allow_all_writes_a_suite_of_no_rules_that_says_so() {
+    let root = workspace(BUILTIN_CHECKER);
+    let directory = evidence(&root);
+    let output = shim_recorded(
+        &root,
+        &[
+            "faux",
+            "pr",
+            "create",
+            "-b",
+            "this fixes acme-private/thing",
+        ],
+        &directory,
+        &[("UPHOLD_ALLOW", "all")],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
+    let files = support::junit::files_in(&directory);
+    assert_eq!(files.len(), 1, "{files:?}");
+    let (suite, _) = support::junit::suite(files.first().unwrap());
+    assert_eq!(suite.name.as_str(), "uphold shim faux");
+    assert_eq!(suite.tests, 0, "{suite:?}");
+    let allowed: Vec<(&str, &str)> = suite
+        .properties
+        .iter()
+        .map(|property| (property.name.as_str(), property.value.as_str()))
+        .collect();
+    assert_eq!(allowed, [("allowed", "all")]);
+}
+
+/// A rule whose own scope did not hold here neither ran nor was bypassed: it
+/// is a skipped testcase saying the destination stood it down, so a reader
+/// asking whether it ran on this body is answered by the file.
+#[test]
+fn a_rule_stood_down_at_this_destination_is_skipped_with_its_scope() {
+    let root = workspace(NARROWER_RULE_POLICY);
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+    let directory = evidence(&root);
+    let output = shim_recorded(
+        &root,
+        &["faux", "pr", "create", "-t", "Generated with Claude Code"],
+        &directory,
+        &[],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let files = support::junit::files_in(&directory);
+    assert_eq!(files.len(), 1, "{files:?}");
+    let (suite, _) = support::junit::suite(files.first().unwrap());
+    assert_eq!((suite.tests, suite.skipped), (1, 1), "{suite:?}");
+    let case = support::junit::case(&suite, "no-published-markers");
+    assert_eq!(
+        support::junit::state(case),
+        ("skipped", Some("out of scope at this destination"))
+    );
+    assert_eq!(support::junit::property(case, "scope"), Some("destination"));
+    assert_eq!(support::junit::property(case, "allowed"), None);
+}
+
+/// A consultation is dispatch, not judgment: the rules it ran each get a
+/// testcase, and it gets none, since both would count one refusal twice.
+#[test]
+fn a_consultation_records_the_rules_it_ran_and_not_itself() {
+    let root = workspace(WIDER_RULE_POLICY);
+    std::fs::remove_file(root.join("bin/uphold")).unwrap();
+    let directory = evidence(&root);
+    let output = shim_recorded(
+        &root,
+        &["faux", "pr", "create", "-t", "Generated with Claude Code"],
+        &directory,
+        &[],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let files = support::junit::files_in(&directory);
+    let (suite, _) = support::junit::suite(files.first().unwrap());
+    assert_eq!((suite.tests, suite.failures), (1, 1), "{suite:?}");
+    assert_eq!(
+        support::junit::state(support::junit::case(&suite, "prevent-ai-author")),
+        ("failure", Some("prevent-ai-author refused"))
+    );
+}
+
+/// A pull-request body refused on its way to a private repository.
+const PRIVATE_DESTINATION_POLICY: &str = r#"
+[[shim]]
+command = "faux"
+match = ["pr:create"]
+title_flags = ["-t", "--title"]
+text_flags = ["-b", "--body"]
+target_flags = ["-R", "--repo"]
+target = "forge-repo"
+scope = "always"
+
+[rule.prevent-ai-author]
+builtin = "prevent-ai-author"
+command.before = ["faux"]
+
+[rule.no-private-repo-names]
+builtin = "no-private-repo-names"
+visibility = "public"
+command.before = ["faux"]
+
+[rule.no-running-os-identity-metadata]
+message = "Do not publish host identity."
+forbidden_literals = "running-os-identity"
+files.include = ["evidence"]
+files.word = true
+"#;
+
+/// The repository a shim invocation publishes to is what a private-names rule
+/// protects, so the record of that invocation names none of it: no owner, no
+/// repository, no URL, no title, no body -- only rule ids and the kinds of
+/// subject they read. And it is held to the rule the fleet holds a published
+/// file to: the identity scan reads this machine's user name, home path and
+/// hostname and finds none of them in it.
+#[test]
+fn a_refused_body_to_a_private_destination_leaves_no_trace_of_it_in_the_file() {
+    let root = checkout_under(PRIVATE_DESTINATION_POLICY);
+    let directory = evidence(&root);
+    let output = shim_recorded(
+        &root,
+        &[
+            "faux",
+            "pr",
+            "create",
+            "--repo",
+            "example-org/private-repo",
+            "-t",
+            "Fix the parser",
+            "-b",
+            "Refs example-org/private-repo#1\n\nGenerated with Claude Code",
+        ],
+        &directory,
+        &[],
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("attribution"),
+        "{}",
+        stderr(&output)
+    );
+
+    let files = support::junit::files_in(&directory);
+    assert_eq!(files.len(), 1, "{files:?}");
+    let (suite, text) = support::junit::suite(files.first().unwrap());
+    let ai = support::junit::case(&suite, "prevent-ai-author");
+    assert_eq!(support::junit::state(ai).0, "failure");
+    assert_eq!(
+        support::junit::properties(ai, "subject"),
+        ["title", "text"],
+        "{suite:?}"
+    );
+    let names = support::junit::case(&suite, "no-private-repo-names");
+    assert_eq!(support::junit::state(names), ("pass", None));
+    for absent in [
+        // The repository half alone is a substring of the rule's own id, so
+        // the owner and the whole name are what is looked for.
+        "example-org",
+        "example-org/private-repo",
+        "github.com",
+        "https://",
+        "Fix the parser",
+        "Refs",
+        "Generated",
+        "main",
+        "faux pr",
+    ] {
+        assert!(!text.contains(absent), "{absent:?} in {text}");
+    }
+
+    support::git(&root, &["add", "-A"]);
+    let scan = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .arg("scan")
+        .current_dir(&root)
+        .env_remove("UPHOLD_ALLOW")
+        .env_remove("UPHOLD_JUNIT")
+        .output()
+        .unwrap();
+    assert_eq!(code(&scan), 0, "{}", stderr(&scan));
 }

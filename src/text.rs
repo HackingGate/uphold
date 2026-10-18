@@ -16,6 +16,10 @@
 //! text and they were four hand-written assemblies of the same ingredients
 //! until that existed; see [`Judged`] for what went dark under that
 //! arrangement.
+//!
+//! And what each rule ANSWERED, as a list -- [`Judgment`]. A seam's report and
+//! its exit code are read off that list, and so is the `JUnit` document it
+//! writes, so a rule cannot be refused on stderr and passed in the file.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -23,7 +27,9 @@ use std::path::PathBuf;
 use crate::config::{self, Check, CheckKind, Literals, Policy, Rule};
 use crate::engine::{self, Query};
 use crate::error::{Exit, Fatal, Result, verdict};
+use crate::guard::Allowed;
 use crate::invocation::{Invocation, Observed};
+use crate::junit::Outcome;
 use crate::report::Failure;
 use crate::sources;
 
@@ -264,6 +270,7 @@ impl Seam {
 /// caller that renders them is the caller that knows which form its seam
 /// speaks. Every caller handles both arms, so a change to the table above is a
 /// change to WHAT prints and never to whether it does.
+#[derive(Debug, Clone)]
 pub(crate) enum Verdict {
     /// A literal rule's or a prose rule's finding.
     Rule(Failure),
@@ -271,24 +278,155 @@ pub(crate) enum Verdict {
     Guard(crate::guard::Refusal),
 }
 
-/// The verdict of one seam, given how each kind of rule it consults answered.
+/// What one rule answered, about one subject.
+///
+/// Five, and the dispatch used to return one of them. A rule that was not a
+/// text guard, one that was bypassed and one that looked and found nothing
+/// all came back as no refusal, and a record of what ran cannot be written
+/// from that: the three have to be told apart, and a fifth -- a rule whose own
+/// scope did not hold at this destination -- is neither a pass nor a bypass.
+/// A rule that judges no text at all is not here: it is not asked, so it has
+/// no answer.
+#[derive(Debug, Clone)]
+pub(crate) enum Answer {
+    /// Looked, and found nothing.
+    Pass,
+    /// Looked, and refused; the report is the one a reader acts on.
+    Refused(Verdict),
+    /// Could not look. The seam stops here with exit 2, so this is the last
+    /// answer its list holds.
+    Unknown,
+    /// Did not run, by `UPHOLD_ALLOW`.
+    Bypass(Allowed),
+    /// Did not run, because its own scope did not hold here.
+    OutOfScope,
+}
+
+/// One entry in a seam's list: which rule, about which kind of subject, and
+/// what it answered. The subject is its KIND -- `text`, `title`, the tool's
+/// name -- and never what it said, since this is what a record is written
+/// from.
+#[derive(Debug, Clone)]
+pub(crate) struct Judgment {
+    pub id: String,
+    /// The dispatch name, for a built-in; a prose or literal rule has none.
+    pub builtin: Option<String>,
+    /// The bundled set the rule came from.
+    pub set: Option<String>,
+    pub subject: Option<String>,
+    pub answer: Answer,
+}
+
+impl Judgment {
+    pub(crate) fn of(rule: &Rule, subject: Option<&str>, answer: Answer) -> Self {
+        Self {
+            id: rule.id.clone(),
+            builtin: rule.builtin().map(str::to_owned),
+            set: rule.origin.set().map(str::to_owned),
+            subject: subject.map(str::to_owned),
+            answer,
+        }
+    }
+
+    /// The refusal this entry carries, if it refused.
+    pub(crate) const fn refused(&self) -> Option<&Verdict> {
+        match &self.answer {
+            Answer::Refused(verdict) => Some(verdict),
+            _ => None,
+        }
+    }
+}
+
+/// Anything that is one rule's answer, as the record names it. A trait so the
+/// count every seam settles its exit on is one function over the real list
+/// and over the model of it the proofs below reason about.
+pub(crate) trait Answered {
+    fn outcome(&self) -> Outcome;
+}
+
+impl Answered for Judgment {
+    fn outcome(&self) -> Outcome {
+        match &self.answer {
+            Answer::Pass => Outcome::Pass,
+            Answer::Refused(_) => Outcome::Refuse,
+            Answer::Unknown => Outcome::Unknown,
+            Answer::Bypass(allowed) => Outcome::Bypass(*allowed),
+            Answer::OutOfScope => Outcome::OutOfScope,
+        }
+    }
+}
+
+/// How many answers refused: the one number a seam's exit is read from.
+pub(crate) fn refusals<V: Answered>(answers: &[V]) -> usize {
+    answers
+        .iter()
+        .filter(|answer| answer.outcome() == Outcome::Refuse)
+        .count()
+}
+
+/// Ask `rule` something, and where it could not answer put that in the list
+/// before the error goes up: the run stops here, and the record of it must say
+/// which rule it stopped at.
+pub(crate) fn asked<T>(
+    ledger: &mut Vec<Judgment>,
+    rule: &Rule,
+    subject: Option<&str>,
+    asking: Result<T>,
+) -> Result<T> {
+    if asking.is_err() {
+        ledger.push(Judgment::of(rule, subject, Answer::Unknown));
+    }
+    asking
+}
+
+/// The findings a seam reports, read off its list in the order they were
+/// asked. A guard asked about a body and again about each headline is one
+/// refusal per rule -- see [`merged_by_rule`] -- placed where its first one
+/// was.
+pub(crate) fn verdicts(ledger: &[Judgment]) -> Vec<Verdict> {
+    let mut found = Vec::new();
+    let mut guards = Vec::new();
+    let mut guards_at = None;
+    for verdict in ledger.iter().filter_map(Judgment::refused) {
+        match verdict {
+            Verdict::Rule(failure) => found.push(Verdict::Rule(failure.clone())),
+            Verdict::Guard(refusal) => {
+                guards_at.get_or_insert(found.len());
+                guards.push(refusal.clone());
+            }
+        }
+    }
+    if let Some(at) = guards_at {
+        found.splice(
+            at..at,
+            merged_by_rule(guards).into_iter().map(Verdict::Guard),
+        );
+    }
+    found
+}
+
+/// The list of one seam, given how each kind of rule it consults answered.
 ///
 /// Every input arrives through `answer`, so nothing here reads a file, runs a
 /// command or looks at a policy. That is what lets `#[cfg(kani)] mod proofs`
 /// state the fail-closed property over every combination of answers rather
 /// than over the rules a test can write. [`judged`] is the caller that knows
 /// what each kind reads.
+///
+/// The list is the caller's and not a return value, because a kind that
+/// could not look stops the seam and what was answered before it -- the
+/// `Unknown` among it -- is still the record of the run.
 pub(crate) fn over_kinds<V>(
     seam: Seam,
-    mut answer: impl FnMut(Judged) -> Result<Vec<V>>,
-) -> Result<Vec<V>> {
-    let mut verdicts: Vec<V> = Vec::new();
+    ledger: &mut Vec<V>,
+    mut answer: impl FnMut(Judged, &mut Vec<V>) -> Result<()>,
+) -> Result<()> {
     for kind in EVERY_JUDGED {
         if seam.consults(*kind) {
-            verdicts.extend(answer(*kind)?);
+            answer(*kind, ledger)?;
         }
     }
-    Ok(verdicts)
+    Ok(())
 }
 
 /// One headline a seam was handed beside its prose: a title, or a commit
@@ -306,16 +444,30 @@ pub(crate) struct Headline {
 /// leaves the tool observable, while unread required prose stops judgment.
 /// Checkers read prose and headlines joined; guards receive each headline
 /// separately, preserving the same headline treatment as command collection.
+///
+/// Every rule's answer goes into `ledger`, and what the seam reports is read
+/// back off it. The subject each is recorded under is the tool's name at the
+/// hook and `text` elsewhere: a `--text` label is a file name, and a record
+/// carries no path.
 pub(crate) fn judged(
     invocation: &Invocation<'_>,
     root: &std::path::Path,
     policy: &Policy,
+    ledger: &mut Vec<Judgment>,
 ) -> Result<Vec<Verdict>> {
     let input = invocation.text_input()?;
     let prose = input.prose.read()?.copied();
     let headlines = input.headlines;
     let seam = invocation.seam;
     let label = invocation.label;
+    let recorded = |named: &'_ str| -> String {
+        if seam == Seam::Hook {
+            named.to_owned()
+        } else {
+            String::from("text")
+        }
+    };
+    let subject = recorded(label);
     let has_text = prose.is_some() || !headlines.is_empty();
     let text = prose.unwrap_or_default();
     let joined;
@@ -329,15 +481,12 @@ pub(crate) fn judged(
             .join("\n");
         joined.as_str()
     };
-    over_kinds(seam, |kind| {
+    over_kinds(seam, ledger, |kind, ledger| {
         if !has_text && kind != Judged::Patterns {
-            return Ok(Vec::new());
+            return Ok(());
         }
-        Ok(match kind {
-            Judged::Literals => failures_in(root, policy, whole)?
-                .into_iter()
-                .map(Verdict::Rule)
-                .collect(),
+        match kind {
+            Judged::Literals => failures_in(root, policy, whole, Some(&subject), ledger),
             // Every inner rule is in scope here: the three seams that reach
             // this line -- `scan --text`, `guard --text`, the harness hook --
             // are handed text and no destination, so there is nothing to ask a
@@ -348,46 +497,44 @@ pub(crate) fn judged(
                 // body, or a tool call's strings joined, and neither says which
                 // part of it is a subject. The headlines are, each on its own,
                 // because a subject is judged line by line as one.
-                let mut verdicts = Vec::new();
                 if !text.is_empty() || headlines.is_empty() {
                     let published = crate::guard::Published {
                         label,
+                        kind: &subject,
                         text,
                         added: None,
                         headline: false,
                     };
-                    verdicts.extend(crate::guard::over_text(
+                    crate::guard::over_text(
                         root,
                         policy,
                         None,
                         &published,
                         &mut |_| Ok(true),
-                    )?);
+                        ledger,
+                    )?;
                 }
                 for headline in headlines {
+                    let headline_kind = recorded(&headline.label);
                     let published = crate::guard::Published {
                         label: &headline.label,
+                        kind: &headline_kind,
                         text: &headline.text,
                         added: None,
                         headline: true,
                     };
-                    verdicts.extend(crate::guard::over_text(
+                    crate::guard::over_text(
                         root,
                         policy,
                         None,
                         &published,
                         &mut |_| Ok(true),
-                    )?);
+                        ledger,
+                    )?;
                 }
-                merged_by_rule(verdicts)
-                    .into_iter()
-                    .map(Verdict::Guard)
-                    .collect()
+                Ok(())
             }
-            Judged::Prose => crate::prose::over_text(policy, seam, whole)?
-                .into_iter()
-                .map(Verdict::Rule)
-                .collect(),
+            Judged::Prose => crate::prose::over_text(policy, seam, whole, &subject, ledger),
             // Only the hook consults these here, and only the rules whose
             // `seams` names it -- see `Seam::runs_by_default`.
             Judged::Patterns => patterns_over(
@@ -396,16 +543,16 @@ pub(crate) fn judged(
                 invocation.tool(),
                 has_text.then_some(whole),
                 headlines,
-            )?
-            .into_iter()
-            .map(Verdict::Rule)
-            .collect(),
+                &subject,
+                ledger,
+            ),
             // The shim's, and the shim does not arrive here: it holds a subject
             // and a per-rule scope this function is not given, so it dispatches
             // rule by rule through `Judged::of` instead.
-            Judged::Consultation => Vec::new(),
-        })
-    })
+            Judged::Consultation => Ok(()),
+        }
+    })?;
+    Ok(verdicts(ledger))
 }
 
 /// One refusal per rule, from the several parts of a call a rule was run over.
@@ -482,12 +629,14 @@ fn patterns_over(
     tool: Option<&str>,
     text: Option<&str>,
     headlines: &[Headline],
-) -> Result<Vec<Failure>> {
+    recorded: &str,
+    ledger: &mut Vec<Judgment>,
+) -> Result<()> {
     // The shim runs its pattern rules itself, over the subjects it collected,
     // and never through this function; were it ever handed here, running its
     // rules over one pathless blob is the guess this module exists to refuse.
     if seam != Seam::Hook {
-        return Ok(Vec::new());
+        return Ok(());
     }
     // Each with the label a report names it by: the kind alone for the call's
     // own two, the key for a headline, so a finding says which field it was in.
@@ -522,7 +671,6 @@ fn patterns_over(
             },
         )
     }));
-    let mut failures = Vec::new();
     for rule in &policy.rules {
         if !matches!(rule.kind(), CheckKind::Regexp | CheckKind::RequireRegexp)
             || rule.command.is_none()
@@ -530,8 +678,9 @@ fn patterns_over(
         {
             continue;
         }
-        if crate::guard::bypassed(&rule.id) {
+        if let Some(allowed) = crate::guard::allowed(&rule.id) {
             eprintln!("uphold: {} bypassed by UPHOLD_ALLOW", rule.id);
+            ledger.push(Judgment::of(rule, Some(recorded), Answer::Bypass(allowed)));
             continue;
         }
         let mut found = Vec::new();
@@ -539,7 +688,13 @@ fn patterns_over(
             .iter()
             .filter(|(_, subject)| rule.selects_subject(subject.kind))
         {
-            if let Some(finding) = crate::shim::pattern_finding(rule, subject)? {
+            let finding = asked(
+                ledger,
+                rule,
+                Some(recorded),
+                crate::shim::pattern_finding(rule, subject),
+            )?;
+            if let Some(finding) = finding {
                 let at = named.map_or_else(String::new, |name| format!(" (in {name})"));
                 found.push(if policy.redact_matches {
                     format!(
@@ -551,18 +706,30 @@ fn patterns_over(
                 });
             }
         }
-        if !found.is_empty() {
-            failures.push(Failure::new(&rule.id, rule.message(), found.join("\n")));
-        }
+        ledger.push(Judgment::of(
+            rule,
+            Some(recorded),
+            if found.is_empty() {
+                Answer::Pass
+            } else {
+                Answer::Refused(Verdict::Rule(Failure::new(
+                    &rule.id,
+                    rule.message(),
+                    found.join("\n"),
+                )))
+            },
+        ));
     }
-    Ok(failures)
+    Ok(())
 }
 
 pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<Exit> {
     let text = read(source)?;
     let (root, policy) = load_for(found)?;
     let invocation = Invocation::text(Seam::Scan, source, Observed::Present(&text), &[]);
-    let verdicts = judged(&invocation, &root, &policy)?;
+    // `scan --text` writes no record; the list is what it reports from.
+    let mut ledger = Vec::new();
+    let verdicts = judged(&invocation, &root, &policy, &mut ledger)?;
 
     for verdict in &verdicts {
         match verdict {
@@ -577,7 +744,7 @@ pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<
             }
         }
     }
-    let exit = verdict(verdicts.len(), 0);
+    let exit = verdict(refusals(&ledger), 0);
     if exit == Exit::Clean {
         println!("policy checks passed (text)");
     }
@@ -598,16 +765,20 @@ pub(crate) fn load_for(found: Option<&(PathBuf, PathBuf)>) -> Result<(PathBuf, P
     }
 }
 
-/// The same rules over an already-loaded policy.
+/// The literal rules, and the running-host fallback under them, over an
+/// already-loaded policy, each answering into `ledger` once per needle found
+/// or once to pass.
 ///
-/// Split from [`failures`] for the `text-literals` built-in: a shim consulting
+/// Over the loaded policy for the `text-literals` built-in: a shim consulting
 /// it already holds the policy that named the rule, and loading it again from
 /// disk would be a second reading free to disagree with the first.
 pub(crate) fn failures_in(
     root: &std::path::Path,
     policy: &Policy,
     text: &str,
-) -> Result<Vec<Failure>> {
+    recorded: Option<&str>,
+    ledger: &mut Vec<Judgment>,
+) -> Result<()> {
     // The test is for the identity rule itself, not for the CHECK KIND it
     // happens to use. Asking whether any `forbidden_literals` rule existed made
     // an unrelated one -- a repository's own list of literals, a command
@@ -628,25 +799,34 @@ pub(crate) fn failures_in(
         owned.push(fallback_rule());
     }
 
-    let mut failures: Vec<Failure> = Vec::new();
     for rule in &owned {
-        let needles = sources::resolve(
-            // `forbidden_literals_from` IS the command source; v2 said it twice.
-            if rule.forbidden_literals_from().is_some() {
-                "command"
-            } else {
-                rule.forbidden_literals().unwrap_or_default()
-            },
-            rule.forbidden_literals_from(),
-            root,
-            rule.files().word,
-            &rule.id,
-            rule.ignore_literals(),
+        let needles = asked(
+            ledger,
+            rule,
+            recorded,
+            sources::resolve(
+                // `forbidden_literals_from` IS the command source; v2 said it twice.
+                if rule.forbidden_literals_from().is_some() {
+                    "command"
+                } else {
+                    rule.forbidden_literals().unwrap_or_default()
+                },
+                rule.forbidden_literals_from(),
+                root,
+                rule.files().word,
+                &rule.id,
+                rule.ignore_literals(),
+            ),
         )?;
+        let mut refused = false;
         for needle in needles {
             let label = format!("{} ({})", rule.id, needle.label);
-            let hits =
-                engine::search_text(text, &Query::literal(&needle.value, needle.word), &label)?;
+            let hits = asked(
+                ledger,
+                rule,
+                recorded,
+                engine::search_text(text, &Query::literal(&needle.value, needle.word), &label),
+            )?;
             if hits.is_empty() {
                 continue;
             }
@@ -662,27 +842,38 @@ pub(crate) fn failures_in(
                 })
                 .collect::<Vec<String>>()
                 .join("\n");
-            failures.push(Failure::new(label, rule.message(), body));
+            refused = true;
+            ledger.push(Judgment::of(
+                rule,
+                recorded,
+                Answer::Refused(Verdict::Rule(Failure::new(label, rule.message(), body))),
+            ));
+        }
+        if !refused {
+            ledger.push(Judgment::of(rule, recorded, Answer::Pass));
         }
     }
 
-    Ok(failures)
+    Ok(())
 }
 
 /// The fail-closed property of the published-text seams, over every answer.
 ///
 /// `cargo kani`, and see CONTRIBUTING for what it costs. What a kind of rule
-/// answers is left to the model checker: could not look, found nothing, or
-/// found one thing. The rule bodies themselves -- a regex, a literal search, a
-/// command source, a guard reading the repository -- are the part no harness
-/// here reaches. What is proven is that no combination of their answers
-/// reaches clean except the one where every kind the seam asks looked and
-/// found nothing.
+/// answers is left to the model checker: could not look, or one answer of the
+/// five a rule gives -- passed, refused, bypassed by id or by `all`, out of
+/// scope -- or none at all. The rule bodies themselves -- a regex, a literal
+/// search, a command source, a guard reading the repository -- are the part no
+/// harness here reaches. What is proven is that no combination of their
+/// answers reaches clean except the one where every kind the seam asks looked
+/// and refused nothing, and that a rule which did not run -- bypassed, or out
+/// of scope -- moves the verdict neither way.
 ///
-/// One finding is the bound. `over_kinds` never looks inside what a kind
-/// found: it passes the list on or stops at an error, so an empty list and a
-/// non-empty one reach every branch it has, and five kinds at one each still
-/// make a concatenation longer than any single list.
+/// One answer per kind, and an `Unknown` after it where the kind could not
+/// look, is the bound. `over_kinds` never looks inside what a kind answered: it
+/// hands the list on or stops at an error, so an empty answer and a non-empty
+/// one reach every branch it has, and five kinds at two each still make a list
+/// longer than any one kind's.
 #[cfg(kani)]
 mod proofs {
     use super::{EVERY_JUDGED, Judged, Seam, load_for, over_kinds};
@@ -699,110 +890,239 @@ mod proofs {
         }
     }
 
-    #[derive(Clone, Copy, kani::Arbitrary)]
-    struct Answer {
-        could_not_look: bool,
-        found_one: bool,
+    /// What one kind answered, as far as the seam can tell them apart. A rule
+    /// that was bypassed, by its id or by `all`, and a rule stood down at this
+    /// destination are one letter here: `over_kinds`, `refusals` and `verdict`
+    /// read none of them, and the proofs say what the seam does with an answer
+    /// it does not read. An enum the checker picks from directly, and not a
+    /// byte reduced by arithmetic, because arithmetic on a symbolic value is a
+    /// circuit.
+    #[derive(Clone, Copy, PartialEq, Eq, kani::Arbitrary)]
+    enum Said {
+        Pass,
+        Refuse,
+        /// Bypassed, or out of scope: did not run, and is not a refusal.
+        NotRun,
+        /// The kind had no rule to ask.
+        Nothing,
     }
 
-    /// What one kind answered, as a list of `finding`. The harnesses that only
-    /// ask whether a list is empty pass `()`, whose list never allocates:
-    /// `over_kinds` cannot look inside a finding, so its type changes the cost
-    /// of the proof and nothing about what it proves.
-    fn answer<V: Clone>(answers: &[Answer; 5], kind: Judged, finding: V) -> Result<Vec<V>> {
-        let given = answers[kind as usize];
-        if given.could_not_look {
-            Err(Fatal::new(String::new()))
-        } else {
-            Ok(vec![finding; usize::from(given.found_one)])
+    #[derive(Clone, Copy, kani::Arbitrary)]
+    struct Given {
+        could_not_look: bool,
+        said: Said,
+    }
+
+    impl Given {
+        /// The byte `answer` records for this answer, or none where there is
+        /// no rule. The checker compares bytes; an `Outcome` compared on a
+        /// symbolic value is a case split per variant per entry, and that was
+        /// what put these proofs past a runner's memory.
+        fn code(self) -> Option<u8> {
+            match self.said {
+                Said::Pass => Some(0),
+                Said::Refuse => Some(1),
+                Said::NotRun => Some(2),
+                Said::Nothing => None,
+            }
         }
     }
 
-    fn looked_and_found_nothing(answers: &[Answer; 5], seam: Seam) -> bool {
+    /// The byte for a kind that could not look.
+    const UNKNOWN: u8 = 3;
+
+    /// One entry per kind asked, and one `UNKNOWN` after the kind that could
+    /// not look, which is the last one asked -- so the list never grows past
+    /// this and the checker never has to model it growing.
+    const LONGEST: usize = 6;
+
+    /// What one kind answered, into a list the harness cannot look inside,
+    /// counting the refusals beside it. The list is of `()`, which never
+    /// allocates: `over_kinds` cannot look inside an entry, so the entry's
+    /// type changes the cost of the proof and nothing about what it proves.
+    /// A kind that could not look stops the seam, as every rule body does
+    /// through `asked`.
+    fn answer(
+        given: &[Given; 5],
+        kind: Judged,
+        ledger: &mut Vec<()>,
+        refused: &mut usize,
+    ) -> Result<()> {
+        let one = given[kind as usize];
+        if let Some(code) = one.code() {
+            ledger.push(());
+            if code == 1 {
+                *refused += 1;
+            }
+        }
+        if one.could_not_look {
+            ledger.push(());
+            return Err(Fatal::new(String::new()));
+        }
+        Ok(())
+    }
+
+    /// What the list would hold, written beside it into an array the checker
+    /// can read back cheaply: the byte `kind << 2 | code` per entry. The list
+    /// itself stays one of `()`, pushed once per entry so its length is the
+    /// array's; reading a heap vector back symbolically is what the two
+    /// harnesses below could not afford.
+    struct Shadow {
+        codes: [u8; LONGEST],
+        len: usize,
+    }
+
+    impl Shadow {
+        const fn new() -> Self {
+            Self {
+                codes: [0; LONGEST],
+                len: 0,
+            }
+        }
+
+        fn push(&mut self, ledger: &mut Vec<()>, code: u8) {
+            self.codes[self.len] = code;
+            self.len += 1;
+            ledger.push(());
+        }
+    }
+
+    /// The same answer as `answer`, with its bytes recorded in the shadow.
+    fn tagged(
+        given: &[Given; 5],
+        kind: Judged,
+        ledger: &mut Vec<()>,
+        shadow: &mut Shadow,
+    ) -> Result<()> {
+        let one = given[kind as usize];
+        let tag = (kind as u8) << 2;
+        if let Some(code) = one.code() {
+            shadow.push(ledger, tag | code);
+        }
+        if one.could_not_look {
+            shadow.push(ledger, tag | UNKNOWN);
+            return Err(Fatal::new(String::new()));
+        }
+        Ok(())
+    }
+
+    fn looked_and_refused_nothing(given: &[Given; 5], seam: Seam) -> bool {
         EVERY_JUDGED.iter().all(|kind| {
-            let given = answers[*kind as usize];
-            !seam.consults(*kind) || (!given.could_not_look && !given.found_one)
+            let one = given[*kind as usize];
+            !seam.consults(*kind) || (!one.could_not_look && one.said != Said::Refuse)
         })
     }
 
-    /// `clean <-> every consulted kind looked and found nothing`, through the
+    /// `clean <-> every consulted kind looked and refused nothing`, through the
     /// same `verdict` and `Exit::of` the callers settle on. Clean is a claim
-    /// that every consulted kind was evaluated, not the absence of a finding.
+    /// that every consulted kind was evaluated, not the absence of a finding
+    /// -- and a rule that did not run is neither a finding nor a failure to
+    /// look.
     #[kani::proof]
     #[kani::unwind(7)]
-    fn clean_means_every_consulted_kind_looked_and_found_nothing() {
+    fn clean_means_every_consulted_kind_looked_and_refused_nothing() {
         let seam = any_seam();
-        let answers: [Answer; 5] = kani::any();
-        let run = over_kinds(seam, |kind| answer(&answers, kind, ()))
-            .map(|verdicts| verdict(verdicts.len(), 0));
+        let given: [Given; 5] = kani::any();
+        let mut ledger = Vec::new();
+        let mut refused = 0;
+        let run = over_kinds(seam, &mut ledger, |kind, ledger| {
+            answer(&given, kind, ledger, &mut refused)
+        })
+        .map(|()| verdict(refused, 0));
         let clean = Exit::of(&run) as i32 == Exit::Clean as i32;
-        assert!(clean == looked_and_found_nothing(&answers, seam));
+        assert!(clean == looked_and_refused_nothing(&given, seam));
     }
 
-    /// `a consulted kind could not look -> exit 2`, whatever the others found.
-    /// A finding does not outrank it here, unlike in `verdict`: the seam
-    /// stops at the first kind that could not look, so what it would have
+    /// `a consulted kind could not look -> exit 2`, whatever the others
+    /// answered. A refusal does not outrank it here, unlike in `verdict`: the
+    /// seam stops at the first kind that could not look, so what it would have
     /// reported is not known.
     #[kani::proof]
     #[kani::unwind(7)]
     fn a_consulted_kind_that_could_not_look_is_broken() {
         let seam = any_seam();
-        let answers: [Answer; 5] = kani::any();
+        let given: [Given; 5] = kani::any();
         let broken_kind = EVERY_JUDGED
             .iter()
-            .any(|kind| seam.consults(*kind) && answers[*kind as usize].could_not_look);
-        let run = over_kinds(seam, |kind| answer(&answers, kind, ()))
-            .map(|verdicts| verdict(verdicts.len(), 0));
+            .any(|kind| seam.consults(*kind) && given[*kind as usize].could_not_look);
+        let mut ledger = Vec::new();
+        let mut refused = 0;
+        let run = over_kinds(seam, &mut ledger, |kind, ledger| {
+            answer(&given, kind, ledger, &mut refused)
+        })
+        .map(|()| verdict(refused, 0));
         assert!(broken_kind == (Exit::of(&run) as i32 == Exit::Broken as i32));
     }
 
     /// Every consulted kind is asked exactly once when none could not look,
     /// no kind the seam does not consult is ever asked, and nothing a kind
-    /// found is dropped or duplicated on the way to the verdict.
+    /// answered is dropped or duplicated on the way to the list the record is
+    /// written from.
     #[kani::proof]
     #[kani::unwind(7)]
-    fn every_consulted_kind_is_asked_once_and_every_finding_is_kept() {
+    fn every_consulted_kind_is_asked_once_and_every_answer_is_kept() {
         let seam = any_seam();
-        let answers: [Answer; 5] = kani::any();
+        let given: [Given; 5] = kani::any();
         let mut asked = [0_u8; 5];
-        let run = over_kinds(seam, |kind| {
+        let mut ledger = Vec::new();
+        let mut shadow = Shadow::new();
+        let run = over_kinds(seam, &mut ledger, |kind, ledger| {
             asked[kind as usize] += 1;
-            answer(&answers, kind, kind as u8)
+            tagged(&given, kind, ledger, &mut shadow)
         });
+        assert!(ledger.len() == shadow.len);
         for kind in EVERY_JUDGED {
             let slot = *kind as usize;
             if !seam.consults(*kind) {
                 assert!(asked[slot] == 0);
-            } else if let Ok(verdicts) = &run {
+            } else if run.is_ok() {
                 assert!(asked[slot] == 1);
-                let kept = verdicts
-                    .iter()
-                    .filter(|found| **found == *kind as u8)
-                    .count();
-                assert!(kept == usize::from(answers[slot].found_one));
+                let mut kept = 0_u8;
+                let mut found = false;
+                for at in 0..LONGEST {
+                    if at < shadow.len && shadow.codes[at] >> 2 == *kind as u8 {
+                        kept += 1;
+                        found |= Some(shadow.codes[at] & 3) == given[slot].code();
+                    }
+                }
+                match given[slot].code() {
+                    Some(_) => assert!(kept == 1 && found),
+                    None => assert!(kept == 0),
+                }
             }
         }
     }
 
-    /// The verdict is a function of the seam and the answers, and an answer
-    /// from a kind the seam does not consult cannot move it.
+    /// The list is a function of the seam and the answers: every entry in it
+    /// is tagged with a kind the seam consults, and says what that kind was
+    /// given to say -- or that it could not look, and then it is the last
+    /// entry. An answer from a kind the seam does not consult therefore has
+    /// nowhere to enter it.
     #[kani::proof]
     #[kani::unwind(7)]
-    fn the_verdict_is_a_function_of_the_consulted_answers() {
+    fn the_list_is_a_function_of_the_consulted_answers() {
         let seam = any_seam();
-        let answers: [Answer; 5] = kani::any();
-        let mut elsewhere: [Answer; 5] = kani::any();
-        for kind in EVERY_JUDGED {
-            if seam.consults(*kind) {
-                elsewhere[*kind as usize] = answers[*kind as usize];
+        let given: [Given; 5] = kani::any();
+        let mut ledger = Vec::new();
+        let mut shadow = Shadow::new();
+        let run = over_kinds(seam, &mut ledger, |kind, ledger| {
+            tagged(&given, kind, ledger, &mut shadow)
+        });
+        assert!(ledger.len() == shadow.len && shadow.len <= LONGEST);
+        for at in 0..LONGEST {
+            if at < shadow.len {
+                let entry = shadow.codes[at];
+                let slot = usize::from(entry >> 2);
+                assert!(seam.consults(EVERY_JUDGED[slot]));
+                if entry & 3 == UNKNOWN {
+                    assert!(given[slot].could_not_look);
+                } else {
+                    assert!(given[slot].code() == Some(entry & 3));
+                }
             }
         }
-        let first = over_kinds(seam, |kind| answer(&answers, kind, kind as u8));
-        let second = over_kinds(seam, |kind| answer(&elsewhere, kind, kind as u8));
-        match (first, second) {
-            (Ok(first), Ok(second)) => assert!(first == second),
-            (Err(_), Err(_)) => {}
-            _ => panic!("one input, two verdicts"),
+        if run.is_err() {
+            assert!(shadow.len > 0 && shadow.codes[shadow.len - 1] & 3 == UNKNOWN);
         }
     }
 
@@ -894,5 +1214,188 @@ mod tests {
         // Reads a push range, not a piece of text, so it is not asked about one.
         let push = Rule::synthetic("push", named_builtin("prevent-public-push"));
         assert_eq!(Judged::of(&push), None);
+    }
+
+    /// Three text guards and one that judges no text, with a consultation
+    /// standing in front of a command.
+    const ANSWERING: &str = "\
+[rule.consult]
+builtin = \"text-guards\"
+command.before = [\"faux\"]
+
+[rule.no-merge-commit]
+builtin = \"no-merge-commit\"
+git.hooks = [\"pre-commit\"]
+
+[rule.prevent-ai-author]
+builtin = \"prevent-ai-author\"
+git.hooks = [\"commit-msg\"]
+
+[rule.prevent-unusual-unicode]
+builtin = \"prevent-unusual-unicode\"
+git.hooks = [\"commit-msg\"]
+
+[[shim]]
+command = \"faux\"
+match = [\"pr:create\"]
+text_flags = [\"-b\"]
+scope = \"always\"
+";
+
+    fn answering() -> Policy {
+        config::load_text(
+            std::path::Path::new("."),
+            std::path::Path::new("ANSWERING"),
+            ANSWERING,
+        )
+        .unwrap()
+    }
+
+    fn published(text: &str) -> crate::guard::Published<'_> {
+        crate::guard::Published {
+            label: "body.md",
+            kind: "text",
+            text,
+            added: None,
+            headline: false,
+        }
+    }
+
+    fn answer_of(ledger: &[Judgment], id: &str) -> Vec<Outcome> {
+        ledger
+            .iter()
+            .filter(|judgment| judgment.id == id)
+            .map(Answered::outcome)
+            .collect()
+    }
+
+    /// Every text guard asked answers, one of them out of scope; a built-in
+    /// that judges no text is not asked and so is not in the list; and the
+    /// exit is read off the same list.
+    #[test]
+    fn each_text_guard_answers_and_a_guard_out_of_scope_says_so() {
+        let policy = answering();
+        let mut ledger = Vec::new();
+        crate::guard::over_text(
+            std::path::Path::new("."),
+            &policy,
+            None,
+            &published("Generated with Claude Code"),
+            &mut |rule| Ok(rule.id != "prevent-unusual-unicode"),
+            &mut ledger,
+        )
+        .unwrap();
+        assert_eq!(answer_of(&ledger, "prevent-ai-author"), [Outcome::Refuse]);
+        assert_eq!(
+            answer_of(&ledger, "prevent-unusual-unicode"),
+            [Outcome::OutOfScope]
+        );
+        assert_eq!(answer_of(&ledger, "no-merge-commit"), Vec::new());
+        assert_eq!(answer_of(&ledger, "consult"), Vec::new());
+        assert_eq!(refusals(&ledger), 1);
+        assert!(
+            ledger
+                .iter()
+                .all(|judgment| judgment.subject.as_deref() == Some("text"))
+        );
+    }
+
+    /// A rule whose scope could not be told is `Unknown`, last, and the
+    /// error goes up: the record ends where the run did.
+    #[test]
+    fn a_scope_that_could_not_be_told_is_the_last_answer() {
+        let policy = answering();
+        let mut ledger = Vec::new();
+        let run = crate::guard::over_text(
+            std::path::Path::new("."),
+            &policy,
+            None,
+            &published("plain"),
+            &mut |rule| {
+                if rule.id == "prevent-ai-author" {
+                    Err(Fatal::new("no destination"))
+                } else {
+                    Ok(true)
+                }
+            },
+            &mut ledger,
+        );
+        assert!(run.is_err());
+        let last = ledger.last().unwrap();
+        assert_eq!(last.id, "prevent-ai-author");
+        assert_eq!(last.outcome(), Outcome::Unknown);
+    }
+
+    /// A consultation answers through the rules it ran, each under its own
+    /// id, and the report the caller prints for it is folded from those.
+    #[test]
+    fn a_consultation_answers_through_its_rules_and_is_reported_as_one() {
+        let policy = answering();
+        let consult = policy
+            .rules
+            .iter()
+            .find(|rule| rule.id == "consult")
+            .unwrap();
+        let mut ledger = Vec::new();
+        crate::guard::text_refusal(
+            std::path::Path::new("."),
+            &policy,
+            consult,
+            None,
+            &published("Generated with Claude Code"),
+            &mut |_| Ok(true),
+            &mut ledger,
+        )
+        .unwrap();
+        assert_eq!(answer_of(&ledger, "consult"), Vec::new());
+        assert_eq!(answer_of(&ledger, "prevent-ai-author"), [Outcome::Refuse]);
+        assert_eq!(
+            answer_of(&ledger, "prevent-unusual-unicode"),
+            [Outcome::Pass]
+        );
+        let told = crate::guard::told(&policy, consult, &ledger).unwrap();
+        assert_eq!(told.id, "consult");
+        assert!(told.report.starts_with("prevent-ai-author: "), "{told:?}");
+    }
+
+    /// A guard asked about a body and again about a headline is one finding
+    /// in the report, where its first one was, between the findings of the
+    /// kinds around it.
+    #[test]
+    fn a_guard_refused_twice_is_reported_once_in_its_place() {
+        let rule = |id: &str| Judgment {
+            id: id.to_owned(),
+            builtin: None,
+            set: None,
+            subject: None,
+            answer: Answer::Pass,
+        };
+        let refused = |id: &str, verdict: Verdict| Judgment {
+            answer: Answer::Refused(verdict),
+            ..rule(id)
+        };
+        let guard = |report: &str| {
+            Verdict::Guard(crate::guard::Refusal {
+                id: String::from("g"),
+                report: report.to_owned(),
+            })
+        };
+        let ledger = [
+            refused("lit", Verdict::Rule(Failure::new("lit", "m", "b"))),
+            refused("g", guard("in the body\n\nadvice\n")),
+            rule("other"),
+            refused("g", guard("in the title\n\nadvice\n")),
+            refused("prose", Verdict::Rule(Failure::new("prose", "m", "b"))),
+        ];
+        let found = verdicts(&ledger);
+        let names: Vec<&str> = found
+            .iter()
+            .map(|verdict| match verdict {
+                Verdict::Rule(failure) => failure.label.as_str(),
+                Verdict::Guard(refusal) => refusal.id.as_str(),
+            })
+            .collect();
+        assert_eq!(names, ["lit", "g", "prose"]);
+        assert_eq!(refusals(&ledger), 4);
     }
 }

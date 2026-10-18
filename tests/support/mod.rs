@@ -34,6 +34,7 @@
     reason = "a fixture reports by panicking; there is no caller to hand a Result to"
 )]
 
+pub mod junit;
 pub mod syntax;
 
 use std::path::{Path, PathBuf};

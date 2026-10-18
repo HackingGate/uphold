@@ -1011,6 +1011,7 @@ dependencies = [
  "unicode-security",
  "unicode_names2",
  "ureq",
+ "uuid",
 ]
 
 [[package]]
