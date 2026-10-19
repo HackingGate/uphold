@@ -3507,7 +3507,12 @@ claim nothing supplies, and the refusal says to claim `uphold-supply-chain` or
 It reads **commits**, not files: each pushed range at `pre-push`, and every
 commit under `--all` or for a branch the remote does not have. Never the
 working tree, which holds ignored files — a populated `.env` — that no commit
-carries.
+carries. Never **git notes** either: a pushed `refs/notes/*` ref is a declared
+gap in every section, and every commit is git's `--all` with `refs/notes/*`
+excluded. A notes ref carries no manifest, only text a tool attached to other
+commits, such as a signed gate record whose cache-key hashes gitleaks reads as
+API keys; scanned, its first push would widen to every commit and refuse the
+record that is being published.
 
 It runs only where the policy **inherits `credentials`**; elsewhere the section
 says it was not asked. A missing scanner is exit `2` here as everywhere in this

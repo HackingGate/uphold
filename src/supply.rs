@@ -684,16 +684,34 @@ pub(crate) fn scope_for_ranges(root: &Path, ranges: &[(String, String)]) -> Resu
 /// range being pushed runs from the remote's sha to the local one. Parsed here
 /// rather than anywhere new because `runner` already reassembles a runner's
 /// environment INTO that shape, so both channels reach one parser.
+///
+/// A ref under [`NOTES`] is left out, and said so. Its commits carry notes --
+/// text a tool attached to other commits, such as a signed gate record whose
+/// cache-key hashes gitleaks reads as API keys -- and no manifest, so there is
+/// nothing a dependency scanner could read. Kept in, its first push names the
+/// all-zero sha and widens to every commit in the repository: one record
+/// refuses the push that publishes it.
 pub(crate) fn scope_for_push(root: &Path, refs: &str) -> Result<Scope> {
     let mut ranges = Vec::new();
     for line in refs.lines() {
         let fields: Vec<&str> = line.split_whitespace().collect();
-        if let [_local_ref, local_sha, _remote_ref, remote_sha] = fields[..] {
+        if let [local_ref, local_sha, _remote_ref, remote_sha] = fields[..] {
+            if local_ref.starts_with(NOTES) {
+                println!(
+                    "   {local_ref} is git notes, which no scanner here reads -- a declared gap, \
+                     not a scanner that failed"
+                );
+                continue;
+            }
             ranges.push(((*remote_sha).to_owned(), (*local_sha).to_owned()));
         }
     }
     scope_for_ranges(root, &ranges)
 }
+
+/// Where git keeps notes. The pushed-ref scope and gitleaks' every-commit pass
+/// both leave it out, for the reason [`scope_for_push`] gives.
+const NOTES: &str = "refs/notes/";
 
 /// git's all-zero object id, in either of the lengths git writes it in.
 fn is_zero(sha: &str) -> bool {
@@ -2577,7 +2595,9 @@ fn gitleaks_not_asked(_root: &Path, _scope: &Scope) -> Result<Section> {
 }
 
 /// gitleaks over the commits in scope: each pushed range, or every commit
-/// under `--all` and for a branch the remote does not have.
+/// under `--all` and for a branch the remote does not have. Every commit is
+/// git's `--all` with [`NOTES`] excluded, as gitleaks' own default would read
+/// them otherwise; `--full-history` is the half of that default kept.
 ///
 /// Commits and not the working tree, because the working tree holds ignored
 /// files -- a populated `.env` among them -- that no commit carries, and a
@@ -2591,7 +2611,12 @@ fn gitleaks(root: &Path, scope: &Scope) -> Result<Section> {
         return Ok(Section::CouldNotLook(reason));
     }
     let passes: Vec<(String, Option<String>)> = match scope {
-        Scope::Whole => vec![(String::from("every commit"), None)],
+        Scope::Whole => vec![(
+            String::from("every commit"),
+            Some(format!(
+                "--log-opts=--full-history --exclude={NOTES}* --all"
+            )),
+        )],
         Scope::Changed(_, ranges) => ranges
             .iter()
             .map(|(from, to)| {
@@ -2609,8 +2634,8 @@ fn gitleaks(root: &Path, scope: &Scope) -> Result<Section> {
 }
 
 /// `gitleaks git` once per pass, each pass being what to print for it and the
-/// one argument that says what it reads: a `--log-opts` range, `--staged`, or
-/// none for every commit. The caller has already checked the version.
+/// one argument that says what it reads: `--log-opts`, a range or every commit,
+/// or `--staged`. The caller has already checked the version.
 fn gitleaks_passes(root: &Path, passes: Vec<(String, Option<String>)>) -> Result<Section> {
     // `--config` named explicitly, as zizmor's is: it outranks the
     // GITLEAKS_CONFIG variables gitleaks otherwise reads, so a variable left
