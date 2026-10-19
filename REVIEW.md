@@ -447,8 +447,11 @@ Prefer small, focused mechanisms connected through stable, inspectable interface
 - A domain can be decomposed into transformations or tools with stable boundaries.
 - Intermediate results are useful to inspect, store, or reuse.
 - The operational cost of composition remains lower than the cost of integration.
+- An interface will be driven by scripts or agents as well as by a person at a keyboard.
 
 **Ask**
 - Is each component focused on one coherent transformation or capability?
 - Can outputs be inspected and consumed without private knowledge?
+- Can a script or an agent do everything a person at a terminal can, without a TTY, and tell success from failure by exit status?
+- Does a prompt appear only when stdin is a terminal, with a flag, stdin, or structured output as the equivalent?
 - Would combining these components preserve a stronger transaction or invariant?
