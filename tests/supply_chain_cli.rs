@@ -2231,7 +2231,11 @@ fn all_scans_every_commit_with_the_bundled_config_and_a_finding_code_of_its_own(
     assert!(ran.starts_with("gitleaks git "), "{ran}");
     assert!(ran.contains("--exit-code=3"), "{ran}");
     assert!(ran.contains("--redact"), "{ran}");
-    assert!(!ran.contains("--log-opts"), "{ran}");
+    // gitleaks' own default, `--full-history --all`, with git notes left out.
+    assert!(
+        ran.contains("--log-opts=--full-history --exclude=refs/notes/* --all"),
+        "{ran}"
+    );
     let config = std::fs::read_to_string(root.join("stub.log.config")).unwrap();
     assert!(config.contains("useDefault = true"), "{config}");
     assert!(config.contains("_test"), "{config}");
@@ -2324,6 +2328,70 @@ fn a_range_touching_no_manifest_still_runs_gitleaks_over_that_range() {
     );
     assert!(!ran.contains("osv-scanner"), "{ran}");
     assert!(!ran.contains("guarddog"), "{ran}");
+}
+
+/// A push of git notes: the commits a tool's notes ref carries, here a gate
+/// record. Run as prek exports it, the ref named and its sha given.
+fn notes_pushed(root: &Path, tools: &Path, from: Option<&str>, to: &str) -> Output {
+    let mut path = tools.as_os_str().to_owned();
+    path.push(":/usr/bin:/bin");
+    let mut push = vec![
+        ("PRE_COMMIT_LOCAL_BRANCH", "refs/notes/gate"),
+        ("PRE_COMMIT_REMOTE_BRANCH", "refs/notes/gate"),
+        ("PRE_COMMIT_TO_REF", to),
+    ];
+    if let Some(from) = from {
+        push.push(("PRE_COMMIT_FROM_REF", from));
+    }
+    invoke(root, &path, &[], &push)
+}
+
+/// A notes ref holds no manifest, and its first push names the all-zero sha,
+/// which would widen to every commit: one gate record refusing the push that
+/// publishes it. It is left out, and the run says so.
+#[test]
+fn a_push_of_git_notes_is_a_declared_gap_and_widens_to_nothing() {
+    let root = tracked();
+    std::fs::write(root.join("policy/principles.toml"), WITH_CREDENTIALS).unwrap();
+    // Two records, so the second push has a remote sha that is a notes commit.
+    let record = |message: &str| {
+        let gated = commit(&root, message);
+        support::git(
+            &root,
+            &[
+                "notes",
+                "--ref=gate",
+                "add",
+                "-m",
+                "{\"cacheKey\": \"0123\"}",
+                &gated,
+            ],
+        );
+        let output = support::git_command(&root)
+            .args(["rev-parse", "refs/notes/gate"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    };
+    let first = record("inherit credentials");
+    let notes = record("a second gated commit");
+    for from in [None, Some(first.as_str())] {
+        let _ = std::fs::remove_file(root.join("stub.log"));
+        let tools = stubs(&[
+            ("osv-scanner", &recording("exit 0")),
+            ("guarddog", &recording(GUARDDOG_CLEAN)),
+            ("gitleaks", &gitleaks_stub(GITLEAKS_PINNED, "exit 3")),
+        ]);
+        let output = notes_pushed(&root, &tools, from, &notes);
+        let said = text(&output);
+        assert_eq!(code(&output), 0, "{from:?}: {said}");
+        assert!(
+            said.contains("refs/notes/gate is git notes, which no scanner here reads"),
+            "{said}"
+        );
+        assert!(!said.contains("every manifest and every commit"), "{said}");
+        assert!(journal(&root).is_empty(), "{}", journal(&root));
+    }
 }
 
 // ── gitleaks over the staged diff ────────────────────────────────────────
