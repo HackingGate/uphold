@@ -85,7 +85,7 @@ encoding_rs = "0.8"
 # format into. A `<<` merge key expands, as it does under the YAML readers
 # pre-commit and lefthook use, and a duplicate key is refused rather than
 # silently resolved to whichever copy came last.
-serde-saphyr = "1.3"
+serde-saphyr = "2.0"
 # A parser, for the one question a regex over file contents cannot answer:
 # whether the text it matched is a comment. `grep-regex` reads bytes, so
 # `let s = "// TODO";` is a hit and a rule about comments is a rule about
