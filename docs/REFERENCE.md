@@ -12,7 +12,7 @@ namespace — that is what lets a claim in
   - [When the policy itself will not load](#when-the-policy-itself-will-not-load)
 - [`uphold hook` — the caller that spawns no process](#uphold-hook--the-caller-that-spawns-no-process)
 - [`uphold audit --for-publication`](#uphold-audit---for-publication)
-- [`uphold supply-chain` — six scanners, one verdict](#uphold-supply-chain--six-scanners-one-verdict)
+- [`uphold supply-chain` — six scanners, one verdict](#uphold-supply-chain--four-scanners-one-check-of-its-own-one-verdict)
 - [`uphold hooks --identity` — across repositories](#uphold-hooks---identity--across-repositories)
 - [`uphold hooks --install` — the hooks git actually runs](#uphold-hooks---install--the-hooks-git-actually-runs)
 - [`uphold probe` — can each hook refuse?](#uphold-probe--can-each-hook-refuse)
@@ -3322,7 +3322,7 @@ found, `2` where a surface this run tried to read could not be read, `0` when
 every surface a flip would republish was read and was clean — subject to the
 standing caveats, which the clean line says.
 
-## `uphold supply-chain` — six scanners, one verdict
+## `uphold supply-chain` — four scanners, one check of its own, one verdict
 
 ```sh
 uphold supply-chain             # what the pushed range changed
@@ -3330,22 +3330,30 @@ uphold supply-chain --base REV  # what REV..HEAD changed
 uphold supply-chain --all       # every manifest in the tree
 ```
 
-Runs five external scanners: **osv-scanner** (known
+Runs four external scanners: **osv-scanner** (known
 vulnerabilities and reported-malicious packages), **zizmor** (workflow
-security), **cargo-deny** (origin, advisories, bans, licenses), **cargo-vet**
-(has anyone looked at this dependency) and **guarddog** (publisher identity
-and typosquats — the half OSV cannot reach, scoring an *unknown* package on
-how closely its name shadows a popular one), plus gitleaks
-([below](#gitleaks-which-owns-secret-shapes)).
+security), **cargo-deny** (origin, advisories, bans, licenses) and
+**cargo-vet** (has anyone looked at this dependency); one check of its own,
+the **git pins** ([below](#git-pins-git-sources-urls-and-paths)); and
+gitleaks ([below](#gitleaks-which-owns-secret-shapes)).
+
+**There is no heuristic malware scanner.** Earlier releases ran guarddog for
+the window between a malicious release being published and OSV learning of it.
+uphold no longer does. That window is closed at install time instead, by the
+package manager's own release-age setting, which refuses a version younger than
+a chosen number of days (bun's `minimumReleaseAge`, uv's `exclude-newer` with a
+relative duration, Dependabot's `cooldown`). A `[[supply_chain.waive]]` row
+naming guarddog is read and ignored: the run names each such row on stderr and
+is not failed by it, so a policy written earlier keeps working until the row is
+deleted.
 
 The scanners come from the host's own toolchain; none is built or fetched
 here. A tool that is not on PATH is **could not look**: reported by name, exit
 `2` through the same verdict ranking every other command here uses, and never
 a refusal or a pass.
 
-Each of the five also has a **version floor**. Several sections read a
-scanner's own output to learn that it did not look — guarddog's timed-out
-rules, cargo-vet's 255 with an empty stdout, cargo-deny's exit 1 over an
+Each of the four also has a **version floor**. Several sections read a
+scanner's own output to learn that it did not look — cargo-vet's 255 with an empty stdout, cargo-deny's exit 1 over an
 unfetched database, zizmor skipping an unparseable workflow — and each reader
 was measured against one release. Before a scanner runs it is asked its
 version (`--version`; `cargo deny --version` and `cargo vet --version` for the
@@ -3358,7 +3366,6 @@ compared with the floor:
 | zizmor | `1.30.0` |
 | cargo-deny | `0.20.2` |
 | cargo-vet | `0.10.2` |
-| guarddog | `3.2.0` |
 
 A release below its floor is **could not look** for that section, exit `2`,
 naming the tool, the version found and the floor. So is a version command that
@@ -3379,10 +3386,9 @@ are never descended into, because vendored and third-party manifests are out of
 scope. cargo-deny runs once per crate or workspace root against the root
 `deny.toml` (no `deny.toml`, and the section says so and stands down);
 cargo-vet runs only where a `supply-chain/` store exists, because a store
-created automatically is a store nobody owns; guarddog reads each `uv.lock`
-through `uv export`, less the direct references it cannot look up (see
-[below](#what-guarddog-is-not-handed-git-sources-urls-and-paths)), and each
-`package.json` directly, metadata rules only. A
+created automatically is a store nobody owns; the git pins check reads each
+`uv.lock` through `uv export` and each `package.json` directly (see
+[below](#git-pins-git-sources-urls-and-paths)). A
 section with nothing to read says so — "no workflows here" and "checked and
 clean" must never look the same.
 
@@ -3392,7 +3398,7 @@ missing or out of step with its manifest is the tool's refusal rather than a
 file resolved and written for the scan. `uv export` runs with `--frozen`: it
 reads a `uv.lock` as it is and writes nothing, and whether the lock is in step
 with its `pyproject.toml` is uv's question (`uv lock --check`), not the scan's,
-which asks only whether the pinned packages are malicious. A crate root with no
+which reads only the pinned set. A crate root with no
 `Cargo.lock` beside it is asked of the locks that are here before cargo-deny
 is pointed at it, by `cargo metadata --locked` of each crate that has one,
 nearest enclosing first:
@@ -3424,8 +3430,8 @@ Each scanner's own exit code decides; findings are shown, never re-judged.
 The one filter applied is cargo-deny's headline lines, dropping the four
 classes that describe `deny.toml` rather than a dependency.
 
-Three hook ids ship it in `.pre-commit-hooks.yaml`. The five dependency
-scanners never run at `pre-commit`, because each reaches the network.
+Three hook ids ship it in `.pre-commit-hooks.yaml`. The dependency
+sections never run at `pre-commit`, because each reaches the network.
 `uphold-supply-chain` at `pre-push` scans the range; `uphold-supply-chain-all`
 at `manual` carries `--all`, since one entry cannot vary its arguments by
 stage. Pin the first for the push gate and the second for a schedule — only
@@ -3454,8 +3460,7 @@ stage weekly, where a new advisory against an untouched dependency is found.
 "aqua:zizmorcore/zizmor" = "latest"
 "aqua:EmbarkStudios/cargo-deny" = "latest"
 "cargo:cargo-vet" = "latest"          # only where a supply-chain/ store exists
-"pipx:guarddog" = "latest"
-"aqua:astral-sh/uv" = "latest"        # guarddog reads `uv export`, not uv.lock
+"aqua:astral-sh/uv" = "latest"        # the git pins check reads `uv export`, not uv.lock
 "aqua:gitleaks/gitleaks" = "8.30.1"   # only where the policy inherits credentials
 ```
 
@@ -3482,7 +3487,7 @@ jobs:
           extra-args: --all-files --hook-stage manual
 ```
 
-`latest` and not a version for the five dependency scanners: each floor above
+`latest` and not a version for the four dependency scanners: each floor above
 is the oldest release whose output the readers here were measured against, and
 a newer one satisfies it. gitleaks is the exception, pinned for the reason given
 [below](#gitleaks-which-owns-secret-shapes). A lefthook consumer writes the same
@@ -3542,7 +3547,7 @@ non-zero code is could-not-look (exit `2`). Findings print with `--redact`.
 for the `pre-commit` id `uphold-supply-chain-staged`. The range scan sees a
 secret at `pre-push`, after it is in local history and can only be rewritten
 out; the staged scan sees it while unstaging is the fix. gitleaks reads no
-network, so the cost that keeps the other five scanners off the commit is not
+network, so the cost that keeps the other sections off the commit is not
 paid here, and they are not run. The same gate applies: only where the policy inherits `credentials`, the
 same pin, the same config and exit codes, and a missing gitleaks is exit `2`. `--staged` with `--all` or
 `--base` is a usage error rather than one flag winning. A staged finding has no
@@ -3566,15 +3571,15 @@ The changed set is filtered to `Cargo.toml`, `Cargo.lock`, `uv.lock`,
 and the unscanned CI configuration below — that last group is in the set
 *because* nothing reads it, so a push carrying only a `.circleci/config.yml`
 is told the file went unscanned instead of being told there was nothing here.
-A range holding none of them runs none of the first five scanners and says so
+A range holding none of them runs none of the first five sections and says so
 in one line; where gitleaks is not asked for either, that is the whole run and
 it exits `0`. Per scanner: osv-scanner is handed the changed
 lockfiles by path; zizmor the changed workflow files; cargo-deny each crate
 root whose `Cargo.toml` or `Cargo.lock` moved, and the crate whose lock pins a
 moved path dependency; cargo-vet only where a
-`Cargo.lock` moved and a store exists; guarddog pypi each directory with a
+`Cargo.lock` moved and a store exists; the git pins check each directory with a
 `uv.lock` whose `uv.lock` or `pyproject.toml` moved (one with no `uv.lock` is
-named and left out, as the whole-tree walk leaves it out) and guarddog npm each changed
+named and left out, as the whole-tree walk leaves it out) and each changed
 `package.json`; gitleaks each pushed range as `--log-opts=FROM..TO`, whatever
 files it touched.
 
@@ -3628,76 +3633,19 @@ these vendors the way zizmor reads Actions would be added through
 
 [checkov]: https://github.com/bridgecrewio/checkov
 
-### guarddog, which cannot answer in its exit code at all
+### Git pins: git sources, URLs and paths
 
-`guarddog verify` **exits 0 whether it found three high-severity risks or
-none**, in both ecosystems, so its exit code cannot carry a verdict.
-
-`--exit-non-zero-on-finding` is not the remedy. It counts `issues`, which
-includes capability matches: `six` reports `issues: 2` with `risks: []` and
-guarddog's own label `no_risks_detected`, so the flag fails a package guarddog
-itself calls clean. It trades a false negative for a false positive.
-
-So guarddog is run with `--output-format json` and its own `risks` list is
-counted. This is the one scanner whose findings are read here. The count is
-reported, never recomputed, with one named exception: a `metadata_mismatch`
-risk made up only of known metadata normalizations is printed as
-tolerated rather than counted
-([below](#what-npm-writes-at-publish-is-tolerated-by-name)).
-
-The same report carries the could-not-look. A dependency guarddog could not
-download populates `errors` and drops `results` while still exiting 0, and a
-total network failure returns a bare `[]`; both are unread rather than clean.
-A report also needs a `results` object and a `risks` array; missing or mistyped
-fields are unread, never an empty risk list. npm tolerance requires the
-underlying `results.metadata_mismatch` and the risk's `threat_description` to
-agree exactly before their differences are accepted.
-Each submitted registry dependency must appear in the report: npm aliases are
-resolved to their package names and PyPI names are normalized. Missing names
-are reported as unread even when other entries are clean. A reported risk
-still refuses the run, with any missing coverage printed alongside it.
-Its older admission, "Some rules failed to run while scanning \<package\>" at
-exit 0 — the two email-domain rules time out routinely — is still read, and
-still names the packages and how many rules. None of that is a finding: it is
-the record that the question was asked and nobody answered.
-
-### Where guarddog unpacks
-
-guarddog is run with `TMPDIR` set to `$XDG_CACHE_HOME/uphold/guarddog`, else
-`$HOME/.cache/uphold/guarddog`, created owner-only if missing. The caller's
-`TMPDIR` is not passed on, because guarddog's `metadata_mismatch` verdict on
-a PyPI wheel depends on the filesystem it unpacks on.
-
-guarddog 3.2.0 takes the first `os.listdir` entry under the unpacked release
-whose name starts with the package's as the package root. A wheel such as
-pandas 3.0.3 holds two such entries, `pandas/` (which carries a
-`pyproject.toml`) and `pandas-3.0.3.dist-info/` (which carries none), and the
-filesystem decides their order: tmpfs lists the newest first, btrfs in creation
-order, ext4 by a hash seeded per filesystem. The order that reaches the
-manifest reports a mismatch and the other reports nothing, so with `TMPDIR` on
-tmpfs the same lock failed that passed with it on btrfs.
-
-Fixing the directory makes one host give one verdict. It does not make two
-hosts agree when their cache directories are on different filesystems. That
-needs guarddog to choose the package root deterministically, which nothing
-outside its process can do. A relative or empty `XDG_CACHE_HOME` is ignored.
-Where neither variable names an absolute directory, or the directory cannot
-be created, guarddog inherits `TMPDIR` as before and the section prints a line
-saying its verdict may differ with that filesystem.
-
-### What guarddog is not handed: git sources, URLs and paths
-
-`guarddog pypi verify` looks every requirement up on PyPI by name. A PEP 508
-direct reference -- `name @ git+https://...@<commit>`, which is how `uv export`
-spells a uv git source, `name @ https://...`, or a path -- names nothing PyPI
-holds, and guarddog answers it with a 404. So the export is sorted before
-guarddog reads it:
+A PEP 508 direct reference -- `name @ git+https://...@<commit>`, which is how
+`uv export` spells a uv git source, `name @ https://...`, or a path -- names
+nothing an index holds, so no registry and no scanner here can vouch for it.
+This check reads each `uv.lock` through `uv export --frozen` and sorts the
+export:
 
 | In the export | What happens |
 |---|---|
-| `name==version` (an index) | handed to guarddog, as before |
-| `-e ./member`, `./libs/x`, `name @ file://...` inside the repository | handed to guarddog, as before |
-| `name @ git+<url>@<commit>` on the first-party forge under the declared owner | asked of its remote with `git ls-remote`; not handed to guarddog |
+| `name==version` (an index) | not this check's |
+| `-e ./member`, `./libs/x`, `name @ file://...` inside the repository | the repository's own; nothing to check |
+| `name @ git+<url>@<commit>` on the first-party forge under the declared owner | asked of its remote with `git ls-remote` |
 | a git source under any other host or owner | refused by name, exit `1` |
 | `name @ https://...` or any other direct URL | refused by name, exit `1` |
 | a path that resolves outside the repository, through a link or not, or does not resolve | refused by name, exit `1` |
@@ -3726,175 +3674,18 @@ variables removed; a remote it cannot answer for (no network, authentication
 refused, git not on PATH) is could-not-look, exit `2`, with git's own reason.
 An `owner_from` command that fails is could-not-look for the same reason.
 
-An export with nothing left that an index resolves is not handed to guarddog
-at all: guarddog handed an empty list answers `[]`, which this section reads as
-a network failure.
+The same rule applies to an npm `package.json`'s `dependencies`. Its git
+dependencies (`git+<url>#<ref>`, `git://...`, `github:`, `gitlab:` and
+`bitbucket:` specifiers, and the `owner/repo` shorthand) are held to the same
+first-party rule and the same remote check. Its commit is the one `bun.lock` or
+`package-lock.json` records, read from the manifest's directory and each one
+above it up to the repository root. Its `#<ref>`, where it names one, must
+point at that commit if it is a tag; if it is a branch, the commit must be what
+some ref points at, as for a commit the lock names alone. A git dependency no
+lock records a commit for, and whose `#` is not itself a commit, is refused by
+name: there is no pin to check. `devDependencies` are not read.
 
-`guarddog npm verify` reads a `package.json`'s `dependencies` and asks npm for
-each by name, so an npm git dependency is the same 404. Its git dependencies
-(`git+<url>#<ref>`, `git://...`, `github:`, `gitlab:` and `bitbucket:`
-specifiers, and the `owner/repo` shorthand) are taken out and guarddog is
-handed the manifest without them; a manifest with none is handed over as it
-is. Each git dependency is held to the same first-party rule and the same
-remote check. Its commit is the one `bun.lock` or `package-lock.json` records,
-read from the manifest's directory and each one above it up to the
-repository root. Its `#<ref>`, where it names one, must point at that commit
-if it is a tag; if it is a branch, the commit must be what some ref points at,
-as for a commit the lock names alone. A git dependency no lock records a
-commit for, and whose `#` is not itself a commit, is refused by name: there is
-no pin to check. Under `GUARDDOG_NPM_INCLUDE_DEV_DEPENDENCIES=true`
-guarddog reads `devDependencies` as well, and they are sorted the same way. A
-manifest with nothing npm resolves among what guarddog reads -- no
-`dependencies`, only `devDependencies` without that setting, or only git
-dependencies -- is not handed to guarddog, for the same `[]`; the section
-says so and passes. A manifest that
-does not parse is still handed over, for guarddog to say so.
-
-### What npm writes at publish is tolerated, by name
-
-guarddog's `metadata_mismatch` compares the registry's manifest for a release
-with the `package.json` inside its tarball. `npm publish` normalizes the
-manifest it uploads and leaves the tarball's file as written, so some
-differences are written by npm, not by the package author. They recur on
-every release, so a version-keyed waiver would need a new row each time. A
-`metadata_mismatch` risk on an npm package whose every difference is on this
-list is not counted:
-
-| Normalization | Registry | Tarball | npm's step |
-|---|---|---|---|
-| npm default start script | `scripts.start` = `node server.js` | no `scripts.start` | `serverjs`: a package with `server.js` at its root and no `start` |
-| npm strips a leading node_modules/.bin/ | `scripts.<key>` = `X` | `scripts.<key>` = `./node_modules/.bin/X` or `node_modules/.bin/X` | `scriptpath`: one leading prefix removed |
-
-The list is `PUBLISH_NORMALIZATIONS` in `src/supply.rs`. A tolerated risk is
-still printed, naming each normalization it accepted:
-
-```
-   tolerated: metadata_mismatch on npm:react-dom@19.2.0 at web -- npm default start script (scripts.start = "node server.js")
-```
-
-The risk is counted as before, and a waiver still applies to it, when any of
-these is true:
-
-- the description lists any other difference, such as a second script, a
-  `dependencies` or `devDependencies` entry, or `main`;
-- a `start` has a value other than `node server.js`, or the tarball has its own
-  `start`;
-- the `node_modules/.bin/` text appears anywhere but the start of the value;
-- the description has a line that does not read as exactly one difference.
-  guarddog does not escape the values, so a line in which either the
-  `: Manifest("` or the `"), package.json("` marker appears more than once
-  is not read.
-
-`"install": "node-gyp rebuild"`, which npm adds where `binding.gyp` exists,
-is not on the list. An install script runs at install time, so it is not the
-same risk as `start`.
-
-guarddog's report does not list the tarball's files, so the `server.js` that
-npm's step requires is not confirmed. guarddog also prints an absent value as
-`None`, the same way it prints a literal `"None"`.
-
-### PyPI optional extras require release evidence
-
-guarddog compares every `requires_dist` name with the required dependencies
-in `pyproject.toml`, including names declared only under optional extras. Its
-report drops the markers, so uphold fetches the exact scanned release from
-[PyPI's release JSON endpoint](https://docs.pypi.org/api/json/) only when the
-entire difference consists of names present in PyPI metadata and absent from
-`pyproject.toml`. It verifies the response's package and version, then parses
-all `requires_dist` entries with `pyreq`.
-
-A name is tolerated only when every occurrence has a simple positive
-`extra == "name"` marker (including the reversed equality). An occurrence
-with no marker, a platform marker, a conjunction or an alternative keeps the
-finding. This closed form covers the ordinary extras declarations without
-evaluating conditions against the host. All reported names must qualify. Both copies of guarddog's
-description must agree; malformed reports, unknown differences, missing
-metadata or unparseable requirements retain the finding and remain eligible
-for an exact-version waiver.
-
-The lookup uses HTTPS at `pypi.org`, refuses redirects, and is bounded to
-15 seconds and 2 MiB per response. A failed lookup prints why the finding was
-retained. A successful normalization prints `tolerated:` with the verified
-names and release. No package-wide exemption or cross-run metadata cache is
-created. This verifies registry metadata, not the artifact contents; PyPI
-metadata can differ from the uploaded artifact. This does not repair guarddog's order-dependent choice of a wheel
-root, so an unmatched PyPI metadata waiver is still not called removable.
-
-### Waiving a confirmed guarddog false positive
-
-Because the findings are read here, a finding somebody has looked at and judged
-a false positive has to be recordable here too. Without that, one such finding
-refuses every push that touches the lockfile, and the only levers are
-`UPHOLD_ALLOW` per invocation or dropping guarddog. The waiver goes in the
-repository's own policy:
-
-```toml
-[[supply_chain.waive]]
-scanner = "guarddog"
-package = "pypi:pandas@3.0.6"          # <ecosystem>:<name>@<version>; pypi or npm
-check = "metadata_mismatch"            # the guarddog rule, as its report names it
-reason = "compares optional extras against the required dependencies"
-```
-
-- **It is keyed on the version.** The next release is a different package with
-  its own reasons to be suspicious or not, so a bump is read fresh. For npm the
-  version is the one guarddog resolved, not the range in `package.json`.
-- **A waived finding is still printed**, as `waived: metadata_mismatch on
-  pypi:pandas@3.0.6 at <dir> -- <reason>`. The verdict says what was not held
-  against the push; it does not hide it.
-- **A waiver that matched nothing is reported**, where the run could have
-  matched it: the package appeared in a report, or `--all` read its ecosystem.
-  A range scan reads only the manifests that moved, so a waiver about one that
-  did not move is not called stale. A `pypi` waiver for `metadata_mismatch` is
-  reported without the advice to remove it, because whether that check reaches
-  the release's manifest depends on the host's filesystem
-  ([above](#where-guarddog-unpacks)); another host may still need it.
-- **A nested repository's own waivers cover its own tree.** Scanned from a
-  superproject, a manifest inside a submodule, or inside any directory that is
-  a repository root with a policy, is judged against the root's waivers and the
-  `[[supply_chain.waive]]` rows of every enclosing repository with a policy,
-  between the root and the manifest. Each policy is the one `uphold` would
-  load if run in that directory: the same `policy/principles.toml` or
-  `policy/rg-policy.toml`, the same boundary at `.git`, the same loader with
-  its `[inherit]`. A repository's rows cover its whole tree, its submodules'
-  manifests included, as they do when it is scanned on its own; a repository
-  without a policy adds nothing. They never cover a manifest outside that
-  tree: not the superproject's own, not a sibling's, and not the repository's
-  around it. The line names the policy whose row matched:
-
-  ```
-     waived (leaf/policy/principles.toml): typosquatting on npm:left-pad@1.3.0 at <dir> -- <reason>
-  ```
-
-  The innermost repository's rows are consulted first, then each one outward,
-  then the root's. An outer row, nested or the root's, that would also have
-  covered the risk is a repeat of the row that matched. Over the whole tree, a
-  row that only ever repeated an inner one is named as a copy, rather than
-  called a match:
-
-  ```
-     waiver repeats leaf/policy/principles.toml: typosquatting on npm:left-pad@1.3.0 -- a repository nearer the manifest waives it in its own policy, so this copy can be removed
-     waiver in outer/policy/principles.toml repeats outer/leaf/policy/principles.toml: ...
-  ```
-
-  A range scan reads only the manifests that moved, so it cannot tell a copy
-  from a row that also covers a manifest it did not read, and says neither.
-  A nested repository's row that matched nothing is not reported by the
-  superproject. That repository's own scan reports it, and that repository is
-  the one that can remove it. An enclosing policy that does not load leaves
-  the manifests in its tree unchecked, which is could-not-look and exit `2`
-  naming the manifest, the repository and the loader's error. It is never
-  read as having no waivers.
-- `scanner` is `guarddog` alone. The other scanners carry their own
-  suppression in their own configuration (`osv-scanner.toml`, `deny.toml`,
-  zizmor's config, cargo-vet's audits), and a second list here would be two
-  sets of exceptions free to disagree.
-- Refused at load, as exit `2`: another scanner, a `package` without an
-  ecosystem or a version, an empty `check` or `reason`, the same waiver twice,
-  and `[supply_chain]` in a bundled set or an `inherit.paths` file, which have
-  no lockfile of their own.
-
-### How the other three report could-not-look
+### How the scanners report could-not-look
 
 `tool_read()` hands each scanner's exit code, stdout and stderr to a reader
 that may name a could-not-look. A tool whose exit code already separates the
@@ -3921,8 +3712,8 @@ audit exit `255` and name them, which is a finding. A run that could not happen
 at all — no store to read, a store that does not parse, a lockfile `--locked`
 refuses — also exits `255`. `tool()` answers by exit code, and every non-zero
 code is a verdict, so the could-not-look half currently reports as out of step.
-This is the guarddog defect with the codes reversed: guarddog exits `0` on work
-it did not do, cargo-vet exits `255` on work it could not start.
+A scanner that exits `0` on work it did not do would be the same defect with the
+codes reversed; cargo-vet exits `255` on work it could not start.
 
 The exit code is the only place the two are confused. They separate cleanly on
 the stream: a vetting failure prints `Vetting Failed!` to stdout and leaves

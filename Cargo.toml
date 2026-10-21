@@ -112,11 +112,6 @@ tree-sitter-go = "0.25"
 # positional word after them. Where this reader and git's `split_cmdline`
 # disagree, `expand_alias` says which case and how it is closed.
 shell-words = "1"
-# The exact-release PyPI metadata used to verify optional extras, with bounded
-# HTTPS requests and no asynchronous runtime.
-ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
-# Parse PEP 508 requirements before accepting the closed optional-extra form.
-pyreq = "0.2.0"
 # JUnit XML, for `UPHOLD_JUNIT`: the evidence format the gate tier already
 # writes, publishes and links, so a guard run is read by the same publisher with
 # nothing of uphold's own to parse. A library rather than a hand-rolled writer

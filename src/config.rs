@@ -614,130 +614,63 @@ impl Override {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SupplyChain {
-    /// `[[supply_chain.waive]]`: findings this repository has looked at and
-    /// holds not to be a reason to refuse a push. See [`Waiver`].
+    /// `[[supply_chain.waive]]`: rows written for the guarddog section that
+    /// `uphold supply-chain` used to have. Still read, so that a policy written
+    /// before the section was removed keeps loading; every row is ignored, and
+    /// each is named as ignored when the command runs. See [`Waiver`].
     #[serde(default)]
     pub waive: Vec<Waiver>,
     /// The forge host a first-party git dependency lives on, for the owner the
     /// policy declares: `github.com` where this is not written. A git source
-    /// under that host and owner is checked against its remote rather than
-    /// handed to guarddog, which looks names up on `PyPI`.
+    /// under that host and owner is checked against its remote; any other is
+    /// refused.
     #[serde(default)]
     pub forge_host: Option<String>,
 }
 
-/// The scanners a waiver may name. guarddog alone: it is the one scanner whose
-/// findings `uphold supply-chain` reads out of its report, and the other four
-/// each carry their own suppression in their own configuration -- an OSV
-/// `osv-scanner.toml`, a cargo-deny `deny.toml`, a zizmor config, cargo-vet's
-/// audits -- where a second one here would be two lists of exceptions free to
-/// disagree.
-const WAIVABLE_SCANNERS: [&str; 1] = ["guarddog"];
+/// The scanner a retired waiver may still name. uphold no longer runs it, so
+/// the row is read and ignored; naming any other scanner is an error, as it
+/// always was, because every scanner that is run carries its own suppression in
+/// its own configuration.
+const RETIRED_SCANNER: &str = "guarddog";
 
-/// The ecosystems a guarddog waiver may name, as its `package` spells them.
-const WAIVABLE_ECOSYSTEMS: [&str; 2] = ["pypi", "npm"];
-
-/// One confirmed false positive: a scanner's rule, on one package at one
-/// version, with the reason it was judged one.
+/// A `[[supply_chain.waive]]` row written when the guarddog section existed.
 ///
-/// Keyed on the VERSION, so a bump is read fresh: what was looked at is that
-/// release, and the next one is a different tarball with a different reason to
-/// be suspicious or not. A waived finding is still printed, marked waived with
-/// its reason, so the verdict says what was not held against the push rather
-/// than hiding it, and a waiver that matched nothing in a run that read its
-/// ecosystem is reported, so a stale one gets removed.
+/// It waives nothing now. It is kept loadable so a policy that still carries
+/// one is told so, by `uphold supply-chain`, rather than refused at load: the
+/// row is a leftover to delete, not a policy error.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Waiver {
     /// `guarddog`.
     pub scanner: String,
-    /// `<ecosystem>:<name>@<version>` -- `pypi:pandas@3.0.6`,
-    /// `npm:@scope/pkg@1.2.0`.
+    /// `<ecosystem>:<name>@<version>`.
     pub package: String,
-    /// The scanner's rule, as it names it: guarddog's `metadata_mismatch`.
+    /// The scanner's rule, as it named it.
     pub check: String,
-    /// Why this finding is not a reason to refuse. Required, because a waiver
-    /// nobody can re-judge is a switch nobody can turn back on.
+    /// Why the finding was judged a false positive.
     pub reason: String,
 }
 
 impl Waiver {
-    /// `(ecosystem, name, version)`, or `None` where `package` is not the
-    /// three-part spelling. Validated at load, so a loaded waiver always has
-    /// one.
-    pub(crate) fn parts(&self) -> Option<(&str, &str, &str)> {
-        let (ecosystem, rest) = self.package.split_once(':')?;
-        // `rsplit`, because an npm scope carries its own `@`.
-        let (name, version) = rest.rsplit_once('@')?;
-        (!name.is_empty() && !version.is_empty()).then_some((ecosystem, name, version))
-    }
-
-    /// Whether this waiver covers `check` reported on `name` at `version` in
-    /// `ecosystem`.
-    pub(crate) fn covers(&self, ecosystem: &str, name: &str, version: &str, check: &str) -> bool {
-        self.check == check
-            && self
-                .parts()
-                .is_some_and(|parts| parts == (ecosystem, name, version))
-    }
-
     fn validate(&self) -> Result<()> {
-        let at = format!("`[[supply_chain.waive]]` for {:?}", self.package);
-        if !WAIVABLE_SCANNERS.contains(&self.scanner.as_str()) {
+        if self.scanner != RETIRED_SCANNER {
             return Err(Fatal::new(format!(
-                "{at} names the scanner {:?}. A waiver here is for {}; every other scanner \
-                 carries its own suppression in its own configuration, and a second list \
-                 here would be two sets of exceptions free to disagree",
-                self.scanner,
-                WAIVABLE_SCANNERS.join(", ")
-            )));
-        }
-        match self.parts() {
-            Some((ecosystem, _, _)) if WAIVABLE_ECOSYSTEMS.contains(&ecosystem) => {}
-            _ => {
-                return Err(Fatal::new(format!(
-                    "{at}: `package` is `<ecosystem>:<name>@<version>`, with the ecosystem one \
-                     of {} -- `pypi:pandas@3.0.6`. A waiver with no version would outlive \
-                     the release it was judged on",
-                    WAIVABLE_ECOSYSTEMS.join(", ")
-                )));
-            }
-        }
-        if self.check.trim().is_empty() {
-            return Err(Fatal::new(format!(
-                "{at}: `check` is empty. Name the scanner's rule, as guarddog reports it \
-                 (`metadata_mismatch`): a waiver of every rule on a package is not a \
-                 finding somebody looked at"
-            )));
-        }
-        if self.reason.trim().is_empty() {
-            return Err(Fatal::new(format!(
-                "{at}: `reason` is empty. Say why the finding is not a reason to refuse, so \
-                 the next reader can judge whether it still holds"
+                "`[[supply_chain.waive]]` for {:?} names the scanner {:?}. No scanner takes a \
+                 waiver here any more (the one that did, {RETIRED_SCANNER}, was removed); every \
+                 scanner carries its own suppression in its own configuration, and a second \
+                 list here would be two sets of exceptions free to disagree",
+                self.package, self.scanner
             )));
         }
         Ok(())
     }
 }
 
-/// Every waiver this policy declares, held to its shape, and none twice.
+/// Every waiver this policy declares, held to its shape.
 fn validate_waivers(path: &Path, waivers: &[Waiver]) -> Result<()> {
-    for (index, waiver) in waivers.iter().enumerate() {
+    for waiver in waivers {
         waiver.validate().map_err(|error| Fatal::at(path, error))?;
-        if waivers.iter().take(index).any(|earlier| {
-            earlier.scanner == waiver.scanner
-                && earlier.package == waiver.package
-                && earlier.check == waiver.check
-        }) {
-            return Err(Fatal::at(
-                path,
-                format!(
-                    "`[[supply_chain.waive]]` waives {} on {} twice. Keep one, with the \
-                     reason that holds",
-                    waiver.check, waiver.package
-                ),
-            ));
-        }
     }
     Ok(())
 }
@@ -4320,10 +4253,13 @@ mod tests {
         assert_eq!(unicode.builtin(), Some("prevent-unusual-unicode-in-files"));
     }
 
-    /// A waiver belongs to the repository whose lockfile it is about: refused
-    /// in a file somebody else's `[inherit]` line reads, and refused twice.
+    /// A retired waiver belongs to the repository whose lockfile it was about:
+    /// refused in a file somebody else's `[inherit]` line reads. It still loads
+    /// in the repository's own file, so removing guarddog does not turn a
+    /// leftover row into a policy error, and a row naming any other scanner is
+    /// refused.
     #[test]
-    fn a_supply_chain_waiver_is_the_repositorys_own_and_is_written_once() {
+    fn a_retired_supply_chain_waiver_loads_and_is_the_repositorys_own() {
         let waiver = "[[supply_chain.waive]]\nscanner = \"guarddog\"\n\
              package = \"pypi:pandas@3.0.6\"\ncheck = \"metadata_mismatch\"\n\
              reason = \"extras read as required\"\n";
@@ -4335,19 +4271,13 @@ mod tests {
         let error = load(&dir, &path).unwrap_err().to_string();
         assert!(error.contains("an inherited file has none"), "{error}");
 
-        let twice = policy_from(&format!("{waiver}\n{waiver}"))
-            .unwrap_err()
-            .to_string();
-        assert!(twice.contains("twice"), "{twice}");
-
         let once = policy_from(waiver).unwrap();
         assert_eq!(once.supply_chain.waive.len(), 1);
-        assert!(once.supply_chain.waive.first().unwrap().covers(
-            "pypi",
-            "pandas",
-            "3.0.6",
-            "metadata_mismatch"
-        ));
+
+        let other = policy_from(&waiver.replace("guarddog", "osv"))
+            .unwrap_err()
+            .to_string();
+        assert!(other.contains("names the scanner"), "{other}");
     }
 
     /// `require_any_link = false` on the `broken-links` rule, for a repository

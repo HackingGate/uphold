@@ -1,29 +1,23 @@
-//! What in a `uv export` guarddog can look up, and what it cannot.
+//! The git sources a lock or a manifest names, and what is done with them.
 //!
-//! `guarddog pypi verify` looks every requirement up on `PyPI` by name. A
-//! requirement that is a DIRECT REFERENCE -- PEP 508 `name @ <url>`, which is
+//! A requirement that is a DIRECT REFERENCE -- PEP 508 `name @ <url>`, which is
 //! how `uv export` spells a uv git source, a direct URL and a `file://` path --
-//! names something `PyPI` never held, so guarddog answers a 404, and the section
-//! read that as could-not-look. Every repository depending on its own
-//! first-party package through a git source was exit 2 on every push, for a
-//! question addressed to the wrong registry.
-//!
-//! So the export is sorted before guarddog sees it, and nothing is dropped
-//! silently. What resolves from an index goes to guarddog unchanged. A path
-//! inside the tree -- a workspace member, the project itself -- goes to it
-//! unchanged too, as it always did. A git source on the repository's own forge,
-//! under the owner the policy DECLARES, is asked of its remote instead: the
-//! locked commit must be what some ref there points at, and a tag the lock
-//! names must point at that commit. Everything else is refused by name: a git
-//! source under anybody else, a direct URL, a path outside the tree. Those are
-//! dependencies no scanner here can vouch for, and skipping them would be a
-//! pass nobody earned.
+//! names something no index holds, so no registry and no scanner here can vouch
+//! for it. So the export is sorted, and nothing is dropped silently. What
+//! resolves from an index is not this section's. A path inside the tree -- a
+//! workspace member, the project itself -- is the repository's own. A git
+//! source on the repository's own forge, under the owner the policy DECLARES, is
+//! asked of its remote: the locked commit must be what some ref there points
+//! at, and a tag the lock names must point at that commit. Everything else is
+//! refused by name: a git source under anybody else, a direct URL, a path
+//! outside the tree. Those are dependencies nothing here can vouch for, and
+//! skipping them would be a pass nobody earned.
 //!
 //! The owner is the policy's declared one and never `origin`'s, for the reason
 //! [`crate::config::PolicyFile::owner`] gives: a first-party set read off the
 //! remote is repointed by the same command that repoints the remote.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Stdio;
 
@@ -50,14 +44,6 @@ pub(super) struct GitPin {
 /// One `uv export`, sorted.
 #[derive(Debug, Default)]
 pub(super) struct Sorted {
-    /// The export with every direct reference outside the tree taken out: what
-    /// guarddog is handed.
-    pub kept: String,
-    /// How many of the kept lines are requirements an index resolves, which is
-    /// what guarddog can look up. Zero is a run with nothing to ask it.
-    pub indexed: usize,
-    /// Canonical index package names that guarddog must report on.
-    pub expected: BTreeSet<String>,
     /// Git sources, for the owner check and the remote.
     pub git: Vec<GitPin>,
     /// Direct references refused as they stand, each a line naming it.
@@ -74,36 +60,24 @@ pub(super) fn sort(export: &str, directory: &Path, root: &Path, lock: Option<&st
     let mut sorted = Sorted::default();
     for line in export.lines() {
         let trimmed = line.trim();
-        let keep = if trimmed.is_empty() || trimmed.starts_with('#') || line.starts_with(' ') {
-            true
-        } else if let Some(path) = trimmed.strip_prefix("-e ").map(str::trim) {
-            path_inside(path, directory, root, &mut sorted)
-        } else if trimmed.starts_with('-') {
-            true
-        } else if is_path(trimmed) {
-            path_inside(trimmed, directory, root, &mut sorted)
-        } else if let Some((name, reference)) = direct_reference(trimmed) {
-            by_reference(name, reference, directory, root, &tags, &mut sorted)
-        } else {
-            sorted.indexed += 1;
-            let name = trimmed
-                .split(|character: char| {
-                    !character.is_ascii_alphanumeric() && !matches!(character, '-' | '_' | '.')
-                })
-                .next()
-                .unwrap_or(trimmed);
-            sorted.expected.insert(normalise(name));
-            true
-        };
-        if keep {
-            sorted.kept.push_str(line);
-            sorted.kept.push('\n');
+        if trimmed.is_empty() || trimmed.starts_with('#') || line.starts_with(' ') {
+            continue;
         }
+        if let Some(path) = trimmed.strip_prefix("-e ").map(str::trim) {
+            path_inside(path, directory, root, &mut sorted);
+        } else if trimmed.starts_with('-') {
+            // An option line of the export, not a requirement.
+        } else if is_path(trimmed) {
+            path_inside(trimmed, directory, root, &mut sorted);
+        } else if let Some((name, reference)) = direct_reference(trimmed) {
+            by_reference(name, reference, directory, root, &tags, &mut sorted);
+        }
+        // Anything else is an index requirement, which is not this check's.
     }
     sorted
 }
 
-/// A direct reference, sorted: whether its line stays in what guarddog reads.
+/// A direct reference, sorted.
 fn by_reference(
     name: &str,
     reference: &str,
@@ -111,7 +85,7 @@ fn by_reference(
     root: &Path,
     tags: &BTreeMap<(String, String), String>,
     sorted: &mut Sorted,
-) -> bool {
+) {
     if let Some(git) = reference.strip_prefix("git+") {
         match split_git(git) {
             Some((remote, commit)) => {
@@ -129,35 +103,34 @@ fn by_reference(
                  no pin to check"
             )),
         }
-        return false;
+        return;
     }
     if let Some(path) = reference.strip_prefix("file://") {
-        return path_inside(path, directory, root, sorted);
+        path_inside(path, directory, root, sorted);
+        return;
     }
     sorted.refused.push(format!(
-        "{name} is a direct URL ({reference}): no index holds it, so guarddog cannot look it \
-         up and nothing here vouches for it"
+        "{name} is a direct URL ({reference}): no index holds it and nothing here vouches \
+         for it"
     ));
-    false
 }
 
-/// Whether a path requirement stays: inside the tree it does, as it always
-/// did; outside, it is refused by name.
+/// A path requirement: inside the tree it is the repository's own; outside, it
+/// is refused by name.
 ///
 /// Both sides are resolved through the filesystem, so a link inside the tree
 /// that points out of it is outside. A path that does not resolve is refused
 /// too: nothing can say where it lands.
-fn path_inside(path: &str, directory: &Path, root: &Path, sorted: &mut Sorted) -> bool {
+fn path_inside(path: &str, directory: &Path, root: &Path, sorted: &mut Sorted) {
     let joined = directory.join(path);
     match (joined.canonicalize(), root.canonicalize()) {
-        (Ok(target), Ok(tree)) if target.starts_with(&tree) => true,
+        (Ok(target), Ok(tree)) if target.starts_with(&tree) => {}
         (Ok(target), Ok(_)) => {
             sorted.refused.push(format!(
                 "{path} is a path dependency outside this repository ({}): no index holds it \
                  and no scanner here reads it",
                 target.display()
             ));
-            false
         }
         (Err(error), _) | (_, Err(error)) => {
             sorted.refused.push(format!(
@@ -165,7 +138,6 @@ fn path_inside(path: &str, directory: &Path, root: &Path, sorted: &mut Sorted) -
                  whether it is inside this repository cannot be said",
                 directory.display()
             ));
-            false
         }
     }
 }
@@ -255,120 +227,60 @@ fn tags_in_lock(lock: &str) -> BTreeMap<(String, String), String> {
 
 /// One `package.json`, sorted the same way.
 ///
-/// `guarddog npm verify` reads a manifest's `dependencies` and asks npm for
-/// each by name, so a git dependency -- `git+https://…#v0.1.0`,
-/// `github:owner/repo`, `owner/repo` -- is a 404 there just as a uv git source
-/// is on `PyPI`. The git dependencies come out for the owner check and the
-/// remote; the rest of the manifest is handed to guarddog unchanged.
+/// A git dependency -- `git+https://...#v0.1.0`, `github:owner/repo`,
+/// `owner/repo` -- is held by no registry, just as a uv git source is held by no
+/// index. The git dependencies come out for the owner check and the remote.
 #[derive(Debug, Default)]
 pub(super) struct NpmSorted {
-    /// The manifest without its git dependencies, where it had any: what
-    /// guarddog is handed instead of the file.
-    pub kept: Option<String>,
-    /// How many dependencies are left for npm to resolve.
-    pub indexed: usize,
-    /// Real npm package names, with aliases merged as guarddog merges them.
-    pub expected: BTreeSet<String>,
-    /// Whether the manifest parsed as a JSON object, so that `indexed` counts
-    /// its `dependencies` -- none at all, or only `devDependencies`, being
-    /// zero -- rather than a file nobody could read.
-    pub read: bool,
     /// Git dependencies, for the owner check and the remote.
     pub git: Vec<GitPin>,
     /// Git dependencies refused as they stand, each a line naming it.
     pub refused: Vec<String>,
 }
 
-/// Sort a `package.json`'s `dependencies`, and its `devDependencies` too where
-/// `include_dev` says guarddog reads them
-/// (`GUARDDOG_NPM_INCLUDE_DEV_DEPENDENCIES=true`). `locks` are the texts of the
+/// Sort a `package.json`'s `dependencies`. `locks` are the texts of the
 /// `bun.lock` and `package-lock.json` files that may record what each git
-/// dependency resolved to, nearest first. A manifest that does not parse is
-/// left whole, for guarddog to say so.
-pub(super) fn sort_npm(manifest: &str, locks: &[String], include_dev: bool) -> NpmSorted {
+/// dependency resolved to, nearest first. A manifest that does not parse has
+/// no git dependency to find.
+pub(super) fn sort_npm(manifest: &str, locks: &[String]) -> NpmSorted {
     let mut sorted = NpmSorted::default();
-    let Ok(serde_json::Value::Object(mut parsed)) = serde_json::from_str(manifest) else {
+    let Ok(serde_json::Value::Object(parsed)) = serde_json::from_str(manifest) else {
         return sorted;
     };
-    sorted.read = true;
-    let groups: &[&str] = if include_dev {
-        &["dependencies", "devDependencies"]
-    } else {
-        &["dependencies"]
+    let Some(serde_json::Value::Object(dependencies)) = parsed.get("dependencies") else {
+        return sorted;
     };
-    let mut taken = false;
-    for group in groups {
-        let Some(serde_json::Value::Object(dependencies)) = parsed.get_mut(*group) else {
+    for (name, spec) in dependencies {
+        let Some((remote, fragment)) = spec.as_str().and_then(npm_git) else {
             continue;
         };
-        dependencies.retain(|name, spec| {
-            let Some((remote, fragment)) = spec.as_str().and_then(npm_git) else {
-                return true;
-            };
-            taken = true;
-            let fragment = fragment.filter(|fragment| !fragment.starts_with("semver:"));
-            let commit = locks
-                .iter()
-                .find_map(|lock| locked_commit(lock, name))
-                .or_else(|| {
-                    fragment
-                        .filter(|fragment| is_commit(fragment))
-                        .map(str::to_owned)
-                });
-            match commit {
-                Some(commit) => sorted.git.push(GitPin {
-                    name: name.clone(),
-                    remote,
-                    tag: fragment
-                        .filter(|fragment| !commit.starts_with(*fragment))
-                        .map(str::to_owned),
-                    commit,
-                    committish: true,
-                }),
-                None => sorted.refused.push(format!(
-                    "{name} is a git dependency ({remote}), and no bun.lock or \
-                     package-lock.json records the commit it resolved to, so there is no \
-                     pin to check"
-                )),
-            }
-            false
-        });
-        sorted.indexed += dependencies.len();
-        for (name, spec) in dependencies.iter() {
-            sorted
-                .expected
-                .insert(npm_identity(name, spec.as_str()).to_owned());
+        let fragment = fragment.filter(|fragment| !fragment.starts_with("semver:"));
+        let commit = locks
+            .iter()
+            .find_map(|lock| locked_commit(lock, name))
+            .or_else(|| {
+                fragment
+                    .filter(|fragment| is_commit(fragment))
+                    .map(str::to_owned)
+            });
+        match commit {
+            Some(commit) => sorted.git.push(GitPin {
+                name: name.clone(),
+                remote,
+                tag: fragment
+                    .filter(|fragment| !commit.starts_with(*fragment))
+                    .map(str::to_owned),
+                commit,
+                committish: true,
+            }),
+            None => sorted.refused.push(format!(
+                "{name} is a git dependency ({remote}), and no bun.lock or \
+                 package-lock.json records the commit it resolved to, so there is no \
+                 pin to check"
+            )),
         }
     }
-    if taken {
-        sorted.kept = serde_json::to_string(&parsed).ok();
-    }
     sorted
-}
-
-/// The package guarddog 3.2.0's `resolve_npm_alias` asks the registry for.
-/// Invalid alias spellings stay under their manifest name, as they do there.
-fn npm_identity<'a>(name: &'a str, spec: Option<&'a str>) -> &'a str {
-    let Some(alias) = spec.and_then(|spec| spec.strip_prefix("npm:")) else {
-        return name;
-    };
-    let after_scope = alias.strip_prefix('@').unwrap_or(alias);
-    let package_end = after_scope.find('@').map_or(alias.len(), |index| {
-        index + usize::from(alias.starts_with('@'))
-    });
-    let Some(package) = alias.get(..package_end) else {
-        return name;
-    };
-    let valid = !package.is_empty()
-        && !package.chars().any(char::is_whitespace)
-        && (!alias.starts_with('@')
-            || package.strip_prefix('@').is_some_and(|scoped| {
-                scoped.split_once('/').is_some_and(|(scope, scoped_name)| {
-                    !scope.is_empty() && !scoped_name.is_empty() && !scope.contains('/')
-                })
-            }))
-        && alias.get(package_end..) != Some("@");
-    if valid { package } else { name }
 }
 
 /// The remote and the `#` fragment of an npm git dependency, or `None` for
@@ -514,8 +426,8 @@ pub(super) fn check(
     if !ours {
         return Checked::Refused(format!(
             "{name} is a git source under {}/{}, not under {}/{owner}, which is this \
-             repository's declared owner: no registry holds it, so guarddog cannot look it \
-             up, and nothing here vouches for it",
+             repository's declared owner: no registry holds it, and nothing here \
+             vouches for it",
             host.as_deref().unwrap_or("no host"),
             under.unwrap_or("no owner"),
             first_party.host
@@ -637,7 +549,7 @@ mod tests {
     const OTHER: &str = "0000000000000000000000000000000000000001";
 
     #[test]
-    fn an_export_is_sorted_into_index_tree_git_and_refused() {
+    fn an_export_is_sorted_into_git_and_refused() {
         let base = crate::fixture::scratch("supply-references");
         let root = base.join("repo");
         let service = root.join("service");
@@ -659,14 +571,6 @@ mod tests {
             service.join("vendor-copy").display()
         );
         let sorted = sort(&export, &service, &root, None);
-        assert_eq!(sorted.indexed, 2);
-        assert!(sorted.kept.contains("-e ./packages/member"));
-        assert!(sorted.kept.contains("./libs/inner"));
-        assert!(sorted.kept.contains("local-dep @ file://"));
-        assert!(!sorted.kept.contains("example-kit"));
-        assert!(!sorted.kept.contains("wheel-dep"));
-        assert!(!sorted.kept.contains("elsewhere"));
-        assert!(!sorted.kept.contains("not-there"));
         assert_eq!(
             sorted.git,
             vec![GitPin {
@@ -702,7 +606,6 @@ mod tests {
         std::fs::create_dir_all(base.join("outside")).unwrap();
         std::os::unix::fs::symlink(base.join("outside"), root.join("looks-inside")).unwrap();
         let sorted = sort("-e ./looks-inside\n", &root, &root, None);
-        assert!(sorted.kept.is_empty(), "{}", sorted.kept);
         assert_eq!(sorted.refused.len(), 1, "{:?}", sorted.refused);
     }
 
@@ -818,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn a_manifest_loses_its_git_dependencies_to_the_lock_and_keeps_the_rest() {
+    fn a_manifest_git_dependency_takes_its_commit_from_the_lock() {
         let manifest = "{\"name\":\"app\",\"dependencies\":{\
             \"@example-org/kit\":\"git+https://github.com/example-org/kit.git#v0.1.0\",\
             \"loose\":\"github:example-org/loose\",\
@@ -827,8 +730,7 @@ mod tests {
         let bun = format!(
             "{{\n  \"packages\": {{\n    \"@example-org/kit\": [\"@example-org/kit@git+https://github.com/example-org/kit.git#{COMMIT}\", {{}}, \"{COMMIT}\"],\n  }}\n}}\n"
         );
-        let sorted = sort_npm(manifest, &[bun], false);
-        assert_eq!(sorted.indexed, 1);
+        let sorted = sort_npm(manifest, &[bun]);
         assert_eq!(
             sorted.git,
             vec![GitPin {
@@ -841,60 +743,30 @@ mod tests {
         );
         assert_eq!(sorted.refused.len(), 1, "{:?}", sorted.refused);
         assert!(sorted.refused[0].contains("loose is a git dependency"));
-        let kept = sorted.kept.unwrap();
-        assert!(kept.contains("\"cookie\""), "{kept}");
-        assert!(kept.contains("\"jose\""), "{kept}");
-        assert!(!kept.contains("example-org"), "{kept}");
     }
 
     #[test]
-    fn a_package_lock_supplies_the_commit_and_a_registry_only_manifest_is_left_whole() {
+    fn a_package_lock_supplies_the_commit_and_a_registry_only_manifest_has_no_pin() {
         let manifest = "{\"dependencies\":{\"kit\":\"example-org/kit#main\"}}";
         let lock = format!(
             "{{\"packages\":{{\"node_modules/kit\":{{\"resolved\":\"git+ssh://git@github.com/example-org/kit.git#{COMMIT}\"}}}}}}"
         );
-        let sorted = sort_npm(manifest, &[lock], false);
-        assert_eq!(sorted.indexed, 0);
+        let sorted = sort_npm(manifest, &[lock]);
         assert_eq!(sorted.git.len(), 1);
         assert_eq!(sorted.git[0].tag.as_deref(), Some("main"));
-        let whole = sort_npm("{\"dependencies\":{\"cookie\":\"^1.1.1\"}}", &[], false);
-        assert!(whole.kept.is_none() && whole.git.is_empty() && whole.refused.is_empty());
-        assert!(whole.read && whole.indexed == 1);
-        let unread = sort_npm("not json", &[], false);
-        assert!(unread.kept.is_none() && !unread.read);
+        let whole = sort_npm("{\"dependencies\":{\"cookie\":\"^1.1.1\"}}", &[]);
+        assert!(whole.git.is_empty() && whole.refused.is_empty());
+        let unread = sort_npm("not json", &[]);
+        assert!(unread.git.is_empty() && unread.refused.is_empty());
     }
 
     #[test]
-    fn a_manifest_with_only_dev_dependencies_leaves_nothing_for_npm() {
-        // guarddog reads `dependencies` alone and answers `[]` for a manifest
-        // without them, which the reader takes for a network failure.
-        let dev = sort_npm("{\"devDependencies\":{\"jose\":\"^6\"}}", &[], false);
+    fn dev_dependencies_are_not_read() {
+        let manifest = "{\"devDependencies\":{\"loose\":\"github:example-org/loose\"}}";
+        let sorted = sort_npm(manifest, &[]);
         assert!(
-            dev.read && dev.indexed == 0 && dev.kept.is_none(),
-            "{dev:?}"
-        );
-        let empty = sort_npm(
-            "{\"dependencies\":{},\"devDependencies\":{\"jose\":\"^6\"}}",
-            &[],
-            false,
-        );
-        assert!(
-            empty.read && empty.indexed == 0 && empty.kept.is_none(),
-            "{empty:?}"
-        );
-    }
-
-    #[test]
-    fn dev_dependencies_count_and_lose_their_git_sources_where_guarddog_reads_them() {
-        let manifest = "{\"devDependencies\":{\"jose\":\"^6\",\
-            \"loose\":\"github:example-org/loose\"}}";
-        let dev = sort_npm(manifest, &[], true);
-        assert_eq!(dev.indexed, 1, "{dev:?}");
-        assert_eq!(dev.refused.len(), 1, "{dev:?}");
-        let kept = dev.kept.unwrap();
-        assert!(
-            kept.contains("\"jose\"") && !kept.contains("loose"),
-            "{kept}"
+            sorted.git.is_empty() && sorted.refused.is_empty(),
+            "{sorted:?}"
         );
     }
 
@@ -930,11 +802,7 @@ mod tests {
             "git+--upload-pack=touch {};git-upload-pack://github.com/example-org/kit#{COMMIT}",
             probe.display()
         );
-        let sorted = sort_npm(
-            &format!("{{\"dependencies\":{{\"kit\":\"{spec}\"}}}}"),
-            &[],
-            false,
-        );
+        let sorted = sort_npm(&format!("{{\"dependencies\":{{\"kit\":\"{spec}\"}}}}"), &[]);
         assert_eq!(sorted.git.len(), 1, "{:?}", sorted.refused);
         let first_party = FirstParty {
             owner: Ok(Some(String::from("example-org"))),

@@ -127,9 +127,10 @@ usage:
   uphold hooks --identity DIR...     do these repositories declare the same hooks
   uphold hooks --install             write the hooks git runs, as tracked files
                [--adopt | --check]   take over a hand-written copy; or only report
-  uphold supply-chain                origin, advisories, typosquats, workflow
-                                     security and committed secrets over the
-                                     pushed range -- six scanners, one verdict
+  uphold supply-chain                origin, advisories, workflow security,
+                                     git pins and committed secrets over the
+                                     pushed range -- five scanners and a
+                                     git-pin check, one verdict
   uphold supply-chain --all          the same, over every manifest and commit
   uphold supply-chain --base REV     the same, over what REV..HEAD changed
   uphold supply-chain --staged       gitleaks alone, over the staged diff
@@ -470,9 +471,9 @@ fn run() -> Result<Exit> {
             // workflows, and a superproject that only tracks submodules is
             // still where its own workflows live.
             let (root, policy) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
-            // Loaded for three facts: whether it inherits the set that asks for
-            // gitleaks, the guarddog findings it has waived, and who owns this
-            // repository, which decides the first-party git dependencies. A
+            // Loaded for two facts: whether it inherits the set that asks for
+            // gitleaks, and who owns this repository, which decides the
+            // first-party git dependencies. A
             // policy that will not load is exit 2 here as it is
             // everywhere else: which sections apply cannot be known without it.
             let loaded = config::load(&root, &policy)?;
@@ -507,25 +508,7 @@ fn run() -> Result<Exit> {
                 }
                 supply::scope_for_push(&root, &push.refs)?
             };
-            // A repository nested in this tree -- a submodule, a vendored clone
-            // with its own `.git` -- keeps its own waivers for its own
-            // manifests, and they are found here the way `uphold` run inside it
-            // would find them: the same boundary, the same file names, the same
-            // loader with its `[inherit]`. Asked only of a directory that IS a
-            // repository root, because `discover` from anywhere else climbs, and
-            // the climb would land on this root's policy or another
-            // repository's.
-            let nested = |directory: &Path| -> Result<Option<(PathBuf, config::Policy)>> {
-                if !is_repository_root(directory) {
-                    return Ok(None);
-                }
-                discover(directory)
-                    .map(|(own, path)| {
-                        config::load(&own, &path).map(|own_policy| (path, own_policy))
-                    })
-                    .transpose()
-            };
-            supply::run(&root, &scope, secrets, &loaded, &nested)
+            supply::run(&root, &scope, secrets, &loaded)
         }
         "probe" => {
             let usage = || {
