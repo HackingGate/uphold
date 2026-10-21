@@ -99,7 +99,7 @@ Three scanner ids are left out above because they need tools on the host:
   diff.
 
 Each scanner must be at least the release its output reader was measured
-against ([floors](docs/REFERENCE.md#uphold-supply-chain--six-scanners-one-verdict));
+against ([floors](docs/REFERENCE.md#uphold-supply-chain--four-scanners-one-check-of-its-own-one-verdict));
 an older one is exit 2 for its section, so an uphold upgrade that raises a floor
 can newly refuse a push on a host with an old scanner.
 
@@ -248,7 +248,7 @@ uphold shim --status            # what is linked, and whether PATH reaches it
 uphold hook claude-code         # judge a pending agent tool call, read on stdin
 uphold hook codex               # the same checks through Codex's PreToolUse hook
 uphold audit --for-publication  # before flipping private -> public
-uphold supply-chain             # six scanners over the pushed range; a missing one is exit 2
+uphold supply-chain             # scanners and the git-pin check over the pushed range; a missing one is exit 2
 uphold supply-chain --all       # the same over every manifest and every commit
 
 uphold hooks --identity ../a ../b   # do these repositories declare the same hooks

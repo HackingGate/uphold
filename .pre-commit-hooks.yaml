@@ -150,8 +150,8 @@
   pass_filenames: false
   always_run: true
 
-# Six external scanners, one verdict. The scanners are NOT built by this
-# hook -- osv-scanner, zizmor, cargo-deny, cargo-vet, guarddog and gitleaks
+# Five external scanners and a git-pin check, one verdict. The scanners are NOT built by this
+# hook -- osv-scanner, zizmor, cargo-deny, cargo-vet and gitleaks
 # come from the host's own toolchain, and one that is missing is exit 2, never
 # a pass. gitleaks runs only where the policy inherits the `credentials` set,
 # and only at the version this uphold pins.
@@ -169,7 +169,7 @@
 # passes the files in the push, and the range is not one of them.
 - id: uphold-supply-chain
   name: uphold supply-chain
-  description: origin, advisories, typosquats, workflow security and committed secrets over the pushed range -- six scanners, one verdict
+  description: origin, advisories, workflow security, git pins and committed secrets over the pushed range -- five scanners and a git-pin check, one verdict
   entry: uphold supply-chain
   language: rust
   stages: [pre-push]
@@ -189,7 +189,7 @@
 # is the pair this was split into.
 - id: uphold-supply-chain-all
   name: uphold supply-chain --all
-  description: the same six scanners over every manifest in the tree and every commit, for CI and scheduled runs
+  description: the same checks over every manifest in the tree and every commit, for CI and scheduled runs
   entry: uphold supply-chain
   args: ["--all"]
   language: rust

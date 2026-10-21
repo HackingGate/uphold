@@ -1,12 +1,18 @@
-//! `uphold supply-chain` -- origin, advisories, typosquats, workflow security
-//! and committed secrets, in one run.
+//! `uphold supply-chain` -- origin, advisories, workflow security, first-party
+//! git pins and committed secrets, in one run.
 //!
-//! Five external scanners over dependencies and workflows, orchestrated:
+//! Four external scanners over dependencies and workflows, orchestrated:
 //! osv-scanner (known vulnerabilities and reported-malicious packages), zizmor
-//! (workflow security), cargo-deny (origin, advisories, bans, licenses),
-//! cargo-vet (has anyone looked at this dependency) and guarddog (publisher
-//! identity and typosquats -- the half OSV cannot reach, scoring an UNKNOWN
-//! package on how closely its name shadows a popular one).
+//! (workflow security), cargo-deny (origin, advisories, bans, licenses) and
+//! cargo-vet (has anyone looked at this dependency). Beside them runs one check
+//! of this crate's own: the git sources a Python lock or an npm manifest names,
+//! which no registry holds and no scanner reads, checked against their own
+//! remote (see `references`).
+//!
+//! Heuristic malware scanning of unreported packages is not done here. The
+//! window it covered -- a malicious release published but not yet reported to
+//! OSV -- is closed at install time instead, by the package manager's own
+//! release-age setting, which refuses a version younger than the window.
 //!
 //! A sixth, gitleaks, reads commits rather than manifests, and owns secret
 //! shapes: the token formats, entropy thresholds and allowlists the
@@ -34,33 +40,12 @@
 //! config rather than a dependency. A wrapper that re-judged findings would be
 //! a second opinion nobody asked for, drifting from the tool it wraps.
 //!
-//! ONE SCANNER'S FINDINGS ARE READ ANYWAY, and the exception is guarddog.
-//! `guarddog verify` exits 0 whether it found three high-severity risks or
-//! none, in both ecosystems, so for as long as this section answered by exit
-//! code it called every guarddog finding clean -- a false negative on the one
-//! scanner here that looks for malware. Its `--exit-non-zero-on-finding` flag
-//! is not the remedy: it counts `issues`, which includes capability matches
-//! guarddog itself scores 0.0 and labels `no_risks_detected`. So guarddog is
-//! run with `--output-format json` and its own `risks` list is counted. The
-//! count is reported, never recomputed; the choice is to parse it or to run it
-//! for nothing. One named exception: a `metadata_mismatch` risk whose every
-//! difference is a known npm rewrite or a verified `PyPI` optional extra is
-//! printed as tolerated rather than counted.
-//!
-//! guarddog is also not handed what it cannot look up. A `uv export` spells a
-//! git source, a direct URL and a path as a PEP 508 direct reference, and
-//! guarddog asks `PyPI` for each by name and gets a 404. `references` sorts the
-//! export first: a git source under the owner the policy declares is checked
-//! against its own remote, and every other direct reference outside the tree
-//! is refused by name rather than skipped.
-//!
 //! What IS read out of a scanner's output is the opposite of a finding: its
-//! own admission that it did not look. Four of the five need it, because four
-//! of the five cannot say so in their exit code. guarddog reports rules that
-//! timed out and still exits 0; cargo-vet answers 255 both for an unvetted
-//! dependency and for a store it could not open; cargo-deny's exit 1 is a
-//! matched advisory or a database it could not fetch; and zizmor, handed one
-//! unparseable workflow among good ones, skips it and exits 0. None of those
+//! own admission that it did not look. Three of the four need it, because they
+//! cannot say so in their exit code. cargo-vet answers 255 both for an
+//! unvetted dependency and for a store it could not open; cargo-deny's exit 1
+//! is a matched advisory or a database it could not fetch; and zizmor, handed
+//! one unparseable workflow among good ones, skips it and exits 0. None of those
 //! is a judgement about a dependency being re-judged here. Each is the record
 //! that a question went unasked, which is this command's third verdict and the
 //! reason it exists.
@@ -105,10 +90,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::config::{Policy, Waiver};
+use crate::config::Policy;
 use crate::error::{Exit, Fatal, Result, verdict};
 
-mod pypi;
 mod references;
 
 /// The zizmor policy run where the repository has none of its own.
@@ -154,8 +138,8 @@ enum Section {
 type SectionRun<'a> = (&'static str, &'a dyn Fn(&Path, &Scope) -> Result<Section>);
 
 /// The file names a scanner here reads. Everything else in a diff -- source,
-/// documentation, a test fixture -- changes nothing any of these five tools
-/// would answer differently, so a range holding only those is a range with
+/// documentation, a test fixture -- changes nothing any of these
+/// tools would answer differently, so a range holding only those is a range with
 /// nothing to scan rather than a range nobody scanned.
 const MANIFEST_NAMES: [&str; 6] = [
     "Cargo.toml",
@@ -197,17 +181,11 @@ pub(crate) const SECRETS_SET: &str = "credentials";
 /// `uphold supply-chain`. `secrets` is whether the policy inherits
 /// [`SECRETS_SET`].
 ///
-/// `policy` is read by the guarddog section alone: its `[[supply_chain.waive]]`
-/// entries, and the declared owner that decides which git dependencies are
-/// first party. `nested` is read by that section too, and for the waivers
-/// alone: see [`NestedPolicy`].
-pub(crate) fn run(
-    root: &Path,
-    scope: &Scope,
-    secrets: bool,
-    policy: &Policy,
-    nested: NestedPolicy<'_>,
-) -> Result<Exit> {
+/// `policy` is read for the declared owner, which decides which git
+/// dependencies are first party, and for any `[[supply_chain.waive]]` row left
+/// from the guarddog section this command no longer has: those are named as
+/// ignored, and are not a failure.
+pub(crate) fn run(root: &Path, scope: &Scope, secrets: bool, policy: &Policy) -> Result<Exit> {
     let manifests_moved = !matches!(scope, Scope::Changed(paths, _) if paths.is_empty());
     if !manifests_moved && !secrets {
         println!(
@@ -216,9 +194,16 @@ pub(crate) fn run(
         );
         return Ok(Exit::Clean);
     }
+    for waiver in &policy.supply_chain.waive {
+        eprintln!(
+            "supply chain: ignoring `[[supply_chain.waive]]` for {} ({}): scanner {:?} is no \
+             longer run by uphold, so the row waives nothing. Remove it (its reason was: {})",
+            waiver.package, waiver.check, waiver.scanner, waiver.reason
+        );
+    }
     let mut failed = 0_usize;
     let mut unread = 0_usize;
-    let guarded = |at: &Path, over: &Scope| guarddog(at, over, policy, nested);
+    let pinned = |at: &Path, over: &Scope| git_pins(at, over, policy);
     let mut sections: Vec<SectionRun<'_>> = Vec::new();
     if manifests_moved {
         let dependencies: [SectionRun<'_>; 5] = [
@@ -229,7 +214,10 @@ pub(crate) fn run(
             ("zizmor -- workflow security", &zizmor),
             ("cargo-deny -- origin, advisories, bans, licenses", &deny),
             ("cargo-vet -- has anyone looked at this dependency", &vet),
-            ("guarddog -- publisher identity and typosquats", &guarded),
+            (
+                "git pins -- first-party git sources against their own remote",
+                &pinned,
+            ),
         ];
         sections.extend(dependencies);
     } else {
@@ -1418,7 +1406,7 @@ fn vet_could_not_look(code: i32, stdout: &str, stderr: &str) -> Option<String> {
 /// The first thing a tool said, so a could-not-look names something.
 ///
 /// "The scanner was inconclusive" with no subject is a red nobody can act on,
-/// which is the same argument the guarddog reason is built on.
+/// which is why every could-not-look names its subject.
 fn first_said(text: &str) -> &str {
     text.lines()
         .map(str::trim)
@@ -1520,664 +1508,6 @@ fn vet(root: &Path, scope: &Scope) -> Result<Section> {
     tool_read(root, "cargo", &["vet", "--locked"], vet_could_not_look)
 }
 
-/// Metadata rules only: the source-code rules download every release, which
-/// is a different job for a different schedule.
-const GUARDDOG_RULES: [&str; 10] = [
-    "-r",
-    "typosquatting",
-    "-r",
-    "deceptive_author",
-    "-r",
-    "unclaimed_maintainer_email_domain",
-    "-r",
-    "potentially_compromised_email_domain",
-    "-r",
-    "metadata_mismatch",
-];
-
-/// The closed list of metadata normalizations supported by the report reader.
-/// `OptionalExtras` additionally requires release evidence from [`pypi`].
-///
-/// The rule compares the registry's manifest for a release with the
-/// `package.json` inside its tarball. `npm publish` normalizes the manifest it
-/// uploads and leaves the tarball's file as written, so some differences are
-/// npm's own and recur on every release of a package, where a version-keyed
-/// waiver needs a new row each time. These are the normalize steps of
-/// `@npmcli/package-json`, and only these two are accepted:
-///
-/// - `DefaultStart`, npm's `serverjs` step: a package with `server.js` at its
-///   root and no `scripts.start` is published with `"start": "node server.js"`.
-///   guarddog prints the absent tarball side as `None`, which is also how a
-///   literal `"None"` prints; either way the registry side is npm's default.
-///   The report does not list the tarball's files, so `server.js` itself is
-///   not confirmed.
-/// - `BinPrefixStripped`, npm's `scriptpath` step: one leading
-///   `./node_modules/.bin/` or `node_modules/.bin/` is removed from each
-///   script. The same text anywhere else in the value is not removed by npm
-///   and is not accepted here.
-///
-/// A risk is tolerated only where every difference its description lists is
-/// one of these. Any other field, any other script difference, or a line that
-/// does not read as exactly one difference leaves the risk counted as before,
-/// and a waiver still applies to it. Not on the list: `"install": "node-gyp
-/// rebuild"`, which npm adds where `binding.gyp` exists; an install script runs
-/// at install time, which `start` does not, so it joins only with a case and a
-/// test. `PyPI` optional extras use separate release evidence in [`pypi`],
-/// because the report itself drops the markers that identify an extra.
-#[derive(Clone, Copy)]
-enum Normalization {
-    DefaultStart,
-    BinPrefixStripped,
-    OptionalExtras,
-}
-
-/// Every normalization tolerated, in the order a difference is tried against
-/// them.
-const PUBLISH_NORMALIZATIONS: [Normalization; 3] = [
-    Normalization::DefaultStart,
-    Normalization::BinPrefixStripped,
-    Normalization::OptionalExtras,
-];
-
-impl Normalization {
-    /// What a `tolerated:` line calls it.
-    const fn name(self) -> &'static str {
-        match self {
-            Self::DefaultStart => "npm default start script",
-            Self::BinPrefixStripped => "npm strips a leading node_modules/.bin/",
-            Self::OptionalExtras => "PyPI optional extras verified against release requires_dist",
-        }
-    }
-
-    /// Whether npm's publish turns the tarball's `scripts.<key>` into the
-    /// registry's, both as guarddog printed them.
-    fn accepts(self, key: &str, registry: &str, tarball: &str) -> bool {
-        match self {
-            Self::DefaultStart => {
-                key == "start" && registry == "node server.js" && tarball == "None"
-            }
-            Self::BinPrefixStripped => ["./node_modules/.bin/", "node_modules/.bin/"]
-                .iter()
-                .any(|prefix| tarball.strip_prefix(prefix) == Some(registry)),
-            Self::OptionalExtras => false,
-        }
-    }
-}
-
-/// The normalization behind each difference an npm `metadata_mismatch`
-/// description lists, described, or `None` where any difference is not one of
-/// [`PUBLISH_NORMALIZATIONS`] or any line cannot be read as one difference.
-///
-/// guarddog 3.2.0's `describe_diff` prints a header, a `<field>: ` line per
-/// differing field, and under `scripts` one
-/// `  <key>: Manifest("<registry>"), package.json("<tarball>") ` line per
-/// differing key, in an order that is not stable. It escapes nothing, so a
-/// line in which either marker appears more than once is ambiguous and is not
-/// read, and a value spanning lines leaves a line that is not a difference.
-/// Only `scripts` can hold a tolerated difference, so any other field refuses.
-fn tolerated(description: &str) -> Option<Vec<String>> {
-    const OPEN: &str = ": Manifest(\"";
-    const BETWEEN: &str = "\"), package.json(\"";
-    let mut lines = description.lines().map(str::trim_end);
-    if lines.next()? != "Difference between manifest and package.json found:"
-        || lines.next()? != "scripts:"
-    {
-        return None;
-    }
-    let mut accepted = Vec::new();
-    for line in lines {
-        let entry = line.strip_prefix("  ")?;
-        if entry.matches(OPEN).count() != 1 || entry.matches(BETWEEN).count() != 1 {
-            return None;
-        }
-        let (key, rest) = entry.split_once(OPEN)?;
-        let (registry, tarball) = rest.strip_suffix("\")")?.split_once(BETWEEN)?;
-        let normalization = PUBLISH_NORMALIZATIONS
-            .into_iter()
-            .find(|normalization| normalization.accepts(key, registry, tarball))?;
-        accepted.push(format!(
-            "{} (scripts.{key} = \"{registry}\")",
-            normalization.name()
-        ));
-    }
-    (!accepted.is_empty()).then_some(accepted)
-}
-
-/// A second source is consulted only for the exact `PyPI` report shape it can
-/// explain. Unavailable or mismatched evidence leaves the scanner's finding
-/// intact, so optional normalization never makes the scan depend on a pass.
-fn tolerated_metadata(
-    ecosystem: &str,
-    name: &str,
-    version: &str,
-    description: &str,
-    metadata: &mut impl FnMut(&str, &str) -> std::result::Result<serde_json::Value, String>,
-) -> Option<Vec<String>> {
-    match ecosystem {
-        "npm" => tolerated(description),
-        "pypi" => {
-            let differences = pypi::differences(description)?;
-            match metadata(name, version) {
-                Ok(release) => pypi::confirms(&release, name, version, &differences)
-                    .map(|accepted| vec![accepted]),
-                Err(reason) => {
-                    println!(
-                        "   retained: metadata_mismatch on pypi:{name}@{version} -- \
-                         could not verify optional extras: {reason}"
-                    );
-                    None
-                }
-            }
-        }
-        _ => None,
-    }
-}
-
-/// guarddog's floor: the "rules failed to run while scanning" text, the JSON
-/// report's `errors` / `results` / `risks` keys and exit 0 on a finding were
-/// all measured against guarddog 3.2.0.
-const GUARDDOG_FLOOR: Floor = Floor {
-    tool: "guarddog",
-    program: "guarddog",
-    args: &["--version"],
-    oldest: Version(3, 2, 0),
-};
-
-/// The directory guarddog unpacks what it downloads under:
-/// `$XDG_CACHE_HOME/uphold/guarddog`, else `$HOME/.cache/uphold/guarddog`, or
-/// `None` where neither names an absolute directory.
-///
-/// GUARDDOG'S `metadata_mismatch` VERDICT ON A PYPI WHEEL DEPENDS ON THE
-/// FILESYSTEM IT UNPACKS ON. guarddog 3.2.0 extracts the release into a fresh
-/// `tempfile.TemporaryDirectory()` and takes the first `os.listdir` entry that
-/// starts with the package name as the package's root. A wheel such as pandas
-/// 3.0.3 holds two, `pandas/` (which carries a `pyproject.toml`) and
-/// `pandas-3.0.3.dist-info/` (which carries none), and the order the two are
-/// listed in is the filesystem's: tmpfs lists the newest first, btrfs in
-/// creation order, ext4 in the order of a hash seeded per filesystem. One
-/// order reaches the manifest and reports a mismatch; the other reaches none
-/// and reports nothing. Inheriting the caller's `TMPDIR` made that the
-/// verdict's input, so one lock passed or failed with where `TMPDIR` pointed.
-///
-/// The defect is guarddog's, and nothing outside its process reorders a
-/// listing. What is fixed here is the input: guarddog is handed this directory
-/// as `TMPDIR`, so the caller's `TMPDIR` no longer decides, and one host gives
-/// one verdict. Two hosts whose cache directories sit on different filesystems
-/// can still disagree, which is why the stale-waiver notice for a `pypi`
-/// `metadata_mismatch` waiver does not advise removing it.
-///
-/// A relative `XDG_CACHE_HOME` is ignored, as the specification says: guarddog
-/// runs in the manifest's directory, so a relative one would unpack downloads
-/// into the tree being checked. The environment is a parameter so a test can
-/// hand in one of its own.
-fn guarddog_unpacks_under(env: impl Fn(&str) -> Option<PathBuf>) -> Option<PathBuf> {
-    let absolute = |name: &str| env(name).filter(|path| path.is_absolute());
-    absolute("XDG_CACHE_HOME")
-        .or_else(|| absolute("HOME").map(|home| home.join(".cache")))
-        .map(|cache| cache.join("uphold").join("guarddog"))
-}
-
-/// [`guarddog_unpacks_under`] on this machine, created; `None`, with the line
-/// saying why, where there is none or it could not be made. guarddog then
-/// inherits `TMPDIR` as before, and the run says its verdict may move with it.
-fn guarddog_unpack_directory() -> Option<PathBuf> {
-    let fallback = "guarddog unpacks under TMPDIR, so its metadata_mismatch verdict may \
-                    differ with the filesystem TMPDIR is on";
-    let Some(directory) = guarddog_unpacks_under(|name| std::env::var_os(name).map(PathBuf::from))
-    else {
-        println!("   {fallback}: neither XDG_CACHE_HOME nor HOME names an absolute directory");
-        return None;
-    };
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-    match builder.create(&directory) {
-        Ok(()) => Some(directory),
-        Err(error) => {
-            println!(
-                "   {fallback}: {} could not be created: {error}",
-                directory.display()
-            );
-            None
-        }
-    }
-}
-
-/// guarddog's own report that a rule did not run.
-///
-/// It prints "Some rules failed to run while scanning <package>:" and a bullet
-/// per rule, then EXITS 0 -- the two email-domain rules time out routinely, and
-/// an orchestrator reading only the exit code files that under "clean". A rule
-/// that timed out is a question nobody answered, which is the could-not-look
-/// verdict and not the pass. The one line returned names the packages and how
-/// many rules, because "guarddog was inconclusive" with no subject is a red
-/// nobody can act on.
-fn rules_that_did_not_run(output: &str) -> Option<String> {
-    let mark = "failed to run rule";
-    let scanning = "rules failed to run while scanning ";
-    let mut rules = 0_usize;
-    let mut packages: Vec<String> = Vec::new();
-    for line in output.lines() {
-        if let Some((_, tail)) = line.split_once(scanning) {
-            let package = tail.trim().trim_end_matches(':').trim();
-            if !package.is_empty() && !packages.iter().any(|held| held == package) {
-                packages.push(package.to_owned());
-            }
-        }
-        if line.contains(mark) {
-            rules += 1;
-        }
-    }
-    if rules == 0 {
-        return None;
-    }
-    let named = if packages.is_empty() {
-        String::from("a package it did not name")
-    } else if packages.len() > 3 {
-        format!(
-            "{} and {} more",
-            packages
-                .iter()
-                .take(3)
-                .cloned()
-                .collect::<Vec<String>>()
-                .join(", "),
-            packages.len() - 3
-        )
-    } else {
-        packages.join(", ")
-    };
-    Some(format!(
-        "guarddog left {rules} rule(s) unrun on {named}, and still exited 0 -- a rule that \
-         did not run answered nothing"
-    ))
-}
-
-/// What one `guarddog verify` run established.
-enum Read {
-    /// guarddog objected to something, with any missing coverage described.
-    Risks(String, Option<String>),
-    /// guarddog did not answer, described.
-    Unread(String),
-    /// guarddog ran and objected to nothing.
-    Clean,
-}
-
-/// Read one `guarddog verify` run out of its report rather than its exit code.
-///
-/// GUARDDOG CANNOT SAY "I FOUND SOMETHING" IN ITS EXIT CODE. `verify` answers
-/// 0 whether it found three high-severity risks or none, in both ecosystems,
-/// so a section reading the code called every finding clean. That is the one
-/// direction this crate must never get wrong, and it was wrong here.
-///
-/// `--exit-non-zero-on-finding` is not the fix. It keys off `issues`, which
-/// counts capability matches -- `six` scores `issues: 2` with `risks: []` and
-/// guarddog's own label `no_risks_detected` -- so the flag turns a package its
-/// own report calls clean into a hard failure, trading a false negative for a
-/// false positive.
-///
-/// So this is the one scanner whose FINDINGS are read here, against the rule
-/// the module header sets, and the reason is that the alternative is running
-/// it for nothing. `risks` is guarddog's own list of what it objected to and
-/// nothing is re-judged: the count is reported, not recomputed.
-///
-/// A risk covered by [`tolerated_metadata`] is
-/// printed as tolerated, naming each, and is not held against the run.
-///
-/// A risk a waiver covers is printed as waived, with the waiver's reason, and
-/// is not held against the run; the index of each root waiver that matched is
-/// recorded in the ledger, with every package a report named, so the section
-/// can report the waivers that did not. A nested repository's waiver is named
-/// on its line by that repository's policy file, so whose decision let the
-/// risk through is on the line that says it was let through.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "scan inputs and subprocess output meet at this reader"
-)]
-fn guarddog_read(
-    at: &str,
-    ecosystem: &str,
-    expected: &BTreeSet<String>,
-    waivers: &Waivers<'_>,
-    ledger: &mut Ledger,
-    code: Option<i32>,
-    stdout: &str,
-    stderr: &str,
-    metadata: &mut impl FnMut(&str, &str) -> std::result::Result<serde_json::Value, String>,
-) -> Read {
-    // Its own admission first, because it survives whatever the report is.
-    if let Some(reason) = rules_that_did_not_run(stdout).or_else(|| rules_that_did_not_run(stderr))
-    {
-        return Read::Unread(reason);
-    }
-    if code != Some(0) {
-        return Read::Unread(format!(
-            "guarddog gave no report at {at}: {}",
-            first_said(stderr)
-        ));
-    }
-    let Ok(serde_json::Value::Array(entries)) = serde_json::from_str::<serde_json::Value>(stdout)
-    else {
-        return Read::Unread(format!(
-            "guarddog printed no report this could read at {at}"
-        ));
-    };
-    // Where the input could not be read, even an empty expected set cannot
-    // establish coverage. Known inputs are reconciled below, including `[]`.
-    if entries.is_empty() && expected.is_empty() {
-        return Read::Unread(format!("guarddog reported on no dependency at all at {at}"));
-    }
-    let mut objected: Vec<String> = Vec::new();
-    let mut observed = BTreeSet::new();
-    for entry in &entries {
-        let name = entry
-            .get("dependency")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("a dependency it did not name");
-        observed.insert(if ecosystem == "pypi" {
-            references::normalise(name)
-        } else {
-            name.to_owned()
-        });
-        let Some(result) = entry.get("result") else {
-            return Read::Unread(format!("guarddog said nothing about {name} at {at}"));
-        };
-        let scanned = result
-            .get("errors")
-            .and_then(serde_json::Value::as_object)
-            .is_some_and(serde_json::Map::is_empty);
-        if !scanned || result.get("results").is_none() {
-            return Read::Unread(format!(
-                "guarddog could not scan {name} at {at}: {}",
-                result.get("errors").map_or_else(
-                    || String::from("it reported no result for it"),
-                    ToString::to_string
-                )
-            ));
-        }
-        let Some(results) = result.get("results").and_then(serde_json::Value::as_object) else {
-            return Read::Unread(format!(
-                "guarddog gave an incomplete report for {name} at {at}: `results` is not an object"
-            ));
-        };
-        let Some(reported_risks) = result.get("risks").and_then(serde_json::Value::as_array) else {
-            return Read::Unread(format!(
-                "guarddog gave an incomplete report for {name} at {at}: `risks` is not an array"
-            ));
-        };
-        // The version guarddog resolved, which for npm is the release a range
-        // in `package.json` picked and not the range itself.
-        let version = result
-            .get("package_version")
-            .or_else(|| entry.get("version"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        ledger
-            .seen
-            .insert((ecosystem.to_owned(), (*name).to_owned()));
-        let mut risks = 0_usize;
-        for risk in reported_risks {
-            // The rule that raised it, as a waiver names it; `name` is the
-            // risk's own id, for a risk no single rule raised.
-            let rule = risk
-                .get("threat_rule")
-                .or_else(|| risk.get("capability_rule"))
-                .and_then(serde_json::Value::as_str)
-                .or_else(|| risk.get("name").and_then(serde_json::Value::as_str))
-                .unwrap_or("");
-            // Known metadata normalizations, named on the line that lets
-            // them through. The risk and the underlying result must describe
-            // the same difference; anything else keeps the risk counted.
-            if rule == "metadata_mismatch"
-                && let Some(description) = risk
-                    .get("threat_description")
-                    .and_then(serde_json::Value::as_str)
-                && results
-                    .get("metadata_mismatch")
-                    .and_then(serde_json::Value::as_str)
-                    == Some(description)
-                && let Some(accepted) =
-                    tolerated_metadata(ecosystem, name, version, description, metadata)
-            {
-                println!(
-                    "   tolerated: {rule} on {ecosystem}:{name}@{version} at {at} -- {}",
-                    accepted.join("; ")
-                );
-                continue;
-            }
-            // The innermost repository's rows first, then each one out, then
-            // the root's. The first to cover the risk lets it through and is
-            // named on the line; every later row that also covers it is a
-            // repeat of that one, recorded so the stale report can say so.
-            let mut covering: Option<(Option<&str>, &str)> = None;
-            for (source, rows) in waivers.in_order() {
-                let Some((index, row)) = rows
-                    .iter()
-                    .enumerate()
-                    .find(|(_, row)| row.covers(ecosystem, name, version, rule))
-                else {
-                    continue;
-                };
-                let key = (source.map(str::to_owned), index);
-                match covering {
-                    None => {
-                        ledger.matched.insert(key);
-                        covering = Some((source, row.reason.as_str()));
-                    }
-                    Some((first, _)) => {
-                        ledger.duplicated.entry(key).or_insert_with(|| Repeat {
-                            of: first.unwrap_or_default().to_owned(),
-                            check: row.check.clone(),
-                            package: row.package.clone(),
-                        });
-                    }
-                }
-            }
-            match covering {
-                Some((Some(source), reason)) => println!(
-                    "   waived ({source}): {rule} on {ecosystem}:{name}@{version} at {at} \
-                     -- {reason}"
-                ),
-                Some((None, reason)) => println!(
-                    "   waived: {rule} on {ecosystem}:{name}@{version} at {at} -- {reason}"
-                ),
-                None => risks += 1,
-            }
-        }
-        if risks > 0 {
-            let at_version = if version.is_empty() {
-                String::new()
-            } else {
-                format!("@{version}")
-            };
-            objected.push(format!("{name}{at_version} ({risks} risk(s))"));
-        }
-    }
-    let missing: Vec<&str> = expected.difference(&observed).map(String::as_str).collect();
-    let unread = (!missing.is_empty()).then(|| {
-        format!(
-            "guarddog omitted {} at {at}: no report for submitted {ecosystem} dependency(s)",
-            missing.join(", ")
-        )
-    });
-    if !objected.is_empty() {
-        Read::Risks(
-            format!("{at}: guarddog objected to {}", objected.join(", ")),
-            unread,
-        )
-    } else if let Some(reason) = unread {
-        Read::Unread(reason)
-    } else {
-        Read::Clean
-    }
-}
-
-/// How the guarddog section finds the policy of a repository nested inside the
-/// scan root: handed a directory under the root, it answers that directory's
-/// own policy file and the policy loaded from it where the directory is a
-/// repository root carrying one, and `None` everywhere else.
-///
-/// Handed in rather than written here because which file `uphold` loads at a
-/// directory is the command's discovery, not this section's: a second walk
-/// written here would be a second answer to "whose policy is this", free to
-/// disagree with the one every other entry point gives -- over
-/// `policy/principles.toml` against `policy/rg-policy.toml`, over where a
-/// repository begins, and over `[inherit]`. A load that fails is an error and
-/// never `None`: a policy that would not load has said nothing about which
-/// findings its owner accepted, and reading it as "no waivers" would refuse on
-/// a guess, or worse, if the run ever read it the other way, pass on one.
-pub(crate) type NestedPolicy<'a> = &'a dyn Fn(&Path) -> Result<Option<(PathBuf, Policy)>>;
-
-/// A nested repository's own waivers, as the guarddog section reads them.
-struct Nested {
-    /// Its policy file, relative to the scan root, which is how every line
-    /// that applies one of its waivers names whose decision it was.
-    source: String,
-    /// Its `[[supply_chain.waive]]` rows.
-    waive: Vec<Waiver>,
-}
-
-/// The waivers one manifest is judged against.
-///
-/// The scan root's rows cover every manifest in the tree, as they always have:
-/// the root's policy is the one the run was started under. Each nested
-/// repository's rows cover the manifests in that repository's tree and nothing
-/// else, because they are that repository's decisions about the dependencies
-/// it carries -- its own and its submodules', the same tree `uphold` run there
-/// would judge. The superproject's manifests and a sibling's are somebody
-/// else's, and a submodule able to waive them would be a repository excusing a
-/// tree it does not own, under the superproject's name.
-#[derive(Default)]
-struct Waivers<'a> {
-    /// The scan root's own.
-    root: &'a [Waiver],
-    /// Every enclosing nested repository's that has a policy, innermost first.
-    nested: &'a [std::rc::Rc<Nested>],
-}
-
-impl Waivers<'_> {
-    /// Each owner's rows in the order a risk is put to them: the innermost
-    /// repository first, each one out after it, the root last, each named by
-    /// its policy file (`None` for the root's, whose lines have always carried
-    /// no name).
-    ///
-    /// Innermost first because the repository closest to a manifest is the
-    /// one whose dependency it is most directly; an outer row covering the
-    /// same risk is then a repeat of the inner one, which is what the stale
-    /// report needs to know to say a copy may go.
-    fn in_order(&self) -> impl Iterator<Item = (Option<&str>, &[Waiver])> {
-        self.nested
-            .iter()
-            .map(|owner| (Some(owner.source.as_str()), owner.waive.as_slice()))
-            .chain(std::iter::once((None, self.root)))
-    }
-}
-
-/// What the nested-repository walk found, by directory, so a repository with
-/// many manifests is loaded once. A load that failed is kept as the loader's
-/// error, because the same repository is the same refusal for each of its
-/// manifests.
-type NestedFound =
-    std::collections::BTreeMap<PathBuf, std::result::Result<Option<std::rc::Rc<Nested>>, String>>;
-
-/// The nested repositories whose waivers also cover a manifest in
-/// `directory`, innermost first: every directory between it and `root` --
-/// `directory` itself included, `root` excluded -- that `nested` answers a
-/// policy for.
-///
-/// Every one, and not only the nearest, because each repository's policy
-/// speaks for its whole tree: a repository scanned on its own judges its
-/// submodules' manifests against its own rows, and a superproject that read
-/// only the innermost repository's would refuse what the repository between
-/// them accepts. A repository with no policy of its own adds nothing and is
-/// passed over, for the reason `uphold` run there refuses to borrow one.
-///
-/// The walk is `directory`'s own ancestors and nothing else, which is the
-/// whole of the boundary: the root's own manifests have no nested repository
-/// above them, a repository's rows never reach a manifest outside it, and a
-/// sibling submodule is never an ancestor. Any enclosing policy that did not
-/// load is an error for the manifest, whatever the others said: the rows it
-/// would have contributed are unknown, so the findings they cover are too.
-fn nested_waivers(
-    root: &Path,
-    directory: &Path,
-    nested: NestedPolicy<'_>,
-    found: &mut NestedFound,
-) -> std::result::Result<Vec<std::rc::Rc<Nested>>, String> {
-    let mut owners = Vec::new();
-    for ancestor in directory
-        .ancestors()
-        .take_while(|ancestor| *ancestor != root && ancestor.starts_with(root))
-    {
-        let answer = found
-            .entry(ancestor.to_path_buf())
-            .or_insert_with(|| load_nested(root, ancestor, nested));
-        match answer {
-            Ok(Some(owner)) => owners.push(std::rc::Rc::clone(owner)),
-            Ok(None) => {}
-            Err(error) => {
-                return Err(format!(
-                    "the guarddog findings at {} were not judged: {} is a repository with a \
-                     policy of its own, which decides waivers for the manifests in its tree, \
-                     and that policy did not load: {error}",
-                    directory.display(),
-                    ancestor.display()
-                ));
-            }
-        }
-    }
-    Ok(owners)
-}
-
-/// One directory's answer for [`nested_waivers`].
-fn load_nested(
-    root: &Path,
-    ancestor: &Path,
-    nested: NestedPolicy<'_>,
-) -> std::result::Result<Option<std::rc::Rc<Nested>>, String> {
-    match nested(ancestor) {
-        Ok(Some((path, policy))) => Ok(Some(std::rc::Rc::new(Nested {
-            source: path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .display()
-                .to_string(),
-            waive: policy.supply_chain.waive,
-        }))),
-        Ok(None) => Ok(None),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-/// One waiver row: its policy file, as [`Waivers::in_order`] names it (`None`
-/// for the scan root's), and its index there.
-type Row = (Option<String>, usize);
-
-/// An outer row that covered a risk an inner row had already covered.
-struct Repeat {
-    /// The policy file whose row covered it first.
-    of: String,
-    /// The repeating row's `check` and `package`, as its line names them.
-    check: String,
-    package: String,
-}
-
-/// What the guarddog reports of one run said about the waivers.
-#[derive(Default)]
-struct Ledger {
-    /// The rows that covered a risk first.
-    matched: BTreeSet<Row>,
-    /// The rows that would have covered a risk an inner repository's row
-    /// covered first: the copies superprojects made before nested waivers
-    /// were read, which the stale report names so they can go.
-    duplicated: std::collections::BTreeMap<Row, Repeat>,
-    /// Every `(ecosystem, package)` a report named.
-    seen: BTreeSet<(String, String)>,
-    /// The ecosystems a report was read for at all.
-    read: BTreeSet<&'static str>,
-}
-
 /// Who is first party here, as the policy declares it.
 fn first_party_of<'a>(policy: &'a Policy, root: &Path) -> references::FirstParty<'a> {
     references::FirstParty {
@@ -2204,22 +1534,25 @@ fn npm_locks(directory: &Path, root: &Path) -> Vec<String> {
         .collect()
 }
 
-fn guarddog(
-    root: &Path,
-    scope: &Scope,
-    policy: &Policy,
-    nested: NestedPolicy<'_>,
-) -> Result<Section> {
-    let waivers = policy.supply_chain.waive.as_slice();
-    let mut found = NestedFound::new();
+/// The first-party git pins section: every git source a Python lock or an npm
+/// manifest names, checked against its own remote.
+///
+/// Registries cannot vouch for a git source, and no scanner here reads one, so
+/// this section does. A source under the owner the policy declares is asked of
+/// its remote (`git ls-remote`): the locked commit must be what some ref there
+/// points at, and a tag the lock names must point at that commit. Everything
+/// else that no index holds -- a git source under anybody else, a direct URL, a
+/// path outside the tree -- is refused by name, because skipping it would be a
+/// pass nobody earned.
+fn git_pins(root: &Path, scope: &Scope, policy: &Policy) -> Result<Section> {
     let (python, npm) = match scope {
         Scope::Whole => (
             find_named(root, "uv.lock")?,
             find_named(root, "package.json")?,
         ),
-        // A directory, not a file: guarddog is run with the working directory
-        // set to the manifest's own, and `pyproject.toml` moving is a dependency
-        // change whether or not the lock moved with it.
+        // A directory, not a file: `uv export` is run with the working
+        // directory set to the manifest's own, and `pyproject.toml` moving is a
+        // dependency change whether or not the lock moved with it.
         //
         // A directory with no `uv.lock` is left out, as the whole-tree walk
         // leaves it out by finding no lock there: `uv export` in it would
@@ -2234,7 +1567,7 @@ fn guarddog(
                     let locked = lock.is_file();
                     if !locked {
                         println!(
-                            "   {}: no uv.lock beside it, so guarddog has no pinned set to read",
+                            "   {}: no uv.lock beside it, so there is no pinned set to read",
                             lock.with_file_name("pyproject.toml").display()
                         );
                     }
@@ -2250,16 +1583,9 @@ fn guarddog(
             Scope::Changed(..) => "no Python or npm manifest moved in this range",
         })));
     }
-    if let Some(reason) = ready(&GUARDDOG_FLOOR) {
-        return Ok(Section::CouldNotLook(reason));
-    }
-    // Handed to every guarddog run as `TMPDIR`; see `guarddog_unpacks_under`.
-    let unpack = guarddog_unpack_directory();
-    let unpacks = || unpack.as_deref().map(|directory| ("TMPDIR", directory));
     let mut refused = false;
     let mut unrun: Option<String> = None;
     let mut checked = 0_usize;
-    let mut ledger = Ledger::default();
     // Asked only where a git source needs it: `owner_from` is a command, and a
     // repository with no git dependency has no reason to run it.
     let mut first_party: Option<references::FirstParty<'_>> = None;
@@ -2267,19 +1593,16 @@ fn guarddog(
     for lock in python {
         let directory = lock.parent().unwrap_or(root);
         checked += 1;
-        if on_path("uv").is_some() {
-            return Ok(Section::CouldNotLook(String::from(
-                "uv is not on PATH, so the Python manifests were not exported for guarddog",
+        if let Some(reason) = on_path("uv") {
+            return Ok(Section::CouldNotLook(format!(
+                "{reason}, so the Python manifests were not exported"
             )));
         }
         // `--frozen`: the pinned set is read as it is and nothing is written.
         // Without it `uv export` relocks a `uv.lock` that is out of step with
         // its `pyproject.toml` and rewrites the file in the tree under scan.
         // Whether a lock is in step with its manifest is uv's question
-        // (`uv lock --check`), not the scan's: guarddog asks whether the
-        // pinned packages are malicious, so a lock that records an option its
-        // manifest lacks, such as an `exclude-newer` passed on the command
-        // line, is still scanned.
+        // (`uv lock --check`), not the scan's.
         let exported = Command::new("uv")
             .args([
                 "export",
@@ -2294,7 +1617,7 @@ fn guarddog(
             .map_err(|error| Fatal::new(format!("could not run uv export: {error}")))?;
         if !exported.status.success() {
             println!(
-                "   FAILED: guarddog: uv export failed in {}",
+                "   FAILED: git pins: uv export failed in {}",
                 directory.display()
             );
             println!(
@@ -2305,15 +1628,6 @@ fn guarddog(
             continue;
         }
         let at = directory.display().to_string();
-        // Before guarddog is asked: a manifest whose owner's policy did not
-        // load has findings nothing here can tell from the accepted ones.
-        let owners = match nested_waivers(root, directory, nested, &mut found) {
-            Ok(owners) => owners,
-            Err(said) => {
-                unrun = unrun.or(Some(said));
-                continue;
-            }
-        };
         let sorted = references::sort(
             &String::from_utf8_lossy(&exported.stdout),
             directory,
@@ -2321,7 +1635,7 @@ fn guarddog(
             std::fs::read_to_string(&lock).ok().as_deref(),
         );
         for said in &sorted.refused {
-            println!("   FAILED: guarddog pypi: {at}: {said}");
+            println!("   FAILED: git pins (pypi): {at}: {said}");
             refused = true;
         }
         for pin in &sorted.git {
@@ -2329,79 +1643,22 @@ fn guarddog(
             match references::check(pin, deciding, directory, &mut remotes) {
                 references::Checked::Holds(said) => println!("   first party: {said}"),
                 references::Checked::Refused(said) => {
-                    println!("   FAILED: guarddog pypi: {at}: {said}");
+                    println!("   FAILED: git pins (pypi): {at}: {said}");
                     refused = true;
                 }
                 references::Checked::Unread(said) => unrun = unrun.or(Some(said)),
             }
         }
-        // Nothing an index resolves is nothing to look up, and guarddog handed
-        // an empty list answers `[]`, which reads as a network failure.
-        if sorted.indexed == 0 {
-            println!(
-                "   {at}: no dependency here resolves from an index, so guarddog was not asked"
-            );
-            continue;
-        }
-        let requirements = tempfile_guard::TempFile::containing(&sorted.kept)?;
-        let status = Command::new("guarddog")
-            .args(["pypi", "verify", "--output-format", "json"])
-            .arg(&requirements.path)
-            .args(GUARDDOG_RULES)
-            .envs(unpacks())
-            .current_dir(directory)
-            .output()
-            .map_err(|error| Fatal::new(format!("could not run guarddog: {error}")))?;
-        match guarddog_read(
-            &at,
-            "pypi",
-            &sorted.expected,
-            &Waivers {
-                root: waivers,
-                nested: &owners,
-            },
-            &mut ledger,
-            status.status.code(),
-            &String::from_utf8_lossy(&status.stdout),
-            &String::from_utf8_lossy(&status.stderr),
-            &mut pypi::fetch,
-        ) {
-            Read::Clean => {
-                ledger.read.insert("pypi");
-            }
-            Read::Risks(said, unread) => {
-                if unread.is_none() {
-                    ledger.read.insert("pypi");
-                }
-                unrun = unrun.or(unread);
-                println!("   FAILED: guarddog pypi: {said}");
-                refused = true;
-            }
-            Read::Unread(said) => unrun = unrun.or(Some(said)),
-        }
     }
-    // guarddog reads `devDependencies` as well only under this setting, and
-    // compares it as Python's `.lower() == "true"`.
-    let include_dev = std::env::var("GUARDDOG_NPM_INCLUDE_DEV_DEPENDENCIES")
-        .is_ok_and(|value| value.eq_ignore_ascii_case("true"));
     for manifest in npm {
         let directory = manifest.parent().unwrap_or(root);
         checked += 1;
         let at = directory.display().to_string();
-        // Before guarddog is asked: a manifest whose owner's policy did not
-        // load has findings nothing here can tell from the accepted ones.
-        let owners = match nested_waivers(root, directory, nested, &mut found) {
-            Ok(owners) => owners,
-            Err(said) => {
-                unrun = unrun.or(Some(said));
-                continue;
-            }
-        };
         let sorted = std::fs::read_to_string(&manifest)
-            .map(|text| references::sort_npm(&text, &npm_locks(directory, root), include_dev))
+            .map(|text| references::sort_npm(&text, &npm_locks(directory, root)))
             .unwrap_or_default();
         for said in &sorted.refused {
-            println!("   FAILED: guarddog npm: {at}: {said}");
+            println!("   FAILED: git pins (npm): {at}: {said}");
             refused = true;
         }
         for pin in &sorted.git {
@@ -2409,74 +1666,18 @@ fn guarddog(
             match references::check(pin, deciding, directory, &mut remotes) {
                 references::Checked::Holds(said) => println!("   first party: {said}"),
                 references::Checked::Refused(said) => {
-                    println!("   FAILED: guarddog npm: {at}: {said}");
+                    println!("   FAILED: git pins (npm): {at}: {said}");
                     refused = true;
                 }
                 references::Checked::Unread(said) => unrun = unrun.or(Some(said)),
             }
         }
-        // Nothing npm resolves among what guarddog reads -- no `dependencies`,
-        // only `devDependencies` where it does not read them, or only git
-        // dependencies -- is nothing to look up, and guarddog would
-        // answer `[]`, which reads as a network failure. A manifest that did not
-        // parse still goes to guarddog, for it to say so.
-        if sorted.read && sorted.indexed == 0 {
-            println!("   {at}: no dependency here resolves from npm, so guarddog was not asked");
-            continue;
-        }
-        // The manifest itself where nothing came out of it; otherwise what is
-        // left.
-        let rewritten = sorted
-            .kept
-            .as_deref()
-            .map(tempfile_guard::TempFile::containing)
-            .transpose()?;
-        let status = Command::new("guarddog")
-            .args(["npm", "verify", "--output-format", "json"])
-            .arg(
-                rewritten
-                    .as_ref()
-                    .map_or_else(|| Path::new("package.json"), |file| file.path.as_path()),
-            )
-            .args(GUARDDOG_RULES)
-            .envs(unpacks())
-            .current_dir(directory)
-            .output()
-            .map_err(|error| Fatal::new(format!("could not run guarddog: {error}")))?;
-        match guarddog_read(
-            &at,
-            "npm",
-            &sorted.expected,
-            &Waivers {
-                root: waivers,
-                nested: &owners,
-            },
-            &mut ledger,
-            status.status.code(),
-            &String::from_utf8_lossy(&status.stdout),
-            &String::from_utf8_lossy(&status.stderr),
-            &mut pypi::fetch,
-        ) {
-            Read::Clean => {
-                ledger.read.insert("npm");
-            }
-            Read::Risks(said, unread) => {
-                if unread.is_none() {
-                    ledger.read.insert("npm");
-                }
-                unrun = unrun.or(unread);
-                println!("   FAILED: guarddog npm: {said}");
-                refused = true;
-            }
-            Read::Unread(said) => unrun = unrun.or(Some(said)),
-        }
     }
     println!("   {checked} Python/npm manifest(s) checked");
-    report_unmatched(waivers, &ledger, scope);
-    // A finding outranks an unrun rule, which is this crate's own ranking: a
-    // refusal is something somebody looked at and objected to. The unrun rules
-    // are printed either way, so the red that does appear says what was
-    // still not asked.
+    // A finding outranks an unrun check, which is this crate's own ranking: a
+    // refusal is something somebody looked at and objected to. The unrun check
+    // is printed either way, so the red that does appear says what was still
+    // not asked.
     if let Some(ref reason) = unrun {
         println!("   {reason}");
     }
@@ -2489,89 +1690,11 @@ fn guarddog(
     Ok(Section::Clean)
 }
 
-/// What a row that only repeats an inner repository's is told.
-const REPEAT_ADVICE: &str = "a repository nearer the manifest waives it in its own policy, so \
-                             this copy can be removed";
-
-/// A waiver that matched nothing, where the run could have matched it, is
-/// one whose version moved or whose finding went away. "Could have" is the
-/// package appearing in a report, or, over the whole tree, its ecosystem
-/// being read at all -- a range scan reads only the manifests that moved,
-/// and a waiver about one that did not is not stale for it. Reported and
-/// not refused: the push it would have excused is not less safe for it,
-/// and the line that names it is the prompt to delete it.
-///
-/// The scan root's waivers only. A nested repository's row that matched
-/// nothing here is reported by that repository's own scan, which is the
-/// one that can act on it -- the row is in its policy, and a superproject
-/// that printed it too would be a second reporter of one fact, naming a
-/// file the superproject does not write.
-///
-/// A row -- the root's or an outer nested repository's -- that covered risks
-/// only where an inner repository's row had already covered them is a copy of
-/// that row, and over the whole tree is named as one. A range scan reads only
-/// the manifests that moved, so it cannot tell a copy from a row that also
-/// covers a manifest it did not read, and says nothing about either: the row
-/// did cover a risk, so it is not stale either.
-fn report_unmatched(waivers: &[Waiver], ledger: &Ledger, scope: &Scope) {
-    let whole = matches!(scope, Scope::Whole);
-    for (index, waiver) in waivers.iter().enumerate() {
-        let Some((ecosystem, name, _)) = waiver.parts() else {
-            continue;
-        };
-        let row = (None, index);
-        if !ledger.matched.contains(&row)
-            && let Some(repeat) = ledger.duplicated.get(&row)
-        {
-            if whole {
-                println!(
-                    "   waiver repeats {}: {} on {} -- {REPEAT_ADVICE}",
-                    repeat.of, waiver.check, waiver.package
-                );
-            }
-            continue;
-        }
-        let could = ledger
-            .seen
-            .contains(&(ecosystem.to_owned(), name.to_owned()))
-            || (matches!(scope, Scope::Whole) && ledger.read.contains(ecosystem));
-        if could && !ledger.matched.contains(&row) {
-            // Except where whether the finding appears is the host's: a pypi
-            // `metadata_mismatch` reaches the release's manifest on some
-            // filesystems and not others (`guarddog_unpacks_under`), so its
-            // absence here is not its absence everywhere.
-            let advice = if ecosystem == "pypi" && waiver.check == "metadata_mismatch" {
-                "guarddog reads a pypi release's manifest for this check on some \
-                 filesystems and not others, so another host may still need it"
-            } else {
-                "remove it if the version moved or the finding is gone"
-            };
-            println!(
-                "   waiver matched nothing in this run: {} on {} -- {advice}",
-                waiver.check, waiver.package
-            );
-        }
-    }
-    if !whole {
-        return;
-    }
-    for (row, repeat) in &ledger.duplicated {
-        if let (Some(source), _) = row
-            && !ledger.matched.contains(row)
-        {
-            println!(
-                "   waiver in {source} repeats {}: {} on {} -- {REPEAT_ADVICE}",
-                repeat.of, repeat.check, repeat.package
-            );
-        }
-    }
-}
-
 /// The gitleaks release this binary is tested against.
 ///
-/// Pinned here, unlike the other five scanners, because gitleaks' verdict is
+/// Pinned here, unlike the other scanners, because gitleaks' verdict is
 /// the rule list compiled into it: two machines on two versions are two gates
-/// over the same commit. The other five answer from databases that move under
+/// over the same commit. The others answer from databases that move under
 /// any version, so a pin would buy them nothing. The README's install line
 /// and docs/REFERENCE.md name this version too, and a unit test below holds
 /// the three together.
@@ -2825,613 +1948,19 @@ mod tempfile_guard {
 #[cfg(test)]
 mod tests {
     use super::{
-        BTreeSet, Ledger, Nested, NestedFound, NestedPolicy, Read, Waivers, guarddog_read,
-        nested_waivers, tolerated,
+        DENY_FLOOR, Floor, GITLEAKS_DEFAULT, GITLEAKS_FOUND, GITLEAKS_VERSION, OSV_FLOOR, PRUNE,
+        Scope, VET_FLOOR, Version, ZIZMOR_FLOOR, against_floor, find_named, find_workflow_dirs,
+        gitleaks_could_not_look, interesting, parse_version, unscanned_ci,
     };
-    use super::{
-        DENY_FLOOR, Floor, GITLEAKS_DEFAULT, GITLEAKS_FOUND, GITLEAKS_VERSION, GUARDDOG_FLOOR,
-        OSV_FLOOR, PRUNE, Scope, VET_FLOOR, Version, ZIZMOR_FLOOR, against_floor, find_named,
-        find_workflow_dirs, gitleaks_could_not_look, guarddog_unpacks_under, interesting,
-        parse_version, unscanned_ci,
-    };
-    use crate::config::{Policy, Waiver};
-
-    /// guarddog 3.2.0's reports, recorded against the public registries with
-    /// only the unpack path rewritten: react-dom 19.2.0, whose registry
-    /// manifest carries npm's default `start`, swagger-ui-express 5.0.1, whose
-    /// `test` lost its leading `./node_modules/.bin/` at publish, and pandas
-    /// 3.0.3 on a host where the rule reached its `pyproject.toml`.
-    const REACT_DOM: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/guarddog/npm-react-dom-19.2.0.json"
-    ));
-    const SWAGGER_UI_EXPRESS: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/guarddog/npm-swagger-ui-express-5.0.1.json"
-    ));
-    const PANDAS: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/guarddog/pypi-pandas-3.0.3.json"
-    ));
-
-    /// `report` with its one risk's description replaced, as guarddog would
-    /// print it for a release that differed in that way.
-    fn describing(report: &str, description: &str) -> String {
-        let mut value: serde_json::Value = serde_json::from_str(report).unwrap();
-        value[0]["result"]["risks"][0]["threat_description"] = serde_json::Value::from(description);
-        value.to_string()
-    }
-
-    /// Whether `report`, read as one run with no waivers, holds a finding, or
-    /// what was said where it did not read at all.
-    fn objected(ecosystem: &str, report: &str) -> Result<bool, String> {
-        let read = guarddog_read(
-            "web",
-            ecosystem,
-            &BTreeSet::new(),
-            &Waivers::default(),
-            &mut Ledger::default(),
-            Some(0),
-            report,
-            "",
-            &mut |_, _| Err(String::from("no registry evidence in this fixture")),
-        );
-        match read {
-            Read::Risks(..) => Ok(true),
-            Read::Clean => Ok(false),
-            Read::Unread(said) => Err(said),
-        }
-    }
-
-    const HEADER: &str = "Difference between manifest and package.json found: \n";
-    const START: &str = "  start: Manifest(\"node server.js\"), package.json(\"None\") \n";
-
-    /// Each publish-time normalization on its own is tolerated, in the report
-    /// guarddog printed for a real release, and named.
-    #[test]
-    fn a_mismatch_that_is_only_npms_publish_rewrite_is_tolerated_and_named() {
-        assert_eq!(objected("npm", REACT_DOM), Ok(false));
-        assert_eq!(objected("npm", SWAGGER_UI_EXPRESS), Ok(false));
-        assert_eq!(
-            tolerated(&format!("{HEADER}scripts: \n{START}")),
-            Some(vec![String::from(
-                "npm default start script (scripts.start = \"node server.js\")"
-            )])
-        );
-        assert_eq!(
-            tolerated(&format!(
-                "{HEADER}scripts: \n  test: Manifest(\"mocha t\"), \
-                 package.json(\"node_modules/.bin/mocha t\") \n"
-            )),
-            Some(vec![String::from(
-                "npm strips a leading node_modules/.bin/ (scripts.test = \"mocha t\")"
-            )])
-        );
-    }
-
-    /// Guarddog repeats the mismatch in `results` and on its risk. A risk's
-    /// description alone cannot excuse a different underlying result.
-    #[test]
-    fn npm_tolerance_requires_the_result_and_risk_to_agree() {
-        let mut report: serde_json::Value = serde_json::from_str(REACT_DOM).unwrap();
-        report[0]["result"]["results"]["metadata_mismatch"] = serde_json::Value::from(format!(
-            "{HEADER}scripts: \n  postinstall: Manifest(\"node evil.js\"), \
-                 package.json(\"None\") \n"
-        ));
-        assert_eq!(objected("npm", &report.to_string()), Ok(true));
-
-        report[0]["result"]["results"]
-            .as_object_mut()
-            .unwrap()
-            .remove("metadata_mismatch");
-        assert_eq!(objected("npm", &report.to_string()), Ok(true));
-    }
-
-    /// A normalization alongside any other difference is still a finding: the
-    /// tolerance is for a risk that is nothing but npm's rewrites.
-    #[test]
-    fn a_normalization_beside_any_other_difference_is_still_a_finding() {
-        for description in [
-            // A second script that differs.
-            format!(
-                "{HEADER}scripts: \n{START}  postinstall: Manifest(\"node x.js\"), \
-                 package.json(\"None\") \n"
-            ),
-            // A dependency that differs, which describe_diff prints first.
-            format!(
-                "{HEADER}dependencies: \n  left-pad: Manifest(\"1.0.0\"), \
-                 package.json(\"None\") \nscripts: \n{START}"
-            ),
-            // A `main` that differs, printed after `scripts`.
-            format!(
-                "{HEADER}scripts: \n{START}main: \n  Manifest:\n    index.js\n  \
-                 package.json:\n    evil.js\n"
-            ),
-            // A `start` npm did not write.
-            format!(
-                "{HEADER}scripts: \n  start: Manifest(\"node evil.js\"), \
-                 package.json(\"None\") \n"
-            ),
-            // The default `start` where the tarball has one of its own.
-            format!(
-                "{HEADER}scripts: \n  start: Manifest(\"node server.js\"), \
-                 package.json(\"node other.js\") \n"
-            ),
-            // The default under another key.
-            format!(
-                "{HEADER}scripts: \n  postinstall: Manifest(\"node server.js\"), \
-                 package.json(\"None\") \n"
-            ),
-        ] {
-            assert_eq!(tolerated(&description), None, "{description}");
-            assert_eq!(
-                objected("npm", &describing(REACT_DOM, &description)),
-                Ok(true),
-                "{description}"
-            );
-        }
-    }
-
-    /// `./node_modules/.bin/` is stripped by npm only at the start of a
-    /// script, once; the same text anywhere else, or a script that differs in
-    /// more than that prefix, is a finding.
-    #[test]
-    fn a_bin_prefix_removed_anywhere_but_the_start_is_still_a_finding() {
-        for (registry, tarball) in [
-            ("nyc mocha t", "nyc ./node_modules/.bin/mocha t"),
-            ("mocha t", "./node_modules/.bin/mocha t && curl x | sh"),
-            ("mocha t", "../node_modules/.bin/mocha t"),
-            ("mocha t", "./node_modules/.bin/mocha  t"),
-            ("./node_modules/.bin/mocha t", "mocha t"),
-        ] {
-            let description = format!(
-                "{HEADER}scripts: \n  test: Manifest(\"{registry}\"), \
-                 package.json(\"{tarball}\") \n"
-            );
-            assert_eq!(tolerated(&description), None, "{description}");
-            assert_eq!(
-                objected("npm", &describing(SWAGGER_UI_EXPRESS, &description)),
-                Ok(true),
-                "{description}"
-            );
-        }
-    }
-
-    /// A description this cannot read line by line as single differences is a
-    /// finding, because its values are not escaped and a line that splits two
-    /// ways could hide a difference behind a tolerated one.
-    #[test]
-    fn a_description_line_that_does_not_read_as_one_difference_is_still_a_finding() {
-        for description in [
-            String::new(),
-            String::from("start script differs"),
-            format!("{HEADER}scripts: \n"),
-            format!("{HEADER}scripts: \n{START}something guarddog never prints\n"),
-            // A value that spans lines.
-            format!(
-                "{HEADER}scripts: \n  test: Manifest(\"mocha\nt\"), \
-                 package.json(\"./node_modules/.bin/mocha\nt\") \n"
-            ),
-            // A marker inside a value, so the line splits more than one way.
-            format!(
-                "{HEADER}scripts: \n  start: Manifest(\"node server.js\"), \
-                 package.json(\"None\"), package.json(\"x\") \n"
-            ),
-            format!(
-                "{HEADER}scripts: \n  start: Manifest(\"a: Manifest(\"node server.js\"), \
-                 package.json(\"None\") \n"
-            ),
-            // A key holding the marker: the script `start: Manifest("Z` is
-            // `curl x | sh` in the registry, and split at the first marker it
-            // would read as `start` losing a `.bin` prefix.
-            format!(
-                "{HEADER}scripts: \n  start: Manifest(\"Z: Manifest(\"curl x | sh\"), \
-                 package.json(\"./node_modules/.bin/Z: Manifest(\"curl x | sh\") \n"
-            ),
-        ] {
-            assert_eq!(tolerated(&description), None, "{description:?}");
-            assert_eq!(
-                objected("npm", &describing(REACT_DOM, &description)),
-                Ok(true),
-                "{description:?}"
-            );
-        }
-        // A risk with no description at all.
-        let mut bare: serde_json::Value = serde_json::from_str(REACT_DOM).unwrap();
-        bare[0]["result"]["risks"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("threat_description");
-        assert_eq!(objected("npm", &bare.to_string()), Ok(true));
-    }
-
-    /// Without release evidence, the dropped `extra ==` markers cannot be
-    /// recovered from the report. An npm-shaped `PyPI` report also stays a finding.
-    #[test]
-    fn pypi_metadata_mismatch_is_not_tolerated() {
-        assert_eq!(objected("pypi", PANDAS), Ok(true));
-        let npm_shaped = describing(PANDAS, &format!("{HEADER}scripts: \n{START}"));
-        assert_eq!(objected("pypi", &npm_shaped), Ok(true));
-    }
-
-    #[test]
-    fn pypi_extras_need_release_evidence_and_agreeing_reports() {
-        let mut report: serde_json::Value = serde_json::from_str(PANDAS).unwrap();
-        let description = "Dependency mismatch between PyPI metadata and pyproject.toml:\n  In PyPI metadata but NOT in pyproject.toml: pyarrow\n";
-        report[0]["result"]["results"]["metadata_mismatch"] = description.into();
-        report[0]["result"]["risks"][0]["threat_description"] = description.into();
-        for (requirements, clean) in [
-            (vec!["pyarrow>=13; extra == 'parquet'"], true),
-            (vec!["pyarrow>=13"], false),
-            (vec!["pyarrow; extra == 'parquet'", "pyarrow"], false),
-        ] {
-            let read = guarddog_read(
-                "project",
-                "pypi",
-                &BTreeSet::from([String::from("pandas")]),
-                &Waivers::default(),
-                &mut Ledger::default(),
-                Some(0),
-                &report.to_string(),
-                "",
-                &mut |name, version| {
-                    assert_eq!((name, version), ("pandas", "3.0.3"));
-                    Ok(serde_json::json!({"info": {
-                        "name": name, "version": version, "requires_dist": requirements,
-                    }}))
-                },
-            );
-            assert_eq!(matches!(read, Read::Clean), clean);
-        }
-        report[0]["result"]["results"]["metadata_mismatch"] = "different evidence".into();
-        let mut fetched = false;
-        let read = guarddog_read(
-            "project",
-            "pypi",
-            &BTreeSet::new(),
-            &Waivers::default(),
-            &mut Ledger::default(),
-            Some(0),
-            &report.to_string(),
-            "",
-            &mut |_, _| {
-                fetched = true;
-                Err(String::from("unexpected lookup"))
-            },
-        );
-        assert!(matches!(read, Read::Risks(..)));
-        assert!(!fetched);
-    }
-
-    #[test]
-    fn verified_pypi_extras_leave_unrelated_risks_counted() {
-        let mut report: serde_json::Value = serde_json::from_str(PANDAS).unwrap();
-        for other_risk in [false, true] {
-            if other_risk {
-                report[0]["result"]["risks"]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(serde_json::json!({"threat_rule": "typosquatting"}));
-            }
-            let read = guarddog_read(
-                "project",
-                "pypi",
-                &BTreeSet::from([String::from("pandas")]),
-                &Waivers::default(),
-                &mut Ledger::default(),
-                Some(0),
-                &report.to_string(),
-                "",
-                &mut |_, _| {
-                    Ok(serde_json::from_str(include_str!(
-                        "../tests/fixtures/guarddog/pypi-pandas-3.0.3-metadata.json"
-                    ))
-                    .unwrap())
-                },
-            );
-            assert_eq!(matches!(read, Read::Risks(..)), other_risk);
-            assert_eq!(matches!(read, Read::Clean), !other_risk);
-        }
-    }
-
-    // ── a nested repository's own waivers ──
-
-    /// A waiver as a policy file would carry it.
-    fn waiver(package: &str, check: &str, reason: &str) -> Waiver {
-        Waiver {
-            scanner: String::from("guarddog"),
-            package: String::from(package),
-            check: String::from(check),
-            reason: String::from(reason),
-        }
-    }
-
-    /// A scan root that exists only as a path: the walk is lexical, and every
-    /// question it asks of the disk goes through the loader.
-    const SUPER: &str = "/srv/example/superproject";
-
-    /// A loader standing in for `uphold`'s discovery: a policy carrying one
-    /// `typosquatting` waiver on `npm:left-pad@1.3.0` at each directory in
-    /// `owners`, a load that fails at each in `broken`, and nothing elsewhere.
-    /// Every directory it is asked about is recorded, so a test can assert
-    /// where the walk went as well as what it found.
-    fn loader<'a>(
-        owners: &'a [&'a str],
-        broken: &'a [&'a str],
-        asked: &'a std::cell::RefCell<Vec<std::path::PathBuf>>,
-    ) -> impl Fn(&std::path::Path) -> crate::error::Result<Option<(std::path::PathBuf, Policy)>> + 'a
-    {
-        move |directory| {
-            asked.borrow_mut().push(directory.to_path_buf());
-            let relative = directory.strip_prefix(SUPER).unwrap_or(directory);
-            let path = directory.join("policy/principles.toml");
-            if broken.iter().any(|at| std::path::Path::new(at) == relative) {
-                return Err(crate::error::Fatal::at(&path, "is not valid TOML"));
-            }
-            if !owners.iter().any(|at| std::path::Path::new(at) == relative) {
-                return Ok(None);
-            }
-            let mut policy = Policy::default();
-            policy.supply_chain.waive = vec![waiver(
-                "npm:left-pad@1.3.0",
-                "typosquatting",
-                &format!("judged by {}", relative.display()),
-            )];
-            Ok(Some((path, policy)))
-        }
-    }
-
-    /// The policy files whose waivers `nested_waivers` gave a manifest in
-    /// `directory`, innermost first; empty where it gave only the root's.
-    fn owners_of(directory: &str, nested: NestedPolicy<'_>) -> Result<Vec<String>, String> {
-        let root = std::path::Path::new(SUPER);
-        nested_waivers(root, &root.join(directory), nested, &mut NestedFound::new())
-            .map(|found| found.iter().map(|owner| owner.source.clone()).collect())
-    }
-
-    /// The boundary, in both directions. A nested repository's waivers reach
-    /// the manifests in its own tree and none outside it: not the scan root's
-    /// own, not a sibling's, and not a directory whose name merely begins with
-    /// the repository's -- `Path::starts_with` is by component, and this is
-    /// the case that would break if it were ever done on text.
-    #[test]
-    fn a_nested_repositorys_waivers_reach_its_own_tree_and_nothing_outside_it() {
-        let asked = std::cell::RefCell::new(Vec::new());
-        let nested = loader(&["leaf"], &[], &asked);
-        let leaf = || vec![String::from("leaf/policy/principles.toml")];
-        for (directory, expected) in [
-            ("leaf", leaf()),
-            ("leaf/web", leaf()),
-            ("leaf/packages/ui", leaf()),
-            ("web", vec![]),
-            ("", vec![]),
-            ("sibling", vec![]),
-            ("sibling/web", vec![]),
-            ("leaf-two/web", vec![]),
-        ] {
-            assert_eq!(owners_of(directory, &nested), Ok(expected), "{directory:?}");
-        }
-        // The root is never asked: its policy is the one the run was started
-        // under, and answering it again as a "nested" one would print the
-        // root's own rows under a second name.
-        assert!(
-            asked
-                .borrow()
-                .iter()
-                .all(|at| at != std::path::Path::new(SUPER)),
-            "{:?}",
-            asked.borrow()
-        );
-    }
-
-    /// Every enclosing repository with a policy contributes, innermost first,
-    /// and each contributes only to its own tree: the outer repository reaches
-    /// the inner one's manifests, never the other way round. A repository
-    /// without a policy is passed over rather than stopped at.
-    #[test]
-    fn every_enclosing_repository_with_a_policy_contributes_innermost_first() {
-        let asked = std::cell::RefCell::new(Vec::new());
-        let nested = loader(&["outer", "outer/inner"], &[], &asked);
-        let outer = "outer/policy/principles.toml";
-        let inner = "outer/inner/policy/principles.toml";
-        for (directory, expected) in [
-            ("outer/inner/web", vec![inner, outer]),
-            ("outer/web", vec![outer]),
-            // `outer/bare` stands for a repository root with no policy: the
-            // loader answers `None` there as `uphold`'s discovery does.
-            ("outer/bare/web", vec![outer]),
-            ("outer/inner/bare/web", vec![inner, outer]),
-        ] {
-            assert_eq!(
-                owners_of(directory, &nested),
-                Ok(expected.into_iter().map(String::from).collect()),
-                "{directory:?}"
-            );
-        }
-    }
-
-    /// A nested policy that will not load is an error naming the manifest and
-    /// the repository, never "no waivers": the findings it would have judged
-    /// cannot be told apart from the ones it accepted. That holds at every
-    /// level -- an outer policy that will not load fails the manifest even
-    /// where the inner one loaded -- and the error names each manifest, not
-    /// the first one that met the broken repository.
-    #[test]
-    fn a_nested_policy_that_will_not_load_is_an_error_and_never_no_waivers() {
-        let asked = std::cell::RefCell::new(Vec::new());
-        let inner_broken = loader(&["leaf"], &["leaf/inner"], &asked);
-        let said = owners_of("leaf/inner/web", &inner_broken).unwrap_err();
-        assert!(
-            said.contains("/srv/example/superproject/leaf/inner/web"),
-            "{said}"
-        );
-        assert!(said.contains("did not load"), "{said}");
-        assert!(said.contains("is not valid TOML"), "{said}");
-        // A sibling of the broken repository is judged as before.
-        assert_eq!(
-            owners_of("leaf/web", &inner_broken),
-            Ok(vec![String::from("leaf/policy/principles.toml")])
-        );
-
-        let outer_broken = loader(&["leaf/inner"], &["leaf"], &asked);
-        let root = std::path::Path::new(SUPER);
-        let mut found = NestedFound::new();
-        for directory in ["leaf/inner/web", "leaf/inner/api"] {
-            let refused = nested_waivers(root, &root.join(directory), &outer_broken, &mut found)
-                .map(|_| ())
-                .unwrap_err();
-            assert!(
-                refused.contains(&root.join(directory).display().to_string()),
-                "{refused}"
-            );
-            assert!(
-                refused.contains(&format!("{} is a repository", root.join("leaf").display())),
-                "{refused}"
-            );
-        }
-    }
-
-    /// A report naming one `typosquatting` risk on `left-pad` at `version`.
-    fn typosquat(version: &str) -> String {
-        serde_json::json!([{
-            "dependency": "left-pad",
-            "result": {
-                "errors": {}, "issues": 1, "results": {}, "package_version": version,
-                "risks": [{"name": "typosquatting", "threat_rule": "typosquatting"}],
-            },
-        }])
-        .to_string()
-    }
-
-    /// `guarddog_read` over [`typosquat`] at `version`, against the root's
-    /// `root` and the enclosing repositories' `nested`, innermost first, and
-    /// what it recorded.
-    fn judged(version: &str, root: &[Waiver], nested: &[std::rc::Rc<Nested>]) -> (Read, Ledger) {
-        let mut ledger = Ledger::default();
-        let read = guarddog_read(
-            "outer/inner/web",
-            "npm",
-            &BTreeSet::from([String::from("left-pad")]),
-            &Waivers { root, nested },
-            &mut ledger,
-            Some(0),
-            &typosquat(version),
-            "",
-            &mut |_, _| Err(String::from("no registry evidence in this fixture")),
-        );
-        (read, ledger)
-    }
-
-    /// A nested repository at `source` waiving `left-pad` 1.3.0 for `reason`.
-    fn owning(source: &str, reason: &str) -> std::rc::Rc<Nested> {
-        std::rc::Rc::new(Nested {
-            source: String::from(source),
-            waive: vec![waiver("npm:left-pad@1.3.0", "typosquatting", reason)],
-        })
-    }
-
-    /// The innermost row covers the risk, and every outer row that also
-    /// covers it -- a nested repository's or the root's -- is recorded as its
-    /// repeat rather than as a match, so the stale report can say the copy may
-    /// go.
-    #[test]
-    fn the_innermost_waiver_covers_first_and_every_outer_row_for_the_same_risk_repeats_it() {
-        let inner = owning("outer/inner/policy/principles.toml", "the inner's");
-        let outer = owning("outer/policy/principles.toml", "the outer's");
-        let root = [waiver("npm:left-pad@1.3.0", "typosquatting", "the copy")];
-        let (all, copied) = judged("1.3.0", &root, &[inner.clone(), outer.clone()]);
-        assert!(matches!(all, Read::Clean));
-        assert_eq!(
-            copied.matched,
-            BTreeSet::from([(Some(inner.source.clone()), 0)])
-        );
-        let repeats: Vec<(Option<&str>, &str)> = copied
-            .duplicated
-            .iter()
-            .map(|((source, _), repeat)| (source.as_deref(), repeat.of.as_str()))
-            .collect();
-        assert_eq!(
-            repeats,
-            vec![
-                (None, "outer/inner/policy/principles.toml"),
-                (
-                    Some("outer/policy/principles.toml"),
-                    "outer/inner/policy/principles.toml"
-                ),
-            ]
-        );
-
-        // An outer repository's row covers what the inner one has no row for.
-        let bare = std::rc::Rc::new(Nested {
-            source: String::from("outer/inner/policy/principles.toml"),
-            waive: vec![],
-        });
-        let (through, outer_only) = judged("1.3.0", &[], &[bare, outer.clone()]);
-        assert!(matches!(through, Read::Clean));
-        assert_eq!(
-            outer_only.matched,
-            BTreeSet::from([(Some(outer.source.clone()), 0)])
-        );
-
-        // Keyed on the version as a root row is: the next release is read
-        // fresh, whoever wrote the row.
-        let (next, fresh) = judged("1.3.1", &[], &[inner, outer]);
-        assert!(matches!(next, Read::Risks(..)));
-        assert!(fresh.matched.is_empty() && fresh.duplicated.is_empty());
-
-        // And with no nested repository, the root's row is the match it was.
-        let (alone, rooted) = judged("1.3.0", &root, &[]);
-        assert!(matches!(alone, Read::Clean));
-        assert_eq!(rooted.matched, BTreeSet::from([(None, 0)]));
-        assert!(rooted.duplicated.is_empty());
-    }
-
-    /// guarddog unpacks under the cache directory, whatever `TMPDIR` says: the
-    /// order its `metadata_mismatch` rule lists an unpacked wheel in is that
-    /// filesystem's, so `TMPDIR` would otherwise be the verdict's input.
-    #[test]
-    fn guarddog_unpacks_under_the_cache_directory_and_never_under_tmpdir() {
-        let under = |xdg: Option<&str>, home: Option<&str>| {
-            guarddog_unpacks_under(|name| match name {
-                "XDG_CACHE_HOME" => xdg.map(std::path::PathBuf::from),
-                "HOME" => home.map(std::path::PathBuf::from),
-                "TMPDIR" => Some(std::path::PathBuf::from("/tmp/elsewhere")),
-                _ => None,
-            })
-        };
-        assert_eq!(
-            under(Some("/x/cache"), Some("/srv/example/user")).as_deref(),
-            Some(std::path::Path::new("/x/cache/uphold/guarddog"))
-        );
-        // Empty and relative are both "not set": a relative one would unpack
-        // downloads into the manifest's directory, which guarddog runs in.
-        for xdg in [None, Some(""), Some("cache")] {
-            assert_eq!(
-                under(xdg, Some("/srv/example/user")).as_deref(),
-                Some(std::path::Path::new(
-                    "/srv/example/user/.cache/uphold/guarddog"
-                )),
-                "{xdg:?}"
-            );
-        }
-        assert_eq!(under(None, None), None);
-        assert_eq!(under(Some("cache"), Some("home")), None);
-    }
 
     /// Every floor, for the tests that hold them all to one rule.
-    const FLOORS: [&Floor; 5] = [
-        &OSV_FLOOR,
-        &ZIZMOR_FLOOR,
-        &DENY_FLOOR,
-        &VET_FLOOR,
-        &GUARDDOG_FLOOR,
-    ];
+    const FLOORS: [&Floor; 4] = [&OSV_FLOOR, &ZIZMOR_FLOOR, &DENY_FLOOR, &VET_FLOOR];
 
     /// What each scanner printed for its version command on the host the
     /// readers were measured on, byte for byte, paired with the floor it
     /// answers. osv-scanner's is the multi-line one: its own version first,
     /// then the osv-scalibr library's, which is not the tool's.
-    const REAL_ANSWERS: [(&Floor, &str, Version); 5] = [
+    const REAL_ANSWERS: [(&Floor, &str, Version); 4] = [
         (
             &OSV_FLOOR,
             "osv-scanner version: 2.5.1\nosv-scalibr version: 0.5.2\ncommit: n/a\nbuilt at: n/a\n",
@@ -3440,7 +1969,6 @@ mod tests {
         (&ZIZMOR_FLOOR, "zizmor 1.30.0\n", Version(1, 30, 0)),
         (&DENY_FLOOR, "cargo-deny 0.20.2\n", Version(0, 20, 2)),
         (&VET_FLOOR, "cargo-vet 0.10.2\n", Version(0, 10, 2)),
-        (&GUARDDOG_FLOOR, "3.2.0\n", Version(3, 2, 0)),
     ];
 
     #[test]
@@ -3468,8 +1996,8 @@ mod tests {
         assert_eq!(parse_version("v2.5.1"), Some(Version(2, 5, 1)));
         assert_eq!(parse_version("zizmor 1.30.0-rc1"), Some(Version(1, 30, 0)));
         assert_eq!(
-            parse_version("guarddog 3.2.0+local"),
-            Some(Version(3, 2, 0))
+            parse_version("zizmor 1.30.0+local"),
+            Some(Version(1, 30, 0))
         );
         // Newer on every axis passes.
         for said in ["zizmor 1.30.1", "zizmor 1.31.0", "zizmor 2.0.0"] {
@@ -3490,7 +2018,6 @@ mod tests {
             ),
             (&DENY_FLOOR, "cargo-deny 0.19.0"),
             (&VET_FLOOR, "cargo-vet 0.10.1"),
-            (&GUARDDOG_FLOOR, "2.9.0"),
         ] {
             let reason = against_floor(floor, said).unwrap_or_default();
             let found = parse_version(said).unwrap().to_string();
@@ -3507,7 +2034,7 @@ mod tests {
     fn a_version_answer_this_cannot_read_is_refused_rather_than_trusted() {
         for said in [
             "",
-            "guarddog",
+            "zizmor",
             "3.2",
             "zizmor 1.x.0",
             "zizmor 1.30.0.1",

@@ -44,7 +44,6 @@ fn version_answer(name: &str) -> &'static str {
              version: 0.5.2\\n'; exit 0; }\n"
         }
         "zizmor" => "[ \"$1\" = --version ] && { echo 'zizmor 1.30.0'; exit 0; }\n",
-        "guarddog" => "[ \"$1\" = --version ] && { echo '3.2.0'; exit 0; }\n",
         "cargo" => {
             "[ \"$1 $2\" = 'deny --version' ] && { echo 'cargo-deny 0.20.2'; exit 0; }\n\
              [ \"$1 $2\" = 'vet --version' ] && { echo 'cargo-vet 0.10.2'; exit 0; }\n"
@@ -130,9 +129,6 @@ fn invoke(root: &Path, path: &std::ffi::OsStr, args: &[&str], push: &[(&str, &st
         .env("PATH", path)
         // Where each stub records that it ran, and with what.
         .env("STUB_LOG", root.join("stub.log"))
-        // Where guarddog unpacks: beside the fixture, so a suite run does not
-        // write under the developer's own cache directory.
-        .env("XDG_CACHE_HOME", cache_of(root))
         .current_dir(root)
         .stdin(Stdio::null());
     // The binary asks git about the fixture's ranges, and a hook's GIT_DIR
@@ -145,9 +141,6 @@ fn invoke(root: &Path, path: &std::ffi::OsStr, args: &[&str], push: &[(&str, &st
         "PRE_COMMIT_ORIGIN",
         "PRE_COMMIT_LOCAL_BRANCH",
         "PRE_COMMIT_REMOTE_BRANCH",
-        // Decides which npm dependencies guarddog reads, and so whether it is
-        // asked at all.
-        "GUARDDOG_NPM_INCLUDE_DEV_DEPENDENCIES",
     ] {
         command.env_remove(name);
     }
@@ -155,11 +148,6 @@ fn invoke(root: &Path, path: &std::ffi::OsStr, args: &[&str], push: &[(&str, &st
         command.env(name, value);
     }
     command.output().unwrap()
-}
-
-/// The cache directory a run against `root` is handed, beside the fixture.
-fn cache_of(root: &Path) -> PathBuf {
-    root.with_extension("cache")
 }
 
 /// The scoped form, driven the way prek drives it: the range in the two
@@ -182,37 +170,9 @@ fn journal(root: &Path) -> String {
 
 /// A stub that records its name, its working directory and its arguments.
 ///
-/// The working directory is half the assertion in the scoped tests: guarddog is
+/// The working directory is half the assertion in the scoped tests: `uv export` is
 /// run from the manifest's own directory, and a scan of the right file from the
 /// wrong place reads the wrong `package.json`.
-/// A clean `guarddog verify --output-format json` report.
-///
-/// guarddog is run with `--output-format json` because its exit code cannot
-/// say it found something: `verify` answers 0 either way. So a stub that only
-/// answers `exit 0` no longer models the tool -- a clean run PRINTS a report
-/// whose `risks` list is empty, and printing nothing is a run that did not
-/// report, which is could-not-look.
-const GUARDDOG_CLEAN: &str = "echo '[{\"dependency\":\"cookie\",\"result\":\
-    {\"errors\":{},\"issues\":0,\"results\":{},\"risks\":[]}}]'\nexit 0";
-
-/// The same report with one risk in it, which is a finding at exit 0.
-const GUARDDOG_RISK: &str = "echo '[{\"dependency\":\"reqests\",\"result\":\
-    {\"errors\":{},\"issues\":1,\"results\":{},\"risks\":\
-    [{\"name\":\"typosquatting\",\"severity\":\"high\"}]}}]'\nexit 0";
-
-fn clean_dependencies(names: &[&str]) -> String {
-    let entries: Vec<serde_json::Value> = names
-        .iter()
-        .map(|name| {
-            serde_json::json!({
-                "dependency": name,
-                "result": {"errors": {}, "results": {}, "risks": []}
-            })
-        })
-        .collect();
-    format!("echo '{}'\nexit 0", serde_json::json!(entries))
-}
-
 fn recording(answer: &str) -> String {
     format!("echo \"$(basename \"$0\") [$PWD] $*\" >> \"$STUB_LOG\"\n{answer}")
 }
@@ -293,7 +253,7 @@ fn a_missing_scanner_is_could_not_look_and_exit_2_not_a_pass() {
 #[test]
 fn clean_scanners_over_a_tree_with_nothing_else_is_a_pass_that_says_what_ran() {
     let root = repository();
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", "exit 0")]);
+    let tools = stubs(&[("osv-scanner", "exit 0")]);
     let output = supply(&root, Some(&tools));
     assert_eq!(code(&output), 0, "{}", text(&output));
     let said = text(&output);
@@ -517,51 +477,15 @@ fn a_repository_with_a_vet_store_runs_vet_and_reports_what_it_said() {
     assert!(!said.contains("no supply-chain/ store here"), "{said}");
 }
 
-/// A Python lock is exported by uv and handed to guarddog.
-///
-/// guarddog reads a requirements file, uv.lock is not one, and the export is
-/// therefore not plumbing but the whole section: a run that skipped it would
-/// scan nothing and say "checked". The refusal is asserted rather than a clean
-/// run so that the count and the verdict are both pinned.
-#[test]
-fn a_python_lock_is_exported_for_guarddog_and_its_refusal_is_the_runs() {
-    let root = repository();
-    std::fs::create_dir_all(root.join("service")).unwrap();
-    std::fs::write(root.join("service/uv.lock"), "version = 1\n").unwrap();
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        ("uv", "echo 'reqests==2.0.0'"),
-        (
-            "guarddog",
-            // `$5`, not `$3`: the export path sits after `--output-format json`,
-            // which guarddog needs because its exit code cannot report a find.
-            &format!(
-                "grep -q 'reqests==2.0.0' \"$5\" || {{ echo 'guarddog was not handed the \
-                 export'; exit 2; }}\n{GUARDDOG_RISK}"
-            ),
-        ),
-    ]);
-    let output = supply(&root, Some(&tools));
-    assert_eq!(code(&output), 1, "{}", text(&output));
-    let said = text(&output);
-    assert!(said.contains("FAILED: guarddog pypi"), "{said}");
-    assert!(said.contains("1 Python/npm manifest(s) checked"), "{said}");
-    assert!(
-        !said.contains("guarddog was not handed the export"),
-        "{said}"
-    );
-}
-
 /// A `uv` that is not on PATH is could-not-look, not a clean Python section.
 ///
-/// guarddog IS installed here, so the section's own missing-tool check passes
-/// and the run reaches the export. Nothing was read; a pass would say the
+/// The run reaches the export. Nothing was read; a pass would say the
 /// Python manifests were scanned when uv never ran.
 #[test]
 fn a_python_lock_with_no_uv_on_path_is_could_not_look_not_a_pass() {
     let root = repository();
     std::fs::write(root.join("uv.lock"), "version = 1\n").unwrap();
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", "exit 0")]);
+    let tools = stubs(&[("osv-scanner", "exit 0")]);
     let output = supply(&root, Some(&tools));
     assert_eq!(code(&output), 2, "{}", text(&output));
     let said = text(&output);
@@ -572,7 +496,7 @@ fn a_python_lock_with_no_uv_on_path_is_could_not_look_not_a_pass() {
 /// An export that fails is a failure of the section, not a skipped manifest.
 ///
 /// `uv export` refusing -- a lock out of date with its `pyproject.toml` is the
-/// ordinary cause -- leaves guarddog nothing to read. Continuing to the next
+/// ordinary cause -- leaves nothing to read. Continuing to the next
 /// manifest without recording it would let a run over one broken lock and one
 /// clean one print a pass.
 #[test]
@@ -585,29 +509,27 @@ fn a_uv_export_that_fails_is_a_failure_rather_than_a_manifest_quietly_skipped() 
             "uv",
             "echo 'error: the lock file is not up to date' >&2; exit 2",
         ),
-        ("guarddog", "echo 'guarddog ran on nothing'; exit 0"),
     ]);
     let output = supply(&root, Some(&tools));
     assert_eq!(code(&output), 1, "{}", text(&output));
     let said = text(&output);
     assert!(
-        said.contains("FAILED: guarddog: uv export failed"),
+        said.contains("FAILED: git pins: uv export failed"),
         "{said}"
     );
-    assert!(!said.contains("guarddog ran on nothing"), "{said}");
 }
 
-/// A lock out of step with its manifest is exported and scanned as it is, and
-/// the tree is not written.
+/// A lock out of step with its manifest is exported as it is, and the tree is
+/// not written.
 ///
 /// The lock records an `exclude-newer` its `pyproject.toml` lacks, which is how
 /// a lock made with the option on the command line reads to `uv lock --check`.
-/// Whether the pair agrees is uv's question; the scan asks about the pinned
-/// packages. The `uv` modelled here refuses `--locked` on such a pair, relocks
+/// Whether the pair agrees is uv's question; the scan reads the pinned
+/// set. The `uv` modelled here refuses `--locked` on such a pair, relocks
 /// and writes without either flag, and exports the lock as it stands under
 /// `--frozen`.
 #[test]
-fn a_lock_out_of_step_with_its_manifest_is_exported_and_scanned_without_a_write() {
+fn a_lock_out_of_step_with_its_manifest_is_exported_without_a_write() {
     let root = repository();
     write(
         &root,
@@ -628,18 +550,7 @@ fn a_lock_out_of_step_with_its_manifest_is_exported_and_scanned_without_a_write(
          [ -z \"$frozen\" ] && echo '# relocked' > uv.lock\n\
          echo 'requests==2.0.0'",
     );
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        ("uv", &uv),
-        (
-            "guarddog",
-            &format!(
-                "grep -q 'requests==2.0.0' \"$5\" || {{ echo 'guarddog was not handed the \
-                 export'; exit 2; }}\n{}",
-                clean_dependencies(&["requests"])
-            ),
-        ),
-    ]);
+    let tools = stubs(&[("osv-scanner", "exit 0"), ("uv", &uv)]);
     let before = tree(&root);
     let output = supply(&root, Some(&tools));
     assert_eq!(tree(&root), before, "the scan wrote into the tree");
@@ -647,25 +558,19 @@ fn a_lock_out_of_step_with_its_manifest_is_exported_and_scanned_without_a_write(
     let said = text(&output);
     assert!(said.contains("1 Python/npm manifest(s) checked"), "{said}");
     assert!(
-        !said.contains("guarddog was not handed the export"),
-        "{said}"
-    );
-    assert!(
         journal(&root).contains("export --frozen"),
         "{}",
         journal(&root)
     );
 }
 
-/// An npm manifest is scanned in its own directory, and a clean one passes.
+/// An npm manifest with registry dependencies alone has no git pin to check,
+/// and passes.
 ///
-/// `package.json` is handed to guarddog by bare name with the working directory
-/// set to the manifest's own, so a nested package scanned from the repository
-/// root would read the wrong file or none. The clean case is asserted here
-/// because it is the only place the section's success path and its count are
-/// both visible.
+/// The clean case is asserted here because it is the only place the git pins
+/// section's success path and its count are both visible.
 #[test]
-fn an_npm_manifest_is_scanned_where_it_lives_and_a_clean_one_is_a_pass() {
+fn an_npm_manifest_with_no_git_dependency_is_counted_and_a_pass() {
     let root = repository();
     std::fs::create_dir_all(root.join("web")).unwrap();
     std::fs::write(
@@ -673,189 +578,18 @@ fn an_npm_manifest_is_scanned_where_it_lives_and_a_clean_one_is_a_pass() {
         "{\"name\": \"web\", \"dependencies\": {\"cookie\": \"^1.1.1\"}}\n",
     )
     .unwrap();
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        (
-            "guarddog",
-            &format!(
-                "grep -q '\"web\"' package.json || {{ echo 'wrong directory'; exit 1; }}\n{GUARDDOG_CLEAN}"
-            ),
-        ),
-    ]);
+    let tools = stubs(&[("osv-scanner", "exit 0")]);
     let output = supply(&root, Some(&tools));
     assert_eq!(code(&output), 0, "{}", text(&output));
     let said = text(&output);
     assert!(said.contains("1 Python/npm manifest(s) checked"), "{said}");
     assert!(said.contains("all checks passed"), "{said}");
-    assert!(!said.contains("wrong directory"), "{said}");
-}
-
-/// guarddog unpacks under the cache directory whatever `TMPDIR` the run was
-/// handed.
-///
-/// guarddog's `metadata_mismatch` rule picks a wheel's root by `os.listdir`
-/// order, which is the filesystem's, so a guarddog that inherited `TMPDIR`
-/// passed pandas 3.0.3 with it on btrfs and failed it with it on tmpfs. Two
-/// runs with two `TMPDIR`s must hand guarddog the same directory, and it must
-/// exist for guarddog's `tempfile` to use.
-#[test]
-fn guarddog_unpacks_in_the_same_directory_whatever_tmpdir_says() {
-    let root = repository();
-    std::fs::create_dir_all(root.join("web")).unwrap();
-    std::fs::write(
-        root.join("web/package.json"),
-        "{\"name\": \"web\", \"dependencies\": {\"cookie\": \"^1.1.1\"}}\n",
-    )
-    .unwrap();
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        (
-            "guarddog",
-            &format!(
-                "[ -d \"$TMPDIR\" ] || {{ echo \"no directory at $TMPDIR\"; exit 1; }}\n\
-                 echo \"TMPDIR=$TMPDIR\" >> \"$STUB_LOG\"\n{GUARDDOG_CLEAN}"
-            ),
-        ),
-    ]);
-    let mut path = tools.as_os_str().to_owned();
-    path.push(":/usr/bin:/bin");
-    let expected = format!(
-        "TMPDIR={}",
-        cache_of(&root).join("uphold/guarddog").display()
-    );
-    for kind in ["supply-chain-tmpfs", "supply-chain-btrfs"] {
-        let tmpdir = support::scratch(kind);
-        std::fs::create_dir_all(&tmpdir).unwrap();
-        let _ = std::fs::remove_file(root.join("stub.log"));
-        let output = invoke(
-            &root,
-            &path,
-            &["--all"],
-            &[("TMPDIR", tmpdir.to_str().unwrap())],
-        );
-        assert_eq!(code(&output), 0, "{}", text(&output));
-        assert_eq!(journal(&root).trim(), expected, "{}", text(&output));
-    }
-}
-
-/// A refusing npm scan is a failure, named by the directory it came from.
-///
-/// A fleet run prints many sections; "guarddog npm" without the directory is a
-/// finding nobody can locate, which was the divergence between the seven copies
-/// of the shell task this replaces -- one dumped the failure output, the rest
-/// printed a bare FAILED.
-#[test]
-fn a_refusing_npm_scan_names_the_directory_it_refused_in() {
-    let root = repository();
-    std::fs::create_dir_all(root.join("web")).unwrap();
-    std::fs::write(
-        root.join("web/package.json"),
-        "{\"name\": \"web\", \"dependencies\": {\"cookie\": \"^1.1.1\"}}\n",
-    )
-    .unwrap();
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_RISK)]);
-    let output = supply(&root, Some(&tools));
-    assert_eq!(code(&output), 1, "{}", text(&output));
-    let said = text(&output);
-    assert!(said.contains("FAILED: guarddog npm"), "{said}");
-    assert!(said.contains("web"), "{said}");
-}
-
-/// A manifest with `devDependencies` only leaves guarddog nothing to read.
-///
-/// `guarddog npm verify` reads `dependencies` alone and answers `[]` for a
-/// manifest without them, which the reader takes for a network failure; every
-/// push of a test-only package was "could not look". Such a manifest is not
-/// handed to guarddog at all, and the section passes.
-#[test]
-fn a_manifest_with_only_dev_dependencies_is_not_sent_to_guarddog_and_passes() {
-    let root = repository();
-    std::fs::write(
-        root.join("package.json"),
-        "{\"name\": \"tests\", \"devDependencies\": {\"jose\": \"^6.2.12\"}}\n",
-    )
-    .unwrap();
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        ("guarddog", &recording("echo '[]'; exit 0")),
-    ]);
-    let output = supply(&root, Some(&tools));
-    let said = text(&output);
-    assert_eq!(code(&output), 0, "{said}");
-    assert!(
-        said.contains("no dependency here resolves from npm"),
-        "{said}"
-    );
-    assert!(!said.contains("reported on no dependency"), "{said}");
-    assert!(said.contains("all checks passed"), "{said}");
-    assert!(!journal(&root).contains("guarddog"), "{}", journal(&root));
-}
-
-/// Where guarddog is told to read `devDependencies`, they are something to
-/// look up, and the same manifest is handed to it.
-#[test]
-fn dev_dependencies_are_sent_to_guarddog_where_it_is_told_to_read_them() {
-    let root = repository();
-    std::fs::write(
-        root.join("package.json"),
-        "{\"name\": \"tests\", \"devDependencies\": {\"jose\": \"^6.2.12\"}}\n",
-    )
-    .unwrap();
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        ("guarddog", &recording(&clean_dependencies(&["jose"]))),
-    ]);
-    let output = supply_with(
-        &root,
-        &tools,
-        &[(
-            "GUARDDOG_NPM_INCLUDE_DEV_DEPENDENCIES",
-            String::from("TRUE"),
-        )],
-    );
-    let said = text(&output);
-    assert_eq!(code(&output), 0, "{said}");
-    assert!(!said.contains("guarddog was not asked"), "{said}");
-    assert!(
-        journal(&root).contains("] npm verify"),
-        "{}",
-        journal(&root)
-    );
-}
-
-/// A manifest that does not parse is still handed to guarddog, and its failure
-/// to report is could-not-look, never the pass a manifest with nothing to
-/// scan earns.
-#[test]
-fn an_unparseable_manifest_is_still_sent_to_guarddog_and_is_not_checked() {
-    let root = repository();
-    std::fs::write(root.join("package.json"), "{\"name\": \"broken\",\n").unwrap();
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        (
-            "guarddog",
-            &recording("echo 'json.decoder.JSONDecodeError: Expecting value' >&2; exit 1"),
-        ),
-    ]);
-    let output = supply(&root, Some(&tools));
-    let said = text(&output);
-    assert_eq!(code(&output), 2, "{said}");
-    assert!(
-        said.contains("NOT CHECKED: guarddog gave no report"),
-        "{said}"
-    );
-    assert!(!said.contains("guarddog was not asked"), "{said}");
-    assert!(
-        journal(&root).contains("] npm verify"),
-        "{}",
-        journal(&root)
-    );
 }
 
 /// A section with work to do and no tool to do it names the tool.
 ///
-/// Both of these sections gate on the tree first -- `deny.toml` here, a
-/// `package.json` there -- and the gate's other answer is a pass. Reaching the
+/// The section gates on the tree first -- `deny.toml` here -- and the gate's
+/// other answer is a pass. Reaching the
 /// missing-tool check only after the gate is what keeps "nothing to check" and
 /// "nobody checked" apart, and the reader is owed the name of what to install
 /// rather than a bare exit 2.
@@ -864,20 +598,13 @@ fn a_section_with_work_and_no_tool_installed_names_the_tool_and_is_not_a_pass() 
     let root = repository();
     std::fs::write(root.join("deny.toml"), "[bans]\n").unwrap();
     std::fs::write(root.join("Cargo.toml"), "[package]\nname = 'fixture'\n").unwrap();
-    std::fs::write(
-        root.join("package.json"),
-        "{\"name\": \"fixture\", \"dependencies\": {\"cookie\": \"^1.1.1\"}}\n",
-    )
-    .unwrap();
     let tools = stubs(&[("osv-scanner", "exit 0")]);
     let output = supply_without_the_system_path(&root, &tools);
     assert_eq!(code(&output), 2, "{}", text(&output));
     let said = text(&output);
     assert!(said.contains("cargo is not on PATH"), "{said}");
-    assert!(said.contains("guarddog is not on PATH"), "{said}");
     assert!(!said.contains("all checks passed"), "{said}");
     assert!(!said.contains("no deny.toml"), "{said}");
-    assert!(!said.contains("no Python or npm manifests here"), "{said}");
 }
 
 /// A cargo-deny that finds nothing is clean, and says how many it looked at.
@@ -1281,7 +1008,6 @@ fn a_range_touching_no_manifest_runs_no_scanner_and_says_so_in_one_line() {
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
         ("zizmor", &recording("exit 0")),
-        ("guarddog", &recording(GUARDDOG_CLEAN)),
         ("cargo", &recording("exit 0")),
     ]);
     let output = pushed(&root, &tools, &before, &after);
@@ -1311,23 +1037,21 @@ fn all_scans_every_manifest_even_where_the_range_holds_none_of_them() {
         ("osv-scanner", &recording("exit 0")),
         ("zizmor", &recording("exit 0")),
         ("uv", &recording("echo 'requests==2.0.0'")),
-        ("guarddog", &recording(&clean_dependencies(&["requests"]))),
     ]);
     let output = supply(&root, Some(&tools));
     assert_eq!(code(&output), 0, "{}", text(&output));
     let ran = journal(&root);
     assert!(ran.contains("osv-scanner"), "{ran}");
     assert!(ran.contains("zizmor"), "{ran}");
-    assert!(ran.contains("guarddog"), "{ran}");
+    assert!(ran.contains("export --frozen"), "{ran}");
 }
 
 /// A changed Python lock is scanned where it lives, and nowhere else.
 ///
-/// The second manifest is the assertion. guarddog is a minute of network per
-/// handful of packages, and a scoped run that still walked to every `uv.lock`
-/// in the tree would have narrowed nothing at the only cost that mattered.
+/// The second manifest is the assertion. A scoped run that still walked to
+/// every `uv.lock` in the tree would have narrowed nothing.
 #[test]
-fn a_changed_python_lock_runs_guarddog_in_that_directory_and_not_the_others() {
+fn a_changed_python_lock_is_exported_in_that_directory_and_not_the_others() {
     let root = tracked();
     write(&root, "other/uv.lock", "version = 1\n");
     let _ = commit(&root, "a lock this push does not touch");
@@ -1337,12 +1061,11 @@ fn a_changed_python_lock_runs_guarddog_in_that_directory_and_not_the_others() {
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
         ("uv", &recording("echo 'requests==2.0.0'")),
-        ("guarddog", &recording(&clean_dependencies(&["requests"]))),
     ]);
     let output = pushed(&root, &tools, &before, &after);
     assert_eq!(code(&output), 0, "{}", text(&output));
     let ran = journal(&root);
-    assert!(ran.contains("guarddog"), "{ran}");
+    assert!(ran.contains("export --frozen"), "{ran}");
     assert!(ran.contains("harness"), "{ran}");
     assert!(!ran.contains("other"), "{ran}");
     // The lock is handed to osv-scanner by path, not scanned for by a walk.
@@ -1379,7 +1102,6 @@ fn a_moved_pyproject_with_no_uv_lock_is_not_exported_and_no_lock_is_written() {
             "uv",
             &recording("echo '# resolved afresh' > uv.lock\necho 'requests==2.0.0'"),
         ),
-        ("guarddog", &recording(&clean_dependencies(&["requests"]))),
     ]);
     let output = pushed(&root, &tools, &before, &after);
     assert_eq!(code(&output), 0, "{}", text(&output));
@@ -1440,7 +1162,6 @@ fn a_range_holding_only_a_ci_config_says_the_file_is_unscanned_not_that_there_wa
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
         ("zizmor", &recording("exit 0")),
-        ("guarddog", &recording(GUARDDOG_CLEAN)),
         ("cargo", &recording("exit 0")),
     ]);
     let output = pushed(&root, &tools, &before, &after);
@@ -1514,12 +1235,11 @@ fn a_bumped_submodule_pointer_expands_into_the_members_own_manifests() {
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
         ("uv", &recording("echo 'requests==2.0.0'")),
-        ("guarddog", &recording(&clean_dependencies(&["requests"]))),
     ]);
     let output = pushed(&root, &tools, &before, &after);
     assert_eq!(code(&output), 0, "{}", text(&output));
     let ran = journal(&root);
-    assert!(ran.contains("guarddog"), "{ran}");
+    assert!(ran.contains("export --frozen"), "{ran}");
     assert!(ran.contains("sub"), "{ran}");
 }
 
@@ -1548,13 +1268,16 @@ fn a_submodule_commit_the_store_does_not_have_widens_to_every_manifest_under_it(
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
         ("uv", &recording("echo 'requests==2.0.0'")),
-        ("guarddog", &recording(&clean_dependencies(&["requests"]))),
     ]);
     let output = pushed(&root, &tools, &before, &after);
     assert_eq!(code(&output), 0, "{}", text(&output));
     let said = text(&output);
     assert!(said.contains("does not have"), "{said}");
-    assert!(journal(&root).contains("guarddog"), "{}", journal(&root));
+    assert!(
+        journal(&root).contains("export --frozen"),
+        "{}",
+        journal(&root)
+    );
 }
 
 /// A push from a linked worktree reads the member's range in the member.
@@ -1617,7 +1340,6 @@ fn a_push_from_a_linked_worktree_reads_the_members_range_in_the_member() {
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
         ("uv", &recording("echo 'requests==2.0.0'")),
-        ("guarddog", &recording(&clean_dependencies(&["requests"]))),
     ]);
     let mut path = tools.as_os_str().to_owned();
     path.push(":/usr/bin:/bin");
@@ -1663,39 +1385,6 @@ fn a_submodule_that_is_not_checked_out_is_refused_rather_than_widened() {
     let said = text(&output);
     assert!(said.contains("not checked out"), "{said}");
     assert!(said.contains("sub"), "{said}");
-}
-
-/// guarddog rules that did not run are could-not-look, not a pass.
-///
-/// guarddog prints "Some rules failed to run while scanning <package>" and
-/// exits 0, and the two email-domain rules time out routinely. An orchestrator
-/// reading only the exit code files that under clean: the publisher-identity
-/// question was asked and nobody answered it, which is the third verdict this
-/// command exists for, and the reason names the package and how many rules.
-#[test]
-fn guarddog_rules_that_did_not_run_are_could_not_look_rather_than_a_clean_scan() {
-    let root = repository();
-    std::fs::write(
-        root.join("package.json"),
-        "{\"name\": \"fixture\", \"dependencies\": {\"cookie\": \"^1.1.1\"}}\n",
-    )
-    .unwrap();
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        (
-            "guarddog",
-            "echo 'Some rules failed to run while scanning left-pad:'\n\
-             echo '* potentially_compromised_email_domain: failed to run rule \
-             potentially_compromised_email_domain: timed out'\n\
-             exit 0",
-        ),
-    ]);
-    let output = supply(&root, Some(&tools));
-    assert_eq!(code(&output), 2, "{}", text(&output));
-    let said = text(&output);
-    assert!(said.contains("left-pad"), "{said}");
-    assert!(said.contains("1 rule(s) unrun"), "{said}");
-    assert!(!said.contains("all checks passed"), "{said}");
 }
 
 /// cargo-vet's finding and cargo-vet's refusal to start share exit 255.
@@ -1872,251 +1561,6 @@ fn cargo_deny_that_never_reached_a_check_is_could_not_look_not_an_advisory() {
     assert!(!said.contains("all checks passed"), "{said}");
 }
 
-/// guarddog reports a finding at exit 0, and the finding must survive that.
-///
-/// `guarddog verify` answers 0 whether it found three high-severity risks or
-/// none, so a section reading the exit code called every finding clean. This
-/// is the false negative that reading `risks` exists to close, on the one
-/// scanner here whose job is malware and typosquats.
-#[test]
-fn guarddog_that_found_risks_and_exited_zero_is_a_finding_not_a_clean_scan() {
-    let root = repository();
-    std::fs::create_dir_all(root.join("web")).unwrap();
-    std::fs::write(
-        root.join("web/package.json"),
-        "{\"name\": \"web\", \"dependencies\": {\"cookie\": \"^1.1.1\"}}\n",
-    )
-    .unwrap();
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_RISK)]);
-    let output = supply(&root, Some(&tools));
-    assert_eq!(code(&output), 1, "{}", text(&output));
-    let said = text(&output);
-    assert!(said.contains("objected to reqests"), "{said}");
-    assert!(!said.contains("all checks passed"), "{said}");
-}
-
-/// `issues` is not the finding count, so a clean package stays clean.
-///
-/// `six` reports `issues: 2` with `risks: []` and guarddog's own label
-/// `no_risks_detected`; the two issues are capability matches on an `exec()`.
-/// This is why `--exit-non-zero-on-finding`, which counts issues, is not the
-/// remedy for the case above: it would fail a package guarddog calls clean.
-#[test]
-fn guarddog_issues_without_risks_are_not_a_finding() {
-    let root = repository();
-    std::fs::create_dir_all(root.join("web")).unwrap();
-    std::fs::write(
-        root.join("web/package.json"),
-        "{\"name\": \"web\", \"dependencies\": {\"six\": \"^1.1.1\"}}\n",
-    )
-    .unwrap();
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        (
-            "guarddog",
-            "echo '[{\"dependency\":\"six\",\"result\":{\"errors\":{},\"issues\":2,\
-             \"results\":{},\"risks\":[]}}]'\nexit 0",
-        ),
-    ]);
-    let output = supply(&root, Some(&tools));
-    assert_eq!(code(&output), 0, "{}", text(&output));
-    assert!(
-        text(&output).contains("all checks passed"),
-        "{}",
-        text(&output)
-    );
-}
-
-/// npm skips a dependency whose selector has no matching release. Neither a
-/// duplicate entry nor an unrelated package can make up for the missing name.
-#[test]
-fn guarddog_must_report_every_submitted_npm_dependency() {
-    let root = repository();
-    write(
-        &root,
-        "package.json",
-        r#"{"dependencies":{"cookie":"1.0.0","missing-package":"1.0.0"}}"#,
-    );
-    for names in [
-        vec![],
-        vec!["cookie"],
-        vec!["cookie", "cookie"],
-        vec!["cookie", "unrelated"],
-    ] {
-        let tools = stubs(&[
-            ("osv-scanner", "exit 0"),
-            ("guarddog", &clean_dependencies(&names)),
-        ]);
-        let output = supply(&root, Some(&tools));
-        let said = text(&output);
-        assert_eq!(code(&output), 2, "{names:?}: {said}");
-        assert!(said.contains("guarddog omitted"), "{said}");
-        assert!(said.contains("missing-package"), "{said}");
-        assert!(said.contains(&root.display().to_string()), "{said}");
-        assert!(!said.contains("all checks passed"), "{said}");
-    }
-}
-
-/// `PyPI`'s parser can return the packages before a failed registry request,
-/// dropping both the failed dependency and everything after it.
-#[test]
-fn guarddog_partial_pypi_reports_name_every_omitted_dependency() {
-    let root = repository();
-    write(&root, "uv.lock", "version = 1\n");
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        (
-            "uv",
-            "printf '%s\\n' 'requests==2.0.0' 'registry-failed==1.0' 'after-failure==1.0'",
-        ),
-        ("guarddog", &clean_dependencies(&["requests"])),
-    ]);
-    let output = supply(&root, Some(&tools));
-    let said = text(&output);
-    assert_eq!(code(&output), 2, "{said}");
-    assert!(
-        said.contains("guarddog omitted after-failure, registry-failed"),
-        "{said}"
-    );
-    assert!(said.contains("submitted pypi dependency"), "{said}");
-    assert!(!said.contains("all checks passed"), "{said}");
-}
-
-/// Alias keys are not the names guarddog reports, and several selectors can
-/// merge into one real npm package, including across dependency groups.
-#[test]
-fn guarddog_coverage_uses_real_npm_alias_names() {
-    let root = repository();
-    write(
-        &root,
-        "package.json",
-        r#"{"dependencies":{"cookie":"1.0.0","renamed":"npm:cookie@1.0.0","scoped":"npm:@scope/package@^2","latest":"npm:@scope/package"},"devDependencies":{"development":"npm:cookie@^1"}}"#,
-    );
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        (
-            "guarddog",
-            &clean_dependencies(&["cookie", "@scope/package"]),
-        ),
-    ]);
-    let output = supply_with(
-        &root,
-        &tools,
-        &[(
-            "GUARDDOG_NPM_INCLUDE_DEV_DEPENDENCIES",
-            String::from("true"),
-        )],
-    );
-    assert_eq!(code(&output), 0, "{}", text(&output));
-    assert!(
-        text(&output).contains("all checks passed"),
-        "{}",
-        text(&output)
-    );
-}
-
-/// Extras, markers and repeated punctuation do not change a `PyPI` identity.
-/// Local project lines and comments remain outside the expected registry set.
-#[test]
-fn guarddog_coverage_normalises_pypi_names_and_ignores_local_requirements() {
-    let root = repository();
-    write(&root, "uv.lock", "version = 1\n");
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        (
-            "uv",
-            "printf '%s\\n' '# exported' '-e .' 'Example__Package.Name[extra]==1.0 ; python_version >= \"3.9\"' 'example-package-name==1.0'",
-        ),
-        ("guarddog", &clean_dependencies(&["EXAMPLE-package_NAME"])),
-    ]);
-    let output = supply(&root, Some(&tools));
-    assert_eq!(code(&output), 0, "{}", text(&output));
-    assert!(
-        text(&output).contains("all checks passed"),
-        "{}",
-        text(&output)
-    );
-}
-
-/// A reported risk stays a finding even when another dependency was omitted;
-/// the output must also disclose the gap.
-#[test]
-fn guarddog_risks_survive_a_partial_report() {
-    let root = repository();
-    write(
-        &root,
-        "package.json",
-        r#"{"dependencies":{"reqests":"2.0.0","missing-package":"1.0.0"}}"#,
-    );
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_RISK)]);
-    let output = supply(&root, Some(&tools));
-    let said = text(&output);
-    assert_eq!(code(&output), 1, "{said}");
-    assert!(said.contains("objected to reqests"), "{said}");
-    assert!(said.contains("guarddog omitted missing-package"), "{said}");
-    assert!(!said.contains("all checks passed"), "{said}");
-}
-
-/// A report must carry both the checks guarddog ran and its risk list. A
-/// missing or mistyped field is an incomplete answer, not an empty finding.
-#[test]
-fn guarddog_with_an_incomplete_result_is_could_not_look() {
-    let root = repository();
-    std::fs::create_dir_all(root.join("web")).unwrap();
-    std::fs::write(
-        root.join("web/package.json"),
-        "{\"name\": \"web\", \"dependencies\": {\"cookie\": \"^1.1.1\"}}\n",
-    )
-    .unwrap();
-    for result in [
-        r#"{"errors":{},"results":{}}"#,
-        r#"{"errors":{},"results":{},"risks":null}"#,
-        r#"{"errors":{},"results":null,"risks":[]}"#,
-    ] {
-        let report = format!(r#"[{{"dependency":"cookie","result":{result}}}]"#);
-        let tools = stubs(&[
-            ("osv-scanner", "exit 0"),
-            ("guarddog", &format!("echo '{report}'\nexit 0")),
-        ]);
-        let output = supply(&root, Some(&tools));
-        assert_eq!(code(&output), 2, "{result}: {}", text(&output));
-        let said = text(&output);
-        assert!(
-            said.contains("incomplete report for cookie"),
-            "{result}: {said}"
-        );
-        assert!(!said.contains("all checks passed"), "{result}: {said}");
-    }
-}
-
-/// A dependency guarddog could not download is could-not-look, not clean.
-///
-/// The 404 and network paths populate `errors` and drop `results`, and still
-/// exit 0. Reading the code alone calls a package nobody scanned clean.
-#[test]
-fn guarddog_that_could_not_scan_a_dependency_is_could_not_look() {
-    let root = repository();
-    std::fs::create_dir_all(root.join("web")).unwrap();
-    std::fs::write(
-        root.join("web/package.json"),
-        "{\"name\": \"web\", \"dependencies\": {\"cookie\": \"^1.1.1\"}}\n",
-    )
-    .unwrap();
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        (
-            "guarddog",
-            "echo '[{\"dependency\":\"left-pad\",\"result\":{\"errors\":\
-             {\"download-package\":\"Received status code: 404 from PyPI\"},\"issues\":0}}]'\nexit 0",
-        ),
-    ]);
-    let output = supply(&root, Some(&tools));
-    assert_eq!(code(&output), 2, "{}", text(&output));
-    let said = text(&output);
-    assert!(said.contains("could not scan left-pad"), "{said}");
-    assert!(!said.contains("all checks passed"), "{said}");
-}
-
 // ── version floors ───────────────────────────────────────────────────────
 
 /// A scanner older than the release its reader was measured against is exit 2
@@ -2245,17 +1689,13 @@ fn inheriting_credentials() -> PathBuf {
 
 /// The two scanners that answer over an empty tree, clean, beside gitleaks.
 fn quiet_neighbours(gitleaks: &str) -> PathBuf {
-    stubs(&[
-        ("osv-scanner", "exit 0"),
-        ("guarddog", "exit 0"),
-        ("gitleaks", gitleaks),
-    ])
+    stubs(&[("osv-scanner", "exit 0"), ("gitleaks", gitleaks)])
 }
 
 #[test]
 fn a_policy_inheriting_credentials_with_no_gitleaks_installed_is_exit_2() {
     let root = inheriting_credentials();
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", "exit 0")]);
+    let tools = stubs(&[("osv-scanner", "exit 0")]);
     let output = supply_without_the_system_path(&root, &tools);
     let said = text(&output);
     assert_eq!(code(&output), 2, "{said}");
@@ -2371,7 +1811,6 @@ fn a_range_touching_no_manifest_still_runs_gitleaks_over_that_range() {
     let after = commit(&root, "source only");
     let tools = stubs(&[
         ("osv-scanner", &recording("exit 0")),
-        ("guarddog", &recording(GUARDDOG_CLEAN)),
         ("gitleaks", &gitleaks_stub(GITLEAKS_PINNED, "exit 0")),
     ]);
     let output = pushed(&root, &tools, &before, &after);
@@ -2387,7 +1826,6 @@ fn a_range_touching_no_manifest_still_runs_gitleaks_over_that_range() {
         "{ran}"
     );
     assert!(!ran.contains("osv-scanner"), "{ran}");
-    assert!(!ran.contains("guarddog"), "{ran}");
 }
 
 /// A push of git notes: the commits a tool's notes ref carries, here a gate
@@ -2439,7 +1877,6 @@ fn a_push_of_git_notes_is_a_declared_gap_and_widens_to_nothing() {
         let _ = std::fs::remove_file(root.join("stub.log"));
         let tools = stubs(&[
             ("osv-scanner", &recording("exit 0")),
-            ("guarddog", &recording(GUARDDOG_CLEAN)),
             ("gitleaks", &gitleaks_stub(GITLEAKS_PINNED, "exit 3")),
         ]);
         let output = notes_pushed(&root, &tools, from, &notes);
@@ -2471,7 +1908,6 @@ fn every_scanner(gitleaks: &str) -> PathBuf {
         ("osv-scanner", &recording("exit 0")),
         ("zizmor", &recording("exit 0")),
         ("cargo", &recording("exit 0")),
-        ("guarddog", &recording(GUARDDOG_CLEAN)),
         ("gitleaks", gitleaks),
     ])
 }
@@ -2580,634 +2016,61 @@ fn staged_with_a_range_flag_is_a_usage_error() {
     }
 }
 
-/// A guarddog 3.2.0 report on `swagger-ui-express` 5.0.1, trimmed to the keys
-/// read here, with a `metadata_mismatch` risk whose description is not one
-/// this reads as npm's publish-time rewrites, so the finding stands until a
-/// waiver excuses it. The real report, which is that rewrite and nothing else,
-/// is tolerated; see the test after these.
-const GUARDDOG_MISMATCH: &str = "echo '[{\"dependency\":\"swagger-ui-express\",\
-    \"version\":\"5.0.1\",\"result\":{\"errors\":{},\"issues\":1,\
-    \"results\":{\"metadata_mismatch\":\"test script differs\"},\
-    \"package_version\":\"5.0.1\",\"risks\":[{\"name\":\"risk.metadata.manifest-mismatch\",\
-    \"threat_rule\":\"metadata_mismatch\",\"severity\":\"medium\"}]}}]'\nexit 0";
+const RETIRED_WAIVER: &str = "\n[[supply_chain.waive]]\nscanner = \"guarddog\"\n\
+    package = \"npm:swagger-ui-express@5.0.1\"\ncheck = \"metadata_mismatch\"\n\
+    reason = \"a false positive\"\n";
 
-/// The policy of [`repository`], with one waiver appended.
-fn waiving(root: &Path, package: &str) {
+/// A `[[supply_chain.waive]]` row naming guarddog, which uphold no longer runs,
+/// still loads: the run names the row as ignored on stderr and is not failed
+/// by it, so a policy written before the section went keeps working until its
+/// owner deletes the row.
+#[test]
+fn a_waiver_naming_guarddog_is_ignored_with_a_warning_and_is_not_a_failure() {
+    let root = repository();
     let path = root.join("policy/principles.toml");
     let policy = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(
-        path,
-        format!(
-            "{policy}\n[[supply_chain.waive]]\nscanner = \"guarddog\"\npackage = \"{package}\"\n\
-             check = \"metadata_mismatch\"\nreason = \"npm rewrites the test script at publish\"\n"
-        ),
-    )
-    .unwrap();
-}
-
-/// A confirmed false positive, waived for the release it was judged on, is
-/// printed as waived with its reason and not held against the run.
-#[test]
-fn a_waived_guarddog_finding_is_printed_and_not_held_against_the_run() {
-    let root = repository();
-    std::fs::create_dir_all(root.join("web")).unwrap();
-    std::fs::write(
-        root.join("web/package.json"),
-        "{\"name\": \"web\", \"dependencies\": {\"swagger-ui-express\": \"5.0.1\"}}\n",
-    )
-    .unwrap();
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_MISMATCH)]);
-
-    let refused = supply(&root, Some(&tools));
-    assert_eq!(code(&refused), 1, "{}", text(&refused));
-    assert!(
-        text(&refused).contains("objected to swagger-ui-express@5.0.1"),
-        "{}",
-        text(&refused)
-    );
-
-    waiving(&root, "npm:swagger-ui-express@5.0.1");
-    let waived = supply(&root, Some(&tools));
-    assert_eq!(code(&waived), 0, "{}", text(&waived));
-    let said = text(&waived);
-    let line = said
-        .lines()
-        .find(|line| line.contains("waived: metadata_mismatch on npm:swagger-ui-express@5.0.1"))
-        .unwrap_or_default();
-    assert!(
-        line.ends_with("-- npm rewrites the test script at publish"),
-        "{line}"
-    );
-    assert!(said.contains("all checks passed"), "{said}");
-}
-
-/// A waiver keyed on a version stops applying when the version moves: the
-/// next release is read fresh, and the waiver is named as matching nothing.
-#[test]
-fn a_waiver_for_another_version_does_not_apply_and_is_reported_stale() {
-    let root = repository();
-    std::fs::create_dir_all(root.join("web")).unwrap();
-    std::fs::write(
-        root.join("web/package.json"),
-        "{\"name\": \"web\", \"dependencies\": {\"swagger-ui-express\": \"5.0.1\"}}\n",
-    )
-    .unwrap();
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_MISMATCH)]);
-    waiving(&root, "npm:swagger-ui-express@5.0.0");
-    let output = supply(&root, Some(&tools));
-    assert_eq!(code(&output), 1, "{}", text(&output));
-    let said = text(&output);
-    assert!(
-        said.contains("objected to swagger-ui-express@5.0.1"),
-        "{said}"
-    );
-    assert!(
-        said.contains(
-            "waiver matched nothing in this run: metadata_mismatch on \
-             npm:swagger-ui-express@5.0.0"
-        ),
-        "{said}"
-    );
-}
-
-/// A pypi `metadata_mismatch` waiver that matched nothing is not called
-/// removable, because whether guarddog reaches the release's manifest at all is
-/// the unpacking filesystem's: pandas 3.0.3 is reported on one host and not on
-/// another, and the advice to delete the row on the second breaks the first.
-#[test]
-fn an_unmatched_pypi_metadata_mismatch_waiver_is_not_called_removable() {
-    let root = repository();
-    std::fs::create_dir_all(root.join("service")).unwrap();
-    std::fs::write(root.join("service/uv.lock"), "version = 1\n").unwrap();
-    let clean = "echo '[{\"dependency\":\"pandas\",\"result\":{\"errors\":{},\"issues\":0,\
-                 \"results\":{\"metadata_mismatch\":null},\"package_version\":\"3.0.3\",\
-                 \"risks\":[]}}]'\nexit 0";
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        ("uv", "echo 'pandas==3.0.3'"),
-        ("guarddog", clean),
-    ]);
-    waiving(&root, "pypi:pandas@3.0.3");
-    let output = supply(&root, Some(&tools));
-    assert_eq!(code(&output), 0, "{}", text(&output));
-    let said = text(&output);
-    let line = said
-        .lines()
-        .find(|line| line.contains("waiver matched nothing in this run"))
-        .unwrap_or_default();
-    assert!(
-        line.contains("metadata_mismatch on pypi:pandas@3.0.3"),
-        "{said}"
-    );
-    assert!(line.contains("another host may still need it"), "{line}");
-    assert!(!line.contains("remove it"), "{line}");
-}
-
-/// guarddog's report for a release whose only mismatch is npm's own default
-/// `start` script passes without a waiver, and the run names what it let
-/// through. A waiver written for it before is now one that matched nothing.
-#[test]
-fn a_mismatch_that_is_only_npms_publish_rewrite_is_tolerated_and_named() {
-    let root = repository();
-    std::fs::create_dir_all(root.join("web")).unwrap();
-    std::fs::write(
-        root.join("web/package.json"),
-        "{\"name\": \"web\", \"dependencies\": {\"react-dom\": \"19.2.0\"}}\n",
-    )
-    .unwrap();
-    let report = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/guarddog/npm-react-dom-19.2.0.json");
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        ("guarddog", &format!("cat '{}'\nexit 0", report.display())),
-    ]);
-    waiving(&root, "npm:react-dom@19.2.0");
-    let output = supply(&root, Some(&tools));
-    assert_eq!(code(&output), 0, "{}", text(&output));
-    let said = text(&output);
-    let line = said
-        .lines()
-        .find(|line| line.contains("tolerated: metadata_mismatch on npm:react-dom@19.2.0 at "))
-        .unwrap_or_default();
-    assert!(
-        line.ends_with("-- npm default start script (scripts.start = \"node server.js\")"),
-        "{said}"
-    );
-    assert!(!said.contains("waived:"), "{said}");
-    assert!(
-        said.contains(
-            "waiver matched nothing in this run: metadata_mismatch on npm:react-dom@19.2.0"
-        ),
-        "{said}"
-    );
-}
-
-/// A waiver with no reason, or no version, is refused at load: exit 2 before
-/// any scanner runs.
-#[test]
-fn a_waiver_without_a_reason_or_a_version_is_refused_at_load() {
-    for (package, reason, expected) in [
-        ("npm:swagger-ui-express@5.0.1", "", "`reason` is empty"),
-        (
-            "npm:swagger-ui-express",
-            "why",
-            "`<ecosystem>:<name>@<version>`",
-        ),
-        ("cargo:serde@1.0.0", "why", "`<ecosystem>:<name>@<version>`"),
-    ] {
-        let root = repository();
-        let path = root.join("policy/principles.toml");
-        let policy = std::fs::read_to_string(&path).unwrap();
-        std::fs::write(
-            &path,
-            format!(
-                "{policy}\n[[supply_chain.waive]]\nscanner = \"guarddog\"\npackage = \"{package}\"\n\
-                 check = \"metadata_mismatch\"\nreason = \"{reason}\"\n"
-            ),
-        )
-        .unwrap();
-        let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_CLEAN)]);
-        let output = supply(&root, Some(&tools));
-        assert_eq!(code(&output), 2, "{package}: {}", text(&output));
-        assert!(
-            text(&output).contains(expected),
-            "{package}: {}",
-            text(&output)
-        );
-    }
-}
-
-// ── a nested repository's own waivers ──
-
-/// guarddog's report on `left-pad` 1.3.0 with one `typosquatting` risk, for
-/// whichever manifest it is run in: every manifest in these fixtures depends
-/// on it, so which of them pass is decided by the waivers alone.
-const GUARDDOG_TYPOSQUAT: &str = "echo '[{\"dependency\":\"left-pad\",\"result\":\
-    {\"errors\":{},\"issues\":1,\"results\":{},\"package_version\":\"1.3.0\",\
-    \"risks\":[{\"name\":\"typosquatting\",\"severity\":\"high\"}]}}]'\nexit 0";
-
-/// A manifest depending on `left-pad` 1.3.0 at `directory`.
-fn depending_on_left_pad(root: &Path, directory: &str) {
-    write(
-        root,
-        &format!("{directory}/package.json"),
-        "{\"name\": \"web\", \"dependencies\": {\"left-pad\": \"1.3.0\"}}\n",
-    );
-}
-
-/// A `[[supply_chain.waive]]` row for `typosquatting` on `package`.
-fn typosquat_waiver(package: &str, reason: &str) -> String {
-    format!(
-        "\n[[supply_chain.waive]]\nscanner = \"guarddog\"\npackage = \"{package}\"\n\
-         check = \"typosquatting\"\nreason = \"{reason}\"\n"
-    )
-}
-
-/// A repository nested in `root` at `directory`, in a submodule's shape: a
-/// `.git` FILE pointing into the superproject, which is what `git submodule`
-/// leaves where a clone has a directory. `policy` is its policy file's text,
-/// at `policy/principles.toml`, or no policy at all.
-fn nested_repository(root: &Path, directory: &str, policy: Option<&str>) {
-    write(
-        root,
-        &format!("{directory}/.git"),
-        &format!("gitdir: ../.git/modules/{directory}\n"),
-    );
-    if let Some(policy) = policy {
-        write(root, &format!("{directory}/policy/principles.toml"), policy);
-    }
-}
-
-/// The `guarddog npm` refusal for a manifest at `directory` under `root`.
-fn refused_at(root: &Path, directory: &str) -> String {
-    format!(
-        "FAILED: guarddog npm: {}: guarddog objected to left-pad@1.3.0",
-        root.join(directory).display()
-    )
-}
-
-/// The live case: a submodule whose own policy waives a confirmed false
-/// positive in its own manifest. Scanned from the superproject, that finding
-/// is judged by the submodule's row, and the line that lets it through names
-/// the submodule's policy file, so whose decision it was is on the line.
-///
-/// A nested repository with no policy changes nothing, which is the first run.
-#[test]
-fn a_nested_repositorys_own_waiver_covers_its_manifests_and_names_its_policy() {
-    let root = repository();
-    depending_on_left_pad(&root, "leaf/web");
-    nested_repository(&root, "leaf", None);
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
-
-    let refused = supply(&root, Some(&tools));
-    assert_eq!(code(&refused), 1, "{}", text(&refused));
-    assert!(
-        text(&refused).contains(&refused_at(&root, "leaf/web")),
-        "{}",
-        text(&refused)
-    );
-
-    nested_repository(
-        &root,
-        "leaf",
-        Some(&typosquat_waiver(
-            "npm:left-pad@1.3.0",
-            "the leaf judged it",
-        )),
-    );
-    let waived = supply(&root, Some(&tools));
-    let said = text(&waived);
-    assert_eq!(code(&waived), 0, "{said}");
-    assert!(
-        said.contains(&format!(
-            "waived (leaf/policy/principles.toml): typosquatting on npm:left-pad@1.3.0 at {} \
-             -- the leaf judged it",
-            root.join("leaf/web").display()
-        )),
-        "{said}"
-    );
-    assert!(!said.contains("waiver matched nothing"), "{said}");
-    assert!(said.contains("all checks passed"), "{said}");
-}
-
-/// The other half of the boundary. The same row that excuses the leaf's own
-/// manifest excuses neither the superproject's nor a sibling submodule's, so
-/// one repository's policy cannot pass a finding in a tree it does not own.
-/// The sibling has a policy of its own, without the row, so what is tested is
-/// whose row it is and not whether a policy is there at all.
-#[test]
-fn a_nested_repositorys_waiver_never_covers_the_superprojects_or_a_siblings_manifests() {
-    let root = repository();
-    for directory in ["web", "leaf/web", "sibling/web"] {
-        depending_on_left_pad(&root, directory);
-    }
-    nested_repository(
-        &root,
-        "leaf",
-        Some(&typosquat_waiver(
-            "npm:left-pad@1.3.0",
-            "the leaf judged it",
-        )),
-    );
-    nested_repository(&root, "sibling", Some("allowed_scripts = [\"Latin\"]\n"));
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
-    let output = supply(&root, Some(&tools));
-    let said = text(&output);
-    assert_eq!(code(&output), 1, "{said}");
-    assert!(said.contains(&refused_at(&root, "web")), "{said}");
-    assert!(said.contains(&refused_at(&root, "sibling/web")), "{said}");
-    assert!(!said.contains(&refused_at(&root, "leaf/web")), "{said}");
-    assert_eq!(
-        said.matches("waived (leaf/policy/principles.toml)").count(),
-        1,
-        "{said}"
-    );
-}
-
-/// `policy/rg-policy.toml` is a policy `uphold` loads, so it is one here too:
-/// the nested repository's file is found by the command's own discovery, not
-/// by a second list of names.
-#[test]
-fn a_nested_repositorys_policy_is_found_under_every_name_uphold_loads() {
-    let root = repository();
-    depending_on_left_pad(&root, "leaf");
-    nested_repository(&root, "leaf", None);
-    write(
-        &root,
-        "leaf/policy/rg-policy.toml",
-        &typosquat_waiver("npm:left-pad@1.3.0", "the leaf judged it"),
-    );
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
+    std::fs::write(&path, format!("{policy}{RETIRED_WAIVER}")).unwrap();
+    let tools = stubs(&[("osv-scanner", "exit 0")]);
     let output = supply(&root, Some(&tools));
     let said = text(&output);
     assert_eq!(code(&output), 0, "{said}");
     assert!(
-        said.contains("waived (leaf/policy/rg-policy.toml)"),
+        said.contains(
+            "ignoring `[[supply_chain.waive]]` for npm:swagger-ui-express@5.0.1 \
+             (metadata_mismatch)"
+        ),
         "{said}"
     );
+    assert!(said.contains("all checks passed"), "{said}");
 }
 
-/// A root row that only ever repeats the nested repository's own is a copy of
-/// it, and is named as one: the run says which file decides and that the copy
-/// can go, which is what removing the copies fleets made before this needs.
-/// The root's line format for a row that does the work is unchanged.
+/// A waiver naming any other scanner is still refused at load: exit 2 before
+/// any scanner runs. Only the one scanner that was removed is read and ignored.
 #[test]
-fn a_root_row_that_repeats_a_nested_repositorys_own_is_named_as_a_removable_copy() {
+fn a_waiver_naming_any_other_scanner_is_refused_at_load() {
     let root = repository();
-    depending_on_left_pad(&root, "leaf/web");
-    nested_repository(
-        &root,
-        "leaf",
-        Some(&typosquat_waiver(
-            "npm:left-pad@1.3.0",
-            "the leaf judged it",
-        )),
-    );
     let path = root.join("policy/principles.toml");
     let policy = std::fs::read_to_string(&path).unwrap();
     std::fs::write(
         &path,
         format!(
             "{policy}{}",
-            typosquat_waiver("npm:left-pad@1.3.0", "copied up")
+            RETIRED_WAIVER.replace("guarddog", "osv-scanner")
         ),
     )
     .unwrap();
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
+    let tools = stubs(&[("osv-scanner", "exit 0")]);
     let output = supply(&root, Some(&tools));
-    let said = text(&output);
-    assert_eq!(code(&output), 0, "{said}");
+    assert_eq!(code(&output), 2, "{}", text(&output));
     assert!(
-        said.contains("waived (leaf/policy/principles.toml)"),
-        "{said}"
+        text(&output).contains("names the scanner \"osv-scanner\""),
+        "{}",
+        text(&output)
     );
-    assert!(!said.contains("copied up"), "{said}");
-    assert!(
-        said.contains(
-            "waiver repeats leaf/policy/principles.toml: typosquatting on npm:left-pad@1.3.0 \
-             -- a repository nearer the manifest waives it in its own policy, so this copy can \
-             be removed"
-        ),
-        "{said}"
-    );
-    assert!(!said.contains("waiver matched nothing"), "{said}");
-
-    // Where the same row also does work of its own -- a manifest of the
-    // superproject's -- it is no copy, and nothing is said about it.
-    depending_on_left_pad(&root, "web");
-    let working = supply(&root, Some(&tools));
-    let also = text(&working);
-    assert_eq!(code(&working), 0, "{also}");
-    assert!(
-        also.contains(&format!(
-            "waived: typosquatting on npm:left-pad@1.3.0 at {} -- copied up",
-            root.join("web").display()
-        )),
-        "{also}"
-    );
-    assert!(!also.contains("waiver repeats"), "{also}");
+    assert!(journal(&root).is_empty(), "{}", journal(&root));
 }
 
-/// Three levels: the scan root, `outer` inside it, `inner` inside that. A row
-/// in `outer`'s policy about a manifest in `inner`'s tree applies from the
-/// root, because `outer` scanned on its own judges that manifest against that
-/// row, and a superproject that read only the innermost policy would refuse
-/// what the repository between them accepts. `inner` has a policy without the
-/// row, so what is tested is that an inner policy does not end the walk.
-#[test]
-fn an_outer_repositorys_waiver_covers_a_manifest_in_a_repository_inside_it() {
-    let root = repository();
-    depending_on_left_pad(&root, "outer/inner/web");
-    nested_repository(
-        &root,
-        "outer",
-        Some(&typosquat_waiver("npm:left-pad@1.3.0", "outer judged it")),
-    );
-    nested_repository(
-        &root,
-        "outer/inner",
-        Some("allowed_scripts = [\"Latin\"]\n"),
-    );
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
-    let output = supply(&root, Some(&tools));
-    let said = text(&output);
-    assert_eq!(code(&output), 0, "{said}");
-    assert!(
-        said.contains(&format!(
-            "waived (outer/policy/principles.toml): typosquatting on npm:left-pad@1.3.0 at {} \
-             -- outer judged it",
-            root.join("outer/inner/web").display()
-        )),
-        "{said}"
-    );
-}
-
-/// The same three levels the other way round: `inner`'s row covers its own
-/// manifest and never `outer`'s, which lies outside `inner`'s tree.
-#[test]
-fn an_inner_repositorys_waiver_never_covers_the_repository_around_it() {
-    let root = repository();
-    depending_on_left_pad(&root, "outer/web");
-    depending_on_left_pad(&root, "outer/inner/web");
-    nested_repository(&root, "outer", Some("allowed_scripts = [\"Latin\"]\n"));
-    nested_repository(
-        &root,
-        "outer/inner",
-        Some(&typosquat_waiver("npm:left-pad@1.3.0", "inner judged it")),
-    );
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
-    let output = supply(&root, Some(&tools));
-    let said = text(&output);
-    assert_eq!(code(&output), 1, "{said}");
-    assert!(said.contains(&refused_at(&root, "outer/web")), "{said}");
-    assert!(
-        !said.contains(&refused_at(&root, "outer/inner/web")),
-        "{said}"
-    );
-    assert!(
-        said.contains(&format!(
-            "waived (outer/inner/policy/principles.toml): typosquatting on npm:left-pad@1.3.0 \
-             at {}",
-            root.join("outer/inner/web").display()
-        )),
-        "{said}"
-    );
-}
-
-/// An outer nested repository's row that only repeats the inner one's is
-/// named as a copy too, under its own file, and the innermost row is the one
-/// on the line that lets the risk through.
-#[test]
-fn an_outer_repositorys_row_that_repeats_an_inner_one_is_named_as_a_removable_copy() {
-    let root = repository();
-    depending_on_left_pad(&root, "outer/inner/web");
-    nested_repository(
-        &root,
-        "outer",
-        Some(&typosquat_waiver("npm:left-pad@1.3.0", "copied up")),
-    );
-    nested_repository(
-        &root,
-        "outer/inner",
-        Some(&typosquat_waiver("npm:left-pad@1.3.0", "inner judged it")),
-    );
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
-    let output = supply(&root, Some(&tools));
-    let said = text(&output);
-    assert_eq!(code(&output), 0, "{said}");
-    assert!(
-        said.contains("waived (outer/inner/policy/principles.toml)"),
-        "{said}"
-    );
-    assert!(!said.contains("copied up"), "{said}");
-    assert!(
-        said.contains(
-            "waiver in outer/policy/principles.toml repeats outer/inner/policy/principles.toml: \
-             typosquatting on npm:left-pad@1.3.0 -- a repository nearer the manifest waives it \
-             in its own policy, so this copy can be removed"
-        ),
-        "{said}"
-    );
-}
-
-/// The pushed-range form reaches a nested repository's waiver too: a bumped
-/// submodule pointer expands into the member's own diff, and the manifest that
-/// moved there is judged against the member's policy. A root row repeating it
-/// is not called a copy here, because a range scan reads only what moved and
-/// cannot tell a copy from a row that also covers a manifest it did not read;
-/// it is not called stale either, because it did cover the risk.
-#[test]
-fn a_pushed_range_judges_a_moved_submodule_manifest_against_the_submodules_own_waiver() {
-    let root = tracked();
-    let path = root.join("policy/principles.toml");
-    let policy = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(
-        &path,
-        format!(
-            "{policy}{}",
-            typosquat_waiver("npm:left-pad@1.3.0", "copied up")
-        ),
-    )
-    .unwrap();
-    support::submodule(
-        &root,
-        "leaf",
-        &[
-            (
-                "policy/principles.toml",
-                &typosquat_waiver("npm:left-pad@1.3.0", "the leaf judged it"),
-            ),
-            ("web/package.json", "{\"name\": \"web\"}\n"),
-        ],
-    );
-    let before = commit(&root, "track the member");
-    let member = root.join("leaf");
-    depending_on_left_pad(&member, "web");
-    commit(&member, "the member's manifest moves");
-    let after = commit(&root, "bump the pointer");
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        ("guarddog", &recording(GUARDDOG_TYPOSQUAT)),
-    ]);
-    let output = pushed(&root, &tools, &before, &after);
-    let said = text(&output);
-    assert_eq!(code(&output), 0, "{said}");
-    assert!(
-        said.contains(&format!(
-            "waived (leaf/policy/principles.toml): typosquatting on npm:left-pad@1.3.0 at {} \
-             -- the leaf judged it",
-            member.join("web").display()
-        )),
-        "{said}"
-    );
-    assert!(!said.contains("waiver repeats"), "{said}");
-    assert!(!said.contains("waiver matched nothing"), "{said}");
-    assert!(journal(&root).contains("guarddog"), "{}", journal(&root));
-}
-
-/// A nested repository's row that matched nothing is left to that
-/// repository's own scan, which reports it and is the one that can act on it.
-/// The superproject does not write that file, and a second reporter of the
-/// same stale row is a second voice for one fact.
-#[test]
-fn a_nested_repositorys_unmatched_waiver_is_reported_by_its_own_scan_alone() {
-    let root = repository();
-    depending_on_left_pad(&root, "leaf/web");
-    nested_repository(
-        &root,
-        "leaf",
-        Some(&typosquat_waiver("npm:left-pad@1.2.0", "an older release")),
-    );
-    let tools = stubs(&[("osv-scanner", "exit 0"), ("guarddog", GUARDDOG_TYPOSQUAT)]);
-
-    let from_above = supply(&root, Some(&tools));
-    let above = text(&from_above);
-    assert_eq!(code(&from_above), 1, "{above}");
-    assert!(above.contains(&refused_at(&root, "leaf/web")), "{above}");
-    assert!(!above.contains("waiver matched nothing"), "{above}");
-
-    let leaf = root.join("leaf");
-    let own = supply(&leaf, Some(&tools));
-    let inside = text(&own);
-    assert_eq!(code(&own), 1, "{inside}");
-    assert!(
-        inside.contains("waiver matched nothing in this run: typosquatting on npm:left-pad@1.2.0"),
-        "{inside}"
-    );
-}
-
-/// A nested policy that will not load leaves its manifests unjudged, as
-/// could-not-look naming the repository and the loader's own refusal. It is
-/// never read as "no waivers", which would refuse on a guess about findings
-/// its owner may have accepted. guarddog is not run there, and a manifest
-/// outside that repository is still judged.
-#[test]
-fn a_nested_policy_that_will_not_load_is_not_checked_rather_than_no_waivers() {
-    let root = repository();
-    depending_on_left_pad(&root, "leaf/web");
-    nested_repository(&root, "leaf", Some("this is not = = toml\n"));
-    let tools = stubs(&[
-        ("osv-scanner", "exit 0"),
-        ("guarddog", &recording(GUARDDOG_CLEAN)),
-    ]);
-    let output = supply(&root, Some(&tools));
-    let said = text(&output);
-    assert_eq!(code(&output), 2, "{said}");
-    assert!(said.contains("NOT CHECKED"), "{said}");
-    assert!(
-        said.contains(&format!(
-            "the guarddog findings at {} were not judged: {} is a repository with a policy of \
-             its own",
-            root.join("leaf/web").display(),
-            root.join("leaf").display()
-        )),
-        "{said}"
-    );
-    assert!(said.contains("leaf/policy/principles.toml"), "{said}");
-    assert!(!journal(&root).contains("guarddog"), "{}", journal(&root));
-}
-
-// ── direct references: git sources, URLs and paths guarddog cannot look up ──
+// ── direct references: git sources, URLs and paths no index holds ──
 
 /// A repository whose policy declares `owner = "example-org"`.
 fn owned_by_example_org() -> PathBuf {
@@ -3259,9 +2122,7 @@ fn lock_naming(root: &Path, tag: &str, commit: &str) {
     .unwrap();
 }
 
-/// Stubs whose `uv export` prints `lines`, and whose guarddog answers an
-/// export still holding a direct reference the way the real tool does -- a
-/// 404 from `PyPI` -- and records every run. A `uv.lock` is written where the
+/// Stubs whose `uv export` prints `lines`. A `uv.lock` is written where the
 /// test wrote none, because the section reads nothing without one.
 fn exporting(root: &Path, lines: &[&str]) -> PathBuf {
     if !root.join("uv.lock").exists() {
@@ -3270,15 +2131,9 @@ fn exporting(root: &Path, lines: &[&str]) -> PathBuf {
     let quoted: Vec<String> = lines.iter().map(|line| format!("'{line}'")).collect();
     stubs(&[
         ("osv-scanner", "exit 0"),
-        ("uv", &format!("printf '%s\\n' {}", quoted.join(" "))),
         (
-            "guarddog",
-            &recording(&format!(
-                "grep -q ' @ ' \"$5\" && {{ echo '[{{\"dependency\":\"example-kit\",\
-                 \"result\":{{\"errors\":{{\"download-package\":\"Received status code: 404 \
-                 from PyPI\"}},\"issues\":0}}}}]'; exit 0; }}\n{}",
-                clean_dependencies(&["requests"])
-            )),
+            "uv",
+            &recording(&format!("printf '%s\\n' {}", quoted.join(" "))),
         ),
     ])
 }
@@ -3301,13 +2156,11 @@ fn supply_with(root: &Path, tools: &Path, environment: &[(&str, String)]) -> Out
     invoke(root, &path, &["--all"], &borrowed)
 }
 
-/// The defect this section had: a first-party package depended on through a
-/// uv git source was handed to guarddog, which looked it up on `PyPI`, got a
-/// 404, and made every push exit 2. Now the git source is asked of its own
-/// remote -- the tag the lock names is there and points at the locked commit
-/// -- and guarddog is handed the `PyPI` requirements alone, and still runs.
+/// A first-party package depended on through a uv git source is asked of its
+/// own remote: the tag the lock names is there and points at the locked
+/// commit.
 #[test]
-fn a_first_party_git_source_whose_tag_resolves_is_not_sent_to_guarddog_and_passes() {
+fn a_first_party_git_source_whose_tag_resolves_passes() {
     let root = owned_by_example_org();
     let (config, tagged, _) = example_kit_remote();
     lock_naming(&root, "v0.1.0", &tagged);
@@ -3329,7 +2182,11 @@ fn a_first_party_git_source_whose_tag_resolves_is_not_sent_to_guarddog_and_passe
         )),
         "{said}"
     );
-    assert!(journal(&root).contains("guarddog"), "{}", journal(&root));
+    assert!(
+        journal(&root).contains("export --frozen"),
+        "{}",
+        journal(&root)
+    );
     assert!(said.contains("all checks passed"), "{said}");
 }
 
@@ -3435,7 +2292,7 @@ fn a_first_party_remote_that_cannot_be_asked_is_could_not_look() {
 }
 
 /// A git source under an owner other than the declared one is refused by
-/// name, and never reaches guarddog or the remote.
+/// name, and never reaches the remote.
 #[test]
 fn a_git_source_under_another_owner_is_refused_by_name() {
     let root = owned_by_example_org();
@@ -3501,39 +2358,18 @@ fn a_direct_url_and_a_path_outside_the_tree_are_refused_by_name() {
         said.contains("../outside-the-tree is a path dependency outside this repository"),
         "{said}"
     );
-    // The `PyPI` half was still scanned.
-    assert!(journal(&root).contains("guarddog"), "{}", journal(&root));
-}
-
-/// A repository whose only dependencies are its own members and a first-party
-/// git source has nothing on `PyPI` to look up, and says so rather than handing
-/// guarddog an empty list it would answer with `[]`.
-#[test]
-fn an_export_with_nothing_from_an_index_does_not_ask_guarddog() {
-    let root = owned_by_example_org();
-    std::fs::create_dir_all(root.join("packages/member")).unwrap();
-    let (config, _, tip) = example_kit_remote();
-    let tools = exporting(
-        &root,
-        &[
-            "-e .",
-            "-e ./packages/member",
-            &format!("example-kit @ git+https://github.com/example-org/example-kit@{tip}"),
-        ],
+    // The export was still read.
+    assert!(
+        journal(&root).contains("export --frozen"),
+        "{}",
+        journal(&root)
     );
-    let output = supply_with(&root, &tools, &forge_environment(&config));
-    let said = text(&output);
-    assert_eq!(code(&output), 0, "{said}");
-    assert!(said.contains("guarddog was not asked"), "{said}");
-    assert!(!journal(&root).contains("guarddog"), "{}", journal(&root));
 }
 
 // ── npm git dependencies ──
 
 /// A `package.json` whose `dependencies` hold `spec` for example-kit beside a
-/// registry range, a `bun.lock` recording `commit` for it, and stubs whose
-/// guarddog answers a manifest still naming example-kit the way the real tool
-/// does -- a 404 from npm -- and records every run.
+/// registry range, a `bun.lock` recording `commit` for it, and stub scanners.
 fn npm_depending_on(root: &Path, spec: &str, commit: &str) -> PathBuf {
     std::fs::write(
         root.join("package.json"),
@@ -3551,25 +2387,13 @@ fn npm_depending_on(root: &Path, spec: &str, commit: &str) -> PathBuf {
         ),
     )
     .unwrap();
-    stubs(&[
-        ("osv-scanner", "exit 0"),
-        (
-            "guarddog",
-            &recording(&format!(
-                "grep -q example-kit \"$5\" && {{ echo '[{{\"dependency\":\"example-kit\",\
-                 \"result\":{{\"errors\":{{\"download-package\":\"Received status code: 404 \
-                 from npm\"}},\"issues\":0}}}}]'; exit 0; }}\n{GUARDDOG_CLEAN}"
-            )),
-        ),
-    ])
+    stubs(&[("osv-scanner", "exit 0")])
 }
 
-/// The npm half of the defect: a first-party package depended on by git was
-/// handed to guarddog, which asked npm for it, got a 404 and made every run
-/// exit 2. The tag the manifest names is now asked of the remote, against the
-/// commit `bun.lock` holds, and guarddog reads the registry dependencies alone.
+/// The npm half: a first-party package depended on by git has the tag the
+/// manifest names asked of the remote, against the commit `bun.lock` holds.
 #[test]
-fn a_first_party_npm_git_dependency_whose_tag_resolves_is_not_sent_to_guarddog_and_passes() {
+fn a_first_party_npm_git_dependency_whose_tag_resolves_passes() {
     let root = owned_by_example_org();
     let (config, tagged, _) = example_kit_remote();
     let tools = npm_depending_on(
@@ -3587,7 +2411,6 @@ fn a_first_party_npm_git_dependency_whose_tag_resolves_is_not_sent_to_guarddog_a
         )),
         "{said}"
     );
-    assert!(journal(&root).contains("guarddog"), "{}", journal(&root));
     assert!(said.contains("all checks passed"), "{said}");
 }
 
@@ -3603,7 +2426,7 @@ fn a_first_party_npm_tag_that_points_elsewhere_is_refused() {
 }
 
 /// A git dependency under another owner is refused by name, and is never
-/// handed to guarddog to 404 on.
+/// asked of the remote.
 #[test]
 fn an_npm_git_dependency_under_another_owner_is_refused_by_name() {
     let root = owned_by_example_org();
