@@ -3387,9 +3387,12 @@ section with nothing to read says so — "no workflows here" and "checked and
 clean" must never look the same.
 
 **No scanner writes a lockfile into the tree it scans.** cargo-deny, the
-`cargo metadata` below, cargo-vet and `uv export` all run with `--locked`, so a
-lock that is missing or out of step with its manifest is the tool's refusal
-rather than a file resolved and written for the scan. A crate root with no
+`cargo metadata` below and cargo-vet run with `--locked`, so a lock that is
+missing or out of step with its manifest is the tool's refusal rather than a
+file resolved and written for the scan. `uv export` runs with `--frozen`: it
+reads a `uv.lock` as it is and writes nothing, and whether the lock is in step
+with its `pyproject.toml` is uv's question (`uv lock --check`), not the scan's,
+which asks only whether the pinned packages are malicious. A crate root with no
 `Cargo.lock` beside it is asked of the locks that are here before cargo-deny
 is pointed at it, by `cargo metadata --locked` of each crate that has one,
 nearest enclosing first:

@@ -597,6 +597,66 @@ fn a_uv_export_that_fails_is_a_failure_rather_than_a_manifest_quietly_skipped() 
     assert!(!said.contains("guarddog ran on nothing"), "{said}");
 }
 
+/// A lock out of step with its manifest is exported and scanned as it is, and
+/// the tree is not written.
+///
+/// The lock records an `exclude-newer` its `pyproject.toml` lacks, which is how
+/// a lock made with the option on the command line reads to `uv lock --check`.
+/// Whether the pair agrees is uv's question; the scan asks about the pinned
+/// packages. The `uv` modelled here refuses `--locked` on such a pair, relocks
+/// and writes without either flag, and exports the lock as it stands under
+/// `--frozen`.
+#[test]
+fn a_lock_out_of_step_with_its_manifest_is_exported_and_scanned_without_a_write() {
+    let root = repository();
+    write(
+        &root,
+        "service/pyproject.toml",
+        "[project]\nname = 'service'\n",
+    );
+    write(
+        &root,
+        "service/uv.lock",
+        "version = 1\n\n[options]\nexclude-newer = \"2026-10-20T01:06:13Z\"\n",
+    );
+    let uv = recording(
+        "for argument do\n\
+         [ \"$argument\" = --frozen ] && frozen=yes\n\
+         [ \"$argument\" = --locked ] && locked=yes\n\
+         done\n\
+         [ -n \"$locked\" ] && { echo 'error: the lock file needs to be updated' >&2; exit 2; }\n\
+         [ -z \"$frozen\" ] && echo '# relocked' > uv.lock\n\
+         echo 'requests==2.0.0'",
+    );
+    let tools = stubs(&[
+        ("osv-scanner", "exit 0"),
+        ("uv", &uv),
+        (
+            "guarddog",
+            &format!(
+                "grep -q 'requests==2.0.0' \"$5\" || {{ echo 'guarddog was not handed the \
+                 export'; exit 2; }}\n{}",
+                clean_dependencies(&["requests"])
+            ),
+        ),
+    ]);
+    let before = tree(&root);
+    let output = supply(&root, Some(&tools));
+    assert_eq!(tree(&root), before, "the scan wrote into the tree");
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let said = text(&output);
+    assert!(said.contains("1 Python/npm manifest(s) checked"), "{said}");
+    assert!(
+        !said.contains("guarddog was not handed the export"),
+        "{said}"
+    );
+    assert!(
+        journal(&root).contains("export --frozen"),
+        "{}",
+        journal(&root)
+    );
+}
+
 /// An npm manifest is scanned in its own directory, and a clean one passes.
 ///
 /// `package.json` is handed to guarddog by bare name with the working directory
@@ -1287,8 +1347,8 @@ fn a_changed_python_lock_runs_guarddog_in_that_directory_and_not_the_others() {
     assert!(!ran.contains("other"), "{ran}");
     // The lock is handed to osv-scanner by path, not scanned for by a walk.
     assert!(ran.contains("-L"), "{ran}");
-    // And read, never rewritten: a lock out of step is uv's refusal.
-    assert!(ran.contains("export --locked"), "{ran}");
+    // And read as it is, never rewritten.
+    assert!(ran.contains("export --frozen"), "{ran}");
     assert!(
         text(&output).contains("1 lockfile(s) in this range"),
         "{}",
