@@ -2272,14 +2272,18 @@ fn guarddog(
                 "uv is not on PATH, so the Python manifests were not exported for guarddog",
             )));
         }
-        // `--locked`: the lock is read, never written. Without it `uv export`
-        // relocks a `uv.lock` that is out of step with its `pyproject.toml`
-        // and rewrites the file in the tree under scan, then exports versions
-        // nobody has built. With it that is uv's refusal, reported below.
+        // `--frozen`: the pinned set is read as it is and nothing is written.
+        // Without it `uv export` relocks a `uv.lock` that is out of step with
+        // its `pyproject.toml` and rewrites the file in the tree under scan.
+        // Whether a lock is in step with its manifest is uv's question
+        // (`uv lock --check`), not the scan's: guarddog asks whether the
+        // pinned packages are malicious, so a lock that records an option its
+        // manifest lacks, such as an `exclude-newer` passed on the command
+        // line, is still scanned.
         let exported = Command::new("uv")
             .args([
                 "export",
-                "--locked",
+                "--frozen",
                 "--no-hashes",
                 "--no-dev",
                 "--format",
