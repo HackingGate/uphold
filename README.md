@@ -14,7 +14,7 @@ When last counted, on 2026-09-23, 88 repositories carried an uphold policy, all
 of them maintained by one person and the coding agents working in them.
 
 ```sh
-cargo install --git https://github.com/HackingGate/uphold --tag v1.34.3
+cargo install --git https://github.com/HackingGate/uphold --tag v1.35.0
 ```
 
 Or pin the pre-commit or lefthook manifest under [Install](#install).
@@ -75,7 +75,7 @@ needed (`language: rust` bootstraps it).
 default_install_hook_types: [pre-commit, commit-msg, pre-merge-commit, pre-push]
 repos:
   - repo: https://github.com/HackingGate/uphold
-    rev: v1.34.3
+    rev: v1.35.0
     hooks:
       - id: uphold-check            # the claims still hold
       - id: uphold-scan             # the content policy
@@ -130,7 +130,7 @@ bootstrapping a language, so the binary must be on PATH, from the
 # lefthook.yml
 remotes:
   - git_url: https://github.com/HackingGate/uphold
-    ref: v1.34.3
+    ref: v1.35.0
     configs:
       - hooks/lefthook.yml
 ```
