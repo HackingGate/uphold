@@ -608,6 +608,31 @@ fn tracker_references_are_refused_in_configuration_and_source() {
 }
 
 #[test]
+fn a_mise_lockfile_is_not_read_by_the_release_download_rule() {
+    // `mise lock` records each tool's artifact as a releases/download URL
+    // beside a checksum mise verifies, so the lock is the manifest the rule
+    // asks for. The script path is the control: the same line is refused
+    // where nothing watches it.
+    let line = "url = \"https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_arm64.tar.gz\"\n";
+    for (path, refused) in [
+        ("install.sh", 1),
+        ("mise.lock", 0),
+        (".config/mise/mise.lock", 0),
+        ("tools/mise.lock", 0),
+    ] {
+        let case = Case {
+            set: "unmanaged-pins",
+            rule: "no-pinned-release-download",
+            path,
+            refuses: &[],
+            allows: &[],
+        };
+        let (code, report) = verdict(&case, line);
+        assert_eq!(code, refused, "{path}: {report}");
+    }
+}
+
+#[test]
 fn a_stylesheet_is_not_read_by_the_code_tracker_rule() {
     // `solid #000` is the prose-word arm's shape, and no pattern that keeps
     // `fixed #451` refused can tell the two apart, so the scope says it. The

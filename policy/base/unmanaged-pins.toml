@@ -128,7 +128,12 @@ Use the package manager, or a manifest entry a dependency bot can read.
 """
 regexp = 'releases/download/v?[0-9]'
 files.include = ["."]
-files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "third_party/**", "vendor/**"]
+# mise.lock is the manifest this message asks for. `mise lock` writes each
+# aqua or github tool's artifact as a releases/download URL beside a
+# per-platform checksum that `mise install` verifies, and Renovate's mise
+# manager rewrites the lock with the row it bumps. The URL there is the
+# watched pin, rendered, not the unwatched one.
+files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "third_party/**", "vendor/**", "**/mise.lock"]
 
 [rule.no-pinned-versioned-fetch]
 message = """
