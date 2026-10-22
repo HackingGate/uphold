@@ -634,7 +634,7 @@ files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "READ
 # line is its rendering. The set's exclude list is repeated for the reason the
 # override above gives.
 [override.no-pinned-release-download]
-files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "third_party/**", "vendor/**", ".github/workflows/release.yml"]
+files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "third_party/**", "vendor/**", "**/mise.lock", ".github/workflows/release.yml"]
 
 [override.no-pinned-versioned-fetch]
 files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "third_party/**", "vendor/**", ".github/workflows/release.yml"]

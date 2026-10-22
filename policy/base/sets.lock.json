@@ -293,7 +293,8 @@
             "policy/**",
             "README.md",
             "third_party/**",
-            "vendor/**"
+            "vendor/**",
+            "**/mise.lock"
           ],
           "exclude_cfg_test": false,
           "include": [
