@@ -1,0 +1,49 @@
+id = "reuse-maintained-components"
+title = "Reuse Maintained Components"
+aliases = ["Not Invented Here", "Build versus buy", "Do not reinvent the wheel"]
+kind = "principle"
+status = "seed"
+domains = ["architecture", "evolution"]
+summary = "Where a maintained library, tool, or service already does the job, use it rather than writing your own; a hand-rolled copy re-decides every edge case the maintained one has already met, and is tested only where its author happened to run it."
+claim = "Do not hand-roll a function that a maintained component already provides at adequate fit, because the component carries the edge cases, platform coverage, and fixes of every user it has, while a private copy carries only the cases its author met."
+problem = "A parser, an installer, a quoting routine, or a date calculation is written in place because it looks like fifteen lines. The fifteen lines are right on the author's machine and wrong on the input or platform nobody tried, and each repository that writes them finds that out separately, in production, months apart."
+rationale = "A maintained component spreads the cost of discovering failure cases over all of its users, and its maintainers ship each fix to every one of them through a version bump. A hand-rolled copy pays that discovery cost alone and receives no fixes. The comparison that matters is not code size but where the failures are found: in the component's issue tracker before you meet them, or in your own incident after."
+applies_when = ["A change implements something a widely used library, standard-library module, or tool already provides: parsing a standard format, quoting for a shell, splitting arguments, installing a toolchain, cryptography.", "The hand-rolled form is short enough to look obviously correct, so its untested edge cases are not visible in review.", "The same helper exists, or is about to, in more than one repository.", "A candidate component exists whose maintenance can be judged from evidence: release history, open advisories, and how many projects depend on it."]
+does_not_mean = ["Take any dependency that exists; an abandoned or single-maintainer component is a hand-rolled copy somebody else wrote, plus a supply-chain edge.", "Never write what a library could have provided; when the fit is poor, the dependency is large against the need, or the function is the product's core, writing it is the decision, and the reason is written beside it.", "Wrap every dependency in an in-house abstraction; a thin wrapper re-hand-rolls the interface and hides the component's documentation from the reader.", "Adopt a framework to get one function; reusing a component's function does not oblige taking on its whole model."]
+benefits = ["Edge cases and platform differences are met by the component's other users before they reach yours.", "Security fixes arrive through a version bump rather than a rewrite.", "Readers recognize a known component and can read its documentation, where a private one must be read in full."]
+costs = ["Each dependency is a supply-chain edge whose compromise reaches every consumer at once.", "The component's release cadence, breaking changes, and licence become the consumer's constraints.", "Adapting to an interface designed for many users can cost more than a narrow private function."]
+failure_when_overapplied = ["A trivial function is replaced by a dependency whose transitive tree dwarfs it, and one unpublished package breaks every build that pulled it.", "A component adopted for one function spreads its framework's assumptions through the codebase.", "Domain logic that is the product's reason to exist is bent to fit a generic library.", "Dependencies are added faster than anyone reviews or updates them, so reuse turns into a stack nobody keeps current."]
+conflicts_with = ["economy-of-mechanism", "minimize-attack-surface"]
+related = ["follow-published-standards", "deprecation-discipline", "rule-of-three", "least-common-mechanism"]
+review_questions = ["Which maintained library, standard-library module, or tool already does what this code does, and why was it not used?", "If one was rejected, is the reason written beside the code: poor fit, size against the need, licence, or maintenance?", "Which inputs and platforms has the hand-rolled form been run on, and which has the maintained component met that this one has not?", "Is the chosen component maintained, judged by its release history, open advisories, and dependents, and who updates it here?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+rung = ["text", "syntax"]
+observable = ["Shell that downloads a tool and unpacks it by hand, where a version manager would resolve it.", "New functions whose names or bodies match a known hand-rolled shape, such as shell quoting, argument splitting, or a Markdown fence scanner.", "Helpers that recur across repositories with near-identical bodies."]
+checks = ["Refuse a fetch piped into an unpacker outside a version manager's own bootstrap, as uphold's hand-rolled-toolchain rule set does for tool installers.", "Flag a new function that matches a recorded hand-rolled shape, naming the component that provides it, and accept a waiver that states why it was not used.", "Report near-identical helpers across repositories, so one can be replaced by a shared component."]
+limits = ["Whether a component fits the need, and whether it is maintained well enough to trust, is a judgment no pattern decides.", "A list of known shapes catches only shapes someone already wrote down; the next hand-rolled parser is new text.", "A tool cannot see that a component was considered and rejected unless the reason is written where it reads."]
+
+[[tools]]
+name = "OpenSSF Scorecard"
+url = "https://scorecard.dev/"
+notes = "Scores an open-source project's maintenance and security practices, such as recent commits, code review, and pinned dependencies; one input to judging whether a component is maintained before reusing it."
+
+[[sources]]
+title = "Investigating the Not Invented Here (NIH) syndrome: A look at the performance, tenure, and communication patterns of 50 R&D project groups"
+url = "https://doi.org/10.1111/j.1467-9310.1982.tb00478.x"
+type = "paper"
+notes = "Katz and Allen, R&D Management 12(1), 1982. The empirical origin of the term: groups that stay together long reduce their communication with outside sources and their performance falls."
+
+[[sources]]
+title = "In Defense of Not-Invented-Here Syndrome"
+url = "https://www.joelonsoftware.com/2001/10/14/in-defense-of-not-invented-here-syndrome/"
+type = "essay"
+notes = "Spolsky, 2001. The counterweight this record's does_not_mean carries: when a function is the core of the business, build it yourself."
+
+[[sources]]
+title = "Our Software Dependency Problem"
+url = "https://research.swtch.com/deps"
+type = "essay"
+notes = "Cox, 2019. Argues for reuse while setting out how to inspect a dependency before adopting it, and how to keep it isolated and current afterwards; the costs side of this record."

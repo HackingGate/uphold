@@ -1,6 +1,6 @@
 id = "deprecation-discipline"
 title = "Deprecation Discipline"
-aliases = ["Compatibility budget", "Semantic versioning"]
+aliases = ["Compatibility budget", "Semantic versioning", "Dependency currency"]
 kind = "practice"
 status = "seed"
 domains = ["evolution", "interfaces"]
@@ -8,14 +8,14 @@ summary = "Change a published interface through announced, versioned, time-boxed
 claim = "Every incompatible change to a published interface should be signaled by its version, announced with a migration path and a removal point, and completed by removal, so that the cost of compatibility is budgeted and paid rather than accumulated."
 problem = "Interfaces change either abruptly, breaking consumers who had no warning, or never, because old paths are marked deprecated and then kept indefinitely. Both come from treating compatibility as free and deprecation as an announcement rather than a process with an end."
 rationale = "A version number that encodes compatibility lets a consumer decide mechanically which updates are safe, and a deprecation with a date and a migration turns an open-ended obligation into a bounded one. Measuring how far each consumer's pin is behind the newest release makes unpaid compatibility debt visible before it becomes a forced jump across several versions."
-applies_when = ["An interface, package, rule, or format is consumed by code its maintainer does not control or release with.", "An incompatible change is planned, or an old path is being kept alive beside a new one.", "Consumers pin versions of their dependencies and must decide when to move.", "A pin, lock, or reference can fall behind the newest release of what it names."]
+applies_when = ["An interface, package, rule, or format is consumed by code its maintainer does not control or release with.", "An incompatible change is planned, or an old path is being kept alive beside a new one.", "Consumers pin versions of their dependencies and must decide when to move.", "A pin, lock, or reference can fall behind the newest release of what it names.", "A component in use has reached its end of life, or carries a published vulnerability that a newer release fixes, so the consumer is the one left on the deprecated path."]
 does_not_mean = ["That a version number proves compatibility; a semantic version is the publisher's promise, and consumers depend on more than the promise covers.", "Deprecate without shipping the replacement; a deprecation with no migration path is a breaking change announced early.", "Move to the newest release of everything at once; the discipline is to know the gap and close it on a schedule.", "Keep compatibility shims indefinitely to avoid disappointing anyone; the unfinished deprecation is the failure this record names."]
 benefits = ["Consumers can tell safe updates from breaking ones without reading every diff.", "Old paths are removed, so the cost of maintaining them stays bounded.", "Staleness is measured, so large version jumps are avoided."]
 costs = ["Two paths are maintained through the deprecation window.", "Migration has to be communicated and tracked across consumers.", "Version numbers invite false confidence where the contract is underspecified."]
 failure_when_overapplied = ["Every change is released as a major version out of caution, so the version stops distinguishing breaking changes from safe ones.", "Deprecation windows are so long that the old path gains users faster than migration removes them.", "Automated update pressure churns pins daily and consumers learn to merge updates unread.", "Removal dates are enforced against consumers who were given no migration path, turning the process into a scheduled outage."]
 conflicts_with = ["robustness-principle"]
 related = ["hyrums-law", "reversible-decisions", "single-authoritative-source", "chestertons-fence"]
-review_questions = ["Is this change compatible under the interface's versioning promise, and does the version bump say so?", "If something is deprecated here, where is its replacement, and when is the old path removed?", "How far is each pin in this tree behind the newest release of what it names, and who closes that gap?", "Which consumers still use the old path, and how would the maintainer know?"]
+review_questions = ["Is this change compatible under the interface's versioning promise, and does the version bump say so?", "If something is deprecated here, where is its replacement, and when is the old path removed?", "How far is each pin in this tree behind the newest release of what it names, and who closes that gap?", "Which consumers still use the old path, and how would the maintainer know?", "Which component in this stack is past its end of life, or behind a release that fixes a published advisory, and what is the plan to move off it?"]
 
 [enforcement]
 level = "lint"
@@ -47,3 +47,9 @@ title = "Software Engineering at Google, Chapter 21: Dependency Management"
 url = "https://abseil.io/resources/swe-book/html/ch21.html"
 type = "book"
 notes = "Argues that a semantic version is a lossy estimate of compatibility, which is why the record keeps version signalling and completed removal together."
+
+[[sources]]
+title = "OWASP Top 10:2021 A06 Vulnerable and Outdated Components"
+url = "https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/"
+type = "standard"
+notes = "The consumer's side of deprecation: a component left unsupported, out of date, or carrying known vulnerabilities is a risk the consumer owns, and the remedy it gives is a continuous inventory and an update process."

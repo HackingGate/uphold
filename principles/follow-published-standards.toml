@@ -1,0 +1,44 @@
+id = "follow-published-standards"
+title = "Follow Published Standards"
+aliases = ["Standards conformance", "Conform to the specification"]
+kind = "principle"
+status = "seed"
+domains = ["interfaces", "security"]
+summary = "Where an RFC, ISO, W3C, or industry standard specifies a format, protocol, or algorithm, implement that standard and cite it; a private variant interoperates only with itself and repeats mistakes the standard's review already fixed."
+claim = "A part whose behavior a published standard specifies should conform to that standard, cite it by number and version, and be tested against its examples or conformance suite, so that peers, tools, and reviewers can check it against a text other than the code."
+problem = "Timestamps in a local format, a home-made token scheme, a CSV dialect with its own quoting, a version string that looks like Semantic Versioning and is not. Each works between the author's own components, then breaks at the first peer that read the standard, and the security review the standard went through never covered the variant."
+rationale = "A standard is a contract that many independent implementations already agree on, reviewed by more people than any one project can gather. Conforming to it buys interoperability with peers not yet written, and lets a reviewer check behavior against a specification instead of reverse-engineering intent from code. A citation by number turns 'what does this accept' into a lookup."
+applies_when = ["The part reads or writes a format, speaks a protocol, or implements an algorithm that a published standard specifies: timestamps, URIs, JSON, email addresses, TLS, password hashing, version strings.", "What it emits will be consumed by tools or peers the author does not control.", "A security property depends on the part, so the standard's review history is evidence a private design lacks.", "The standard publishes test vectors or a conformance suite a test can run."]
+does_not_mean = ["Implement the standard by hand; a maintained library that already conforms is usually the better way to follow it.", "Implement every optional feature; name the profile or subset implemented and refuse the rest explicitly.", "Treat a standard as correct because it is published; errata, obsoleting RFCs, and deprecated algorithms are part of following it.", "Reject every nonconforming input; how liberal a reader should be is the robustness principle's question, and this record asks what the part itself emits and claims."]
+benefits = ["Interoperability with implementations the author never tested against.", "Reviewers check behavior against a specification instead of inferring it from code.", "Security analysis done on the standard applies to a conforming implementation."]
+costs = ["Standards are long, and the parts used must be read and tested.", "A standard can lag the need, or be heavier than a private format would be.", "A citation goes stale when the standard is superseded, so following one includes migrating off it."]
+failure_when_overapplied = ["A heavyweight standard is adopted for an internal exchange a two-field record would serve.", "Conformance is claimed by citing an RFC the code does not implement, and nothing tests the claim.", "A project waits for a standard that does not exist yet instead of documenting its own format.", "Every optional extension is implemented, enlarging the attack surface for features no peer uses."]
+conflicts_with = []
+related = ["robustness-principle", "reuse-maintained-components", "hyrums-law", "least-astonishment", "deprecation-discipline"]
+review_questions = ["Which standard specifies what this part reads, writes, or computes, is it cited by number and version where the code is, and has it been obsoleted or amended since?", "Which subset or profile of the standard is implemented, and what happens on input that uses the rest?", "Is conformance tested against the standard's own examples, test vectors, or conformance suite?", "Where this departs from the standard, is the departure written down, and which peers will it break?"]
+
+[enforcement]
+level = "test"
+automatable = "partially"
+rung = ["text", "syntax"]
+observable = ["Citations of standards in source comments and documentation, and the status the publisher's index gives each cited document.", "Output the part emits, which a validator for the claimed standard can parse.", "Test vectors and conformance suites the standard publishes."]
+checks = ["Run the standard's test vectors or conformance suite against the implementation as part of its tests.", "Validate emitted documents against the standard's grammar or schema, such as its ABNF or a published JSON Schema.", "Flag a cited RFC that the RFC Editor's index marks obsoleted, naming the document that obsoletes it."]
+limits = ["Which standard applies to a part is a judgment; a tool checks only the claims a part makes.", "A conformance suite covers what its authors wrote, so passing it does not prove conformance.", "A private format that should have been a standard carries no citation for a tool to find."]
+
+[[sources]]
+title = "RFC 2026: The Internet Standards Process -- Revision 3"
+url = "https://www.rfc-editor.org/rfc/rfc2026"
+type = "standard"
+notes = "Defines the IETF's maturity levels and the review a specification passes before it becomes a standard; the review history this record counts as evidence."
+
+[[sources]]
+title = "RFC 7282: On Consensus and Humming in the IETF"
+url = "https://www.rfc-editor.org/rfc/rfc7282"
+type = "standard"
+notes = "Describes rough consensus: that every objection raised was addressed, not that everyone agreed. That is why a standard carries more review than a private design."
+
+[[sources]]
+title = "QA Framework: Specification Guidelines"
+url = "https://www.w3.org/TR/qaframe-spec/"
+type = "standard"
+notes = "W3C guidance on conformance clauses, profiles, and optional features; the source of this record's advice to name the subset implemented."
