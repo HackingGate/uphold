@@ -143,6 +143,21 @@ When continuing cannot satisfy the contract safely, detect the condition at the 
 - Would continuing preserve a truthful and safe contract?
 - Does the error include enough evidence for recovery?
 
+## Follow Published Standards
+A part whose behavior a published standard specifies should conform to that standard, cite it by number and version, and be tested against its examples or conformance suite, so that peers, tools, and reviewers can check it against a text other than the code.
+
+**Applies when**
+- The part reads or writes a format, speaks a protocol, or implements an algorithm that a published standard specifies: timestamps, URIs, JSON, email addresses, TLS, password hashing, version strings.
+- What it emits will be consumed by tools or peers the author does not control.
+- A security property depends on the part, so the standard's review history is evidence a private design lacks.
+- The standard publishes test vectors or a conformance suite a test can run.
+
+**Ask**
+- Which standard specifies what this part reads, writes, or computes, is it cited by number and version where the code is, and has it been obsoleted or amended since?
+- Which subset or profile of the standard is implemented, and what happens on input that uses the rest?
+- Is conformance tested against the standard's own examples, test vectors, or conformance suite?
+- Where this departs from the standard, is the departure written down, and which peers will it break?
+
 ## Goodhart's Law
 When a measure becomes a target, it ceases to be a good measure, because those it measures move the number by means that decouple it from what it was chosen to indicate.
 
@@ -351,6 +366,21 @@ Protection mechanisms must be easy enough to apply correctly and routinely that 
 - Is the cheapest response to a failure a fix, or turning the check off?
 - Is there a scoped way in for a tree that does not yet comply, such as a baseline or a ratchet?
 - Six months from now, what evidence would show this is still enabled everywhere it was installed?
+
+## Reuse Maintained Components
+Do not hand-roll a function that a maintained component already provides at adequate fit, because the component carries the edge cases, platform coverage, and fixes of every user it has, while a private copy carries only the cases its author met.
+
+**Applies when**
+- A change implements something a widely used library, standard-library module, or tool already provides: parsing a standard format, quoting for a shell, splitting arguments, installing a toolchain, cryptography.
+- The hand-rolled form is short enough to look obviously correct, so its untested edge cases are not visible in review.
+- The same helper exists, or is about to, in more than one repository.
+- A candidate component exists whose maintenance can be judged from evidence: release history, open advisories, and how many projects depend on it.
+
+**Ask**
+- Which maintained library, standard-library module, or tool already does what this code does, and why was it not used?
+- If one was rejected, is the reason written beside the code: poor fit, size against the need, licence, or maintenance?
+- Which inputs and platforms has the hand-rolled form been run on, and which has the maintained component met that this one has not?
+- Is the chosen component maintained, judged by its release history, open advisories, and dependents, and who updates it here?
 
 ## Optimize for Reversible Decisions
 For uncertain, noncritical choices, favor designs and commitments whose consequences can be observed and reversed at acceptable cost before scaling them.

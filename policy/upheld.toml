@@ -241,7 +241,7 @@ acyclic-dependencies = "No gate here decides a module graph. uphold is one crate
 # whoever wrote the record is the only reader who knows what violating it looks
 # like, and a fixture in a file is reviewable.
 #
-# One control, deliberately, and the run says so on every invocation: twenty-eight
+# One control, deliberately, and the run says so on every invocation: thirty
 # review-carried records have none. That line is the honest reading of what has
 # been demonstrated here, and it is what the next control should be chosen
 # against.

@@ -91,6 +91,10 @@ const RECORDS: &[(&str, &str)] = &[
         include_str!("../principles/fail-safe-defaults.toml"),
     ),
     (
+        "follow-published-standards",
+        include_str!("../principles/follow-published-standards.toml"),
+    ),
+    (
         "goodharts-law",
         include_str!("../principles/goodharts-law.toml"),
     ),
@@ -158,6 +162,10 @@ const RECORDS: &[(&str, &str)] = &[
     (
         "reproducible-derived-state",
         include_str!("../principles/reproducible-derived-state.toml"),
+    ),
+    (
+        "reuse-maintained-components",
+        include_str!("../principles/reuse-maintained-components.toml"),
     ),
     (
         "reversible-decisions",

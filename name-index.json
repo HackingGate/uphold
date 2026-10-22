@@ -175,6 +175,19 @@
       "path": "principles/defense-in-depth.toml"
     },
     {
+      "name": "Build versus buy",
+      "key": "build versus buy",
+      "tokens": [
+        "build",
+        "versus",
+        "buy"
+      ],
+      "field": "alias",
+      "id": "reuse-maintained-components",
+      "title": "Reuse Maintained Components",
+      "path": "principles/reuse-maintained-components.toml"
+    },
+    {
       "name": "Calculator with one_plus_one()",
       "key": "calculator with one plus one",
       "tokens": [
@@ -367,6 +380,20 @@
       "path": "principles/informed-consent.toml"
     },
     {
+      "name": "Conform to the specification",
+      "key": "conform to the specification",
+      "tokens": [
+        "conform",
+        "to",
+        "the",
+        "specification"
+      ],
+      "field": "alias",
+      "id": "follow-published-standards",
+      "title": "Follow Published Standards",
+      "path": "principles/follow-published-standards.toml"
+    },
+    {
       "name": "Confused Deputy",
       "key": "confused deputy",
       "tokens": [
@@ -467,6 +494,18 @@
       "path": "principles/graceful-degradation.toml"
     },
     {
+      "name": "Dependency currency",
+      "key": "dependency currency",
+      "tokens": [
+        "dependency",
+        "currency"
+      ],
+      "field": "alias",
+      "id": "deprecation-discipline",
+      "title": "Deprecation Discipline",
+      "path": "principles/deprecation-discipline.toml"
+    },
+    {
       "name": "Deprecation Discipline",
       "key": "deprecation discipline",
       "tokens": [
@@ -529,6 +568,21 @@
       "id": "explicit-unknown",
       "title": "Explicit Unknown",
       "path": "principles/explicit-unknown.toml"
+    },
+    {
+      "name": "Do not reinvent the wheel",
+      "key": "do not reinvent the wheel",
+      "tokens": [
+        "do",
+        "not",
+        "reinvent",
+        "the",
+        "wheel"
+      ],
+      "field": "alias",
+      "id": "reuse-maintained-components",
+      "title": "Reuse Maintained Components",
+      "path": "principles/reuse-maintained-components.toml"
     },
     {
       "name": "Do one thing well",
@@ -836,6 +890,19 @@
       "id": "backpressure",
       "title": "Backpressure",
       "path": "principles/backpressure.toml"
+    },
+    {
+      "name": "Follow Published Standards",
+      "key": "follow published standards",
+      "tokens": [
+        "follow",
+        "published",
+        "standards"
+      ],
+      "field": "title",
+      "id": "follow-published-standards",
+      "title": "Follow Published Standards",
+      "path": "principles/follow-published-standards.toml"
     },
     {
       "name": "Goodhart's Law",
@@ -1309,6 +1376,19 @@
       "path": "principles/explicit-unknown.toml"
     },
     {
+      "name": "Not Invented Here",
+      "key": "not invented here",
+      "tokens": [
+        "not",
+        "invented",
+        "here"
+      ],
+      "field": "alias",
+      "id": "reuse-maintained-components",
+      "title": "Reuse Maintained Components",
+      "path": "principles/reuse-maintained-components.toml"
+    },
+    {
       "name": "Observability",
       "key": "observability",
       "tokens": [
@@ -1731,6 +1811,19 @@
       "path": "principles/reproducible-derived-state.toml"
     },
     {
+      "name": "Reuse Maintained Components",
+      "key": "reuse maintained components",
+      "tokens": [
+        "reuse",
+        "maintained",
+        "components"
+      ],
+      "field": "title",
+      "id": "reuse-maintained-components",
+      "title": "Reuse Maintained Components",
+      "path": "principles/reuse-maintained-components.toml"
+    },
+    {
       "name": "Robustness Principle",
       "key": "robustness principle",
       "tokens": [
@@ -1988,6 +2081,18 @@
       "id": "high-cohesion-low-coupling",
       "title": "High Cohesion, Low Coupling",
       "path": "principles/high-cohesion-low-coupling.toml"
+    },
+    {
+      "name": "Standards conformance",
+      "key": "standards conformance",
+      "tokens": [
+        "standards",
+        "conformance"
+      ],
+      "field": "alias",
+      "id": "follow-published-standards",
+      "title": "Follow Published Standards",
+      "path": "principles/follow-published-standards.toml"
     },
     {
       "name": "System of Record",
