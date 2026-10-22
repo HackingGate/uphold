@@ -1987,6 +1987,78 @@ fn staged_exit_1_from_gitleaks_is_a_scan_that_did_not_finish() {
     assert!(said.contains("NOT CHECKED: gitleaks exited 1"), "{said}");
 }
 
+/// What gitleaks 8.30.1 does with a git that wrote to stderr, measured: logs
+/// the line at `ERR`, scans nothing, says `no leaks found`, and exits 0.
+const GITLEAKS_BLINDED: &str = "echo '9:52PM ERR [git] warning: something' >&2\n\
+     echo '9:52PM ERR error=\"stderr is not empty\"' >&2\n\
+     echo '9:52PM INF no leaks found' >&2\n\
+     exit 0";
+
+#[test]
+fn staged_exit_0_from_a_gitleaks_that_logged_an_error_is_not_a_pass() {
+    let root = inheriting_credentials();
+    let tools = every_scanner(&gitleaks_stub(GITLEAKS_PINNED, GITLEAKS_BLINDED));
+    let output = staged(&root, &tools, &[]);
+    let said = text(&output);
+    assert_eq!(code(&output), 2, "{said}");
+    assert!(said.contains("stderr is not empty"), "{said}");
+    assert!(!said.contains("staged diff passed"), "{said}");
+}
+
+/// The two halves of #410 together: a token staged, uphold linked in front of
+/// git as an install puts it with a `[[shim]]` for git declared, and a gitleaks
+/// that reads the index through the argv the real one runs and answers as the
+/// real one does -- a git that wrote to stderr is a diff it did not read. The
+/// shim warned on that argv, so the scan read nothing and the commit passed.
+#[test]
+fn a_staged_token_is_refused_with_the_git_shim_on_path() {
+    let root = tracked();
+    std::fs::write(
+        root.join("policy/principles.toml"),
+        format!(
+            "{WITH_CREDENTIALS}\n[rule.no-wip-branch]\nmessage = \"unfinished\"\n\
+             regexp = '^WIP'\ncommand.before = [\"git push\"]\n\
+             \n[[shim]]\ncommand = \"git\"\nmatch = [\"push:*\"]\n\
+             target = \"git-remote\"\nscope = \"public-target\"\ncollect = \"git-refs\"\n"
+        ),
+    )
+    .unwrap();
+    commit(&root, "inherit credentials and shim git");
+    // Spelled at run time, so this file holds no token of its own.
+    write(
+        &root,
+        "leak.txt",
+        &format!("token = \"ghp_{}\"\n", "a1".repeat(18)),
+    );
+    support::git(&root, &["add", "leak.txt"]);
+
+    let reader = "out=\"$STUB_LOG.diff\"\n\
+         err=$(git -C . diff -U0 --no-ext-diff --staged . 2>&1 >\"$out\")\n\
+         if [ -n \"$err\" ]; then\n\
+           echo \"9:52PM ERR [git] $err\" >&2\n\
+           echo '9:52PM ERR error=\"stderr is not empty\"' >&2\n\
+           exit 0\n\
+         fi\n\
+         while IFS= read -r line; do\n\
+           case \"$line\" in *ghp_*) echo 'RuleID: github-pat'; exit 3;; esac\n\
+         done < \"$out\"\n\
+         exit 0";
+    let tools = every_scanner(&gitleaks_stub(GITLEAKS_PINNED, reader));
+    let front = root.join("front");
+    std::fs::create_dir_all(&front).unwrap();
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_uphold"), front.join("git")).unwrap();
+    let mut path = tools.as_os_str().to_owned();
+    path.push(":");
+    path.push(front.as_os_str());
+    path.push(":/usr/bin:/bin");
+
+    let output = invoke(&root, &path, &["--staged"], &[]);
+    let said = text(&output);
+    assert_eq!(code(&output), 1, "{said}");
+    assert!(said.contains("RuleID: github-pat"), "{said}");
+    assert!(!said.contains("uphold shim"), "{said}");
+}
+
 #[test]
 fn staged_in_a_policy_that_does_not_inherit_credentials_asks_nothing() {
     let root = repository();

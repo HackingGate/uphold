@@ -1838,14 +1838,33 @@ fn gitleaks_version_mismatch() -> Option<String> {
 /// gitleaks' could-not-look, which its own exit code names once the finding
 /// has been moved off `1`: anything but `0` and [`GITLEAKS_FOUND`] is a scan
 /// that did not finish, the partial scan included.
+///
+/// And a `0` that logged an error. gitleaks 8.30.1 treats any line git writes
+/// to stderr as a failed diff, logs `ERR error="stderr is not empty"`, scans
+/// nothing, says `no leaks found` and exits 0 -- so a warning from whatever
+/// `git` is on PATH turned the staged scan into a pass over a diff nobody read.
 fn gitleaks_could_not_look(code: i32, _stdout: &str, stderr: &str) -> Option<String> {
-    if matches!(code, 0 | GITLEAKS_FOUND) {
+    if code == 0 {
+        return gitleaks_logged_an_error(stderr).map(|line| {
+            format!("gitleaks exited 0 but logged an error, so what it read is unknown: {line}")
+        });
+    }
+    if code == GITLEAKS_FOUND {
         return None;
     }
     Some(format!(
         "gitleaks exited {code} without a verdict, so the range was not fully read: {}",
         first_said(stderr)
     ))
+}
+
+/// The first line gitleaks logged at `ERR`, which under `--no-color` is the
+/// second word of its line: `9:52PM ERR [git] ...`.
+fn gitleaks_logged_an_error(stderr: &str) -> Option<&str> {
+    stderr
+        .lines()
+        .map(str::trim)
+        .find(|line| line.split_whitespace().nth(1) == Some("ERR"))
 }
 
 /// A file that exists for one child process and is removed on the way out.
@@ -2110,6 +2129,21 @@ mod tests {
         assert!(gitleaks_could_not_look(GITLEAKS_FOUND, "", "").is_none());
         assert!(gitleaks_could_not_look(1, "", "partial scan completed").is_some());
         assert!(gitleaks_could_not_look(126, "", "unknown flag").is_some());
+    }
+
+    #[test]
+    fn gitleaks_exit_0_that_logged_an_error_is_not_a_pass() {
+        // What gitleaks 8.30.1 printed, `--no-color`, for `git --staged` when
+        // the git on PATH wrote one line to stderr: it exited 0.
+        let stderr = "9:52PM ERR [git] noise on stderr\n\
+                      9:52PM ERR error=\"stderr is not empty\"\n\
+                      9:52PM INF 0 commits scanned.\n\
+                      9:52PM INF no leaks found\n";
+        let reason = gitleaks_could_not_look(0, "", stderr).unwrap();
+        assert!(reason.contains("[git] noise on stderr"), "{reason}");
+        assert!(gitleaks_could_not_look(0, "", "9:52PM INF no leaks found\n").is_none());
+        // `ERR` inside a message is not the level.
+        assert!(gitleaks_could_not_look(0, "", "9:52PM INF path ERR.txt\n").is_none());
     }
 
     /// Paths under the fixture, as strings, so a failure names what was found.

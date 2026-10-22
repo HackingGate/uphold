@@ -1859,7 +1859,26 @@ impl Shim {
         if bare.verb == valued.verb && bare.noun == valued.noun {
             return Reading::Absent;
         }
+        // And a disagreement about the noun alone is no doubt where no entry
+        // names this verb with any noun: whichever word it is, no `match` entry
+        // could have named the pair. `git diff -U0 --no-ext-diff --staged .` is
+        // `diff` under both readings and only `.` moves, and calling it unclear
+        // wrote a line to stderr under every `gitleaks git --staged`, which
+        // gitleaks reads as a failed diff and answers by scanning nothing.
+        if bare.verb == valued.verb && !self.names_a_noun_of(&bare.verb) {
+            return Reading::Absent;
+        }
         Reading::Unclear(flag)
+    }
+
+    /// Whether any `match` entry names this verb, whatever noun it pairs it
+    /// with.
+    fn names_a_noun_of(&self, verb: &str) -> bool {
+        self.match_.iter().any(|entry| {
+            entry
+                .split_once(':')
+                .is_some_and(|(named, _)| named == verb)
+        })
     }
 
     /// argv as the command itself will read it, with an alias in the verb
@@ -7039,12 +7058,26 @@ mod tests {
             "status --short --branch",
             "diff --stat --cached",
             "log --format=%H -5",
+            // The argv `gitleaks git --staged` runs, which moves the noun and
+            // not the verb: no entry names `diff` with anything.
+            "-C . diff -U0 --no-ext-diff --staged .",
+            "diff -U0 --no-ext-diff --staged .",
         ] {
             assert!(
                 matches!(git_push().reading(&argv(line)), Reading::Absent),
                 "{line}"
             );
         }
+        // A verb an entry DOES pair with a noun keeps the doubt, because there
+        // the word that moved is the one the match turns on.
+        let push_to_main = Shim {
+            match_: vec!["push:main".into()],
+            ..git_push()
+        };
+        assert!(matches!(
+            push_to_main.reading(&argv("push --fic-a --fic-b --fic-c x")),
+            Reading::Unclear(flag) if flag == "--fic-a"
+        ));
     }
 
     #[test]
