@@ -45,6 +45,9 @@ allow = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "Unlicense",
+    # foldhash, which serde_json depends on. Permissive and OSI
+    # approved: no attribution in the binary, no copyleft.
+    "Zlib",
 ]
 # A dual-licensed crate is taken under the first of its licences this list
 # admits, which is how `MIT OR Apache-2.0` resolves without a note per crate.
