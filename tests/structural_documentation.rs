@@ -58,7 +58,6 @@ const KNOWN: &[&str] = &[
     "catalog.rs::get",
     "check.rs::Supply",
     "check.rs::installed",
-    "config.rs::PolicyFile",
     "git.rs::config_global",
     "git.rs::dir",
     "git.rs::run",

@@ -168,7 +168,7 @@ impl std::fmt::Display for CheckKind {
 /// `deny_unknown_fields` is here rather than on `Rule` for the reason the
 /// conversion is: an unknown key is a spelling question the deserializer can
 /// answer on its own, and everything the id has to appear in is answered after.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Written {
     pub message: Option<String>,

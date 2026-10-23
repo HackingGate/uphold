@@ -55,7 +55,7 @@ use checker::{consult, pattern_refusal};
 use destination::{CommandContext, effective_scope};
 
 /// Where an invocation is going, when that is a meaningful question at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Target {
     /// Ask the command itself which repository it is operating on.
@@ -68,7 +68,7 @@ pub(crate) enum Target {
 }
 
 /// Whether this invocation publishes to somewhere that matters.
-#[derive(Debug, Clone, Deserialize, serde::Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Scope {
     /// `visibility == "public"` on the target repository. `internal` is
@@ -115,7 +115,7 @@ pub(crate) enum Standing {
 /// behaviour, kept as an opt-in for a workspace whose forge is routinely
 /// unreachable and who would rather have the command than the answer -- it
 /// still says on stderr that no checker ran.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Unresolved {
     /// Refuse the invocation with exit 2, having published nothing.
@@ -133,7 +133,7 @@ pub(crate) enum Unresolved {
 /// one: whether the shim stands in as the editor, and whether it SAYS the
 /// editor is the checkpoint -- which it said for `gh pr merge --squash`, where
 /// no editor ever opens and the forge composed the merge message unread.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Editor {
     /// An editor opens whenever no body flag was given -- `pr create`.
@@ -350,7 +350,7 @@ pub(crate) fn message_subjects(message: String) -> Vec<Subject> {
 }
 
 /// How this command's subjects are found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Collect {
     /// Walk argv once, reading the flags the table names.
@@ -382,7 +382,7 @@ pub(crate) enum Collect {
 /// than adding to them, which is the rule `allowed_scripts` already follows for
 /// the same reason: what is declared beside the narrower thing is the whole
 /// truth for it, and a union would mean a vocabulary nobody wrote.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct VerbFlags {
     /// `verb:noun` or `verb:*`, in the spelling the table's own `match` uses.
@@ -420,7 +420,7 @@ pub(crate) struct VerbFlags {
     pub inert_flags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Shim {
     /// The command this stands in front of.

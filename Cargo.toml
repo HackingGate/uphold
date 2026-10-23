@@ -135,10 +135,23 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 # machine and adds no crate.
 uuid = { version = "1", default-features = false, features = ["v8"] }
 
+# The JSON Schema of the policy file, derived from the structs that read it
+# rather than written beside them: a hand-written schema is a second list of
+# the keys, which is the drift `uphold schema` exists to remove. It reads the
+# same `#[serde(...)]` attributes the deserializer does, so `deny_unknown_fields`,
+# `rename` and `default` mean to the schema what they mean to the reader.
+schemars = { version = "1", features = ["derive"] }
+
 [target.'cfg(unix)'.dependencies]
 # Git discovers hooks with access(X_OK), which checks the caller's permission
 # class and ACLs. Use the same OS check through a safe API.
 rustix = { version = "1", features = ["fs"] }
+
+[dev-dependencies]
+# Checks the committed schema against the 2020-12 metaschema and then runs
+# this repository's own policy files through it. A schema nothing validates
+# against is a claim; this is the standard's own test for it.
+jsonschema = { version = "0.60", default-features = false }
 
 # `strip` is deliberately absent: stripping is a packaging step, and a stripped
 # binary with no build-id cannot be symbolicated from a core. `debug = 1` keeps
