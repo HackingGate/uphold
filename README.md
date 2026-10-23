@@ -36,6 +36,7 @@ command.before = ["git push"]
 
 - [`docs/REFERENCE.md`](docs/REFERENCE.md) — every config field, seam by seam
 - [`docs/DESIGN.md`](docs/DESIGN.md) — why it is shaped this way
+- [`docs/workflow.md`](docs/workflow.md) — how an action reaches uphold, and which bundled rules fire there (generated)
 - [`docs/COVERAGE.md`](docs/COVERAGE.md) — which rung of checking exists for which language
 - [`QUICK_REFERENCE.md`](QUICK_REFERENCE.md) — the catalog, one page
 
