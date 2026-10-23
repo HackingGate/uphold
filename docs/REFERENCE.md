@@ -17,6 +17,7 @@ namespace — that is what lets a claim in
 - [`uphold hooks --install` — the hooks git actually runs](#uphold-hooks---install--the-hooks-git-actually-runs)
 - [`uphold probe` — can each hook refuse?](#uphold-probe--can-each-hook-refuse)
 - [`uphold check --coverage` and `--oscal`](#uphold-check---coverage-and---oscal)
+- [`uphold schema` — the policy file's JSON Schema](#uphold-schema--the-policy-files-json-schema)
 - [The review tier](#the-review-tier)
   - [Controls: can a record produce a finding at all?](#controls-can-a-record-produce-a-finding-at-all)
 
@@ -4145,6 +4146,50 @@ re-export with nothing changed is a diff with nothing in it. Four fields ride
 along as props in this repository's namespace: the rule id, the seam, the
 record's `enforcement.level` and its `automatable`. The catalog itself does not
 cross over — see [DESIGN.md](DESIGN.md#why-oscal-and-why-only-the-mapping).
+
+## `uphold schema` — the policy file's JSON Schema
+
+```sh
+uphold schema > principles.schema.json
+```
+
+Prints a JSON Schema (draft 2020-12) for `principles.toml`, and for the bundled
+sets and `inherit.paths` files, which are read by the same deserializer. It is
+derived from the structs that read the file, so an unknown key is
+`additionalProperties: false` because the reader refuses it, and a key's
+description is the doc comment on its field. The `[override.<id>]` table is read
+by hand and is described by a stand-in type that a test holds to the reader's
+keys. Output is deterministic and takes no arguments; exit `0`.
+
+The schema states the shape and not the whole of loading. A rule that carries
+two checks, a `[set]` header outside a bundled set, an `owner` beside an
+`owner_from`, and a regular expression that does not compile are refused after
+the read, with the rule's id in the message. A document that validates has the
+right shape; `uphold scan` or `uphold rules --effective` is what says it loads.
+
+The committed copy is `docs/schema/principles.schema.json`, and
+`tests/schema_cli.rs` fails while it differs from what the binary prints. After
+a change to a policy struct, regenerate it and read the diff:
+
+```sh
+UPHOLD_SCHEMA_GOLDEN=bless cargo test --test schema_cli
+```
+
+The same test holds the file to the 2020-12 metaschema, validates this
+repository's `policy/principles.toml` and every bundled set against it, and
+checks that documents the deserializer refuses are refused by the schema.
+
+Each release carries the schema as an asset, `principles.schema.json`, with
+`principles.schema.json.sha256` beside it. To get completion and diagnostics in
+an editor that speaks the Even Better TOML language server (taplo), make the
+first line of the policy file a schema directive naming the asset:
+
+```toml
+#:schema https://github.com/HackingGate/uphold/releases/latest/download/principles.schema.json
+```
+
+Replace `latest` with a tag to pin the schema to the release a repository's
+`uphold` is pinned to, so the editor and the binary agree on what is a key.
 
 ## The review tier
 

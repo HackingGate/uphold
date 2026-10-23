@@ -11,7 +11,7 @@ use crate::error::{Fatal, Result};
 
 /// A consumer-selected policy blob, identified by GitHub repository, immutable
 /// commit and path. The loader also uses this exact tuple as rule provenance.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Remote {
     /// GitHub repository in `owner/name` form.

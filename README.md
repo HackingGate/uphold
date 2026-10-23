@@ -241,6 +241,7 @@ uphold check                    # the claims in policy/upheld.toml still hold
 uphold check --probe            # add fresh behavior evidence without changing acceptance
 uphold check --coverage         # which rules here carry a principle
 uphold rules --effective        # every rule inheritance resolved to, and where each runs
+uphold schema                   # the JSON Schema of principles.toml, for editors
 uphold guard --stage pre-push   # the guards for that Git hook
 uphold shim gh pr create ...    # stand in front of a command, then exec
 uphold shim --install           # link this binary under each command's name

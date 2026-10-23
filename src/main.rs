@@ -100,6 +100,7 @@ mod remote_policy;
 mod report;
 mod runner;
 mod scan;
+mod schema;
 mod selection;
 mod shim;
 mod sources;
@@ -119,6 +120,7 @@ usage:
                                      run the guards that fire at STAGE
   uphold guard --text [FILE|-]       run the text-capable guards over text
                [--junit FILE|DIR]
+  uphold schema                      print the JSON Schema of principles.toml
   uphold check [--json] [--probe]    reconcile claims; optionally measure hook behavior
   uphold check --coverage            which rules run here and carry no principle
   uphold audit --for-publication     what a private->public flip would republish
@@ -371,6 +373,13 @@ fn run() -> Result<Exit> {
         "scan" => scan_command(rest),
         "guard" => guard_command(rest),
         "audit" => audit_command(rest),
+        "schema" => match rest {
+            [] => {
+                print!("{}", schema::document()?);
+                Ok(Exit::Clean)
+            }
+            _ => Err(Fatal::new(format!("usage: uphold schema\n\n{USAGE}"))),
+        },
         "check" => match rest {
             [] => check_command(false, false, false),
             [flag] if flag == "--coverage" => check_command(true, false, false),

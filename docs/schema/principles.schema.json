@@ -1,0 +1,911 @@
+{
+  "$defs": {
+    "Collect": {
+      "description": "How this command's subjects are found.",
+      "oneOf": [
+        {
+          "const": "flags",
+          "description": "Walk argv once, reading the flags the table names.",
+          "type": "string"
+        },
+        {
+          "const": "git-refs",
+          "description": "Branch and tag names, which are positional. `git push origin\nfix/acme-outage` puts that name on a public forge, in the ref list, in\nthe pull request it suggests, and in every notification -- and pre-push\nis handed the refs, but the guards that read them judge the DESTINATION\nand never the name itself.",
+          "type": "string"
+        },
+        {
+          "const": "npm-package",
+          "description": "A package's metadata and its tree. What `npm publish` sends is a FILE\nTREE -- README, description, keywords, everything not excluded -- so the\nsubject kinds are `text` for the metadata and `path` for the tree.",
+          "type": "string"
+        }
+      ]
+    },
+    "CommandWhere": {
+      "additionalProperties": false,
+      "description": "The command lines a rule stands in front of.",
+      "properties": {
+        "before": {
+          "default": [],
+          "description": "`\"gh pr create\"`, `\"git push\"`, `\"npm publish\"` -- the command and as\nmuch of its subcommand path as should match, space-separated, as typed.\n`\"gh\"` alone matches every `gh` invocation a shim collects a subject\nfrom.\n\nBefore this field, a checker rule was consulted by EVERY shim: a check\nwritten for a pull-request body was also asked about a branch name on\n`git push` and a tarball on `npm publish`, and there was no way to say\notherwise.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope",
+          "description": "When this rule applies, overriding the `[[shim]]` table's own `scope`\nfor this rule alone. Absent means the table decides, which is every\nrule written before this field existed.\n\nThe table's scope answers for the COMMAND -- is this push going\nsomewhere public -- and one answer cannot fit every rule consulted\nbehind it. A private-name check belongs only where the destination is\npublic; host identity in a pull-request body is worth refusing\nwhatever the destination, because a private forge repository is still\nsomebody else's infrastructure with its own retention. Two workspaces\nheld that second class of rule in a hand-rolled agent hook, standing\nOUTSIDE the shim to escape its table's `public-target`, re-invoking\nthis binary for the same two rules the policy already declared --\nwhich is the same rule twice, free to disagree."
+        }
+      },
+      "type": "object"
+    },
+    "Editor": {
+      "description": "When an invocation that supplied no body opens an editor for one.\n\nA closed value rather than a flag list or an expression, because the\nquestion has three answers and the commands this tool stands in front of\ngive exactly those three. The answer decides two things that used to be\none: whether the shim stands in as the editor, and whether it SAYS the\neditor is the checkpoint -- which it said for `gh pr merge --squash`, where\nno editor ever opens and the forge composed the merge message unread.",
+      "oneOf": [
+        {
+          "const": "without-body",
+          "description": "An editor opens whenever no body flag was given -- `pr create`.",
+          "type": "string"
+        },
+        {
+          "const": "never",
+          "description": "No editor opens, and a body nobody gave is no body -- `pr close`.",
+          "type": "string"
+        },
+        {
+          "const": "interactive",
+          "description": "An editor is offered only from an interactive prompt, and offered\nwhether or not a body flag was given -- `gh pr merge` asks \"Edit commit\nmessage\" with `--body` on the line. With no terminal to prompt on, or\nwith a flag in `editor_unless`, none opens, and a body that was not\ngiven is composed by the forge.",
+          "type": "string"
+        },
+        {
+          "const": "forge",
+          "description": "No editor opens, and a body nobody gave is composed by the forge --\n`glab mr merge`, whose merge commit message GitLab writes from its own\ntemplate when no message flag is given. Said, like the `interactive`\ncase off a terminal, rather than passed over in silence.",
+          "type": "string"
+        }
+      ]
+    },
+    "Files": {
+      "additionalProperties": false,
+      "description": "Where a rule runs: over files, as a git hook, in front of a command.\n\nThree tables, three vocabularies, and none of them this tool's. `[rule.git]`\ntakes hook names from githooks(5). `[rule.command]` takes command lines as\ntyped. `[rule.files]` takes ripgrep's own search scoping, because the search\nIS ripgrep -- the crates are linked in, so a glob written here means what it\nmeans to `rg --glob`.\n\nAn absent table is not a default. It is a place the rule does not run, which\nis the whole of the configuration story and the reason \"the gh shim and the\nfile scan, but install no git hook\" is now something a person can write down.",
+      "properties": {
+        "baseline": {
+          "type": "string"
+        },
+        "exclude": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "exclude_cfg_test": {
+          "default": false,
+          "type": "boolean"
+        },
+        "fixed_strings": {
+          "type": "boolean"
+        },
+        "glob": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "include": {
+          "description": "Search roots. `[\".\"]` when absent.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "min_selected": {
+          "description": "The smallest selection this rule accepts. Fewer files than this and the\nrule fails, naming the count and the keys that produced it.\n\nHere rather than beside a check, and that is the whole placement\nargument: the count is a fact about the SELECTION, so it belongs in the\nshared selection vocabulary every check reads, and one implementation at\nthe funnel covers the check kinds nobody has written yet. `min_selected`\nrather than a `require_selection = true` boolean, because a floor of one\nis a value and not a kind of floor -- a repository whose selection must\ncover four workflow files writes `4`, and no second field has to be\ninvented for it.\n\nA written `0` is refused at load: it is satisfied by every selection\nthere is, so it declares a floor and enforces nothing, which is the\nshape `trivial_comments = false` is refused for.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "multiline": {
+          "default": false,
+          "type": "boolean"
+        },
+        "reach": {
+          "$ref": "#/$defs/Reach",
+          "description": "Whose tracked files the selection is drawn from: this repository's own\n(`\"repository\"`, and what an absent key means), or those plus the\ncontent of every repository its index pins (`\"pinned\"`).\n\nAn `Option` rather than a defaulted value so that a rule written before\nthe field existed serializes exactly as it did, into the bundled-set\nlock and everywhere else a rule is printed."
+        },
+        "word": {
+          "default": false,
+          "description": "Needles from this source match whole words only.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Git": {
+      "additionalProperties": false,
+      "description": "The five stage names a rule may run at: four of git's own, spelled as\ngithooks(5) spells them, and `manual`.",
+      "properties": {
+        "hooks": {
+          "default": [],
+          "description": "`pre-commit`, `commit-msg`, `pre-merge-commit`, `pre-push`, `manual`.\n\n`manual` is the one name here that is not git's: no git operation runs\nit, and it exists because every runner spells \"run this on purpose, in\nCI\" that way. It is where the checks too slow to sit in front of a\ncommit go.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Inherit": {
+      "additionalProperties": false,
+      "description": "What a policy inherits, named set by set.\n\n`sets` is a list and nothing else: the old `use_default = true` shorthand\ntook every bundled set without naming one, so what a repository inherited\nwas not written in the repository. Naming the sets is cheap, and each is\na separate decision -- `unmanaged-pins` refuses a shape a repository that\nvendors deliberately has on purpose, `host-identity` shells out to read the\nrunning machine, and `captured-fixtures` refuses a script a parser's own\ntest corpus is made of. None of those arguments should stand between anyone\nand `process-residue`.",
+      "properties": {
+        "disabled_rules": {
+          "default": [],
+          "description": "Ids dropped from everything inherited. A repository's own rule of the\nsame id overrides instead, which is the other half of the same choice.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "paths": {
+          "default": [],
+          "description": "Extra policy files, repository-relative. Merged after the bundled sets\nand before the repository's own rules, in the order written.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "remote": {
+          "default": [],
+          "description": "Organization policy fetched at an immutable GitHub commit, after local paths.",
+          "items": {
+            "$ref": "#/$defs/Remote"
+          },
+          "type": "array"
+        },
+        "sets": {
+          "default": [],
+          "description": "Bundled rule sets, by name. [`BUNDLED`] is the list and the only one:\na copy of it here named eight sets when the array held twenty, and\nnothing checked the two against each other. `uphold rules --sets`\nprints the array, and the error a wrong name gets is built from it.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "OverrideCommand": {
+      "additionalProperties": false,
+      "description": "The `command` keys of an [`OverrideShape`].",
+      "properties": {
+        "before_append": {
+          "description": "Added to the inherited `command.before`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "OverrideFiles": {
+      "additionalProperties": false,
+      "description": "The `files` keys of an [`OverrideShape`].",
+      "properties": {
+        "exclude": {
+          "description": "What the rule leaves out, replacing the inherited value.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "glob": {
+          "description": "Ripgrep globs, replacing the inherited value.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "include": {
+          "description": "Where the rule reads, replacing the inherited value.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "OverrideShape": {
+      "additionalProperties": false,
+      "description": "What an `[override.<id>]` table is allowed to say, as a type the schema can\nbe derived from.\n\n[`Override::of_table`] reads the raw table by hand, because its refusals\nname the id and the key and a derived reader cannot. That leaves the\naccepted shape in a `match`, where `schemars` cannot see it. This is the same\nshape as a struct: never constructed or deserialized, and read only by the\nschema generator, so the keys the schema offers an editor are the keys\n`of_table` accepts. A test in this file feeds every key of this type to\n`of_table`, so a key added to one and not the other fails the build rather\nthan the first consumer.",
+      "properties": {
+        "allow": {
+          "description": "More allowances, added to the inherited list.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "$ref": "#/$defs/OverrideCommand",
+          "description": "Adds to the commands the inherited rule stands in front of."
+        },
+        "files": {
+          "$ref": "#/$defs/OverrideFiles",
+          "description": "Replaces `files.include`, `files.exclude` and `files.glob` of the\ninherited rule, for the keys written."
+        },
+        "message": {
+          "description": "The wording, replaced.",
+          "type": "string"
+        },
+        "require_any_link": {
+          "description": "The floor under a `links-resolve` selection.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Reach": {
+      "description": "How far down a rule's selection reaches.\n\n`Repository` is what every rule did before the field existed: the files\nthis repository's index lists, a gitlink skipped as another repository's\ncontent. `Pinned` is a claim about the content the repository pins as well:\neach gitlink in the index is asked for its own tracked files, which are\nselected under the mount path. The pin is what makes the content this\nrepository's business -- a member never borrows upward, and a repository\nmay judge, downward, what it pins.",
+      "oneOf": [
+        {
+          "const": "repository",
+          "description": "This repository's own tracked files.",
+          "type": "string"
+        },
+        {
+          "const": "pinned",
+          "description": "This repository's own tracked files and those of every repository it\npins, at every depth, under their mount paths.",
+          "type": "string"
+        }
+      ]
+    },
+    "Remote": {
+      "additionalProperties": false,
+      "description": "A consumer-selected policy blob, identified by GitHub repository, immutable\ncommit and path. The loader also uses this exact tuple as rule provenance.",
+      "properties": {
+        "path": {
+          "description": "Regular policy blob relative to that commit's tree.",
+          "type": "string"
+        },
+        "repo": {
+          "description": "GitHub repository in `owner/name` form.",
+          "type": "string"
+        },
+        "rev": {
+          "description": "Full commit object ID, never a movable branch or tag.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repo",
+        "rev",
+        "path"
+      ],
+      "type": "object"
+    },
+    "Scope": {
+      "description": "Whether this invocation publishes to somewhere that matters.",
+      "oneOf": [
+        {
+          "const": "public-target",
+          "description": "`visibility == \"public\"` on the target repository. `internal` is\ndeliberately NOT counted: it is not public to the internet but is public\nto everyone with an account, which is not a distinction worth betting a\nprivate repository's name on.",
+          "type": "string"
+        },
+        {
+          "const": "public-registry",
+          "description": "The public package registry, and a package not marked private.",
+          "type": "string"
+        },
+        {
+          "const": "always",
+          "description": "Always in scope. The right default for a command with no destination:\na spec that HAS a scope predicate says so, rather than inheriting a\nforge's idea of the question.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An escape hatch, for a command whose question is neither of the above.\nExit 0 to be in scope.",
+          "properties": {
+            "command": {
+              "properties": {
+                "command": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SetHeader": {
+      "additionalProperties": false,
+      "description": "The ceiling on what one bundled set may install, declared in the set.\n\nA set ships compiled into the binary, so a rule added to one starts running\nin every repository that inherits it with NOTHING IN ANY TREE TO REVIEW. For\na content rule that is a finding somebody argues about; for a guard it is a\ncommit refused in up to sixty-five repositories on the strength of a version\nbump. The constraint that makes the difference safe -- \"a new guard gets a\nnew set name rather than joining an existing one\" -- was written down as a\nrisk to hold, which is another way of saying nothing enforced it.\n\nThis is the enforcement, and it is deliberately a DECLARATION rather than a\nderivation. `stages` is what this set is permitted to install, and a rule in\nit declaring any hook outside that list is refused at load: the set cannot\nquietly grow a `pre-commit` guard, because doing so means editing a line\nthat says in words what the set is allowed to do. An empty list -- the\ndefault -- is a content-only set, which is what seven of the twelve\nbundled sets are.\n\nIt is refused in a repository's own policy and in an `inherit.paths` file.\nNothing there ships compiled in, so nothing there has the problem, and a\nfield that looks like a permission but constrains nothing is worse than no\nfield at all.",
+      "properties": {
+        "commands": {
+          "default": [],
+          "description": "`command.before` lines the rules in this set may name, verbatim. Empty\nmeans none: the set stands in front of no command.\n\nThe same ceiling as `stages`, for the seam `stages` cannot see. A rule\njoining a set with `command.before = [\"gh\"]` starts being consulted in\nfront of a real command in every inheriting repository on the strength\nof a version bump, which is exactly the arrival the stage ceiling\nexists to make a visible diff. Verbatim lines rather than command\nnames, because a rule's entry is a line -- `\"git push\"` and `\"git\"`\nare different reaches, and a ceiling that matched on the first word\nwould let a set widen from one to the other without editing the line\nthat says what it may do.\n\nWhat this ceiling deliberately does NOT grant: a shim. A set's rule\nreaches a command only through a `[[shim]]` the repository declared\nitself, and inheriting a set in a repository that has not declared one\nis refused at load, naming the table to write.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stages": {
+          "default": [],
+          "description": "Git hook stages the rules in this set may declare. Empty means none:\nthe set carries content rules only.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Shim": {
+      "additionalProperties": false,
+      "properties": {
+        "argv_subject": {
+          "default": false,
+          "description": "Hand the rules the whole command line, after the command's own name, as\none subject of kind `argv`. For a rule whose subject is the invocation\nitself -- `release create` -- rather than any text a flag carries.",
+          "type": "boolean"
+        },
+        "collect": {
+          "$ref": "#/$defs/Collect"
+        },
+        "command": {
+          "description": "The command this stands in front of.",
+          "type": "string"
+        },
+        "editor": {
+          "$ref": "#/$defs/Editor",
+          "description": "When the command opens that editor. See [`Editor`]."
+        },
+        "editor_env": {
+          "description": "The environment variable this command reads to find its editor.\n\nDeclared so the shim can stand in the one place argv cannot reach: no\nbody on the command line, no `--web`, and a command about to open an\neditor. What gets typed there has not been written yet, so the shim puts\nitself in this variable, runs the user's real editor, and reads the file\nback -- the checkpoint `commit-msg` is for a commit.",
+          "type": "string"
+        },
+        "editor_unless": {
+          "default": [],
+          "description": "Flags that take the editor path away under `editor = \"interactive\"`\n-- `--squash` on `gh pr merge` picks the method the prompt would have\nasked for, and no prompt means no \"Edit commit message\".",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "file_flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "inert_flags": {
+          "default": [],
+          "description": "Flags under which the command publishes nothing -- `--help` prints\nusage, `--disable-auto` on `gh pr merge` turns auto-merge off -- so no\neditor opens and no forge composes a message, whatever `editor` says.\nThe editor path is closed, and nothing is said about a message that\ndoes not exist.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "match": {
+          "default": [],
+          "description": "`verb:noun`, `verb:*`, or `*`. Named rather than pattern-matched: a shim\nthat guesses which subcommands carry text is one release away from\neither missing a new one in silence or blocking one that never carried\nany, and only the first failure is visible.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "message_flags": {
+          "default": [],
+          "description": "Flags whose value is a whole commit MESSAGE -- `glab mr merge\n--squash-message`. Its first line is judged as a title, because it is\nthe commit subject, and the rest as a body; a value here counts as the\nbody given.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path_flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope",
+          "default": "always"
+        },
+        "skip_flags": {
+          "default": [],
+          "description": "Flags that mean a body was supplied from somewhere already checked.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "target_flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "text_flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title_flags": {
+          "default": [],
+          "description": "Flags whose value is a TITLE -- a name the forge shows above the body.\nA separate kind rather than more `text_flags`, for both directions of\nthe difference: a format rule about titles must not be asked about a\nbody, and a title given alone must not read as \"the body was supplied\"\n-- which is what `text_flags` marks, and what used to close the editor\ncheckpoint over the body the command was about to open an editor for.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "unresolved": {
+          "$ref": "#/$defs/Unresolved",
+          "description": "What to do where `scope` could not be evaluated at all.\n\n`refuse` (the default) or `run`. Only `public-target` can reach this: it\nis the one predicate that asks somebody else, and a forge that cannot be\nasked has said nothing. Refused at load beside a table no reading of\nwhich can produce that answer, because a parameter nothing reads is\nconfiguration that looks like it works."
+        },
+        "verbs": {
+          "description": "Flag vocabularies for verbs whose grammar differs from the table's.\n\n`target_flags` is deliberately not overridable: `-R`/`--repo` means the\nsame thing on every verb of a command, and a per-verb answer to \"which\nrepository is this going to\" would be a way to publish somewhere the\ntable did not expect.",
+          "items": {
+            "$ref": "#/$defs/VerbFlags"
+          },
+          "type": "array"
+        },
+        "web_flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    "SupplyChain": {
+      "additionalProperties": false,
+      "description": "`[supply_chain]` in a repository's own policy.",
+      "properties": {
+        "forge_host": {
+          "description": "The forge host a first-party git dependency lives on, for the owner the\npolicy declares: `github.com` where this is not written. A git source\nunder that host and owner is checked against its remote; any other is\nrefused.",
+          "type": "string"
+        },
+        "waive": {
+          "description": "`[[supply_chain.waive]]`: rows written for the guarddog section that\n`uphold supply-chain` used to have. Still read, so that a policy written\nbefore the section was removed keeps loading; every row is ignored, and\neach is named as ignored when the command runs. See [`Waiver`].",
+          "items": {
+            "$ref": "#/$defs/Waiver"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Target": {
+      "description": "Where an invocation is going, when that is a meaningful question at all.",
+      "oneOf": [
+        {
+          "const": "forge-repo",
+          "description": "Ask the command itself which repository it is operating on.",
+          "type": "string"
+        },
+        {
+          "const": "git-remote",
+          "description": "Parse it out of a git remote URL.",
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "The command has no notion of a destination.",
+          "type": "string"
+        }
+      ]
+    },
+    "Unresolved": {
+      "description": "What a shim does with a scope predicate that could not be asked.\n\n`refuse` is the default and the reading the rest of this tool takes: an\nunobserved property must not resolve to success. `run` is the older\nbehaviour, kept as an opt-in for a workspace whose forge is routinely\nunreachable and who would rather have the command than the answer -- it\nstill says on stderr that no checker ran.",
+      "oneOf": [
+        {
+          "const": "refuse",
+          "description": "Refuse the invocation with exit 2, having published nothing.",
+          "type": "string"
+        },
+        {
+          "const": "run",
+          "description": "Run the command, saying on stderr that this is not a pass.",
+          "type": "string"
+        }
+      ]
+    },
+    "VerbFlags": {
+      "additionalProperties": false,
+      "description": "A flag vocabulary that holds only for the verbs it names.\n\nOne command does not have one grammar. `-c` on `gh pr review` is a boolean\n-- \"Comment on a pull request\" -- and `-c` on `gh issue close` takes a value\n-- \"Leave a closing comment\". A single `text_flags` cannot hold both: name\n`-c` there and a review's `-c` swallows the flag after it, so the body that\nreview is publishing goes unread. Leave it out and a closing comment is\npublished with nothing in front of it. Both are false negatives in the seam\nthat exists to prevent exactly that.\n\nThe lists here REPLACE the table's for the verbs this entry names rather\nthan adding to them, which is the rule `allowed_scripts` already follows for\nthe same reason: what is declared beside the narrower thing is the whole\ntruth for it, and a union would mean a vocabulary nobody wrote.",
+      "properties": {
+        "argv_subject": {
+          "description": "The table's `argv_subject` for these verbs, where given. An option\nrather than a list because it is one answer, and absent means the\ntable's: an entry written to change a flag vocabulary must not also\nswitch the command line on or off as a side effect.",
+          "type": "boolean"
+        },
+        "editor": {
+          "$ref": "#/$defs/Editor",
+          "description": "The table's `editor` for these verbs, where given; absent means the\ntable's, for the reason `argv_subject` gives."
+        },
+        "editor_unless": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "file_flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "inert_flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "match": {
+          "default": [],
+          "description": "`verb:noun` or `verb:*`, in the spelling the table's own `match` uses.\nEvery entry must also be matched by the table, because a vocabulary for\na verb the shim does not stand in front of is read by nothing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "message_flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path_flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skip_flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "text_flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title_flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "web_flags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Waiver": {
+      "additionalProperties": false,
+      "description": "A `[[supply_chain.waive]]` row written when the guarddog section existed.\n\nIt waives nothing now. It is kept loadable so a policy that still carries\none is told so, by `uphold supply-chain`, rather than refused at load: the\nrow is a leftover to delete, not a policy error.",
+      "properties": {
+        "check": {
+          "description": "The scanner's rule, as it named it.",
+          "type": "string"
+        },
+        "package": {
+          "description": "`<ecosystem>:<name>@<version>`.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why the finding was judged a false positive.",
+          "type": "string"
+        },
+        "scanner": {
+          "description": "`guarddog`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scanner",
+        "package",
+        "check",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "Written": {
+      "additionalProperties": false,
+      "description": "The flat shape a policy file writes, before it is read as one check.\n\nEvery field here is a key somebody types in `policy/principles.toml`, and\nwhat each one MEANS is documented on the type it becomes -- [`Check`] for\nthe checks and their knobs, [`Parameters`] for the settings a built-in\nreads. This struct is deliberately a bare list: it exists for the length of\none `toml::from_str`, and the moment `parse` has a rule id to name in a\nrefusal it becomes a [`Rule`], which cannot hold two checks or a knob\nnothing reads.\n\n`deny_unknown_fields` is here rather than on `Rule` for the reason the\nconversion is: an unknown key is a spelling question the deserializer can\nanswer on its own, and everything the id has to appear in is answered after.",
+      "properties": {
+        "actor": {
+          "type": "string"
+        },
+        "allow": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allow_outside_repo": {
+          "type": "boolean"
+        },
+        "allowed_owners": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowed_repos": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowed_scripts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "builtin": {
+          "type": "string"
+        },
+        "command": {
+          "$ref": "#/$defs/CommandWhere"
+        },
+        "command_sources": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "comment_regexp": {
+          "type": "string"
+        },
+        "encoding": {
+          "type": "string"
+        },
+        "exclusive": {
+          "type": "boolean"
+        },
+        "exec": {
+          "type": "string"
+        },
+        "files": {
+          "$ref": "#/$defs/Files"
+        },
+        "forbidden_literals": {
+          "type": "string"
+        },
+        "forbidden_literals_from": {
+          "type": "string"
+        },
+        "foreign_hosts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "git": {
+          "$ref": "#/$defs/Git"
+        },
+        "ignore_literals": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_lines": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "owner_required": {
+          "type": "boolean"
+        },
+        "path_regexp": {
+          "type": "string"
+        },
+        "private_owners": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "private_owners_file": {
+          "type": "string"
+        },
+        "private_owners_from": {
+          "type": "string"
+        },
+        "prose_regexp": {
+          "type": "string"
+        },
+        "public_repos": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "refuse_unknown": {
+          "type": "boolean"
+        },
+        "regexp": {
+          "type": "string"
+        },
+        "require_any_anchor": {
+          "type": "boolean"
+        },
+        "require_any_link": {
+          "type": "boolean"
+        },
+        "require_regexp": {
+          "type": "string"
+        },
+        "seams": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subjects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "trivial_comments": {
+          "type": "boolean"
+        },
+        "visibility": {
+          "type": "string"
+        },
+        "visibility_required": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A policy file: `principles.toml`, a bundled set under `policy/base/`, or an\n`inherit.paths` file. One shape for all three, because one deserializer reads\nthem; what a bundled set or an inherited file may NOT carry is refused after\nthe read, by rules a schema cannot state.",
+  "properties": {
+    "allowed_scripts": {
+      "default": [],
+      "description": "The default script constraint for every file no scoped rule selects.\nValues are UTS #24 script names, as `\\p{Script=Latin}` spells them.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "baselines_signed": {
+      "default": false,
+      "description": "Whether every path-baseline entry must say who excused it and why.\n\nOff by default, and the default is not neutrality -- it is what every\nexisting baseline file already is. A repository turns it on when its\nbaselines stop being one homogeneous debt with a header explaining all\nof it, and start holding entries that differ from each other. The\n`.ljust(` case is the shape: one call site should take the dependency\nand another is correct as it stands, and no pattern separates them, so\nthe entry that excuses the second has to carry the judgement or the\njudgement is nowhere.\n\nPolicy-level rather than per-rule, because \"may an exemption be\nanonymous\" is one answer a repository gives once. Per-rule it would be a\nsetting every new baseline has to remember, which is the same as not\nhaving it.",
+      "type": "boolean"
+    },
+    "foreign_hosts": {
+      "default": [],
+      "description": "The hosts this repository's documents cite that carry no repository the\nprivate-name guards need an answer about.\n\nA policy field rather than a rule one for the reason\n`private_owners_from` is: a rule arriving from a bundled set cannot be\nhanded a parameter, and which hosts a repository's own bibliography\nnames is a property of the repository rather than of one rule in it.\n\nHost globs, matched case-insensitively -- `\"doi.org\"`, `\"*.sr.ht\"`. What\nis NOT named here and is not GitHub is could-not-look and exits 2,\nbecause the tool cannot tell whether `git.acme.example/acme/secret` is\nprivate and silence would read as clean.\n\nExtends [`FOREIGN_HOSTS_DEFAULT`] rather than replacing it: a host that\nserves no `owner/repo` path for anybody is not a fact about this\nrepository, and the fleet had said so in 84 identical lines.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "inherit": {
+      "$ref": "#/$defs/Inherit"
+    },
+    "override": {
+      "additionalProperties": {
+        "$ref": "#/$defs/OverrideShape"
+      },
+      "default": {},
+      "description": "`[override.<id>]` sections, raw, for the reason `written` is: the id is\nthe section header, and every refusal about one names it. See\n[`Override`].",
+      "type": "object"
+    },
+    "owner": {
+      "description": "Who this repository belongs to, declared once for the whole policy.\n\nIdentity is a property of the repository and not of any one rule, and\nthis is the field that makes that true. It exists because a rule\narriving from a bundled set cannot be given a parameter -- the only way\nto set one is to write the rule out again, which is the transcription\n`no-hand-copied-base-rule` refuses. So the guard asks the POLICY who\nthis is, and inheriting a set never decides that on the repository's\nbehalf.",
+      "type": "string"
+    },
+    "owner_from": {
+      "description": "A command whose stdout is this repository's owner.\n\nThe duplication is measured rather than asserted: across one fleet, 78\npolicy files declare an `owner` for seven distinct values -- 41 copies of\none string inside a single organisation. That is a workspace fact\ntranscribed once per repository, and it is the same shape\n[`PolicyFile::private_owners_from`] already answered by reading from\noutside the tree.\n\nIt is NOT permission to derive the owner from `origin`. Deriving it is\nthe defect rather than the fix -- repointing `origin` at somebody else's\nremote is the exact accident `prevent-public-push` exists to catch, and a\nderived allow-list is repointed by the same command. This field moves a\nDECLARATION out of the tree; it never reads one off the thing being\nguarded.\n\nRefused beside a literal `owner`, and refused in a bundled set or an\ninherited file. See [`refuse_two_statements_of_one_fact`] and\n[`refuse_inherited_declaration`].",
+      "type": "string"
+    },
+    "private_owners_file": {
+      "description": "A file listing the owners this workspace treats as private, one per\nline, read by this binary with no shell in between.\n\nA [`FileSpec`]: `xdg:principles/private-owners` for a file under\n`$XDG_CONFIG_HOME` (else `$HOME/.config`), `home:<path>` for one under\n`$HOME`, or an absolute path. Measured before it existed: 97 copies of\none `cat` line across 87 policy files, every one naming the same file\nunder the same directory, because the objection to a set shipping the\nline was to the SHELL and not to the declaration. A path is not a\ncommand, so a bundled set may carry this one at its top level as the\ndefault for every policy inheriting it; the policy's own line, in\neither form, overrides that default.\n\nRefused beside `private_owners_from` at the same level: two statements\nof where one list lives. See [`refuse_two_statements_of_one_fact`].",
+      "type": "string"
+    },
+    "private_owners_from": {
+      "description": "A command whose output lists the owners this workspace treats as\nprivate, declared once for the whole policy.\n\nThe same argument again, and the measurement behind it: across the fleet\nthis was promoted from, ten repositories declared\n`private_owners_from` and every one of them declared the SAME command.\nThat is one workspace-level fact written out ten times, and a rule\narriving from a set has no other way to reach it.\n\nThe shell form. It is refused in a bundled set and in an inherited file\nfor the reason [`refuse_inherited_declaration`] gives, which is why the\nfleet went on writing it: [`PolicyFile::private_owners_file`] is the\nform a set may ship.",
+      "type": "string"
+    },
+    "private_owners_optional": {
+      "default": false,
+      "description": "Whether the machine running this policy may legitimately not have the\nsource `private_owners_from` or `private_owners_file` names.\n\n`false` -- the default -- makes an unreadable source exit 2, because a\nrule with no owners refuses nothing and would report a clean tree over a\nlist it could not read.\n\n`true` exists for one shape and should be written for no other: a policy\nin a repository other people CLONE, naming a source that is one\noperator's. There the default refuses every clone's first commit, and\nthe usual workaround -- a command that swallows its own failure -- loses\nthe check silently and permanently. This is the third answer: the source\nfailing is reported, on stderr, naming the two forms that stop being\nchecked without it.",
+      "type": "boolean"
+    },
+    "redact_matches": {
+      "default": false,
+      "description": "Print the RULE and the location of each hit without the matched text.\n\nFor the tree where a finding is itself the secret: a `forbidden_literals`\nrule refusing a hostname prints that hostname into a CI log every time it\nfires, and the log is read by more people than the file was. Off by\ndefault, because a finding a reader cannot see the text of is one they\nhave to reproduce locally before they can act on it.",
+      "type": "boolean"
+    },
+    "rule": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Written"
+      },
+      "description": "`[rule.<id>]` sections. A map rather than an array because the id IS\nthe key: two sections with one id are a TOML parse error, and there is\nno `[rule.files]` floating free to bind to whatever `[[rule]]` happened\nto be written above it. Iteration order is id order, which is\ndeterministic where file order was merely incidental.\nA rule is deserialized flat and READ as one check by `parse`, which is\nthe first moment an id exists to name in a refusal. Nothing outside\n`parse` looks at this map; `rules` is what the rest of the crate reads.",
+      "type": "object"
+    },
+    "set": {
+      "$ref": "#/$defs/SetHeader",
+      "description": "What a BUNDLED set is allowed to install. Refused in any other file --\nsee [`SetHeader`]."
+    },
+    "shim": {
+      "items": {
+        "$ref": "#/$defs/Shim"
+      },
+      "type": "array"
+    },
+    "supply_chain": {
+      "$ref": "#/$defs/SupplyChain",
+      "description": "`[supply_chain]`: what this repository has said about its own\ndependency scan. See [`SupplyChain`]."
+    },
+    "visibility": {
+      "description": "Whether what this repository publishes is visible to everyone, declared\nonce for the whole policy.\n\nHere for the reason [`PolicyFile::owner`] is here, and it is the same\nkind of fact: a property of the repository rather than of any one rule\nin it, and the only form in which a rule arriving from a bundled set can\nbe told. `public`, `private` or `internal`; anything else is refused at\nload rather than at the moment a guard needs it.\n\nThe value that is NOT accepted is silence. A guard whose whole scope\ncondition is \"is this repository public\" cannot answer from a policy\nthat never says, and the fallback -- asking the forge -- is a network\ncall that answers `unknown` on a train, in CI without a token, and for\na repository whose visibility is about to change. See\n`guard::names::target_is_public`.",
+      "type": "string"
+    },
+    "visibility_from": {
+      "description": "A command whose stdout is this repository's visibility.\n\nSame mechanism as [`PolicyFile::owner_from`], for a host the built-in\nlookup does not speak to or a workspace that would rather answer from a\ncached organisation index than a request per repository. The word it\nprints is held to `public`, `private` or `internal` exactly as a written\none is.\n\nWhat it must not become is a probe. This is a declaration read from\nsomewhere else, and a command that asks a forge what a repository is\nTODAY hands the private-name family's one scope condition to a network\ncall -- which answers nothing on a train, nothing in CI without a token,\nand answers about the visibility a repository is in the middle of\nchanging. So a command that cannot answer must fail, and failing is exit\n2: a quiet `private` would stand the whole family down, which is\nfail-open on the one rule family where fail-open is unacceptable.",
+      "type": "string"
+    }
+  },
+  "title": "PolicyFile",
+  "type": "object"
+}

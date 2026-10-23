@@ -201,7 +201,7 @@ pub(crate) use rule::{Check, CheckKind, Literals, Rule, Written};
 /// An absent table is not a default. It is a place the rule does not run, which
 /// is the whole of the configuration story and the reason "the gh shim and the
 /// file scan, but install no git hook" is now something a person can write down.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Files {
     /// Search roots. `["."]` when absent.
@@ -259,7 +259,9 @@ pub(crate) struct Files {
 /// selected under the mount path. The pin is what makes the content this
 /// repository's business -- a member never borrows upward, and a repository
 /// may judge, downward, what it pins.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Reach {
     /// This repository's own tracked files.
@@ -272,7 +274,7 @@ pub(crate) enum Reach {
 
 /// The five stage names a rule may run at: four of git's own, spelled as
 /// githooks(5) spells them, and `manual`.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Git {
     /// `pre-commit`, `commit-msg`, `pre-merge-commit`, `pre-push`, `manual`.
@@ -286,7 +288,7 @@ pub(crate) struct Git {
 }
 
 /// The command lines a rule stands in front of.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CommandWhere {
     /// `"gh pr create"`, `"git push"`, `"npm publish"` -- the command and as
@@ -357,7 +359,7 @@ impl CommandWhere {
 /// running machine, and `captured-fixtures` refuses a script a parser's own
 /// test corpus is made of. None of those arguments should stand between anyone
 /// and `process-residue`.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Inherit {
     /// Bundled rule sets, by name. [`BUNDLED`] is the list and the only one:
@@ -610,8 +612,58 @@ impl Override {
     }
 }
 
+/// What an `[override.<id>]` table is allowed to say, as a type the schema can
+/// be derived from.
+///
+/// [`Override::of_table`] reads the raw table by hand, because its refusals
+/// name the id and the key and a derived reader cannot. That leaves the
+/// accepted shape in a `match`, where `schemars` cannot see it. This is the same
+/// shape as a struct: never constructed or deserialized, and read only by the
+/// schema generator, so the keys the schema offers an editor are the keys
+/// `of_table` accepts. A test in this file feeds every key of this type to
+/// `of_table`, so a key added to one and not the other fails the build rather
+/// than the first consumer.
+#[derive(Debug, schemars::JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[expect(dead_code, reason = "read by the schema generator, never constructed")]
+pub(crate) struct OverrideShape {
+    /// Replaces `files.include`, `files.exclude` and `files.glob` of the
+    /// inherited rule, for the keys written.
+    files: Option<OverrideFiles>,
+    /// Adds to the commands the inherited rule stands in front of.
+    command: Option<OverrideCommand>,
+    /// More allowances, added to the inherited list.
+    allow: Option<Vec<String>>,
+    /// The floor under a `links-resolve` selection.
+    require_any_link: Option<bool>,
+    /// The wording, replaced.
+    message: Option<String>,
+}
+
+/// The `files` keys of an [`OverrideShape`].
+#[derive(Debug, schemars::JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[expect(dead_code, reason = "read by the schema generator, never constructed")]
+pub(crate) struct OverrideFiles {
+    /// Where the rule reads, replacing the inherited value.
+    include: Option<Vec<String>>,
+    /// What the rule leaves out, replacing the inherited value.
+    exclude: Option<Vec<String>>,
+    /// Ripgrep globs, replacing the inherited value.
+    glob: Option<Vec<String>>,
+}
+
+/// The `command` keys of an [`OverrideShape`].
+#[derive(Debug, schemars::JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[expect(dead_code, reason = "read by the schema generator, never constructed")]
+pub(crate) struct OverrideCommand {
+    /// Added to the inherited `command.before`.
+    before_append: Option<Vec<String>>,
+}
+
 /// `[supply_chain]` in a repository's own policy.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SupplyChain {
     /// `[[supply_chain.waive]]`: rows written for the guarddog section that
@@ -639,7 +691,7 @@ const RETIRED_SCANNER: &str = "guarddog";
 /// It waives nothing now. It is kept loadable so a policy that still carries
 /// one is told so, by `uphold supply-chain`, rather than refused at load: the
 /// row is a leftover to delete, not a policy error.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Waiver {
     /// `guarddog`.
@@ -708,7 +760,11 @@ impl Origin {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+/// A policy file: `principles.toml`, a bundled set under `policy/base/`, or an
+/// `inherit.paths` file. One shape for all three, because one deserializer reads
+/// them; what a bundled set or an inherited file may NOT carry is refused after
+/// the read, by rules a schema cannot state.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PolicyFile {
     /// What a BUNDLED set is allowed to install. Refused in any other file --
@@ -880,6 +936,7 @@ pub(crate) struct PolicyFile {
     /// the section header, and every refusal about one names it. See
     /// [`Override`].
     #[serde(default, rename = "override")]
+    #[schemars(with = "BTreeMap<String, OverrideShape>")]
     written_overrides: BTreeMap<String, toml::Table>,
     /// The same sections, each held to the three fields it may carry. Read by
     /// `load` and by nothing outside this file: once applied, an override is
@@ -1106,7 +1163,7 @@ pub(crate) struct OwnersDeclaration {
 /// Nothing there ships compiled in, so nothing there has the problem, and a
 /// field that looks like a permission but constrains nothing is worse than no
 /// field at all.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SetHeader {
     /// Git hook stages the rules in this set may declare. Empty means none:
@@ -2826,6 +2883,84 @@ mod tests {
         let path = dir.join("rg-policy.toml");
         std::fs::write(&path, text).unwrap();
         load(&dir, &path)
+    }
+
+    /// The keys the schema offers an `[override.<id>]` are the keys it reads.
+    ///
+    /// `Override::of_table` is a hand-written `match`, so the schema cannot be
+    /// derived from it and `OverrideShape` stands in. This is the join: every
+    /// leaf the shape declares is written into a table and read back, and has to
+    /// come out as exactly that one setting. A key added to the reader and not
+    /// the shape would be refused here by name; one added to the shape and not
+    /// the reader would be offered to editors and then refused at load.
+    #[test]
+    fn the_override_schema_offers_exactly_the_keys_of_table_reads() {
+        fn leaves(
+            schema: &serde_json::Value,
+            defs: &serde_json::Value,
+            prefix: &str,
+        ) -> Vec<String> {
+            // An optional table is `anyOf [ref, null]` before the schema
+            // command strips the null; its first branch is the table.
+            let schema = schema.pointer("/anyOf/0").unwrap_or(schema);
+            let schema = schema
+                .get("$ref")
+                .and_then(serde_json::Value::as_str)
+                .map_or(schema, |reference| {
+                    defs.get(reference.trim_start_matches("#/$defs/")).unwrap()
+                });
+            let Some(properties) = schema
+                .get("properties")
+                .and_then(serde_json::Value::as_object)
+            else {
+                return vec![prefix.to_owned()];
+            };
+            properties
+                .iter()
+                .flat_map(|(key, child)| {
+                    let path = if prefix.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{prefix}.{key}")
+                    };
+                    leaves(child, defs, &path)
+                })
+                .collect()
+        }
+        let root = serde_json::to_value(schemars::schema_for!(OverrideShape)).unwrap();
+        let mut offered = leaves(&root, &root["$defs"], "");
+        offered.sort();
+        let mut read = vec![
+            "allow",
+            "command.before_append",
+            "files.exclude",
+            "files.glob",
+            "files.include",
+            "message",
+            "require_any_link",
+        ];
+        read.sort_unstable();
+        assert_eq!(
+            offered, read,
+            "the shape and the reader disagree on the keys"
+        );
+        for path in read {
+            let text = match path {
+                "message" => "message = \"m\"".to_owned(),
+                "require_any_link" => "require_any_link = true".to_owned(),
+                _ => match path.split_once('.') {
+                    Some((table, key)) => format!("[{table}]\n{key} = [\"x\"]"),
+                    None => format!("{path} = [\"x\"]"),
+                },
+            };
+            let table: toml::Table = text.parse().unwrap();
+            let parsed = Override::of_table("probe", table).unwrap();
+            assert_eq!(
+                parsed.written(),
+                vec![path],
+                "{path} did not read back as itself"
+            );
+        }
     }
 
     /// A bundled set's own instructions name keys the schema still has.

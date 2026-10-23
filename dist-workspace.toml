@@ -77,3 +77,13 @@ host = "x86_64-unknown-linux-gnu"
 [dist.github-custom-runners.x86_64-unknown-linux-gnu]
 runner = "ubuntu-latest"
 host = "x86_64-unknown-linux-gnu"
+
+# The policy file's JSON Schema, as a release asset with a `.sha256` beside it,
+# so a `#:schema` line in a consumer's policy can name an address that is
+# immutable per release. dist writes a `.sha256` for the archives and the source
+# tarball only, and its unified `sha256.sum` lists those too; an extra artifact
+# gets neither, so the command writes its own. `sha256sum` prints the name as
+# given, which is why it runs where the copy was written.
+[[dist.extra-artifacts]]
+artifacts = ["principles.schema.json", "principles.schema.json.sha256"]
+build = ["sh", "-c", "cp docs/schema/principles.schema.json principles.schema.json && sha256sum principles.schema.json > principles.schema.json.sha256"]
