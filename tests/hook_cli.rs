@@ -1176,6 +1176,49 @@ fn a_stop_that_follows_a_block_ends_the_turn_and_tells_the_person() {
     assert!(message.contains("`test ! -e red`"), "{message}");
 }
 
+/// A gate that cannot start blocks once. It does not hold every later turn.
+#[test]
+fn a_gate_that_cannot_start_does_not_block_a_stop_that_follows_a_block() {
+    let root = gated(
+        "stop-unstartable-again",
+        "[stop]\nrun = [[\"uphold-no-such-program\"]]\n",
+    );
+    let again = serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": "s-unstartable-again",
+        "stop_hook_active": true,
+    });
+    let stopped = turn(&root, &again.to_string());
+    assert_eq!(code(&stopped), 0, "{}", stderr(&stopped));
+    let document = decision(&stopped);
+    let message = document
+        .get("systemMessage")
+        .and_then(Value::as_str)
+        .unwrap();
+    assert!(message.contains("could not be started"), "{message}");
+}
+
+/// The baseline runs while the agent works. A tree that moved under it cannot
+/// say what was red before the session, so it is not compared against.
+#[test]
+fn a_baseline_whose_tree_changed_while_it_ran_is_not_trusted() {
+    let root = gated(
+        "stop-moved-tree",
+        "[stop]\nrun = [[\"touch\", \"written-during-baseline\"], [\"test\", \"!\", \"-e\", \"red\"]]\n",
+    );
+    std::fs::write(root.join("red"), "").unwrap();
+    let started = turn(&root, &moment("SessionStart", "s-moved"));
+    assert_eq!(code(&started), 0, "{}", stderr(&started));
+    let stopped = turn(&root, &moment("Stop", "s-moved"));
+    let document = decision(&stopped);
+    assert_eq!(document.get("decision"), Some(&Value::from("block")));
+    let reason = document.get("reason").and_then(Value::as_str).unwrap();
+    assert!(
+        reason.contains("the tree changed while the SessionStart baseline ran"),
+        "{reason}"
+    );
+}
+
 #[test]
 fn a_green_gate_lets_the_turn_end_silently() {
     let root = gated("stop-green", STOP_POLICY);

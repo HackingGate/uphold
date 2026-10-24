@@ -18,6 +18,13 @@
 //! that was already red is named to the person in `systemMessage`, and the turn
 //! ends.
 //!
+//! `SessionStart` is configured `async`, so the agent is already working while
+//! the baseline runs, and a slow gate can read a file after the agent changed
+//! it -- recording the session's own red as red it found. So the tree is
+//! fingerprinted before and after the run, and a baseline whose tree moved
+//! underneath it is discarded: with no baseline every red command blocks,
+//! which fails toward the gate rather than away from it.
+//!
 //! The baseline lives under the worktree's git dir, keyed by `session_id`. The
 //! harness supplies that id, so it is held to a closed character set before it
 //! becomes a path: an id that could name `../` is an id that could make this
@@ -65,6 +72,10 @@ struct Baseline {
     ran: Vec<Vec<String>>,
     /// The ones that failed.
     red: Vec<Vec<String>>,
+    /// Why this run cannot be compared against, where it cannot: the tree
+    /// changed while it ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unusable: Option<String>,
 }
 
 struct Outcome {
@@ -106,6 +117,42 @@ fn session_id(event: &Value) -> std::result::Result<&str, String> {
 
 fn baseline_dir(root: &Path) -> Result<PathBuf> {
     Ok(git::dir(root)?.join("uphold").join("stop"))
+}
+
+/// What the tree looks like to a gate: HEAD, and the size and modification
+/// time of every path git reports as changed or untracked. Any edit to a file
+/// moves its time, and a commit moves HEAD or the status list, so two equal
+/// fingerprints mean nothing the gate reads moved in between -- ignored paths
+/// aside, which is where builds put what they write.
+fn fingerprint(root: &Path) -> Result<String> {
+    let mut seen =
+        git::try_run(root, &["rev-parse", "-q", "--verify", "HEAD"])?.unwrap_or_default();
+    let entries = git::run_z(
+        root,
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ],
+    )?;
+    for entry in entries {
+        let path = entry.get(3..).unwrap_or(&entry);
+        let stamp = std::fs::symlink_metadata(root.join(path)).map_or_else(
+            |_| "missing".to_owned(),
+            |metadata| {
+                let modified = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |since| since.as_nanos());
+                format!("{} {modified}", metadata.len())
+            },
+        );
+        write!(seen, "\n{entry}\0{stamp}").ok();
+    }
+    Ok(seen)
 }
 
 fn run_gate(root: &Path, commands: &[Vec<String>]) -> Result<Vec<Outcome>> {
@@ -150,8 +197,13 @@ pub(super) fn session_start(event: &Value, root: &Path, policy: &Policy) -> Resu
     std::fs::create_dir_all(&directory)?;
     let pending = directory.join(format!("{id}.pending"));
     std::fs::write(&pending, b"")?;
-    let outcomes = run_gate(root, &policy.stop.run);
-    let written = outcomes.and_then(|outcomes| {
+    let written = fingerprint(root).and_then(|before| {
+        let outcomes = run_gate(root, &policy.stop.run)?;
+        let unusable = (fingerprint(root)? != before).then(|| {
+            "the tree changed while the SessionStart baseline ran, so it cannot say what was \
+             red before this session"
+                .to_owned()
+        });
         let baseline = Baseline {
             ran: outcomes
                 .iter()
@@ -162,6 +214,7 @@ pub(super) fn session_start(event: &Value, root: &Path, policy: &Policy) -> Resu
                 .filter(|outcome| !outcome.passed())
                 .map(|outcome| outcome.argv.clone())
                 .collect(),
+            unusable,
         };
         let document = serde_json::to_vec(&baseline)
             .map_err(|error| Fatal::new(format!("the baseline is not writable: {error}")))?;
@@ -201,12 +254,19 @@ fn baseline(event: &Value, root: &Path) -> Result<std::result::Result<Baseline, 
         }));
     }
     let text = std::fs::read(&recorded)?;
-    Ok(serde_json::from_slice(&text).map_err(|error| {
-        format!(
-            "the baseline at {} is unreadable ({error})",
-            recorded.display()
-        )
-    }))
+    let read: Baseline = match serde_json::from_slice(&text) {
+        Ok(read) => read,
+        Err(error) => {
+            return Ok(Err(format!(
+                "the baseline at {} is unreadable ({error})",
+                recorded.display()
+            )));
+        }
+    };
+    Ok(match read.unusable {
+        Some(why) => Err(why),
+        None => Ok(read),
+    })
 }
 
 fn tail(output: &str) -> String {
@@ -225,8 +285,27 @@ pub(super) fn stop(event: &Value, root: &Path, policy: &Policy) -> Result<Exit> 
         );
         return Ok(Exit::Clean);
     }
+    let sent_back = event
+        .pointer("/stop_hook_active")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let known = baseline(event, root)?;
-    let outcomes = run_gate(root, &policy.stop.run)?;
+    let outcomes = match run_gate(root, &policy.stop.run) {
+        Ok(outcomes) => outcomes,
+        // A gate that cannot run blocks the first stop, which fails closed. It
+        // blocks no second one: the agent was sent back once, and a missing
+        // program is not something every further turn can fix.
+        Err(error) if sent_back => {
+            let message = format!(
+                "uphold: the [stop] gate could not run after the agent was sent back once, so \
+                 the turn ends unchecked: {error}"
+            );
+            eprintln!("{message}");
+            println!("{}", serde_json::json!({ "systemMessage": message }));
+            return Ok(Exit::Clean);
+        }
+        Err(error) => return Err(error),
+    };
     let (preexisting, blocking): (Vec<&Outcome>, Vec<&Outcome>) = outcomes
         .iter()
         .filter(|outcome| !outcome.passed())
@@ -238,10 +317,6 @@ pub(super) fn stop(event: &Value, root: &Path, policy: &Policy) -> Result<Exit> 
 
     let mut document = Map::new();
     let mut told: Vec<String> = Vec::new();
-    let sent_back = event
-        .pointer("/stop_hook_active")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
     if !blocking.is_empty() && sent_back {
         let names: Vec<String> = blocking
             .iter()

@@ -3279,7 +3279,12 @@ none, is judged as a pending tool call, as above.
 - **`SessionStart`** runs every command once and records which failed, under
   the worktree's git dir (`.git/uphold/stop/<session_id>.json`). It prints
   nothing on stdout, because Claude Code adds that to the conversation, and
-  `async` keeps the session from waiting for it. A `session_id` outside
+  `async` keeps the session from waiting for it. Because the agent is already
+  working while it runs, the tree is fingerprinted before and after (HEAD, and
+  the size and modification time of every changed or untracked path); a
+  baseline whose tree moved is discarded, so every red command blocks. A gate
+  that writes outside ignored paths therefore never leaves a usable baseline.
+  A `session_id` outside
   `A-Z a-z 0-9 - _`, or longer than 128, is refused rather than used as a
   file name.
 - **`Stop`** runs the commands again. One that fails now and passed at session
@@ -3297,7 +3302,8 @@ reason told the agent to fix it or say it cannot, and blocking an agent that
 said so would spend Claude Code's own cap (eight consecutive continuations,
 reset by a tool call) on a turn that is over. A command that cannot be started
 is exit `2`; at `Stop`
-that sends stderr to the agent as the reason, so a broken gate fails closed.
+that sends stderr to the agent as the reason, so a broken gate fails closed,
+once: on a stop that follows a block it is named in `systemMessage` instead.
 With no policy, or no `[stop]`, nothing runs, and stderr says no gate was
 checked rather than that one passed. `--junit` is not written for these two
 events. The gate judges the session's working directory, so work done in a
