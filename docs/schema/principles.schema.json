@@ -480,6 +480,24 @@
       ],
       "type": "object"
     },
+    "Stop": {
+      "additionalProperties": false,
+      "description": "`[stop]` in a repository's own policy: the gate `uphold hook` runs when an\nagent ends its turn.\n\nargv arrays and not a shell string, so what runs is what a reader sees:\nno quoting, no expansion, no second language inside the policy file\n(`least-power`). A command that needs a pipeline names a script that holds it.",
+      "properties": {
+        "run": {
+          "default": [],
+          "description": "Each entry is one command as argv, run in order from the repository\nroot, with no shell. Every one runs, red or green, so the report names\nall that failed rather than the first.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "SupplyChain": {
       "additionalProperties": false,
       "description": "`[supply_chain]` in a repository's own policy.",
@@ -892,6 +910,10 @@
         "$ref": "#/$defs/Shim"
       },
       "type": "array"
+    },
+    "stop": {
+      "$ref": "#/$defs/Stop",
+      "description": "`[stop]`: the gate an agent's turn may not end red. See [`Stop`]."
     },
     "supply_chain": {
       "$ref": "#/$defs/SupplyChain",

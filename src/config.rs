@@ -680,6 +680,39 @@ pub(crate) struct SupplyChain {
     pub forge_host: Option<String>,
 }
 
+/// `[stop]` in a repository's own policy: the gate `uphold hook` runs when an
+/// agent ends its turn.
+///
+/// argv arrays and not a shell string, so what runs is what a reader sees:
+/// no quoting, no expansion, no second language inside the policy file
+/// (`least-power`). A command that needs a pipeline names a script that holds it.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Stop {
+    /// Each entry is one command as argv, run in order from the repository
+    /// root, with no shell. Every one runs, red or green, so the report names
+    /// all that failed rather than the first.
+    #[serde(default)]
+    pub run: Vec<Vec<String>>,
+}
+
+impl Stop {
+    /// An empty argv, or one whose program is empty, cannot be spawned, and a
+    /// gate holding one would refuse every turn's end for a reason that is the
+    /// policy file's rather than the tree's. Refused at load instead.
+    fn validate(&self) -> std::result::Result<(), String> {
+        for argv in &self.run {
+            if argv.first().is_none_or(|program| program.trim().is_empty()) {
+                return Err(format!(
+                    "`[stop] run` holds {argv:?}, which names no program. Each entry is one \
+                     command as argv, its program first"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The scanner a retired waiver may still name. uphold no longer runs it, so
 /// the row is read and ignored; naming any other scanner is an error, as it
 /// always was, because every scanner that is run carries its own suppression in
@@ -949,6 +982,9 @@ pub(crate) struct PolicyFile {
     /// dependency scan. See [`SupplyChain`].
     #[serde(default)]
     pub supply_chain: Option<SupplyChain>,
+    /// `[stop]`: the gate an agent's turn may not end red. See [`Stop`].
+    #[serde(default)]
+    pub stop: Option<Stop>,
     /// Whether every path-baseline entry must say who excused it and why.
     ///
     /// Off by default, and the default is not neutrality -- it is what every
@@ -1266,6 +1302,8 @@ pub(crate) struct Policy {
     pub inherited_sets: Vec<String>,
     /// The repository's own `[supply_chain]`, or the empty one.
     pub supply_chain: SupplyChain,
+    /// The repository's own `[stop]`, or the empty one.
+    pub stop: Stop,
 }
 
 impl Policy {
@@ -1541,6 +1579,17 @@ fn refuse_inherited_override(path: &Path, file: &PolicyFile, kind: &str) -> Resu
                 "`[supply_chain]` waives findings on a repository's own dependencies, and \
                  {kind} has none. Move it to the policy of the repository whose lockfile \
                  the finding is in"
+            ),
+        ));
+    }
+    // The gate is the inheriting repository's own: what its tree has to pass
+    // is not a fact a bundled set can know.
+    if file.stop.is_some() {
+        return Err(Fatal::at(
+            path,
+            format!(
+                "`[stop]` names the commands this repository's tree has to pass, and {kind} \
+                 has no tree. Move it to the policy of the repository it gates"
             ),
         ));
     }
@@ -2076,6 +2125,10 @@ pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<P
             .as_ref()
             .map_or(&[], |supply| supply.waive.as_slice()),
     )?;
+    if let Some(stop) = &file.stop {
+        stop.validate()
+            .map_err(|error| Fatal::at(policy_path, error))?;
+    }
     validate_unique(policy_path, &rules)?;
     for rule in &rules {
         rule.validate()?;
@@ -2112,6 +2165,7 @@ pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<P
         shims: file.shims,
         inherited_sets: inherit.sets.clone(),
         supply_chain: file.supply_chain.clone().unwrap_or_default(),
+        stop: file.stop.clone().unwrap_or_default(),
     })
 }
 
