@@ -246,9 +246,10 @@ acyclic-dependencies = "No gate here decides a module graph. uphold is one crate
 # here shows it can produce a finding. `--review --drive -- REVIEWER` plants
 # each one and reports whether it holds.
 #
-# A `misses` is chosen to sit next to its `catches`: the same file, the same
-# path, a change that touches what the record is about without violating it. A
-# reviewer that names the record on both is matching words, not the claim.
+# A `misses` is chosen to sit next to its `catches`: the same feature or
+# decision, often the same file, a change that touches what the record is about
+# without violating it. A reviewer that names the record on both is matching
+# words, not the claim.
 [[review.control]]
 record = "complete-mediation"
 catches = "Make src/shim/destination.rs stop asking whether a `gh issue create --repo other-owner/their-repo` destination is owned, leaving the ownership decision only in the pre-push path through prevent_public_push in src/guard/push.rs."
@@ -272,7 +273,7 @@ misses = "Move the \"The policy over its own tree\" step in .github/workflows/te
 [[review.control]]
 record = "economy-of-mechanism"
 catches = "Let prevent_public_push in src/guard/push.rs accept allow-list entries written as regular expressions, per-rule fallback commands and an \"ask the forge, else a script\" chain, all decided inside the one function that refuses a push."
-misses = "Add unit tests to src/guard/push.rs showing that a destination under another owner and a destination with differently cased owner are both refused, changing no code outside the test module."
+misses = "Add unit tests to src/guard/push.rs showing that a destination under an owner nothing declares is refused and that one under a declared owner written in a different case is accepted, changing no code outside the test module."
 
 [[review.control]]
 record = "end-to-end-principle"

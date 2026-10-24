@@ -23,7 +23,7 @@
     {
       "record": "economy-of-mechanism",
       "catches": "Let prevent_public_push in src/guard/push.rs accept allow-list entries written as regular expressions, per-rule fallback commands and an \"ask the forge, else a script\" chain, all decided inside the one function that refuses a push.",
-      "misses": "Add unit tests to src/guard/push.rs showing that a destination under another owner and a destination with differently cased owner are both refused, changing no code outside the test module."
+      "misses": "Add unit tests to src/guard/push.rs showing that a destination under an owner nothing declares is refused and that one under a declared owner written in a different case is accepted, changing no code outside the test module."
     },
     {
       "record": "end-to-end-principle",
