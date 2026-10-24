@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "uphold hook claude-code", "async": true}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "uphold hook claude-code", "timeout": 600}]}
+    ]
+  }
+}

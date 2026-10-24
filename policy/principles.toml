@@ -638,3 +638,16 @@ files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "READ
 
 [override.no-pinned-versioned-fetch]
 files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "third_party/**", "vendor/**", ".github/workflows/release.yml"]
+
+# What an agent's turn may not end red. `uphold hook claude-code`, configured
+# for SessionStart and Stop in .claude/settings.json, runs these at session
+# start and again when the agent stops, and blocks once on a command that was
+# green when the session started. The reconcile and the Python suite, and not
+# `cargo test`: these run at the end of every turn, and a gate that adds a
+# minute or more to each one is a gate people turn off. The Rust suite stays at
+# pre-push and in CI.
+[stop]
+run = [
+  ["uphold", "check"],
+  ["uv", "run", "--no-project", "python", "-m", "unittest", "discover", "-s", "tests"],
+]
