@@ -335,6 +335,18 @@ class Drive(unittest.TestCase):
         self.assertIn("exited 1", str(raised.exception))
         self.assertIn("no API key", str(raised.exception))
 
+    def test_a_reviewer_that_stalls_is_refused_at_the_deadline(self):
+        reviewer = self.reviewer("import time; time.sleep(30)")
+        with self.assertRaises(review_mod.ReviewerFailed) as raised:
+            review_mod.ask(reviewer, "doc", "change", self.CARRIED, timeout=1)
+        self.assertIn("did not answer within 1s", str(raised.exception))
+
+    def test_output_that_is_not_utf8_is_refused_rather_than_raised(self):
+        reviewer = self.reviewer('sys.stdout.buffer.write(b"\\xff\\n")')
+        with self.assertRaises(review_mod.ReviewerFailed) as raised:
+            review_mod.ask(reviewer, "doc", "change", self.CARRIED)
+        self.assertIn("not UTF-8", str(raised.exception))
+
     def test_a_reviewer_that_cannot_be_run_is_refused(self):
         with self.assertRaises(review_mod.ReviewerFailed):
             review_mod.ask(["/nonexistent/reviewer"], "doc", "change", self.CARRIED)
@@ -674,7 +686,9 @@ class SelfApplication(unittest.TestCase):
             print("\\n".join(c["record"] for c in key if c["catches"] == change))
             """
         )
-        result = self.drive("--runs", "2", "--", sys.executable, "-c", oracle)
+        result = self.drive(
+            "--timeout", "60", "--runs", "2", "--", sys.executable, "-c", oracle
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("single-authoritative-source: caught 2/2", result.stdout)
         self.assertIn("pass^2", result.stdout)
@@ -686,10 +700,16 @@ class SelfApplication(unittest.TestCase):
         self.assertIn("DOES NOT HOLD", result.stdout)
 
     def test_drive_without_a_reviewer_is_a_usage_error(self):
-        for argv in [(), ("--runs", "0", "--", "true"), ("--runs", "2"), ("true",)]:
+        for argv in [
+            (),
+            ("--runs", "0", "--", "true"),
+            ("--timeout", "x", "--", "true"),
+            ("--runs", "2"),
+            ("true",),
+        ]:
             result = self.drive(*argv)
             self.assertEqual(result.returncode, 2, argv)
-            self.assertIn("--drive [--runs N] -- REVIEWER", result.stderr)
+            self.assertIn("--drive [--runs N] [--timeout SECONDS]", result.stderr)
 
     def test_an_exemption_without_a_reason_is_refused(self):
         # A reason nobody wrote is one nobody can review, and it is exactly as

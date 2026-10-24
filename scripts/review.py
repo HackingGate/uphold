@@ -53,6 +53,11 @@ DEFAULT_MAX_LINES = 900
 #: run cannot tell it from a reviewer that catches it every time.
 DEFAULT_RUNS = 3
 
+#: Seconds one reviewer invocation may take. A model call answers in seconds;
+#: a reviewer that has not answered in five minutes has stalled, and waiting on
+#: it holds every control after it. A person at a prompt passes a longer one.
+DEFAULT_TIMEOUT = 300
+
 #: The standing asymmetry, and it points one way on purpose: a static rule has
 #: no length ceiling and a prompt rule does, so every mechanizable rule is
 #: cheaper to push down into a static tier than to leave here.
@@ -316,7 +321,11 @@ class ReviewerFailed(Exception):
 
 
 def ask(
-    reviewer: list[str], document: str, change: str, carried: dict[str, str]
+    reviewer: list[str],
+    document: str,
+    change: str,
+    carried: dict[str, str],
+    timeout: int = DEFAULT_TIMEOUT,
 ) -> set[str]:
     """Run the reviewer once and return the record ids it names.
 
@@ -334,10 +343,24 @@ def ask(
     payload = json.dumps({"document": document, "change": change}, ensure_ascii=False)
     try:
         completed = subprocess.run(
-            reviewer, input=payload, capture_output=True, text=True, check=False
+            reviewer,
+            input=payload,
+            capture_output=True,
+            encoding="utf-8",
+            timeout=timeout,
+            check=False,
         )
     except OSError as error:
         raise ReviewerFailed(f"could not run {reviewer[0]!r}: {error}") from error
+    except subprocess.TimeoutExpired as error:
+        raise ReviewerFailed(
+            f"{reviewer[0]!r} did not answer within {timeout}s; pass --timeout "
+            f"for a reviewer that needs longer"
+        ) from error
+    except UnicodeDecodeError as error:
+        raise ReviewerFailed(
+            f"{reviewer[0]!r} printed output that is not UTF-8: {error}"
+        ) from error
     if completed.returncode != 0:
         tail = completed.stderr.strip().splitlines()[-5:]
         raise ReviewerFailed(

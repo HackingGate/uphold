@@ -4275,7 +4275,7 @@ carrying a second copy of the compiled document.
 `--drive` plants the controls itself, against a reviewer command you name:
 
 ```sh
-uphold_check.py --review --drive [--runs N] -- ./my-reviewer --model x
+uphold_check.py --review --drive [--runs N] [--timeout SECONDS] -- ./my-reviewer --model x
 ```
 
 Everything after `--` is the reviewer, run once per plant. It reads one JSON
@@ -4298,6 +4298,8 @@ named it against `misses`. pass@1 is the mean share of runs that caught their
 plant, and pass^k the share of controls caught on all `N`. The exit is `0` when
 every control holds and `1` when one does not. A reviewer that exits non-zero,
 cannot be run, or prints a line that names no record in the document is exit
-`2`: it has said nothing about the record, so it is not scored as a miss. No
+`2`: it has said nothing about the record, so it is not scored as a miss. So
+is one that has not answered within `--timeout` seconds (default 300); a person
+answering at a prompt passes a longer one. No
 model client lives here; the reviewer command carries the model, the key and
 the budget. See [DESIGN.md](DESIGN.md#a-control-is-the-probe-fixture-one-tier-up).

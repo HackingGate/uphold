@@ -740,26 +740,29 @@ def emit_target(root: Path, name: str) -> Path:
 
 REVIEW_USAGE = (
     "usage: uphold_check.py --review "
-    "[--emit | --check | --drive [--runs N] -- REVIEWER...]"
+    "[--emit | --check | --drive [--runs N] [--timeout SECONDS] -- REVIEWER...]"
 )
 
 
-def drive_arguments(argv: list[str]) -> tuple[int, list[str]] | None:
-    """`--drive [--runs N] -- REVIEWER...`, or None when it is not that shape.
+def drive_arguments(argv: list[str]) -> tuple[int, int, list[str]] | None:
+    """`--drive [--runs N] [--timeout SECONDS] -- REVIEWER...`, or None.
 
-    The reviewer is everything after `--`, verbatim, so its own flags never
-    have to be told apart from these.
+    Returns (runs, timeout, reviewer). The reviewer is everything after `--`,
+    verbatim, so its own flags never have to be told apart from these.
     """
-    runs = review_mod.DEFAULT_RUNS
+    values = {
+        "--runs": review_mod.DEFAULT_RUNS,
+        "--timeout": review_mod.DEFAULT_TIMEOUT,
+    }
     rest = argv[1:]
-    if rest[:1] == ["--runs"]:
+    while rest[:1] and rest[0] in values:
         if len(rest) < 2 or not rest[1].isdigit() or int(rest[1]) < 1:
             return None
-        runs = int(rest[1])
+        values[rest[0]] = int(rest[1])
         rest = rest[2:]
     if rest[:1] != ["--"] or len(rest) < 2:
         return None
-    return runs, rest[1:]
+    return values["--runs"], values["--timeout"], rest[1:]
 
 
 def run_review(argv: list[str]) -> int:
@@ -833,7 +836,7 @@ def run_review(argv: list[str]) -> int:
         return 1
 
     if driving is not None:
-        runs, reviewer = driving
+        runs, timeout, reviewer = driving
         carried = {record["id"]: record["title"] for record in for_review}
         try:
             results = review_mod.drive(
@@ -841,7 +844,9 @@ def run_review(argv: list[str]) -> int:
                 document,
                 carried,
                 runs,
-                lambda doc, change, shown: review_mod.ask(reviewer, doc, change, shown),
+                lambda doc, change, shown: review_mod.ask(
+                    reviewer, doc, change, shown, timeout
+                ),
             )
         except review_mod.ReviewerFailed as error:
             print(f"uphold review could not look: {error}", file=sys.stderr)
