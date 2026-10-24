@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -60,10 +61,10 @@ class Preflight(unittest.TestCase):
     reason "not installed" and would pass while proving nothing.
     """
 
-    def _check(self) -> subprocess.CompletedProcess[str]:
+    def _check(self, root: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["./scripts/deps.sh", "check"],
-            cwd=REPO,
+            cwd=root,
             capture_output=True,
             text=True,
             check=False,
@@ -75,12 +76,16 @@ class Preflight(unittest.TestCase):
         impossible = manifest.replace(f'want = "{want}"', 'want = ">=999.0"', 1)
         self.assertNotEqual(manifest, impossible, "the rustc `want` line moved")
 
-        original = (REPO / "toolchain.toml").read_bytes()
-        try:
-            (REPO / "toolchain.toml").write_text(impossible, encoding="utf-8")
-            done = self._check()
-        finally:
-            (REPO / "toolchain.toml").write_bytes(original)
+        # In a copy, never the tree: this suite runs as the [stop] gate while
+        # an agent works, and writing the real toolchain.toml and restoring it
+        # afterwards would revert any edit made to it in between. deps.sh reads
+        # only the toolchain.toml beside its own scripts/ directory.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "scripts").mkdir()
+            shutil.copy2(REPO / "scripts" / "deps.sh", root / "scripts" / "deps.sh")
+            (root / "toolchain.toml").write_text(impossible, encoding="utf-8")
+            done = self._check(root)
 
         report = done.stdout + done.stderr
         self.assertNotEqual(done.returncode, 0, report)
