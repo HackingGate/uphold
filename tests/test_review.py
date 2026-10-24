@@ -8,12 +8,14 @@ they let through.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "uphold_check.py"
@@ -276,6 +278,121 @@ class Controls(unittest.TestCase):
         self.assertIsNone(review_mod.uncontrolled_note([]))
 
 
+class Drive(unittest.TestCase):
+    """Planting a control and scoring what the reviewer names.
+
+    The reviewer is a command, so these drive small Python scripts that answer
+    in its protocol. What is tested is the scoring and the refusals: a reviewer
+    that broke the protocol has said nothing about the record, and must not be
+    scored as having missed it.
+    """
+
+    CARRIED: ClassVar[dict[str, str]] = {
+        "single-authoritative-source": "Single Authoritative Source"
+    }
+
+    def reviewer(self, body: str) -> list[str]:
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        script = Path(tmp) / "reviewer.py"
+        script.write_text(
+            "import json, sys\npayload = json.load(sys.stdin)\n"
+            + textwrap.dedent(body),
+            encoding="utf-8",
+        )
+        return [sys.executable, str(script)]
+
+    def test_a_finding_may_be_the_id_or_the_title_in_any_case(self):
+        reviewer = self.reviewer(
+            """
+            print("single-authoritative-source")
+            print()
+            print("single AUTHORITATIVE source")
+            """
+        )
+        named = review_mod.ask(reviewer, "doc", "change", self.CARRIED)
+        self.assertEqual(named, {"single-authoritative-source"})
+
+    def test_the_reviewer_is_handed_the_document_and_the_change_and_not_the_key(self):
+        reviewer = self.reviewer(
+            """
+            assert sorted(payload) == ["change", "document"], sorted(payload)
+            assert payload == {"document": "doc", "change": "plant"}, payload
+            """
+        )
+        self.assertEqual(review_mod.ask(reviewer, "doc", "plant", self.CARRIED), set())
+
+    def test_a_name_outside_the_document_is_refused_rather_than_scored(self):
+        reviewer = self.reviewer('print("Single Authoritative Source.")')
+        with self.assertRaises(review_mod.ReviewerFailed) as raised:
+            review_mod.ask(reviewer, "doc", "change", self.CARRIED)
+        self.assertIn("'Single Authoritative Source.'", str(raised.exception))
+
+    def test_a_reviewer_that_exits_non_zero_is_refused_with_its_stderr(self):
+        reviewer = self.reviewer('sys.exit("no API key")')
+        with self.assertRaises(review_mod.ReviewerFailed) as raised:
+            review_mod.ask(reviewer, "doc", "change", self.CARRIED)
+        self.assertIn("exited 1", str(raised.exception))
+        self.assertIn("no API key", str(raised.exception))
+
+    def test_a_reviewer_that_stalls_is_refused_at_the_deadline(self):
+        reviewer = self.reviewer("import time; time.sleep(30)")
+        with self.assertRaises(review_mod.ReviewerFailed) as raised:
+            review_mod.ask(reviewer, "doc", "change", self.CARRIED, timeout=1)
+        self.assertIn("did not answer within 1s", str(raised.exception))
+
+    def test_output_that_is_not_utf8_is_refused_rather_than_raised(self):
+        reviewer = self.reviewer('sys.stdout.buffer.write(b"\\xff\\n")')
+        with self.assertRaises(review_mod.ReviewerFailed) as raised:
+            review_mod.ask(reviewer, "doc", "change", self.CARRIED)
+        self.assertIn("not UTF-8", str(raised.exception))
+
+    def test_a_reviewer_that_cannot_be_run_is_refused(self):
+        with self.assertRaises(review_mod.ReviewerFailed):
+            review_mod.ask(["/nonexistent/reviewer"], "doc", "change", self.CARRIED)
+
+    def test_one_catch_in_three_is_counted_and_does_not_hold(self):
+        answers = iter([{"a"}, set(), set(), set(), set(), set()])
+        declared = [{"record": "a", "catches": "plant", "misses": "clean"}]
+        results = review_mod.drive(
+            declared, "doc", {"a": "A"}, 3, lambda *_: next(answers)
+        )
+        self.assertEqual(results, [{"record": "a", "caught": 1, "fired": 0}])
+        self.assertFalse(review_mod.holds(results[0], 3))
+        report = review_mod.render_drive(results, 3)
+        self.assertIn("a: caught 1/3, misses fired 0/3 -- DOES NOT HOLD", report)
+        self.assertIn("pass@1 0.33; pass^3 0/1", report)
+
+    def test_firing_on_the_miss_breaks_a_control_that_caught_every_plant(self):
+        results = review_mod.drive(
+            [{"record": "a", "catches": "plant", "misses": "clean"}],
+            "doc",
+            {"a": "A"},
+            2,
+            lambda *_: {"a"},
+        )
+        self.assertEqual(results[0]["fired"], 2)
+        self.assertFalse(review_mod.holds(results[0], 2))
+        self.assertIn("false positives 1.00", review_mod.render_drive(results, 2))
+
+    def test_an_unwritten_misses_is_unmeasured_and_not_a_rate_of_zero(self):
+        calls = []
+
+        def reviewer(document: str, change: str, carried: dict) -> set:
+            calls.append(change)
+            return {"a"}
+
+        results = review_mod.drive(
+            [{"record": "a", "catches": "plant"}], "doc", {"a": "A"}, 2, reviewer
+        )
+        self.assertEqual(calls, ["plant", "plant"])
+        self.assertIsNone(results[0]["fired"])
+        self.assertTrue(review_mod.holds(results[0], 2))
+        report = review_mod.render_drive(results, 2)
+        self.assertIn("misses not written", report)
+        self.assertNotIn("false positives", report)
+
+
 @needs_the_engine
 class ClaimsThatEnforceNothing(unittest.TestCase):
     """A claim naming a rule no seam supplies must not silence the review.
@@ -524,9 +641,8 @@ class SelfApplication(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_the_denominator_is_printed_on_a_run_that_found_nothing_wrong(self):
-        # The reader who most needs it is the one skimming a green run: this
-        # repository declares one control and carries twenty-nine records, and
-        # a run that said only "29 record(s) compile" would read like coverage.
+        # The reader who most needs it is the one skimming a green run: a run
+        # that said only how many records compile would read like coverage.
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--review"],
             cwd=ROOT,
@@ -537,7 +653,7 @@ class SelfApplication(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("have no control", result.stdout)
         self.assertIn("nothing here shows they can produce a finding", result.stdout)
-        # The one record that does carry a control is not in that list.
+        # A record that does carry a control is not in that list.
         self.assertNotIn("single-authoritative-source", result.stdout)
 
     def test_the_compiled_documents_are_current(self):
@@ -549,6 +665,51 @@ class SelfApplication(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def drive(self, *argv: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--review", "--drive", *argv],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_a_reviewer_holding_the_answer_key_holds_every_control(self):
+        # Reads the export, so it stays an oracle as controls are added: what
+        # this pins is the wiring from the declaration to the verdict.
+        oracle = textwrap.dedent(
+            """
+            import json, sys
+            change = json.load(sys.stdin)["change"]
+            key = json.load(open("review-controls.json"))["controls"]
+            print("\\n".join(c["record"] for c in key if c["catches"] == change))
+            """
+        )
+        result = self.drive(
+            "--timeout", "60", "--runs", "2", "--", sys.executable, "-c", oracle
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("single-authoritative-source: caught 2/2", result.stdout)
+        self.assertIn("pass^2", result.stdout)
+
+    def test_a_reviewer_that_names_nothing_is_reported_and_exits_1(self):
+        result = self.drive("--", sys.executable, "-c", "import sys; sys.stdin.read()")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("caught 0/3", result.stdout)
+        self.assertIn("DOES NOT HOLD", result.stdout)
+
+    def test_drive_without_a_reviewer_is_a_usage_error(self):
+        for argv in [
+            (),
+            ("--runs", "0", "--", "true"),
+            ("--timeout", "x", "--", "true"),
+            ("--runs", "2"),
+            ("true",),
+        ]:
+            result = self.drive(*argv)
+            self.assertEqual(result.returncode, 2, argv)
+            self.assertIn("--drive [--runs N] [--timeout SECONDS]", result.stderr)
 
     def test_an_exemption_without_a_reason_is_refused(self):
         # A reason nobody wrote is one nobody can review, and it is exactly as

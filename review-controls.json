@@ -1,6 +1,16 @@
 {
   "controls": [
     {
+      "record": "fail-fast",
+      "catches": "Change uphold_check.py's read_toml() so a policy/upheld.toml that tomllib cannot parse is treated as an empty declaration, and `--review --check` goes on to print \"compiled review is current\" and exit 0 instead of exiting 2 with the parse error.",
+      "misses": "Change the message uphold_check.py prints when policy/upheld.toml cannot be parsed so it carries the line and column tomllib reported, still exiting 2."
+    },
+    {
+      "record": "least-astonishment",
+      "catches": "Make `uphold_check.py --review --check` rewrite REVIEW.md and AGENTS.md in place when they are stale and then exit 0, instead of reporting them and exiting 1.",
+      "misses": "Make `uphold_check.py --review --emit` print the absolute path of each file it writes, beside the name and line count it already prints."
+    },
+    {
       "record": "single-authoritative-source",
       "catches": "Add a hand-written docs/PRINCIPLES.md that restates each record's claim and applies_when, alongside the generated REVIEW.md that already compiles them from principles/*.toml.",
       "misses": "Change scripts/review.py's render() so the compiled document prints applies_when before the claim."
@@ -14,7 +24,6 @@
     "economy-of-mechanism",
     "end-to-end-principle",
     "enforcement-needs-a-trigger",
-    "fail-fast",
     "follow-published-standards",
     "goodharts-law",
     "graceful-degradation",
@@ -22,7 +31,6 @@
     "hyrums-law",
     "information-hiding",
     "informed-consent",
-    "least-astonishment",
     "least-common-mechanism",
     "least-power",
     "make-illegal-states-unrepresentable",
