@@ -8,6 +8,7 @@ they let through.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -640,9 +641,9 @@ class SelfApplication(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_the_denominator_is_printed_on_a_run_that_found_nothing_wrong(self):
-        # The reader who most needs it is the one skimming a green run: a run
-        # that said only how many records compile would read like coverage.
+    def test_every_review_carried_record_here_carries_a_control(self):
+        # A record added to the review tier without a control is one nothing
+        # shows can produce a finding. The run names it; this refuses it.
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--review"],
             cwd=ROOT,
@@ -651,10 +652,9 @@ class SelfApplication(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("have no control", result.stdout)
-        self.assertIn("nothing here shows they can produce a finding", result.stdout)
-        # A record that does carry a control is not in that list.
-        self.assertNotIn("single-authoritative-source", result.stdout)
+        self.assertNotIn("have no control", result.stdout)
+        export = json.loads((ROOT / "review-controls.json").read_text(encoding="utf-8"))
+        self.assertEqual(export["uncontrolled"], [])
 
     def test_the_compiled_documents_are_current(self):
         result = subprocess.run(

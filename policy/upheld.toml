@@ -241,19 +241,48 @@ acyclic-dependencies = "No gate here decides a module graph. uphold is one crate
 # whoever wrote the record is the only reader who knows what violating it looks
 # like, and a fixture in a file is reviewable.
 #
-# Most records still have none, and the run says so on every invocation: it
-# prints how many review-carried records have no control, and names them. That
-# line, not a count copied here, is the honest reading of what has been
-# demonstrated, and it is what the next control should be chosen against.
-# `--review --drive -- REVIEWER` plants each one and reports whether it holds.
+# Every review-carried record carries one, and a test holds it there: a record
+# added without a control is named on every run, as the line that says nothing
+# here shows it can produce a finding. `--review --drive -- REVIEWER` plants
+# each one and reports whether it holds.
 #
 # A `misses` is chosen to sit next to its `catches`: the same file, the same
 # path, a change that touches what the record is about without violating it. A
 # reviewer that names the record on both is matching words, not the claim.
 [[review.control]]
-record = "single-authoritative-source"
-catches = "Add a hand-written docs/PRINCIPLES.md that restates each record's claim and applies_when, alongside the generated REVIEW.md that already compiles them from principles/*.toml."
-misses = "Change scripts/review.py's render() so the compiled document prints applies_when before the claim."
+record = "complete-mediation"
+catches = "Make src/shim/destination.rs stop asking whether a `gh issue create --repo other-owner/their-repo` destination is owned, leaving the ownership decision only in the pre-push path through prevent_public_push in src/guard/push.rs."
+misses = "Reword the phrase src/guard/push.rs prints for the command seam from \"this command would publish to\" to \"this command would send text to\", leaving the decision it reaches unchanged."
+
+[[review.control]]
+record = "confused-deputy"
+catches = "Make the gh shim in src/shim/destination.rs, when a command's --repo names a repository the workspace does not own, retry the command with the shim's own configured App token, so any repository that token can reach is accepted whoever typed the command."
+misses = "Make the refusal src/guard/push.rs prints after a failed forge lookup name the forge client it asked, still refusing the same destinations."
+
+[[review.control]]
+record = "conways-law"
+catches = "Move principles/ and scripts/validate.py into a separate repository run by the people who write records, and have the Rust crate fetch it at a pinned revision, on the ground that record authors and engine maintainers rarely talk, although nearly every record-field change also edits src/catalog.rs and the schema in the same pull request."
+misses = "Add a CODEOWNERS entry that names the people who write records as reviewers for principles/, leaving the directory and the build in this repository."
+
+[[review.control]]
+record = "defense-in-depth"
+catches = "Delete the \"The policy over its own tree\" step from the scan engine job in .github/workflows/test.yml because the uphold-scan command in hooks/lefthook.yml already runs `uphold scan` on every commit, so a commit made with --no-verify is no longer scanned anywhere."
+misses = "Move the \"The policy over its own tree\" step in .github/workflows/test.yml ahead of `cargo test --locked` so a policy failure is reported first, keeping both steps."
+
+[[review.control]]
+record = "economy-of-mechanism"
+catches = "Let prevent_public_push in src/guard/push.rs accept allow-list entries written as regular expressions, per-rule fallback commands and an \"ask the forge, else a script\" chain, all decided inside the one function that refuses a push."
+misses = "Add unit tests to src/guard/push.rs showing that a destination under another owner and a destination with differently cased owner are both refused, changing no code outside the test module."
+
+[[review.control]]
+record = "end-to-end-principle"
+catches = "Change scripts/install_lefthook.sh to drop its sha256sum comparison of the archive against the release's checksum file and rely on curl's TLS and its exit status instead, so the archive is checked only on the network hop and never against the digest computed where it was built."
+misses = "Make scripts/install_lefthook.sh print the asset name and the checksum line it matched before running `sha256sum --check --strict`, which still fails the install on a mismatch."
+
+[[review.control]]
+record = "enforcement-needs-a-trigger"
+catches = "Add a rule to policy/upheld.toml whose only payload is a paragraph of design advice about naming, with no files, pattern or stage to match, so it is printed on every commit as if it were a check that had passed."
+misses = "Make the message over_budget in scripts/review.py returns also say how many lines the document is over the ceiling, still returning it when the document is too long."
 
 [[review.control]]
 record = "fail-fast"
@@ -261,6 +290,116 @@ catches = "Change uphold_check.py's read_toml() so a policy/upheld.toml that tom
 misses = "Change the message uphold_check.py prints when policy/upheld.toml cannot be parsed so it carries the line and column tomllib reported, still exiting 2."
 
 [[review.control]]
+record = "follow-published-standards"
+catches = "Change src/junit.rs so the suite timestamp is written in a format of its own, day/month/year and local clock time with no zone, instead of the RFC 3339 form the report was read with, which the test-report consumers parse."
+misses = "Add a unit test to src/junit.rs that parses the suite timestamp attribute back as RFC 3339 and asserts it is present."
+
+[[review.control]]
+record = "goodharts-law"
+catches = "Change scripts/coverage.sh to leave src/shim.rs and src/config.rs out of the measured files, so the reported percentage clears the floor the hook and CI enforce, without adding a test."
+misses = "Make scripts/coverage.sh print the per-file line percentages beneath the total in its terminal summary, still failing only under the floor it already enforces."
+
+[[review.control]]
+record = "graceful-degradation"
+catches = "Change uphold_check.py's engine_report() so that when `uphold check --json` reports unavailable evidence it returns an empty report instead of raising, and `--review --check` goes on to print \"compiled review is current\" and exit 0."
+misses = "Change the message engine_report() raises for unavailable evidence in uphold_check.py so it lists each unavailable item on its own line."
+
+[[review.control]]
+record = "high-cohesion-low-coupling"
+catches = "Move the OSCAL export from uphold_check.py into scripts/review.py beside render() and drive(), and have it call uphold_check's engine() subprocess wrapper and index the dictionaries reconciliation_report() builds, so a change to the engine's JSON needs edits in both files."
+misses = "Split scripts/review.py's render_drive() into two functions in the same file, one that formats a record's row and one that formats the summary line."
+
+[[review.control]]
+record = "hyrums-law"
+catches = "Change scripts/review.py's render() so each section of REVIEW.md is headed by the record id instead of its title and the sections are ordered by domain instead of alphabetically, with no note beyond the commit message."
+misses = "Rename the private helper _sorted_records in scripts/review.py to _ordered_records and update its callers, leaving the compiled document byte-for-byte unchanged."
+
+[[review.control]]
+record = "information-hiding"
+catches = "Make uphold_check.py's run_review() print the drive results by indexing the dictionaries scripts/review.py's drive() returns (result[\"caught\"], result[\"fired\"]) and recomputing pass or fail itself, instead of calling review.holds() and review.render_drive()."
+misses = "Change scripts/review.py's render_drive() to print \"misses: none written\" in place of \"misses not written\" for a control that declares no misses."
+
+[[review.control]]
+record = "informed-consent"
+catches = "Make `uphold --install` in src/install.rs also append the PATH hook line to the user's shell startup file (~/.bashrc, ~/.zshrc or fish's config.fish), without printing it and without a flag to skip it, along with linking the commands."
+misses = "Make `uphold --install` in src/install.rs print the path each new link points at beside \"linked\", in the line it already prints for every name."
+
+[[review.control]]
 record = "least-astonishment"
-catches = "Make `uphold_check.py --review --check` rewrite REVIEW.md and AGENTS.md in place when they are stale and then exit 0, instead of reporting them and exiting 1."
+catches = "Make `uphold_check.py --review --check` rewrite REVIEW.md and AGENTS.md in place when they are stale and exit 0, printing nothing about the write, so someone who ran a command named check to look at the tree finds their working copy changed afterwards."
 misses = "Make `uphold_check.py --review --emit` print the absolute path of each file it writes, beside the name and line count it already prints."
+
+[[review.control]]
+record = "least-common-mechanism"
+catches = "Change src/remote_policy.rs Repository::new() to use one fixed directory name under the system temp directory, kept between runs and reused as the scratch object store for every repository's policy fetch, instead of a fresh exclusive 0o700 directory removed on drop."
+misses = "Change src/remote_policy.rs Repository::new() to put the counter before the process id in the scratch directory name, still created exclusively with mode 0o700 and removed on drop."
+
+[[review.control]]
+record = "least-power"
+catches = "Let a [[waive]] entry in policy/hooks.toml carry a `when` string that `uphold hooks --identity` runs through sh -c to decide whether the waiver applies, beside the closed `findings` and `repos` lists it matches today."
+misses = "Let `findings` in a [[waive]] entry of policy/hooks.toml accept one more fixed word, checked against the closed list the loader already holds, so an unknown word is still refused at load."
+
+[[review.control]]
+record = "make-illegal-states-unrepresentable"
+catches = "Change the loader for policy/hooks.toml in src/hooks.rs to keep each waiver's `findings` as plain strings and compare them to Finding only when reporting, so a misspelled word loads and silently waives nothing instead of being refused when the file is read."
+misses = "Change the load error src/hooks.rs raises for a [[waive]] entry with an empty `reason` so it also names that entry's id, still refusing at load."
+
+[[review.control]]
+record = "mechanism-policy-separation"
+catches = "Hard-code the owner names a push may go to inside prevent_public_push in src/guard/push.rs and delete the policy/principles.toml setting a repository declares them in, so every repository running the guard gets the same owners and changing that rule means editing the Rust and cutting a release."
+misses = "Change the refusal text prevent_public_push in src/guard/push.rs prints so it names the owner from policy that the destination was compared with."
+
+[[review.control]]
+record = "observability"
+catches = "Change the refusal path in src/main.rs so a refused guard prints only \"guard refused\" and exits non-zero, no longer printing the rule that refused (guard::refused_by), the input it judged, or the report body that says why, so an operator cannot tell one refusal from another without reproducing it."
+misses = "Change the refusal path in src/main.rs so the rule id is printed on a line of its own before the report body, which it still prints in full."
+
+[[review.control]]
+record = "parameterize-do-not-enumerate"
+catches = "Add uphold_check.py functions emit_review_md() and emit_agents_md(), each calling emit_target with its file name written in, beside the emit_target(root, name) that already takes any name."
+misses = "Add a third file name to the emit list in the [review] table of policy/upheld.toml so `--review --emit` writes it through the existing emit_target."
+
+[[review.control]]
+record = "psychological-acceptability"
+catches = "Make the uphold-check command in lefthook.yml fail every commit while any finding exists anywhere in the tree, with the single message \"policy violation\" and no baseline, per-rule skip, or file and rule named, so a tree with one old finding cannot commit."
+misses = "Change the uphold-check command in lefthook.yml to print the rule id and file:line of each finding in its failure message, still failing the commit on any finding."
+
+[[review.control]]
+record = "reuse-maintained-components"
+catches = "Replace the serde_saphyr parse in src/pins.rs pre_commit_pins() with a loop over the config's lines that finds `repo:` and `rev:` by splitting each line on the first colon and trimming quotes, so the crate is no longer called there."
+misses = "Make src/pins.rs pre_commit_pins() put the source file's path in the error it returns when an entry has no `rev:`, still reading the config through serde_saphyr."
+
+[[review.control]]
+record = "reversible-decisions"
+catches = "Rename the `applies_when` field to `scope` in every principles/*.toml and in scripts/catalog.py and scripts/validate.py in one commit and one release, with no release that reads both names, so a consumer pinned to the catalog has no step to move across and no way back but to edit every record."
+misses = "Add an optional `examples` field to scripts/validate.py's accepted keys for principles/*.toml, which no record has to set and which scripts/catalog.py and scripts/review.py ignore when absent."
+
+[[review.control]]
+record = "robustness-principle"
+catches = "Change src/pins.rs version_key() so that a tag written by an upstream in a slightly different style, such as `1.2.3` without the leading v or `v1.2.3.post1`, whose order is unambiguous, is no longer ordered but makes the pin check stop with a fatal error, where it is accepted today."
+misses = "Change src/pins.rs so the finding for a stale pin lists the newer tags in ascending order, still ordering them with version_key() as now."
+
+[[review.control]]
+record = "rule-of-three"
+catches = "Replace the two similar readers pre_commit_pins() and lefthook_pins() in src/pins.rs with one generic `PinSource` trait, a registry and configurable field-name mappings, built for hook-config formats that nothing in the repository reads yet, although only these two copies exist."
+misses = "Move the repeated block that turns a config entry into a Pin, now written in several places in src/pins.rs, into one helper function there, with no new trait or option."
+
+[[review.control]]
+record = "separation-of-concerns"
+catches = "Make src/pins.rs version_key() call remote_refs() to fetch the tags itself and sort them, and have it print the stale-pin report text, so that ordering a tag, reaching the network and wording the finding are one function that cannot be tested without a remote."
+misses = "Add unit tests in src/pins.rs for version_key() ordering of `v1.0.0-rc1`, `v1.0.0` and `v1.0.0-1`, leaving remote_refs() and the report wording where they are."
+
+[[review.control]]
+record = "separation-of-privilege"
+catches = "Add a TAG_RELEASE_FORCE environment variable to scripts/tag-release.sh that, when set, skips the checks on the squash-merge subject, the parent's lower Cargo.toml version and the files changed, and goes on to tag and push with nothing recorded about its use."
+misses = "Make scripts/tag-release.sh print, before its dry-run summary, each check it has passed and the version it read from origin/main's Cargo.toml, with the checks themselves unchanged."
+
+[[review.control]]
+record = "single-authoritative-source"
+catches = "Add a hand-written docs/PRINCIPLES.md that restates each record's claim and applies_when, alongside the generated REVIEW.md that already compiles them from principles/*.toml."
+misses = "Change scripts/review.py's render() so the compiled document prints applies_when before the claim."
+
+[[review.control]]
+record = "unix-composability"
+catches = "Make `uphold_check.py --review --emit` ask \"Overwrite REVIEW.md? [y/N]\" through input() before writing, with no flag to answer it, so a script or agent without a terminal hangs or gets an end-of-file error and the exit status is 0 either way."
+misses = "Make `uphold_check.py --review --emit` print a one-line summary of the files it wrote to stderr, leaving the files written and the exit status as they are."
