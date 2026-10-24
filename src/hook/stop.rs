@@ -44,7 +44,7 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -195,8 +195,25 @@ pub(super) fn session_start(event: &Value, root: &Path, policy: &Policy) -> Resu
     }
     let directory = baseline_dir(root)?;
     std::fs::create_dir_all(&directory)?;
+    // Claude Code fires SessionStart again on resume and on compaction, under
+    // the same id. A second run would record the session's own red as red it
+    // found, so the first baseline -- finished, running, or killed -- stands.
+    let recorded = directory.join(format!("{id}.json"));
     let pending = directory.join(format!("{id}.pending"));
-    std::fs::write(&pending, b"")?;
+    if recorded.exists() {
+        return Ok(Exit::Clean);
+    }
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&pending)
+    {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Ok(Exit::Clean);
+        }
+        Err(error) => return Err(error.into()),
+    }
     let written = fingerprint(root).and_then(|before| {
         let outcomes = run_gate(root, &policy.stop.run)?;
         let unusable = (fingerprint(root)? != before).then(|| {
@@ -221,7 +238,7 @@ pub(super) fn session_start(event: &Value, root: &Path, policy: &Policy) -> Resu
         // Renamed into place, so `Stop` never reads half a file.
         let partial = directory.join(format!("{id}.json.partial"));
         std::fs::write(&partial, document)?;
-        std::fs::rename(&partial, directory.join(format!("{id}.json")))?;
+        std::fs::rename(&partial, &recorded)?;
         Ok(())
     });
     std::fs::remove_file(&pending).ok();
@@ -229,44 +246,50 @@ pub(super) fn session_start(event: &Value, root: &Path, policy: &Policy) -> Resu
 }
 
 /// The baseline for this session, or why there is none.
-fn baseline(event: &Value, root: &Path) -> Result<std::result::Result<Baseline, String>> {
-    let id = match session_id(event) {
-        Ok(id) => id,
-        Err(why) => return Ok(Err(why)),
-    };
-    let directory = baseline_dir(root)?;
+fn baseline(event: &Value, root: &Path) -> std::result::Result<Baseline, String> {
+    let id = session_id(event)?;
+    let directory = baseline_dir(root)
+        .map_err(|error| format!("there is no git dir to keep a baseline in ({error})"))?;
     let recorded = directory.join(format!("{id}.json"));
     let pending = directory.join(format!("{id}.pending"));
-    let started = Instant::now();
-    while !recorded.is_file() && pending.is_file() && started.elapsed() < WAIT_FOR_BASELINE {
+    // Measured from when the marker was written, not from now: a SessionStart
+    // that was killed leaves its marker behind, and waiting afresh on every
+    // stop would charge each one the whole bound for a run that is not coming.
+    let deadline = std::fs::metadata(&pending)
+        .and_then(|metadata| metadata.modified())
+        .map(|written| written + WAIT_FOR_BASELINE);
+    while !recorded.is_file()
+        && pending.is_file()
+        && deadline
+            .as_ref()
+            .is_ok_and(|deadline| SystemTime::now() < *deadline)
+    {
         std::thread::sleep(POLL);
     }
     if !recorded.is_file() {
-        return Ok(Err(if pending.is_file() {
+        return Err(if pending.is_file() {
             format!(
-                "the SessionStart baseline was still running after {}s",
+                "the SessionStart baseline did not finish within {}s of starting",
                 WAIT_FOR_BASELINE.as_secs()
             )
         } else {
             "no SessionStart baseline was recorded for this session; configure the \
              SessionStart hook beside the Stop hook"
                 .to_owned()
-        }));
+        });
     }
-    let text = std::fs::read(&recorded)?;
-    let read: Baseline = match serde_json::from_slice(&text) {
-        Ok(read) => read,
-        Err(error) => {
-            return Ok(Err(format!(
-                "the baseline at {} is unreadable ({error})",
-                recorded.display()
-            )));
-        }
+    let unreadable = |error: &dyn std::fmt::Display| {
+        format!(
+            "the baseline at {} is unreadable ({error})",
+            recorded.display()
+        )
     };
-    Ok(match read.unusable {
+    let text = std::fs::read(&recorded).map_err(|error| unreadable(&error))?;
+    let read: Baseline = serde_json::from_slice(&text).map_err(|error| unreadable(&error))?;
+    match read.unusable {
         Some(why) => Err(why),
         None => Ok(read),
-    })
+    }
 }
 
 fn tail(output: &str) -> String {
@@ -289,7 +312,7 @@ pub(super) fn stop(event: &Value, root: &Path, policy: &Policy) -> Result<Exit> 
         .pointer("/stop_hook_active")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let known = baseline(event, root)?;
+    let known = baseline(event, root);
     let outcomes = match run_gate(root, &policy.stop.run) {
         Ok(outcomes) => outcomes,
         // A gate that cannot run blocks the first stop, which fails closed. It

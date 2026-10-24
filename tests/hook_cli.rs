@@ -1219,6 +1219,67 @@ fn a_baseline_whose_tree_changed_while_it_ran_is_not_trusted() {
     );
 }
 
+/// Claude Code fires `SessionStart` again on resume and compaction, under the
+/// same id. The second one must not re-baseline the session's own red.
+#[test]
+fn a_repeated_session_start_keeps_the_first_baseline() {
+    let root = gated("stop-resumed", STOP_POLICY);
+    turn(&root, &moment("SessionStart", "s-resumed"));
+    std::fs::write(root.join("red"), "").unwrap();
+    let resumed = turn(&root, &moment("SessionStart", "s-resumed"));
+    assert_eq!(code(&resumed), 0, "{}", stderr(&resumed));
+    let stopped = turn(&root, &moment("Stop", "s-resumed"));
+    assert_eq!(
+        decision(&stopped).get("decision"),
+        Some(&Value::from("block"))
+    );
+}
+
+/// A `SessionStart` that was killed leaves its marker. Stop does not wait the
+/// whole bound again for a run that is not coming.
+#[test]
+fn a_stale_pending_marker_is_not_waited_on() {
+    let root = gated("stop-stale-pending", STOP_POLICY);
+    std::fs::write(root.join("red"), "").unwrap();
+    let directory = root.join(".git/uphold/stop");
+    std::fs::create_dir_all(&directory).unwrap();
+    let marker = directory.join("s-stale.pending");
+    std::fs::write(&marker, "").unwrap();
+    let aged = Command::new("touch")
+        .args(["-t", "202001010000"])
+        .arg(&marker)
+        .status()
+        .unwrap();
+    assert!(aged.success());
+    let started = std::time::Instant::now();
+    let stopped = turn(&root, &moment("Stop", "s-stale"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    let reason = decision(&stopped)
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_owned();
+    assert!(reason.contains("did not finish within"), "{reason}");
+}
+
+/// Outside a git repository there is nowhere to keep a baseline. That is a
+/// missing baseline, which still honours the one-block rule.
+#[test]
+fn outside_a_git_repository_the_baseline_is_missing_not_fatal() {
+    let root = workspace("stop-no-git", Some(STOP_POLICY));
+    std::fs::write(root.join("red"), "").unwrap();
+    let again = serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": "s-no-git",
+        "stop_hook_active": true,
+    });
+    let stopped = turn(&root, &again.to_string());
+    assert_eq!(code(&stopped), 0, "{}", stderr(&stopped));
+    let document = decision(&stopped);
+    assert!(document.get("decision").is_none(), "{document}");
+    assert!(document.get("systemMessage").is_some_and(Value::is_string));
+}
+
 #[test]
 fn a_green_gate_lets_the_turn_end_silently() {
     let root = gated("stop-green", STOP_POLICY);

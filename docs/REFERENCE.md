@@ -3284,7 +3284,8 @@ none, is judged as a pending tool call, as above.
   the size and modification time of every changed or untracked path); a
   baseline whose tree moved is discarded, so every red command blocks. A gate
   that writes outside ignored paths therefore never leaves a usable baseline.
-  A `session_id` outside
+  Claude Code fires `SessionStart` again on resume and compaction under the
+  same id; the first baseline, finished or not, is kept. A `session_id` outside
   `A-Z a-z 0-9 - _`, or longer than 128, is refused rather than used as a
   file name.
 - **`Stop`** runs the commands again. One that fails now and passed at session
@@ -3293,7 +3294,8 @@ none, is judged as a pending tool call, as above.
   already failing does not block, and is named in `systemMessage` for the
   person. With no baseline, because `SessionStart` is not configured or the
   id was unusable, every failing command blocks and the reason says so. A
-  baseline still being written is waited for, up to 300 seconds, so the
+  baseline still being written is waited for, up to 300 seconds from when it
+  started (a killed one is not waited on again), so the
   `timeout` above covers that wait plus one run of the gate.
 
 A turn's end is blocked once. When `stop_hook_active` says this stop follows
