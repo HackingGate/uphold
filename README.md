@@ -247,7 +247,7 @@ uphold guard --stage pre-push   # the guards for that Git hook
 uphold shim gh pr create ...    # stand in front of a command, then exec
 uphold shim --install           # link this binary under each command's name
 uphold shim --status            # what is linked, and whether PATH reaches it
-uphold hook claude-code         # judge a pending agent tool call, read on stdin
+uphold hook claude-code         # judge a pending tool call or a turn's end, read on stdin
 uphold hook codex               # the same checks through Codex's PreToolUse hook
 uphold audit --for-publication  # before flipping private -> public
 uphold supply-chain             # scanners and the git-pin check over the pushed range; a missing one is exit 2
@@ -347,6 +347,11 @@ hooks also require a trusted project. Set the matcher to the MCP tools that
 publish your text; the example covers the GitHub MCP server. See
 [Codex hooks](https://learn.chatgpt.com/docs/hooks) and the
 [configuration reference](docs/REFERENCE.md#configuring-it) for inline TOML.
+
+The same command, configured for `SessionStart` and `Stop`, keeps an agent from
+ending its turn with the gate red: `[stop] run` names the commands, and a turn
+is blocked only on one that was green when the session started. See
+[the end of a turn](docs/REFERENCE.md#the-end-of-a-turn-stop).
 
 **`uphold hooks --identity DIR...`** and **`uphold probe`** answer two questions
 a single repository cannot answer about itself. A forked hook declaration is

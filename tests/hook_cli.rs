@@ -1079,3 +1079,342 @@ fn the_flag_names_the_directory_on_either_side_of_the_harness() {
     let (suite, _) = support::junit::suite(files.first().unwrap());
     assert_eq!(suite.name.as_str(), "uphold hook codex");
 }
+
+// -- the end of a turn ---------------------------------------------------------
+
+/// A gate that is green while the file `red` is absent: argv, no shell, and a
+/// program every test machine has.
+const STOP_POLICY: &str = "[stop]\nrun = [[\"test\", \"!\", \"-e\", \"red\"]]\n";
+
+/// A repository with a `[stop]` gate. A git repository, because the baseline
+/// lives under the worktree's git dir.
+fn gated(name: &str, policy: &str) -> PathBuf {
+    let root = workspace(name, Some(policy));
+    support::git(&root, &["init", "-q"]);
+    root
+}
+
+/// Run the hook with the fixture's own git, never the one a commit hook running
+/// this suite exported.
+fn turn(root: &Path, stdin: &str) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command
+        .args(["hook", "claude-code"])
+        .current_dir(root)
+        .env_remove("UPHOLD_ALLOW")
+        .env("HOME", "/home/example-user")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    support::without_git_environment(&mut command);
+    let mut child = command.spawn().unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .ok();
+    child.wait_with_output().unwrap()
+}
+
+fn moment(name: &str, session: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": name,
+        "session_id": session,
+        "cwd": "/unused",
+        "stop_hook_active": false,
+    })
+    .to_string()
+}
+
+fn decision(output: &Output) -> Value {
+    serde_json::from_str(stdout(output).trim()).unwrap()
+}
+
+/// The point of the seam: green when the session started, red when it ends.
+#[test]
+fn a_command_this_session_turned_red_blocks_the_end_of_the_turn() {
+    let root = gated("stop-new-red", STOP_POLICY);
+    let started = turn(&root, &moment("SessionStart", "s-new"));
+    assert_eq!(code(&started), 0, "{}", stderr(&started));
+    // Claude Code adds SessionStart stdout to the conversation.
+    assert_eq!(stdout(&started), "");
+    std::fs::write(root.join("red"), "").unwrap();
+    let stopped = turn(&root, &moment("Stop", "s-new"));
+    assert_eq!(code(&stopped), 0, "{}", stderr(&stopped));
+    let document = decision(&stopped);
+    assert_eq!(document.get("decision"), Some(&Value::from("block")));
+    let reason = document.get("reason").and_then(Value::as_str).unwrap();
+    assert!(reason.contains("`test ! -e red` exited 1"), "{reason}");
+    assert!(document.get("systemMessage").is_none(), "{document}");
+}
+
+/// An agent sent back once that says it cannot fix the gate has followed the
+/// reason. Blocking it again spends the harness's cap on a turn that is over.
+#[test]
+fn a_stop_that_follows_a_block_ends_the_turn_and_tells_the_person() {
+    let root = gated("stop-sent-back", STOP_POLICY);
+    turn(&root, &moment("SessionStart", "s-back"));
+    std::fs::write(root.join("red"), "").unwrap();
+    let again = serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": "s-back",
+        "stop_hook_active": true,
+    });
+    let stopped = turn(&root, &again.to_string());
+    assert_eq!(code(&stopped), 0, "{}", stderr(&stopped));
+    let document = decision(&stopped);
+    assert!(document.get("decision").is_none(), "{document}");
+    let message = document
+        .get("systemMessage")
+        .and_then(Value::as_str)
+        .unwrap();
+    assert!(
+        message.contains("still red after the agent was sent back once"),
+        "{message}"
+    );
+    assert!(message.contains("`test ! -e red`"), "{message}");
+}
+
+/// A gate that cannot start blocks once. It does not hold every later turn.
+#[test]
+fn a_gate_that_cannot_start_does_not_block_a_stop_that_follows_a_block() {
+    let root = gated(
+        "stop-unstartable-again",
+        "[stop]\nrun = [[\"uphold-no-such-program\"]]\n",
+    );
+    let again = serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": "s-unstartable-again",
+        "stop_hook_active": true,
+    });
+    let stopped = turn(&root, &again.to_string());
+    assert_eq!(code(&stopped), 0, "{}", stderr(&stopped));
+    let document = decision(&stopped);
+    let message = document
+        .get("systemMessage")
+        .and_then(Value::as_str)
+        .unwrap();
+    assert!(message.contains("could not be started"), "{message}");
+}
+
+/// The baseline runs while the agent works. A tree that moved under it cannot
+/// say what was red before the session, so it is not compared against.
+#[test]
+fn a_baseline_whose_tree_changed_while_it_ran_is_not_trusted() {
+    let root = gated(
+        "stop-moved-tree",
+        "[stop]\nrun = [[\"touch\", \"written-during-baseline\"], [\"test\", \"!\", \"-e\", \"red\"]]\n",
+    );
+    std::fs::write(root.join("red"), "").unwrap();
+    let started = turn(&root, &moment("SessionStart", "s-moved"));
+    assert_eq!(code(&started), 0, "{}", stderr(&started));
+    let stopped = turn(&root, &moment("Stop", "s-moved"));
+    let document = decision(&stopped);
+    assert_eq!(document.get("decision"), Some(&Value::from("block")));
+    let reason = document.get("reason").and_then(Value::as_str).unwrap();
+    assert!(
+        reason.contains("the tree changed while the SessionStart baseline ran"),
+        "{reason}"
+    );
+}
+
+/// Claude Code fires `SessionStart` again on resume and compaction, under the
+/// same id. The second one must not re-baseline the session's own red.
+#[test]
+fn a_repeated_session_start_keeps_the_first_baseline() {
+    let root = gated("stop-resumed", STOP_POLICY);
+    turn(&root, &moment("SessionStart", "s-resumed"));
+    std::fs::write(root.join("red"), "").unwrap();
+    let resumed = turn(&root, &moment("SessionStart", "s-resumed"));
+    assert_eq!(code(&resumed), 0, "{}", stderr(&resumed));
+    let stopped = turn(&root, &moment("Stop", "s-resumed"));
+    assert_eq!(
+        decision(&stopped).get("decision"),
+        Some(&Value::from("block"))
+    );
+}
+
+/// A `SessionStart` that was killed leaves its marker. Stop does not wait the
+/// whole bound again for a run that is not coming.
+#[test]
+fn a_stale_pending_marker_is_not_waited_on() {
+    let root = gated("stop-stale-pending", STOP_POLICY);
+    std::fs::write(root.join("red"), "").unwrap();
+    let directory = root.join(".git/uphold/stop");
+    std::fs::create_dir_all(&directory).unwrap();
+    let marker = directory.join("s-stale.pending");
+    std::fs::write(&marker, "").unwrap();
+    let aged = Command::new("touch")
+        .args(["-t", "202001010000"])
+        .arg(&marker)
+        .status()
+        .unwrap();
+    assert!(aged.success());
+    let started = std::time::Instant::now();
+    let stopped = turn(&root, &moment("Stop", "s-stale"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    let reason = decision(&stopped)
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_owned();
+    assert!(reason.contains("did not finish within"), "{reason}");
+}
+
+/// Outside a git repository there is nowhere to keep a baseline. That is a
+/// missing baseline, which still honours the one-block rule.
+#[test]
+fn outside_a_git_repository_the_baseline_is_missing_not_fatal() {
+    let root = workspace("stop-no-git", Some(STOP_POLICY));
+    std::fs::write(root.join("red"), "").unwrap();
+    let again = serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": "s-no-git",
+        "stop_hook_active": true,
+    });
+    let stopped = turn(&root, &again.to_string());
+    assert_eq!(code(&stopped), 0, "{}", stderr(&stopped));
+    let document = decision(&stopped);
+    assert!(document.get("decision").is_none(), "{document}");
+    assert!(document.get("systemMessage").is_some_and(Value::is_string));
+}
+
+#[test]
+fn a_green_gate_lets_the_turn_end_silently() {
+    let root = gated("stop-green", STOP_POLICY);
+    turn(&root, &moment("SessionStart", "s-green"));
+    let stopped = turn(&root, &moment("Stop", "s-green"));
+    assert_eq!(code(&stopped), 0, "{}", stderr(&stopped));
+    assert_eq!(stdout(&stopped), "");
+}
+
+/// Red the session found is named to the person, and does not hold the agent.
+#[test]
+fn a_command_already_red_at_session_start_is_reported_and_does_not_block() {
+    let root = gated("stop-old-red", STOP_POLICY);
+    std::fs::write(root.join("red"), "").unwrap();
+    turn(&root, &moment("SessionStart", "s-old"));
+    let stopped = turn(&root, &moment("Stop", "s-old"));
+    assert_eq!(code(&stopped), 0, "{}", stderr(&stopped));
+    let document = decision(&stopped);
+    assert!(document.get("decision").is_none(), "{document}");
+    let message = document
+        .get("systemMessage")
+        .and_then(Value::as_str)
+        .unwrap();
+    assert!(message.contains("`test ! -e red`"), "{message}");
+}
+
+/// Without a baseline nothing separates found red from caused red, so it
+/// blocks, and says the comparison was missing.
+#[test]
+fn with_no_baseline_every_red_command_blocks_and_says_why() {
+    let root = gated("stop-no-baseline", STOP_POLICY);
+    std::fs::write(root.join("red"), "").unwrap();
+    let stopped = turn(&root, &moment("Stop", "s-none"));
+    let document = decision(&stopped);
+    assert_eq!(document.get("decision"), Some(&Value::from("block")));
+    let reason = document.get("reason").and_then(Value::as_str).unwrap();
+    assert!(
+        reason.contains("No baseline to compare against"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("configure the SessionStart hook"),
+        "{reason}"
+    );
+}
+
+/// A first turn can end before a slow gate's first run has. Stop waits for
+/// the baseline rather than racing it.
+#[test]
+fn stop_waits_for_a_baseline_that_is_still_being_written() {
+    let root = gated("stop-pending", STOP_POLICY);
+    std::fs::write(root.join("red"), "").unwrap();
+    let directory = root.join(".git/uphold/stop");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("s-wait.pending"), "").unwrap();
+    let writer = {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let baseline = r#"{"ran":[["test","!","-e","red"]],"red":[["test","!","-e","red"]]}"#;
+            std::fs::write(directory.join("s-wait.json"), baseline).unwrap();
+            std::fs::remove_file(directory.join("s-wait.pending")).unwrap();
+        })
+    };
+    let stopped = turn(&root, &moment("Stop", "s-wait"));
+    writer.join().unwrap();
+    let document = decision(&stopped);
+    assert!(document.get("decision").is_none(), "{document}");
+    assert!(
+        document.get("systemMessage").is_some_and(Value::is_string),
+        "{document}"
+    );
+}
+
+/// The harness supplies the id that becomes a file name.
+#[test]
+fn a_session_id_that_could_name_another_path_is_not_used_as_one() {
+    let root = gated("stop-unsafe-id", STOP_POLICY);
+    let started = turn(&root, &moment("SessionStart", "../escaped"));
+    assert_eq!(code(&started), 2, "{}", stderr(&started));
+    assert!(stderr(&started).contains("is not used as a file name"));
+    assert!(!root.join(".git/uphold/escaped.json").exists());
+    assert!(!root.join(".git/uphold/stop").exists());
+
+    std::fs::write(root.join("red"), "").unwrap();
+    let stopped = turn(&root, &moment("Stop", "../escaped"));
+    let document = decision(&stopped);
+    assert_eq!(document.get("decision"), Some(&Value::from("block")));
+    assert!(
+        document
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("is not used as a file name")
+    );
+}
+
+#[test]
+fn a_policy_without_a_stop_gate_says_nothing_was_checked() {
+    let root = gated("stop-undeclared", POLICY);
+    let stopped = turn(&root, &moment("Stop", "s-undeclared"));
+    assert_eq!(code(&stopped), 0, "{}", stderr(&stopped));
+    assert_eq!(stdout(&stopped), "");
+    assert!(stderr(&stopped).contains("declares no `[stop] run`"));
+}
+
+/// A gate that cannot run is not a gate that passed. Exit 2 at Stop sends
+/// stderr to the agent, so this fails closed.
+#[test]
+fn a_command_that_cannot_start_is_could_not_look() {
+    let root = gated(
+        "stop-unstartable",
+        "[stop]\nrun = [[\"uphold-no-such-program\"]]\n",
+    );
+    let stopped = turn(&root, &moment("Stop", "s-unstartable"));
+    assert_eq!(code(&stopped), 2, "{}", stderr(&stopped));
+    assert!(stderr(&stopped).contains("could not be started"));
+}
+
+#[test]
+fn an_entry_naming_no_program_is_refused_at_load() {
+    let root = gated("stop-empty-argv", "[stop]\nrun = [[]]\n");
+    let stopped = turn(&root, &moment("Stop", "s-empty"));
+    assert_eq!(code(&stopped), 2, "{}", stderr(&stopped));
+    assert!(stderr(&stopped).contains("names no program"));
+}
+
+/// What a repository's tree has to pass is not a fact another file can know.
+#[test]
+fn a_stop_gate_in_an_inherited_file_is_refused() {
+    let root = gated(
+        "stop-inherited",
+        "[inherit]\npaths = [\"policy/shared.toml\"]\n",
+    );
+    std::fs::write(root.join("policy/shared.toml"), STOP_POLICY).unwrap();
+    let stopped = turn(&root, &moment("Stop", "s-inherited"));
+    assert_eq!(code(&stopped), 2, "{}", stderr(&stopped));
+    assert!(stderr(&stopped).contains("`[stop]` names the commands"));
+}

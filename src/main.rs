@@ -143,7 +143,7 @@ usage:
                                      versions of this binary can be diffed
   uphold rules --effective [--json]  every rule this repository resolves to, and
                                      the git hooks each one fires at
-  uphold hook claude-code|codex      judge a pending agent tool call, read on stdin
+  uphold hook claude-code|codex      judge a pending tool call or a turn's end, read on stdin
               [--junit DIR]
   uphold shim <command> [args...]     check what a command would publish, then run it
   uphold shim --install [COMMAND...]  link this binary under each command's name

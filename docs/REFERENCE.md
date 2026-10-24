@@ -3247,6 +3247,70 @@ report goes, and which exit code that harness reads as blocked. A name the table
 does not carry is refused and the known ones are listed, because none of those
 five values is derivable from a name.
 
+### The end of a turn: `[stop]`
+
+An agent can finish, say it is done, and leave a tree the repository's own gate
+refuses; the refusal then arrives at the next commit, often in another session.
+The same `uphold hook claude-code` entry, configured for `SessionStart` and
+`Stop`, holds the end of a turn to the commands a repository names:
+
+```toml
+# policy/principles.toml
+[stop]
+run = [["uphold", "check"], ["cargo", "test", "--locked", "--quiet"]]
+```
+
+Each entry is one command as argv, run from the repository root with no shell.
+A command that needs a pipeline names a script holding it. An entry with no
+program is refused at load, and so is `[stop]` in a file read through
+`[inherit]`: what a tree has to pass is that repository's own declaration.
+
+```jsonc
+// .claude/settings.json
+{"hooks": {
+  "SessionStart": [{"hooks": [{"type": "command", "command": "uphold hook claude-code", "async": true}]}],
+  "Stop":         [{"hooks": [{"type": "command", "command": "uphold hook claude-code", "timeout": 900}]}]
+}}
+```
+
+`hook_event_name` says which arrived. Every other event, and an event naming
+none, is judged as a pending tool call, as above.
+
+- **`SessionStart`** runs every command once and records which failed, under
+  the worktree's git dir (`.git/uphold/stop/<session_id>.json`). It prints
+  nothing on stdout, because Claude Code adds that to the conversation, and
+  `async` keeps the session from waiting for it. Because the agent is already
+  working while it runs, the tree is fingerprinted before and after (HEAD, and
+  the size and modification time of every changed or untracked path); a
+  baseline whose tree moved is discarded, so every red command blocks. A gate
+  that writes outside ignored paths therefore never leaves a usable baseline.
+  Claude Code fires `SessionStart` again on resume and compaction under the
+  same id; the first baseline, finished or not, is kept. A `session_id` outside
+  `A-Z a-z 0-9 - _`, or longer than 128, is refused rather than used as a
+  file name.
+- **`Stop`** runs the commands again. One that fails now and passed at session
+  start blocks the turn with `{"decision": "block", "reason": ...}`, where the
+  reason names the command and the last 40 lines of its output. One that was
+  already failing does not block, and is named in `systemMessage` for the
+  person. With no baseline, because `SessionStart` is not configured or the
+  id was unusable, every failing command blocks and the reason says so. A
+  baseline still being written is waited for, up to 300 seconds from when it
+  started (a killed one is not waited on again), so the
+  `timeout` above covers that wait plus one run of the gate.
+
+A turn's end is blocked once. When `stop_hook_active` says this stop follows
+a block, a gate still red is named in `systemMessage` and the turn ends: the
+reason told the agent to fix it or say it cannot, and blocking an agent that
+said so would spend Claude Code's own cap (eight consecutive continuations,
+reset by a tool call) on a turn that is over. A command that cannot be started
+is exit `2`; at `Stop`
+that sends stderr to the agent as the reason, so a broken gate fails closed,
+once: on a stop that follows a block it is named in `systemMessage` instead.
+With no policy, or no `[stop]`, nothing runs, and stderr says no gate was
+checked rather than that one passed. `--junit` is not written for these two
+events. The gate judges the session's working directory, so work done in a
+separate `git worktree` is checked only if the session runs there.
+
 ## `uphold audit --for-publication`
 
 Every guard across every seam conditions on *is the target public **now***. So

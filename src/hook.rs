@@ -42,6 +42,15 @@
 //! let the call through with a complaint attached. The refusal travels in the
 //! document, and it is ALSO printed to stderr, so that a person running
 //! `uphold hook` by hand sees the report rather than a line of JSON.
+//!
+//! ## One command, two moments
+//!
+//! The same `uphold hook claude-code` entry is configured for `SessionStart`
+//! and `Stop` as well, and `hook_event_name` says which arrived. Those two are
+//! the end-of-turn gate in [`stop`]; every other event, and an event naming
+//! none, is the pre-call judgment below, as it was before the gate existed.
+
+mod stop;
 
 use std::fmt::Write as _;
 use std::io::Read;
@@ -198,6 +207,29 @@ pub(crate) fn run(
              \"allowed\" would mean \"unexamined\""
         ))
     })?;
+
+    if let Some(name @ ("SessionStart" | "Stop")) =
+        event.pointer("/hook_event_name").and_then(Value::as_str)
+    {
+        // The gate is a repository's own declaration, so with no policy there
+        // is nothing to run -- said, not passed, as the guards' absence is.
+        if found.is_none() {
+            eprintln!(
+                "uphold hook: no policy where this {name} arrived, so no [stop] gate ran. That \
+                 is no gate, not a passing one."
+            );
+            return Ok(Exit::Clean);
+        }
+        if evidence.is_some() {
+            eprintln!("uphold hook: --junit is not written for {name}; it records tool calls");
+        }
+        let (root, policy) = text::load_for(found)?;
+        return if name == "Stop" {
+            stop::stop(&event, &root, &policy)
+        } else {
+            stop::session_start(&event, &root, &policy)
+        };
+    }
 
     // The label names the call in reports and is its `tool` subject. A missing
     // name retains the harness fallback; supplied argument text is still read.
