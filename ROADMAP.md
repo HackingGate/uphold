@@ -10,8 +10,8 @@ and labels, and this page cites no issue by number.
   record is `seed`.
 - State `enforcement.rung` on the machine-observable records that predate the
   field, so the by-rung index in `QUICK_REFERENCE.md` covers the whole catalog.
-- Add review controls: one record carries a control, and the run names every
-  review-carried record that has none.
+- Add a control to every review-carried record that has none; `--review` names
+  them, and `--review --drive` scores a reviewer against the ones that exist.
 - Fill the kinds no record uses yet only with candidates a rule can hold; a
   method, representation or metric belongs in the coverage page's rung glossary
   unless a consumer can claim it.

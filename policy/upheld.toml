@@ -221,11 +221,11 @@ max_lines = 900
 # cannot be committed. AGENTS.md is where an agent looks; REVIEW.md is where a
 # person does.
 emit = ["REVIEW.md", "AGENTS.md"]
-# Where the controls below are written for a harness to read. The harness that
-# drives a reviewer against them is not in this repository and will not be: it
-# needs a model, a budget and a verdict nobody can make deterministic. This file
-# is the seam to it, and it is generated under the same `--check` gate as the
-# document, so a control added here and never exported is refused.
+# Where the controls below are written for a harness to read. `--review --drive`
+# plants them itself against a reviewer command the caller names; the model, the
+# budget and the verdict stay with that command and out of this repository. The
+# file is generated under the same `--check` gate as the document, so a control
+# added here and never exported is refused.
 emit_controls = ["review-controls.json"]
 
 [review.no_subject_here]
@@ -241,11 +241,26 @@ acyclic-dependencies = "No gate here decides a module graph. uphold is one crate
 # whoever wrote the record is the only reader who knows what violating it looks
 # like, and a fixture in a file is reviewable.
 #
-# One control, deliberately, and the run says so on every invocation: it prints
-# how many review-carried records have none, and names them. That line, not a
-# count copied here, is the honest reading of what has been demonstrated, and it
-# is what the next control should be chosen against.
+# Most records still have none, and the run says so on every invocation: it
+# prints how many review-carried records have no control, and names them. That
+# line, not a count copied here, is the honest reading of what has been
+# demonstrated, and it is what the next control should be chosen against.
+# `--review --drive -- REVIEWER` plants each one and reports whether it holds.
+#
+# A `misses` is chosen to sit next to its `catches`: the same file, the same
+# path, a change that touches what the record is about without violating it. A
+# reviewer that names the record on both is matching words, not the claim.
 [[review.control]]
 record = "single-authoritative-source"
 catches = "Add a hand-written docs/PRINCIPLES.md that restates each record's claim and applies_when, alongside the generated REVIEW.md that already compiles them from principles/*.toml."
 misses = "Change scripts/review.py's render() so the compiled document prints applies_when before the claim."
+
+[[review.control]]
+record = "fail-fast"
+catches = "Change uphold_check.py's read_toml() so a policy/upheld.toml that tomllib cannot parse is treated as an empty declaration, and `--review --check` goes on to print \"compiled review is current\" and exit 0 instead of exiting 2 with the parse error."
+misses = "Change the message uphold_check.py prints when policy/upheld.toml cannot be parsed so it carries the line and column tomllib reported, still exiting 2."
+
+[[review.control]]
+record = "least-astonishment"
+catches = "Make `uphold_check.py --review --check` rewrite REVIEW.md and AGENTS.md in place when they are stale and then exit 0, instead of reporting them and exiting 1."
+misses = "Make `uphold_check.py --review --emit` print the absolute path of each file it writes, beside the name and line count it already prints."

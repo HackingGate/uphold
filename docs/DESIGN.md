@@ -105,12 +105,22 @@ Controls share probe's weakness: whoever wrote the record also writes its
 control, and can make it easy to pass. The mitigation is also the same: the
 control lives in `policy/upheld.toml`, where a diff shows it.
 
-Driving an actual reviewer against a control needs a model, a budget and a
-verdict nothing here can make deterministic, so the harness is out of scope and
-`[review] emit_controls` is the seam to it. It exports the controls and nothing
-from the catalog: a harness also handed the claim and the questions would carry
-a second copy of the compiled document, going stale on its own schedule, which
-is the failure `single-authoritative-source` names.
+A reviewer needs a model, a budget and a verdict nothing here can make
+deterministic, so the reviewer is a command the caller names and nothing here
+holds a model client. `--review --drive` is the harness around it: it hands the
+command the compiled document and one control's change, never the record the
+change was planted for, and scores the ids it prints against the answer key. It
+runs every control k times on each side and reports pass@1 beside pass^k,
+because a reviewer that catches a plant one run in three scores a third on the
+first and zero on the second, and only the second is a control. A reviewer that
+exits non-zero or names something outside the document is exit `2`, not a miss:
+it has said nothing about the record.
+
+`[review] emit_controls` is the same answer key as a file, for a harness that
+would rather read one. It exports the controls and nothing from the catalog: a
+harness also handed the claim and the questions would carry a second copy of the
+compiled document, going stale on its own schedule, which is the failure
+`single-authoritative-source` names.
 
 ### Why `emit` is still per-document and not per-record
 

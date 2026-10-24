@@ -34,16 +34,24 @@ record that says nothing a reviewer could act on are the same silence, in every
 report anybody reads, for as long as nobody plants what the record is supposed
 to catch. `uphold probe` exists because a git hook has that defect. A control is
 the same fixture one tier up, and `audit_controls` below is what reads it.
+`drive` is what plants it: it hands a reviewer the compiled document and each
+control's change, and scores what comes back against the answer key.
 """
 
 from __future__ import annotations
 
 import json
+import subprocess
+from collections.abc import Callable
 
 #: Below the bottom of the range in which review quality was observed to
 #: degrade. A limit set at the top of a range is a limit that reaches the
 #: failure it was measured against.
 DEFAULT_MAX_LINES = 900
+
+#: A reviewer that catches a plant one time in three is not a control, and one
+#: run cannot tell it from a reviewer that catches it every time.
+DEFAULT_RUNS = 3
 
 #: The standing asymmetry, and it points one way on purpose: a static rule has
 #: no length ceiling and a prompt rule does, so every mechanizable rule is
@@ -235,9 +243,9 @@ def audit_controls(
 def render_controls(declared: list[dict], uncontrolled: list[str]) -> str:
     """The controls as JSON, for a harness this repository does not contain.
 
-    Running an LLM reviewer against a control needs a model, a budget and a
-    verdict nobody here can make deterministic, so the harness is out of scope
-    and the export is the seam to it. JSON rather than the TOML it was written
+    `drive` below runs a reviewer against the controls in this process; the
+    export is for a harness that would rather read a file, such as one that
+    batches runs or records them somewhere this repository does not. JSON rather than the TOML it was written
     in because the reader is a program: TOML is the form a person writes a
     fixture in, and `name-index.json` and `policy/base/sets.lock.json` are
     already the form a program reads one out of.
@@ -296,3 +304,130 @@ def over_budget(document: str, max_lines: int) -> str | None:
         f"ceiling: it is the half of `enforcement-needs-a-trigger`'s carve-out "
         f"that keeps this tier from becoming prose emitted always."
     )
+
+
+class ReviewerFailed(Exception):
+    """The reviewer command did not answer in the protocol `ask` reads.
+
+    Not a missed plant: a reviewer that exits non-zero or names something that
+    is not in the document has said nothing about the record, and scoring it as
+    a miss would report a live record as dead.
+    """
+
+
+def ask(
+    reviewer: list[str], document: str, change: str, carried: dict[str, str]
+) -> set[str]:
+    """Run the reviewer once and return the record ids it names.
+
+    The reviewer reads one JSON object on stdin, `{"document": ..., "change":
+    ...}`, and prints one line per record the change violates: the record's
+    id, or its title as the document's heading spells it. Blank lines are
+    skipped, and printing nothing says the change violates nothing. It is never told
+    which record the change was planted for -- that is the answer key.
+
+    The reviewer is a command named by the caller, so no model client, key or
+    budget lives here, and any reviewer -- a model behind a wrapper script, a
+    person at a prompt, a fixture in a test -- answers the same way.
+    """
+    by_title = {title.casefold(): record_id for record_id, title in carried.items()}
+    payload = json.dumps({"document": document, "change": change}, ensure_ascii=False)
+    try:
+        completed = subprocess.run(
+            reviewer, input=payload, capture_output=True, text=True, check=False
+        )
+    except OSError as error:
+        raise ReviewerFailed(f"could not run {reviewer[0]!r}: {error}") from error
+    if completed.returncode != 0:
+        tail = completed.stderr.strip().splitlines()[-5:]
+        raise ReviewerFailed(
+            f"{reviewer[0]!r} exited {completed.returncode}"
+            + (": " + " | ".join(tail) if tail else "")
+        )
+    named: set[str] = set()
+    for line in completed.stdout.splitlines():
+        finding = line.strip()
+        if not finding:
+            continue
+        record_id = finding if finding in carried else by_title.get(finding.casefold())
+        if record_id is None:
+            raise ReviewerFailed(
+                f"{reviewer[0]!r} named {finding!r}, which is neither the id nor "
+                f"the title of a record in the compiled document. Print one id or "
+                f"title per line and nothing else."
+            )
+        named.add(record_id)
+    return named
+
+
+def drive(
+    declared: list[dict],
+    document: str,
+    carried: dict[str, str],
+    runs: int,
+    reviewer: Callable[[str, str, dict[str, str]], set[str]],
+) -> list[dict]:
+    """Plant every control `runs` times on each side and count what fired.
+
+    `caught` is how many runs named the record against `catches`; `fired` is
+    how many named it against `misses`, or None where no `misses` was written,
+    because an unmeasured false-positive rate is not a rate of zero.
+    """
+    results = []
+    for control in sorted(declared, key=lambda control: control["record"]):
+        record_id = control["record"]
+        caught = sum(
+            record_id in reviewer(document, control["catches"], carried)
+            for _ in range(runs)
+        )
+        misses = control.get("misses")
+        fired = (
+            None
+            if misses is None
+            else sum(
+                record_id in reviewer(document, misses, carried) for _ in range(runs)
+            )
+        )
+        results.append({"record": record_id, "caught": caught, "fired": fired})
+    return results
+
+
+def holds(result: dict, runs: int) -> bool:
+    """pass^k on the plant, and quiet on every run against the miss."""
+    return result["caught"] == runs and not result["fired"]
+
+
+def render_drive(results: list[dict], runs: int) -> str:
+    """One line per control, then pass@1 and pass^k over all of them.
+
+    pass@1 is the mean share of runs that caught the plant: what one review
+    would be expected to do. pass^k is the share of controls caught on every
+    one of the k runs, which is what a control has to be before anyone leans on
+    it. Both are printed because a reviewer can score well on the first and
+    still be a coin toss on the second.
+    """
+    lines = []
+    for result in results:
+        fired = result["fired"]
+        quiet = (
+            "misses not written" if fired is None else f"misses fired {fired}/{runs}"
+        )
+        verdict = "holds" if holds(result, runs) else "DOES NOT HOLD"
+        lines.append(
+            f"{result['record']}: caught {result['caught']}/{runs}, {quiet} -- {verdict}"
+        )
+    if results:
+        pass_at_1 = sum(result["caught"] for result in results) / (len(results) * runs)
+        pass_k = sum(result["caught"] == runs for result in results)
+        lines.append(
+            f"pass@1 {pass_at_1:.2f}; pass^{runs} {pass_k}/{len(results)} control(s)"
+        )
+        measured = [
+            result["fired"] for result in results if result["fired"] is not None
+        ]
+        if measured:
+            rate = sum(measured) / (len(measured) * runs)
+            lines.append(
+                f"false positives {rate:.2f} over {len(measured)} control(s) with a misses"
+            )
+    return "\n".join(lines) + "\n"

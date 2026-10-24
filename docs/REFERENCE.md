@@ -4270,7 +4270,34 @@ emit_controls = ["review-controls.json"]
 
 It carries `record`, `catches`, `misses` and the uncontrolled list, and nothing
 from the catalog: a harness also handed the claim and the questions would be
-carrying a second copy of the compiled document. Driving a reviewer against a
-control needs a model, a budget and a verdict nothing here can make
-deterministic, so the harness itself is outside this repository. See
-[DESIGN.md](DESIGN.md#a-control-is-the-probe-fixture-one-tier-up).
+carrying a second copy of the compiled document.
+
+`--drive` plants the controls itself, against a reviewer command you name:
+
+```sh
+uphold_check.py --review --drive [--runs N] -- ./my-reviewer --model x
+```
+
+Everything after `--` is the reviewer, run once per plant. It reads one JSON
+object on stdin, `{"document": ..., "change": ...}`, where `document` is the
+compiled review and `change` is one control's `catches` or `misses`. It prints
+one line per record the change violates, the record's id or its title as the
+document spells it, in any case; blank lines are skipped, and no lines means no
+violation. It is never told which record was planted.
+
+Each control runs `N` times on each side (default 3):
+
+```text
+single-authoritative-source: caught 3/3, misses fired 0/3 -- holds
+pass@1 1.00; pass^3 1/1 control(s)
+false positives 0.00 over 1 control(s) with a misses
+```
+
+A control holds when every run named the record against `catches` and none
+named it against `misses`. pass@1 is the mean share of runs that caught their
+plant, and pass^k the share of controls caught on all `N`. The exit is `0` when
+every control holds and `1` when one does not. A reviewer that exits non-zero,
+cannot be run, or prints a line that names no record in the document is exit
+`2`: it has said nothing about the record, so it is not scored as a miss. No
+model client lives here; the reviewer command carries the model, the key and
+the budget. See [DESIGN.md](DESIGN.md#a-control-is-the-probe-fixture-one-tier-up).
