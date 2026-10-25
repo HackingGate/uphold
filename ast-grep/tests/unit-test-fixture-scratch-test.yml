@@ -9,12 +9,24 @@ valid:
     mod tests {
         fn root() -> PathBuf { crate::fixture::scratch("git") }
     }
+  - |
+    #[cfg(test)]
+    fn helper() {}
+    mod later {
+        fn root() -> PathBuf { std::env::temp_dir() }
+    }
 invalid:
   - |
     #[cfg(test)]
     mod tests {
         #[test]
         fn empty() { assert!(blob_shas(&std::env::temp_dir(), &[]).is_empty()); }
+    }
+  - |
+    #[cfg(test)]
+    #[allow(dead_code)]
+    mod tests {
+        fn root() -> PathBuf { std::env::temp_dir() }
     }
   - |
     #[cfg(test)]

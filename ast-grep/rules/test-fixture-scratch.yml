@@ -33,5 +33,13 @@ rule:
   inside:
     stopBy: end
     kind: mod_item
+    # Any of the attributes stacked on the module, and nothing past them: the
+    # search stops at the first sibling that is not an attribute or a comment.
     follows:
       pattern: "#[cfg(test)]"
+      stopBy:
+        not:
+          any:
+            - kind: attribute_item
+            - kind: line_comment
+            - kind: block_comment

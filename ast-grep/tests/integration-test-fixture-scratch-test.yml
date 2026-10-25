@@ -4,6 +4,8 @@ valid:
   - let root = crate::fixture::scratch("halves");
   - assert!(blob_shas(&support::scratch("git"), &[]).is_empty());
   - let dir = myenv::temp_dir();
+  - assert_eq!(message, "std::env::temp_dir()");
+  - assert!(found, "env::temp_dir() is refused"); // std::env::temp_dir()
 invalid:
   - let root = std::env::temp_dir();
   - let root = env::temp_dir().join("uphold-tests");
