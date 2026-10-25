@@ -728,11 +728,8 @@ mod tests {
     fn an_empty_list_asks_git_nothing() {
         let root = crate::fixture::scratch("empty-list");
         assert!(blob_shas(&root, &[]).unwrap().is_empty());
-        assert!(
-            each_blob(&root, &[], |_, _| ()).unwrap().is_empty(),
-            "{:?}",
-            each_blob(&root, &[], |_, _| ()).unwrap()
-        );
+        let blobs = each_blob(&root, &[], |_, _| ()).unwrap();
+        assert!(blobs.is_empty(), "{blobs:?}");
     }
 
     #[test]
