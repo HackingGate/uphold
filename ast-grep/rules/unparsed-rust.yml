@@ -1,0 +1,9 @@
+# The companion docs/COVERAGE.md requires: ast-grep matches inside a tree the
+# grammar recovered, so a file that did not parse would read as clean to the
+# fixture rules. A MISSING node makes no ERROR node; clippy refuses that file.
+id: unparsed-rust
+language: rust
+severity: error
+message: the grammar could not read this region, so no rule here looked at it
+rule:
+  kind: ERROR

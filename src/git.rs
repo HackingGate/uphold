@@ -726,14 +726,10 @@ mod tests {
 
     #[test]
     fn an_empty_list_asks_git_nothing() {
-        assert!(blob_shas(&std::env::temp_dir(), &[]).unwrap().is_empty());
-        assert!(
-            each_blob(&std::env::temp_dir(), &[], |_, _| ())
-                .unwrap()
-                .is_empty(),
-            "{:?}",
-            each_blob(&std::env::temp_dir(), &[], |_, _| ()).unwrap()
-        );
+        let root = crate::fixture::scratch("empty-list");
+        assert!(blob_shas(&root, &[]).unwrap().is_empty());
+        let blobs = each_blob(&root, &[], |_, _| ()).unwrap();
+        assert!(blobs.is_empty(), "{blobs:?}");
     }
 
     #[test]

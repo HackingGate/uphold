@@ -1,0 +1,8 @@
+id: unparsed-rust
+snapshots:
+  "fn scratch() -> PathBuf { run_root().join(\"kind\") } }":
+    labels:
+    - source: "}"
+      style: primary
+      start: 52
+      end: 53

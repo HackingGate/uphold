@@ -78,6 +78,22 @@ repos:
         # repository is held to.
         args: ["--ignore", "E006"]
 
+  # The syntax rung, as the entry docs/COVERAGE.md gives a consumer: the
+  # rules under ast-grep/rules over the whole tree, and `ast-grep test` holding
+  # each rule to the code it must refuse and the code it must let through.
+  - repo: local
+    hooks:
+      - id: ast-grep
+        name: ast-grep scan
+        entry: ast-grep scan
+        language: system
+        pass_filenames: false
+      - id: ast-grep-rule-tests
+        name: ast-grep test
+        entry: ast-grep test
+        language: system
+        pass_filenames: false
+
   # The catalog runs its own checks over itself, from the working tree rather
   # than from a released tag. A catalog whose generated index disagrees with its
   # records is the generated document quietly becoming the source, which its own

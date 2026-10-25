@@ -1,0 +1,56 @@
+id: unit-test-fixture-scratch
+snapshots:
+  "#[cfg(test)]\n#[allow(dead_code)]\nmod tests {\n    fn root() -> PathBuf { std::env::temp_dir() }\n}\n":
+    labels:
+    - source: std::env::temp_dir()
+      style: primary
+      start: 72
+      end: 92
+    - source: "#[cfg(test)]"
+      style: secondary
+      start: 0
+      end: 12
+    - source: |-
+        mod tests {
+            fn root() -> PathBuf { std::env::temp_dir() }
+        }
+      style: secondary
+      start: 33
+      end: 96
+  "#[cfg(test)]\nmod tests {\n    #[test]\n    fn empty() { assert!(blob_shas(&std::env::temp_dir(), &[]).is_empty()); }\n}\n":
+    labels:
+    - source: temp_dir
+      style: primary
+      start: 83
+      end: 91
+    - source: "#[cfg(test)]"
+      style: secondary
+      start: 0
+      end: 12
+    - source: |-
+        mod tests {
+            #[test]
+            fn empty() { assert!(blob_shas(&std::env::temp_dir(), &[]).is_empty()); }
+        }
+      style: secondary
+      start: 13
+      end: 116
+  "#[cfg(test)]\nmod tests {\n    mod nested {\n        fn root() -> PathBuf { env::temp_dir() }\n    }\n}\n":
+    labels:
+    - source: env::temp_dir()
+      style: primary
+      start: 73
+      end: 88
+    - source: "#[cfg(test)]"
+      style: secondary
+      start: 0
+      end: 12
+    - source: |-
+        mod tests {
+            mod nested {
+                fn root() -> PathBuf { env::temp_dir() }
+            }
+        }
+      style: secondary
+      start: 13
+      end: 98

@@ -1,0 +1,10 @@
+# ast-grep, the syntax rung docs/COVERAGE.md names: a rule over the parse tree,
+# for a constraint a regex over bytes cannot scope and the compiler has no
+# opinion on. `ast-grep scan` runs the rules; `ast-grep test` holds each rule to
+# the code it must refuse and the code it must let through.
+ruleDirs:
+  - ast-grep/rules
+utilDirs:
+  - ast-grep/utils
+testConfigs:
+  - testDir: ast-grep/tests
