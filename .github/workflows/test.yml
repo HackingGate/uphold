@@ -214,6 +214,15 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v10.3.0
 
+      # The syntax rung's hooks are `language: system` on every runner, as the
+      # entry docs/COVERAGE.md gives a consumer, so each leg needs the binary.
+      # Unpinned, for the reason actionlint is below: no updater reads a
+      # version written here.
+      - name: Install ast-grep
+        run: |
+          uv tool install ast-grep-cli
+          uv tool dir --bin >> "$GITHUB_PATH"
+
       # The `rg` executable is no longer a dependency: the search stack is
       # linked into `uphold`, so there is nothing left to shell out to. A
       # Rust toolchain is, because this repository runs its own gate from the
@@ -294,7 +303,6 @@ jobs:
           sudo apt-get install -y shellcheck
           pipx install bashate
           pipx install ruff
-          pipx install ast-grep-cli
 
       # Without the staged secret scan, which needs a gitleaks this runner does
       # not install. The other two legs run the manual stage, where that hook

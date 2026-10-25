@@ -1,0 +1,5 @@
+id: unparsed-rust
+valid:
+  - fn scratch() -> PathBuf { run_root().join("kind") }
+invalid:
+  - fn scratch() -> PathBuf { run_root().join("kind") } }

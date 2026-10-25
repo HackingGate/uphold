@@ -205,8 +205,9 @@ not require an uphold release. The entry, for pre-commit or prek:
 `ast-grep scan` reads `sgconfig.yml` and every rule under its `ruleDirs`, and
 exits 1 on a finding at `error`. `pass_filenames: false` because the project
 file, not the staged list, decides what each rule reads. `language: system`
-because the binary is the consumer's, like its compiler; this repository adds
-the entry to its own config only once it has a rule directory to run.
+because the binary is the consumer's, like its compiler. This repository runs
+the same entry on itself, beside an `ast-grep-rule-tests` hook running
+`ast-grep test`.
 
 In three cases `ast-grep` reports nothing where it did not look (measured on
 0.45.3). An adopter must handle all three:

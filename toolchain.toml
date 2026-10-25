@@ -133,15 +133,14 @@ hint = "lefthook runs the host's copy; pre-commit and prek install their own"
 # The shell linters. pre-commit and prek install their own copies from the
 # pinned hook repos; lefthook has no managed environments and calls whatever is
 # on PATH, so on a lefthook box these are the version of record.
-# The syntax rung's engine, for the rules under ast-grep/rules. Same split as
-# the linters around it: pre-commit and prek install their own copy from the
-# pinned hook repo, and a lefthook box runs this one.
+# The syntax rung's engine, for the rules under ast-grep/rules. Optional like
+# the linters around it, but all three runners call this copy.
 [[tool]]
 name = "ast-grep"
 check = "ast-grep --version"
 optional = true
 packages.arch = "ast-grep"
-hint = "lefthook runs the host's copy; pre-commit and prek install their own; pipx install ast-grep-cli"
+hint = "every runner calls the host's copy (language: system); pipx install ast-grep-cli"
 
 [[tool]]
 name = "shellcheck"

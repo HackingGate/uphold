@@ -6,5 +6,31 @@
     "Stop": [
       {"hooks": [{"type": "command", "command": "uphold hook claude-code", "timeout": 600}]}
     ]
+  },
+  "extraKnownMarketplaces": {
+    "ast-grep-pinned": {
+      "source": {
+        "source": "settings",
+        "name": "ast-grep-pinned",
+        "owner": {
+          "name": "HackingGate"
+        },
+        "plugins": [
+          {
+            "name": "ast-grep",
+            "description": "ast-grep's own skill for writing the rules under ast-grep/rules",
+            "source": {
+              "source": "git-subdir",
+              "url": "ast-grep/agent-skill",
+              "path": "ast-grep",
+              "sha": "f2175aff21f20cfb8e2db30c28febeb3a2d42b61"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "enabledPlugins": {
+    "ast-grep@ast-grep-pinned": true
   }
 }

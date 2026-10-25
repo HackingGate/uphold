@@ -62,13 +62,11 @@ pre-commit:
     bashate:
       glob: "scripts/*.sh"
       run: bashate --ignore E006 {staged_files}
-    # The two hooks .pre-commit-config.yaml takes from ast-grep-pre-commit, as
-    # that repository spells them, over the host's ast-grep.
+    # The same two commands as .pre-commit-config.yaml, over the whole tree.
     ast-grep:
-      glob: "*.rs"
-      run: ast-grep scan --report-style=short --color=never {staged_files}
+      run: ast-grep scan
     ast-grep-rule-tests:
-      run: ast-grep test --color=never
+      run: ast-grep test
 
 # Not git hooks. lefthook has no equivalent of pre-commit's manual stage, so the
 # checks that are too slow or too host-dependent to sit in front of a commit are
