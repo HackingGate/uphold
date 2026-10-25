@@ -21,7 +21,7 @@ Every cell holds exactly one of three states:
 | rung | what | ladder |
 | --- | --- | --- |
 | text | regex over bytes: `regexp`, `comment_regexp`, `prose_regexp`, `require_regexp` | commit |
-| syntax | an `ast-grep` rule over the parse tree | commit (this repository runs no syntax rung on itself) |
+| syntax | an `ast-grep` rule over the parse tree | commit |
 | semantic | compiler and linter | push for a whole-program build and lint; commit for a per-file linter |
 | proof | a verifier over a stated core | push, or manual where a run is longer than minutes |
 
@@ -30,6 +30,9 @@ The ladder column is checked against [`lefthook.yml`](../lefthook.yml) and
 repository runs on itself, and the two files agree with each other on each:
 
 - text: `uphold scan` (`content-policy`) is a pre-commit hook in both.
+- syntax: `ast-grep scan` (`ast-grep`) and `ast-grep test`
+  (`ast-grep-rule-tests`) are pre-commit hooks in both, over the rules under
+  `ast-grep/rules`. Each reads one tree per file and needs no build.
 - semantic: `cargo clippy --all-targets` (`engine-clippy`) is a pre-push hook in
   both, because it compiles the whole crate and its tests. `ruff check` and
   `shellcheck` are pre-commit hooks in both, because each reads only the files
@@ -38,10 +41,6 @@ repository runs on itself, and the two files agree with each other on each:
   at push.
 - proof: `cargo kani` (`kani`) is a manual hook in both, and CI runs it as a job
   of its own, because the harnesses take minutes of solver time.
-
-The syntax row has no hook in this repository to check against. It is where the
-consumer's `ast-grep scan` belongs by cost: it reads one tree per file and needs
-no build.
 
 ## Records by rung
 

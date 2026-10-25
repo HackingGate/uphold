@@ -78,6 +78,20 @@ repos:
         # repository is held to.
         args: ["--ignore", "E006"]
 
+  # The syntax rung docs/COVERAGE.md names, run on this repository: the rules
+  # under ast-grep/rules over the staged files, and `ast-grep test` holding each
+  # rule to the code it must refuse and the code it must let through. A hook
+  # repository rather than `repo: local` with the wheel in
+  # `additional_dependencies`, because Dependabot skips local hooks and neither
+  # `no-stale-hook-pins` nor `prek update --check` reads that list: a version
+  # written there is one nothing watches. This repository's tags follow
+  # ast-grep's releases, and its entry runs ast-grep's own npm package.
+  - repo: https://github.com/boidolr/ast-grep-pre-commit
+    rev: 0.51.0
+    hooks:
+      - id: ast-grep
+      - id: ast-grep-rule-tests
+
   # The catalog runs its own checks over itself, from the working tree rather
   # than from a released tag. A catalog whose generated index disagrees with its
   # records is the generated document quietly becoming the source, which its own

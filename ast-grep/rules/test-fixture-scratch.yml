@@ -1,0 +1,37 @@
+# CONTRIBUTING.md, "Where a test's fixture lives": every fixture goes through
+# scratch(), whose first call in a run removes the directories of exited runs.
+# A test that builds under std::env::temp_dir() itself leaves its directory
+# behind, and enough of them fill the tmpfs every run shares.
+#
+# Test code only. The runtime calls in src/ (the probe checkout, the shim's
+# stdin copy, the remote policy clone, the supply-chain temporary file) are
+# not fixtures and are not scoped here. Two rules because the scope is a path
+# in tests/ and a module in src/, and `files` is per rule.
+id: integration-test-fixture-scratch
+language: rust
+severity: error
+message: Build the fixture with support::scratch("name"), not std::env::temp_dir()
+note: CONTRIBUTING.md, "Where a test's fixture lives". scratch() removes the directories of exited runs; a path under temp_dir() is never removed.
+files:
+  - tests/**/*.rs
+ignores:
+  - tests/support/mod.rs
+rule:
+  matches: temp-dir-call
+---
+id: unit-test-fixture-scratch
+language: rust
+severity: error
+message: Build the fixture with crate::fixture::scratch("name"), not std::env::temp_dir()
+note: CONTRIBUTING.md, "Where a test's fixture lives". scratch() removes the directories of exited runs; a path under temp_dir() is never removed.
+files:
+  - src/**/*.rs
+ignores:
+  - src/fixture.rs
+rule:
+  matches: temp-dir-call
+  inside:
+    stopBy: end
+    kind: mod_item
+    follows:
+      pattern: "#[cfg(test)]"

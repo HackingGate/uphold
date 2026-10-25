@@ -541,7 +541,8 @@ fn text_that_is_not_utf8_is_could_not_look_and_not_a_pass() {
     // passed (text)" and exited 0 over bytes that were never the text they were
     // searched as: `from_utf8_lossy` had already replaced the byte that should
     // have stopped the run.
-    let root = std::env::temp_dir();
+    let root = support::scratch("not-utf8");
+    std::fs::create_dir_all(&root).unwrap();
     let output = scan_text(&root, b"caf\xe9 latin1\n", "/srv/example");
     assert_eq!(code(&output), 2, "{}", stderr(&output));
     assert!(stderr(&output).contains("not UTF-8"), "{}", stderr(&output));

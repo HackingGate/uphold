@@ -1,0 +1,20 @@
+id: integration-test-fixture-scratch
+snapshots:
+  "assert!(blob_shas(&std::env::temp_dir(), &[]).is_empty());":
+    labels:
+    - source: (&std::env::temp_dir(), &[])
+      style: primary
+      start: 17
+      end: 45
+  "let root = env::temp_dir().join(\"uphold-tests\");":
+    labels:
+    - source: env::temp_dir()
+      style: primary
+      start: 11
+      end: 26
+  "let root = std::env::temp_dir();":
+    labels:
+    - source: std::env::temp_dir()
+      style: primary
+      start: 11
+      end: 31

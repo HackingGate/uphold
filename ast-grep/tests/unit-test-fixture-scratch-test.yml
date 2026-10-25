@@ -1,0 +1,25 @@
+id: unit-test-fixture-scratch
+valid:
+  - |
+    fn at_revision() -> PathBuf {
+        std::env::temp_dir().join("uphold-probe")
+    }
+  - |
+    #[cfg(test)]
+    mod tests {
+        fn root() -> PathBuf { crate::fixture::scratch("git") }
+    }
+invalid:
+  - |
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn empty() { assert!(blob_shas(&std::env::temp_dir(), &[]).is_empty()); }
+    }
+  - |
+    #[cfg(test)]
+    mod tests {
+        mod nested {
+            fn root() -> PathBuf { env::temp_dir() }
+        }
+    }

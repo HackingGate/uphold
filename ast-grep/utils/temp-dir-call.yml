@@ -1,0 +1,22 @@
+# The two spellings of the call the fixture rules refuse. Both rules match
+# through this one file, so a third spelling is added once.
+#
+# A macro's arguments, as in `assert!(f(&std::env::temp_dir()))`, are a token
+# tree the grammar does not parse as an expression, so the patterns cannot see
+# into them; the regex arm matches the innermost token tree that spells the
+# call. A syntax rule matches what is written, not what a name resolves to: a
+# `use std::env::temp_dir;` followed by a bare `temp_dir()` is not matched.
+id: temp-dir-call
+language: rust
+rule:
+  any:
+    - pattern: std::env::temp_dir()
+    - pattern: env::temp_dir()
+    - all:
+        - kind: token_tree
+        - regex: '\b(?:std\s*::\s*)?env\s*::\s*temp_dir\s*\(\s*\)'
+        - not:
+            has:
+              stopBy: end
+              kind: token_tree
+              regex: '\b(?:std\s*::\s*)?env\s*::\s*temp_dir\s*\(\s*\)'
