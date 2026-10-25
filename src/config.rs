@@ -184,6 +184,15 @@ pub(crate) const BUNDLED: &[(&str, &str)] = &[
         "prose-shapes",
         include_str!("../policy/base/prose-shapes.toml"),
     ),
+    // A document's sentence about how something changed. Separate from
+    // `prose-shapes` because it reads the tree and nothing else: a commit
+    // message and a pull-request body are where a change is narrated, so this
+    // set has no command, and a repository taking the shim-seam shapes has
+    // said nothing about whether its documents may carry history.
+    (
+        "narrated-history",
+        include_str!("../policy/base/narrated-history.toml"),
+    ),
 ];
 
 mod rule;
