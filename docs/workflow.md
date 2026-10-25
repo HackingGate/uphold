@@ -185,3 +185,4 @@ flowchart LR
 | `no-empty-hedge` | `prose-shapes` | This hedge admits no uncertainty -- it softens the claim without qualifying it. |
 | `no-restating-clause` | `prose-shapes` | This clause restates the one in front of it. |
 | `no-unproposed-alternative` | `prose-shapes` | This answers an objection nobody made. |
+| `no-narrated-history` | `narrated-history` | This sentence narrates how something changed. |

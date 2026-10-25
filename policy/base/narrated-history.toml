@@ -1,0 +1,68 @@
+# Base rule set: narrated-history (a document states what holds, not how it got there)
+#
+# A sentence in a document that tells the story of a change: what something
+# used to be, what it was formerly called, what this section previously said,
+# what the previous approach was. Pull in with:
+#
+#   [inherit]
+#   sets = ["narrated-history"]
+#
+# WHAT IT IS ABOUT. A reader opens a README or a runbook to act on what is true
+# now. A narrated change makes them read the old state to reach the new one,
+# and the old state is the half that stops being checked: nothing fails when
+# the sentence about it goes wrong. The change already has a record that is
+# kept with it -- the commit message and the pull request that made it -- so
+# the document states the rule and the history stays where it was written.
+#
+# WHY ONLY `uphold scan`, AND NO COMMAND. A commit message and a pull-request
+# body are exactly where a change is narrated, so the rule declares no
+# `command.before` and is left out of the shim, the hook and `--text`. It reads
+# the tree, and nothing that publishes a change.
+#
+# WHY THESE SHAPES AND NOT THE OTHERS. Each one is history wherever it appears:
+# "used to be", a pronoun followed by "used to", "formerly", "has since been",
+# "the previous approach", and "previously" after a pronoun or a word naming
+# part of a document ("this section previously said"). The near misses are
+# left out because the same characters also state a present condition, an
+# instrument or a compatibility rule:
+#
+#   "a session that no longer exists"          a condition
+#   "a class that was renamed", in a migration a step
+#   "the key used to sign the release"         an instrument
+#   "all previously issued tokens"             a condition
+#   "the relay accepts the previous version"   a compatibility rule
+#   "releases through v0.8.0 shipped it as"    a compatibility rule
+#
+# A pattern cannot tell those apart, and refusing them would refuse a correct
+# sentence to catch a narrated one.
+#
+# WHAT IT READS. Markdown, minus its code blocks. A decision record narrates a
+# change by definition -- the context it was decided in is its content -- so
+# `adr` directories are excluded, as are test fixtures and changelogs. Comments
+# in code are not read here; a repository that wants them read widens
+# `files.glob` under this id.
+#
+# WHEN THE RULE IS WRONG ABOUT ONE SENTENCE -- a troubleshooting heading such
+# as "a login that used to work starts failing" -- a baseline entry excuses
+# that one match and keeps the file checked.
+
+# WHAT THIS SET MAY INSTALL. Nothing: no git hook and no command. It runs in
+# `uphold scan`.
+[set]
+
+[rule.no-narrated-history]
+message = """
+This sentence narrates how something changed. State what holds now; the change
+is recorded in the commit message or pull request that made it.
+"""
+prose_regexp = '(?i)\bused to be\b|\b(?:it|this|that|these|those|they|which|there|we|he|she)\s+used to\b|\bformerly\b|\b(?:has|have) since been\b|\bthe (?:previous|earlier|original|former) (?:approach|design|wording|behaviou?r)s?\b|\b(?:it|this|that|they|which|document|section|block|file|paragraph|sentence|table|page|list)\s+(?:(?:was|were|had)\s+)?previously\b'
+files.include = ["."]
+files.glob = ["*.md"]
+files.exclude = [
+    "**/adr/**",
+    "**/tests/**",
+    "**/test/**",
+    "**/testdata/**",
+    "**/fixtures/**",
+    "CHANGELOG*",
+]

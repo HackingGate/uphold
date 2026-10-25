@@ -114,10 +114,11 @@ cargo test --quiet                    # the engine suite
 cargo clippy --quiet --all-targets    # the lint profile declared in Cargo.toml
 ```
 
-These used to run at every commit. A full compile and test pass on every commit
-costs time even on commits that touch no Rust, and encourages `--no-verify`,
-which also skips the guards. At `pre-push` they still refuse before anything
-leaves the machine. `uphold guard --stage pre-push` runs there with them.
+They run at `pre-push`, not at every commit. A full compile and test pass on
+every commit costs time even on commits that touch no Rust, and encourages
+`--no-verify`, which also skips the guards. At `pre-push` they still refuse
+before anything leaves the machine. `uphold guard --stage pre-push` runs there
+with them.
 
 The manual stage covers the host and the network:
 
@@ -164,11 +165,10 @@ the first fixture in a run removes every sibling whose process has exited. Use
 `support::scratch("name")` in `tests/`, `crate::fixture::scratch("name")` in
 `src/`, and do not use `std::env::temp_dir()` directly.
 
-The previous approach cleared a fixture on creation and never afterwards, which
-freed nothing, because the directory name includes the pid so it cannot collide
-with a live run. One working session left 84,992 directories under `/tmp`,
-filled 15 GB of a 16 GB tmpfs, and caused a `cargo mutants` run to fail with
-`No space left on device`, which it then reported as 158 mutants "unviable".
+Clearing a directory when a fixture is created frees nothing: the name carries
+the pid, so no later run reuses it. Only the sweep of exited runs frees space,
+and a full tmpfs fails a `cargo mutants` run with `No space left on device`,
+which it reports as mutants it found unviable.
 
 ### The dependency graph
 

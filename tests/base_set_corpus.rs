@@ -488,6 +488,41 @@ const CORPUS: &[Case] = &[
             "The alternative was measured and it lost.\n",
         ],
     },
+    // The history set. Its `allows` are the near misses the set's header names,
+    // one per shape it gave up: a present condition, a migration step, an
+    // instrument, an adjectival "previously", a compatibility rule.
+    Case {
+        set: "narrated-history",
+        rule: "no-narrated-history",
+        path: "notes.md",
+        refuses: &[
+            "The flag used to be read from the environment.\n",
+            "It used to exit 0 when a refusal was counted.\n",
+            "The reports repository (formerly a script here) holds the store.\n",
+            "The runner has since been rebuilt around a table.\n",
+            "The previous approach cleared the fixture on creation.\n",
+            "This section previously said nothing was live.\n",
+            "The commands\nused to be environment variables.\n",
+        ],
+        allows: &[
+            "A session that no longer exists is refused.\n",
+            "Remove the tombstone of a class that was renamed.\n",
+            "The key used to sign the release is listed in gate-keys.\n",
+            "All previously issued tokens stop being accepted.\n",
+            "The relay accepts the previous version while a machine sends it.\n",
+            "Releases through v0.8.0 shipped the binary as term-cli.\n",
+            "Since v0.6.0 every release carries a signature.\n",
+        ],
+    },
+    // A decision record narrates the change it decided, so `adr` is excluded:
+    // the same sentence the case above refuses passes there.
+    Case {
+        set: "narrated-history",
+        rule: "no-narrated-history",
+        path: "docs/adr/0004-three-plane-split.md",
+        refuses: &[],
+        allows: &["The flag used to be read from the environment.\n"],
+    },
 ];
 
 /// The rules this corpus does not cover, and why each is somewhere else.

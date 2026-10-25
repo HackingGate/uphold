@@ -1022,5 +1022,36 @@
     ],
     "set": "prose-shapes",
     "stages": []
+  },
+  {
+    "commands": [],
+    "rules": [
+      {
+        "files": {
+          "exclude": [
+            "**/adr/**",
+            "**/tests/**",
+            "**/test/**",
+            "**/testdata/**",
+            "**/fixtures/**",
+            "CHANGELOG*"
+          ],
+          "exclude_cfg_test": false,
+          "glob": [
+            "*.md"
+          ],
+          "include": [
+            "."
+          ],
+          "multiline": false,
+          "word": false
+        },
+        "id": "no-narrated-history",
+        "message": "This sentence narrates how something changed. State what holds now; the change\nis recorded in the commit message or pull request that made it.\n",
+        "prose_regexp": "(?i)\\bused to be\\b|\\b(?:it|this|that|these|those|they|which|there|we|he|she)\\s+used to\\b|\\bformerly\\b|\\b(?:has|have) since been\\b|\\bthe (?:previous|earlier|original|former) (?:approach|design|wording|behaviou?r)s?\\b|\\b(?:it|this|that|they|which|document|section|block|file|paragraph|sentence|table|page|list)\\s+(?:(?:was|were|had)\\s+)?previously\\b"
+      }
+    ],
+    "set": "narrated-history",
+    "stages": []
   }
 ]
