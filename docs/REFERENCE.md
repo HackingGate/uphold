@@ -4311,6 +4311,7 @@ to both:
 ```sh
 uphold_check.py --review          # what routes where
 uphold_check.py --review --emit   # write REVIEW.md and AGENTS.md
+uphold_check.py --review --print  # the same document on stdout, no file written
 uphold_check.py --review --check  # refuse a stale or over-budget document
 ```
 
@@ -4323,6 +4324,15 @@ Over budget fails the build and says to shorten records or narrow
 `include_domains`. Its values come from the closed list in
 [`principles/SCHEMA.md`](../principles/SCHEMA.md#domains), and a value outside
 it is exit `2`: a filter no record can match would compile an empty document.
+
+`--print` is for a reviewer in a repository that has just adopted uphold, where
+no rule claims anything yet. It compiles the same document under the same
+`max_lines` budget, writes it to stdout, and writes no file. A `yes` record that
+nothing claims does not refuse it. Those records are listed by id on stderr,
+apart from the document, as rules uphold could enforce there, each with the
+`no_subject_here` alternative below; the reviewer is never asked to judge them.
+`--emit` and `--check` refuse them exactly as before, because a committed
+document must not carry a record a machine could check.
 
 When a repository has no subject for a principle, say so with a reason:
 

@@ -101,6 +101,7 @@ def route(
     claimed: set[str],
     exempt: dict[str, str],
     include_domains: list[str] | None = None,
+    unclaimed: list[dict] | None = None,
 ) -> tuple[list[dict], list[str], list[str]]:
     """Return (records for review, errors, stale exemptions).
 
@@ -114,6 +115,13 @@ def route(
     Amending the record instead would be worse and was the first thing tried: it
     would make the catalog describe this repository rather than the principle,
     and the next consumer would read `partially` and believe it.
+
+    `unclaimed`, when given, receives the `automatable = "yes"` records nothing
+    claims and nothing exempts, and they are then not errors. Only a document
+    printed for a reader (`--review --print`) passes it: a committed document
+    must not carry a record a machine could check, and a document handed to a
+    reviewer in a repository that has just adopted uphold has no rules yet to
+    claim anything. Every other caller leaves it None and gets the refusal.
     """
     include_domains = include_domains or []
     for_review: list[dict] = []
@@ -126,6 +134,9 @@ def route(
             if record_id in claimed:
                 continue  # a rule enforces it; a reviewer repeating it is noise
             if record_id in exempt:
+                continue
+            if unclaimed is not None:
+                unclaimed.append(record)
                 continue
             errors.append(
                 f'{record_id}: enforcement.automatable = "yes" and no rule here '
@@ -151,6 +162,25 @@ def route(
         if record_id in claimed or record_id not in known
     ]
     return for_review, errors, stale
+
+
+def render_could_enforce(unclaimed: list[dict]) -> str:
+    """The records `--print` kept out of the document, for a caller to read apart.
+
+    It is not part of the reviewer's instructions: a reviewer asked to judge a
+    record a rule should own is the noise the preamble forbids. Each line is the
+    id and the one alternative to building the rule.
+    """
+    lines = [
+        f"{len(unclaimed)} record(s) uphold could enforce here, and no rule here "
+        f"claims them yet; they are not in the document above:"
+    ]
+    for record in unclaimed:
+        lines.append(
+            f"- {record['id']}: build the rule, or record why this repository "
+            f"has no subject for it under [review].no_subject_here."
+        )
+    return "\n".join(lines) + "\n"
 
 
 def render(for_review: list[dict], active_rules: list[str]) -> str:

@@ -79,6 +79,17 @@ class Routing(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("no rule here claims it", errors[0])
 
+    def test_an_unclaimed_automatable_record_is_listed_apart_when_asked_to_print(self):
+        records = {"a": record("a", "yes"), "b": record("b", "no")}
+        unclaimed: list[dict] = []
+        for_review, errors, _ = review_mod.route(records, set(), {}, None, unclaimed)
+        self.assertEqual([entry["id"] for entry in for_review], ["b"])
+        self.assertEqual(errors, [])
+        self.assertEqual([entry["id"] for entry in unclaimed], ["a"])
+        listed = review_mod.render_could_enforce(unclaimed)
+        self.assertIn("- a:", listed)
+        self.assertIn("no_subject_here", listed)
+
     def test_a_partially_automatable_record_compiles_in_whether_or_not_it_is_claimed(
         self,
     ):
