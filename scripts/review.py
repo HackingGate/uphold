@@ -731,12 +731,8 @@ def drive_rulings(
             )
             if given["kind"] != kind or (kind == "answer" and given["value"] != option):
                 continue
-            if (
-                kind != "escalate"
-                and given["kind"] == "answer"
-                and not given["citations"]
-            ):
-                broken.append("an answer that cites nothing")
+            if given["kind"] in {"answer", "none"} and not given["citations"]:
+                broken.append(f"a {given['kind']} that cites nothing")
                 continue
             failed = unresolved(given["citations"], lines)
             if failed:

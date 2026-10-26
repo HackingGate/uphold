@@ -908,6 +908,11 @@ def run_review(argv: list[str]) -> int:
         return 2
 
     records = load_records()
+    # Ahead of the routing: a ruling is answered from the adopted records, not
+    # from the compiled review document, so what that document would refuse
+    # says nothing about whether a ruler can be scored.
+    if driving is not None and driving["rule"]:
+        return drive_rulings(driving, settings, report, records)
     # Partial reports identify the exact claims that held. A refused claim may
     # name the same rule as a reconciled one, so the rule id alone is insufficient.
     claimed = {
@@ -941,9 +946,6 @@ def run_review(argv: list[str]) -> int:
         print(f"- {over}", file=sys.stderr)
     if errors or stale or control_errors or over:
         return 1
-
-    if driving is not None and driving["rule"]:
-        return drive_rulings(driving, settings, report, records)
 
     if driving is not None:
         runs, timeout, reviewer = (
@@ -1039,9 +1041,18 @@ def drive_rulings(driving: dict, settings: dict, report: dict, records: dict) ->
             file=sys.stderr,
         )
         return 2
-    adopted = [
-        record_id for record_id in decide.get("adopt", []) if record_id in records
-    ]
+    adopted = list(decide.get("adopt", []))
+    missing = [record_id for record_id in adopted if record_id not in records]
+    if missing:
+        # The engine and this script carry different catalogs. Dropping the id
+        # would hand the ruler fewer records than the repository adopts.
+        print(
+            f"uphold review could not look: `[decide] adopt` names "
+            f"{', '.join(missing)}, which the catalog beside this script does not "
+            f"carry. Run the uphold_check.py of the same uphold as the binary",
+            file=sys.stderr,
+        )
+        return 2
     if not adopted:
         print(
             "- the ruling controls have no adopted record to be answered from. "

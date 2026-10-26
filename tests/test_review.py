@@ -513,6 +513,28 @@ class Rulings(unittest.TestCase):
         self.assertEqual(result["held"], 0)
         self.assertIn("cites nothing", result["broken"][0])
 
+    def test_a_none_that_cites_nothing_breaks_the_run(self):
+        control = {**self.CONTROL, "none": True}
+        del control["answer"]
+
+        def ruler(*_):
+            return {"kind": "none", "value": "no option works", "citations": []}
+
+        result = self.drive(control, ruler)
+        self.assertEqual(result["held"], 0)
+        self.assertIn("a none that cites nothing", result["broken"][0])
+
+    def test_an_adopted_id_the_scripts_catalog_lacks_is_two_rather_than_dropped(self):
+        settings = {"rulings": [self.CONTROL]}
+        report = {
+            "decide": {"adopt": ["fail-fast", "not-in-this-catalog"], "order": []}
+        }
+        driving = {"seed": 1, "timeout": 1, "auditor": None, "command": ["false"]}
+        records = {record["id"]: record for record in load_catalog()}
+        self.assertEqual(
+            uphold_check.drive_rulings(driving, settings, report, records), 2
+        )
+
     def test_one_held_answer_in_audit_every_is_audited_and_an_unsupported_one_fails(
         self,
     ):
@@ -630,6 +652,31 @@ class RuleCommand(unittest.TestCase):
         self.assertIn("seed 3", result.stdout)
         self.assertIn("held 3/3 (agree 3)", result.stdout)
         self.assertIn("unaudited", result.stdout)
+
+    @needs_the_engine
+    def test_what_the_review_document_would_refuse_does_not_block_a_ruling(self):
+        # No include_domains: every `automatable = "yes"` record is unclaimed
+        # here, which `--review` refuses. The rulings are scored regardless.
+        upheld = self.tmp / "policy" / "upheld.toml"
+        text = upheld.read_text(encoding="utf-8")
+        upheld.write_text(
+            "\n".join(
+                line for line in text.splitlines() if "include_domains" not in line
+            ),
+            encoding="utf-8",
+        )
+        self.assertNotEqual(
+            subprocess.run(
+                [sys.executable, str(SCRIPT), "--review"],
+                cwd=self.tmp,
+                capture_output=True,
+                check=False,
+            ).returncode,
+            0,
+        )
+        result = self.rule(self.ANSWERS_B)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("held 3/3", result.stdout)
 
     @needs_the_engine
     def test_a_ruler_that_always_escalates_is_one(self):

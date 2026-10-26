@@ -4425,7 +4425,11 @@ pass@1 1.00; pass^3 1/1 control(s)
 ```
 
 Exit `0` when every ruling control holds and `1` when one does not, or when no
-record is adopted. Exit `2` when no ruling control is declared, for a control
+record is adopted. What the review document would refuse (an unclaimed record,
+the line ceiling) does not stop a ruling run: a ruling is answered from the
+adopted records, not from that document. Exit `2` when no ruling control is
+declared, when an adopted id is missing from the catalog beside
+`uphold_check.py` (a binary and a script from different releases), for a control
 with no `question`, fewer than two distinct `options`, an `answer` that is not
 one of them, or not exactly one of `answer`, `escalate = true` and
 `none = true`, and for a ruler or auditor that exits non-zero, stalls past
