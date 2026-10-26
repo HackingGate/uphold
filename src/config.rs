@@ -722,6 +722,64 @@ impl Stop {
     }
 }
 
+/// `[decide]` in a repository's own policy: the records its design questions
+/// are answered from, and which side it takes where two of them conflict.
+///
+/// The shape is refused here, at load. Whether each id is in the catalog and
+/// whether every adopted conflict carries an order are questions about the
+/// catalog this binary carries, and `uphold check` answers them at exit 1.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Decide {
+    /// Catalog record ids, each at most once.
+    #[serde(default)]
+    pub adopt: Vec<String>,
+    /// `[[decide.order]]`: one per pair of adopted records that names the
+    /// other in `conflicts_with`.
+    #[serde(default)]
+    pub order: Vec<Order>,
+}
+
+/// One `[[decide.order]]`: where `prefer` and `over` disagree, the answer
+/// is `prefer`'s, for the reason `why` gives.
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Order {
+    pub prefer: String,
+    pub over: String,
+    /// Read by whoever reviews the order; an order with no reason is refused.
+    pub why: String,
+}
+
+impl Decide {
+    fn validate(&self) -> std::result::Result<(), String> {
+        let mut seen = BTreeSet::new();
+        for id in &self.adopt {
+            if id.trim().is_empty() {
+                return Err("`[decide] adopt` holds a blank id".to_owned());
+            }
+            if !seen.insert(id.as_str()) {
+                return Err(format!("`[decide] adopt` names {id:?} twice"));
+            }
+        }
+        for order in &self.order {
+            for (field, value) in [
+                ("prefer", &order.prefer),
+                ("over", &order.over),
+                ("why", &order.why),
+            ] {
+                if value.trim().is_empty() {
+                    return Err(format!(
+                        "a `[[decide.order]]` has a blank `{field}`. Each order names the \
+                         record preferred, the one it is preferred over, and why"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The scanner a retired waiver may still name. uphold no longer runs it, so
 /// the row is read and ignored; naming any other scanner is an error, as it
 /// always was, because every scanner that is run carries its own suppression in
@@ -994,6 +1052,10 @@ pub(crate) struct PolicyFile {
     /// `[stop]`: the gate an agent's turn may not end red. See [`Stop`].
     #[serde(default)]
     pub stop: Option<Stop>,
+    /// `[decide]`: the records this repository's design questions are
+    /// answered from. See [`Decide`].
+    #[serde(default)]
+    pub decide: Option<Decide>,
     /// Whether every path-baseline entry must say who excused it and why.
     ///
     /// Off by default, and the default is not neutrality -- it is what every
@@ -1313,6 +1375,8 @@ pub(crate) struct Policy {
     pub supply_chain: SupplyChain,
     /// The repository's own `[stop]`, or the empty one.
     pub stop: Stop,
+    /// The repository's own `[decide]`, or the empty one.
+    pub decide: Decide,
 }
 
 impl Policy {
@@ -1599,6 +1663,18 @@ fn refuse_inherited_override(path: &Path, file: &PolicyFile, kind: &str) -> Resu
             format!(
                 "`[stop]` names the commands this repository's tree has to pass, and {kind} \
                  has no tree. Move it to the policy of the repository it gates"
+            ),
+        ));
+    }
+    // Which records a repository rules by is what its owner reviews, so it is
+    // written where that repository's review reaches.
+    if file.decide.is_some() {
+        return Err(Fatal::at(
+            path,
+            format!(
+                "`[decide]` names the records one repository's design questions are \
+                 answered from, and {kind} is not that repository. Move it to the policy \
+                 of the repository it decides for"
             ),
         ));
     }
@@ -2138,6 +2214,11 @@ pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<P
         stop.validate()
             .map_err(|error| Fatal::at(policy_path, error))?;
     }
+    if let Some(decide) = &file.decide {
+        decide
+            .validate()
+            .map_err(|error| Fatal::at(policy_path, error))?;
+    }
     validate_unique(policy_path, &rules)?;
     for rule in &rules {
         rule.validate()?;
@@ -2175,6 +2256,7 @@ pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<P
         inherited_sets: inherit.sets.clone(),
         supply_chain: file.supply_chain.clone().unwrap_or_default(),
         stop: file.stop.clone().unwrap_or_default(),
+        decide: file.decide.clone().unwrap_or_default(),
     })
 }
 

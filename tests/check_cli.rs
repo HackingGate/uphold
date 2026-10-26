@@ -1434,3 +1434,203 @@ fn misplaced_range_hooks_do_not_supply_partial_claim_evidence() {
         );
     }
 }
+
+// ── [decide]: the records design questions are answered from ─────────
+
+/// `economy-of-mechanism` and `defense-in-depth` name each other in
+/// `conflicts_with`, and so do `unix-composability` and `defense-in-depth`;
+/// `unix-composability` and `economy-of-mechanism` do not.
+fn decide_fixture(decide: &str) -> PathBuf {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        &format!("{GUARD_POLICY}\n{decide}"),
+    );
+    write(&root, "policy/upheld.toml", "# nothing claimed yet\n");
+    write(&root, ".pre-commit-config.yaml", PRE_COMMIT);
+    root
+}
+
+const ORDERED: &str = "\
+[decide]
+adopt = [\"economy-of-mechanism\", \"defense-in-depth\", \"unix-composability\"]
+
+[[decide.order]]
+prefer = \"defense-in-depth\"
+over = \"economy-of-mechanism\"
+why = \"A second control is worth the larger mechanism here.\"
+
+[[decide.order]]
+prefer = \"unix-composability\"
+over = \"defense-in-depth\"
+why = \"Each layer is a separate command.\"
+";
+
+#[test]
+fn an_adopted_list_with_every_conflict_ordered_is_printed_and_zero() {
+    let output = check(&decide_fixture(ORDERED), &[]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let printed = stdout(&output);
+    assert!(
+        printed.contains("adopted 3 record(s) for design rulings"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("order  defense-in-depth over economy-of-mechanism: A second control"),
+        "{printed}"
+    );
+}
+
+#[test]
+fn the_json_report_carries_the_adopted_list() {
+    let output = check(&decide_fixture(ORDERED), &["--json"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report.pointer("/decide/adopt/2").unwrap(),
+        "unix-composability"
+    );
+    assert_eq!(
+        report.pointer("/decide/order/0/prefer").unwrap(),
+        "defense-in-depth"
+    );
+}
+
+#[test]
+fn an_adopted_conflict_with_no_order_is_one() {
+    let output = check(
+        &decide_fixture("[decide]\nadopt = [\"economy-of-mechanism\", \"defense-in-depth\"]\n"),
+        &[],
+    );
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert!(
+        stderr(&output)
+            .contains("defense-in-depth and economy-of-mechanism are both adopted and conflict"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn an_order_over_a_pair_that_does_not_conflict_is_one() {
+    let output = check(
+        &decide_fixture(
+            "[decide]\nadopt = [\"economy-of-mechanism\", \"unix-composability\"]\n\n\
+             [[decide.order]]\nprefer = \"unix-composability\"\nover = \"economy-of-mechanism\"\n\
+             why = \"no conflict to settle\"\n",
+        ),
+        &[],
+    );
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("do not name each other in conflicts_with"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn an_order_naming_a_record_not_adopted_is_one() {
+    let output = check(
+        &decide_fixture(
+            "[decide]\nadopt = [\"economy-of-mechanism\"]\n\n\
+             [[decide.order]]\nprefer = \"defense-in-depth\"\nover = \"economy-of-mechanism\"\n\
+             why = \"stale\"\n",
+        ),
+        &[],
+    );
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("orders defense-in-depth, which this repository does not adopt"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_pair_ordered_twice_is_one() {
+    let output = check(
+        &decide_fixture(&format!(
+            "{ORDERED}\n[[decide.order]]\nprefer = \"economy-of-mechanism\"\n\
+             over = \"defense-in-depth\"\nwhy = \"the other way\"\n"
+        )),
+        &[],
+    );
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("order[0] already orders this pair"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn an_adopted_id_the_catalog_lacks_is_one() {
+    let output = check(
+        &decide_fixture("[decide]\nadopt = [\"no-such-principle\"]\n"),
+        &[],
+    );
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("unknown principle id \"no-such-principle\""),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_malformed_decide_table_is_two() {
+    for (decide, says) in [
+        (
+            "[decide]\nadopted = [\"economy-of-mechanism\"]\n",
+            "adopted",
+        ),
+        (
+            "[decide]\nadopt = [\"economy-of-mechanism\", \"economy-of-mechanism\"]\n",
+            "twice",
+        ),
+        (
+            "[decide]\nadopt = [\"economy-of-mechanism\"]\n\n[[decide.order]]\n\
+             prefer = \"economy-of-mechanism\"\nover = \"defense-in-depth\"\n",
+            "why",
+        ),
+        (
+            "[decide]\nadopt = [\"economy-of-mechanism\"]\n\n[[decide.order]]\n\
+             prefer = \"economy-of-mechanism\"\nover = \"defense-in-depth\"\nwhy = \" \"\n",
+            "blank `why`",
+        ),
+    ] {
+        let output = check(&decide_fixture(decide), &[]);
+        assert_eq!(code(&output), 2, "{decide}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains(says),
+            "{decide}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn a_decide_table_in_an_inherited_file_is_two() {
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        "[inherit]\npaths = [\"policy/extra.toml\"]\n",
+    );
+    write(
+        &root,
+        "policy/extra.toml",
+        "[decide]\nadopt = [\"economy-of-mechanism\"]\n",
+    );
+    write(&root, "policy/upheld.toml", "# nothing claimed yet\n");
+    write(&root, ".pre-commit-config.yaml", PRE_COMMIT);
+    let output = check(&root, &[]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("Move it to the policy of the repository it decides for"),
+        "{}",
+        stderr(&output)
+    );
+}

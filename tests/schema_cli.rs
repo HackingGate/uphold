@@ -143,6 +143,12 @@ scanner = "guarddog"
 package = "pypi:x@1"
 check = "c"
 reason = "r"
+[decide]
+adopt = ["economy-of-mechanism", "defense-in-depth"]
+[[decide.order]]
+prefer = "defense-in-depth"
+over = "economy-of-mechanism"
+why = "w"
 "#,
     );
     assert!(found.is_empty(), "{found:#?}");
@@ -192,6 +198,14 @@ fn a_document_the_deserializer_refuses_is_refused_by_the_schema() {
         (
             "a shim with no command",
             "[[shim]]\nmatch = [\"pr:create\"]\n",
+        ),
+        (
+            "an order with no reason",
+            "[[decide.order]]\nprefer = \"a\"\nover = \"b\"\n",
+        ),
+        (
+            "an adopted list that is not a list",
+            "[decide]\nadopt = \"economy-of-mechanism\"\n",
         ),
     ] {
         assert!(!errors(text).is_empty(), "{what} was accepted:\n{text}");

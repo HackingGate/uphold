@@ -20,6 +20,7 @@ namespace — that is what lets a claim in
 - [`uphold schema` — the policy file's JSON Schema](#uphold-schema--the-policy-files-json-schema)
 - [The review tier](#the-review-tier)
   - [Controls: can a record produce a finding at all?](#controls-can-a-record-produce-a-finding-at-all)
+- [Design rulings: `[decide]`](#design-rulings-decide)
 
 ## Rule shape
 
@@ -4126,7 +4127,9 @@ suppliers. Each supplier names its `component` (`local` or `uphold`) explicitly
 and carries the supplying `seam` as a description. Consumers route by component
 and treat seam descriptions, notes and diagnostics as text for a person.
 `violations`, `unavailable` and `notes` are arrays of diagnostic strings.
-Additional fields may be added within a schema version.
+`decide` is the policy's [`[decide]`](#design-rulings-decide) as written,
+`{"adopt": [...], "order": [{"prefer", "over", "why"}]}`, empty where the
+policy has none. Additional fields may be added within a schema version.
 
 A missing or invalid policy or declaration, discovery failure, or other error
 before evaluation produces no JSON: stdout is empty, the diagnostic is on
@@ -4368,3 +4371,54 @@ is one that has not answered within `--timeout` seconds (default 300); a person
 answering at a prompt passes a longer one. No
 model client lives here; the reviewer command carries the model, the key and
 the budget. See [DESIGN.md](DESIGN.md#a-control-is-the-probe-fixture-one-tier-up).
+
+## Design rulings: `[decide]`
+
+A repository's design questions are answered from the records it adopts, and
+where two adopted records conflict, from the side it takes. Both are written in
+the repository's own policy:
+
+```toml
+# policy/principles.toml
+[decide]
+adopt = ["unix-composability", "defense-in-depth", "economy-of-mechanism"]
+
+[[decide.order]]
+prefer = "defense-in-depth"
+over = "economy-of-mechanism"
+why = "A second control is worth the larger mechanism for anything that publishes."
+
+[[decide.order]]
+prefer = "unix-composability"
+over = "defense-in-depth"
+why = "Each layer is a separate command that can be run and tested alone."
+```
+
+`adopt` is catalog ids. Every pair of adopted records that names the other in
+`conflicts_with` takes exactly one `[[decide.order]]`: `prefer` is the record
+whose answer wins where the two disagree, `over` the one it wins over, and `why`
+the reason, for whoever reviews the order. `conflicts_with` is symmetric, so
+one order covers the pair whichever end lists it.
+
+`uphold check` holds the table to the catalog this binary carries and prints
+the adopted list and its orders after the reconciled claims, so the review of
+what a repository rules by is one command:
+
+```text
+adopted 3 record(s) for design rulings ([decide]):
+  unix-composability
+  defense-in-depth
+  economy-of-mechanism
+  order  defense-in-depth over economy-of-mechanism: A second control is ...
+  order  unix-composability over defense-in-depth: Each layer is a separate ...
+```
+
+Exit `1`, under `design rulings refused ([decide]):`, for an adopted id the
+catalog does not define or keeps only as deprecated, an adopted conflict with no
+order, an order naming a record the repository does not adopt, an order over two
+records that do not conflict, and a second order over a pair already ordered.
+Exit `2`, at load and so from every command that reads the policy, for a table
+whose shape is wrong: an unknown key, an `order` missing `prefer`, `over` or
+`why` or holding a blank one, an id adopted twice, and `[decide]` in a bundled
+set or an `inherit.paths` file, since which records a repository rules by is
+that repository's own declaration. `uphold schema` describes the table.
