@@ -205,6 +205,10 @@ pub(crate) struct Record {
     pub status: String,
     #[serde(default)]
     pub enforcement: Enforcement,
+    /// Symmetric, as `scripts/validate.py` holds it: an adopted pair in it is
+    /// a pair `[decide]` must order.
+    #[serde(default)]
+    pub conflicts_with: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

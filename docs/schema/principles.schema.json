@@ -39,6 +39,29 @@
       },
       "type": "object"
     },
+    "Decide": {
+      "additionalProperties": false,
+      "description": "`[decide]` in a repository's own policy: the records its design questions\nare answered from, and which side it takes where two of them conflict.\n\nThe shape is refused here, at load. Whether each id is in the catalog and\nwhether every adopted conflict carries an order are questions about the\ncatalog this binary carries, and `uphold check` answers them at exit 1.",
+      "properties": {
+        "adopt": {
+          "default": [],
+          "description": "Catalog record ids, each at most once.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "order": {
+          "default": [],
+          "description": "`[[decide.order]]`: one per pair of adopted records that names the\nother in `conflicts_with`.",
+          "items": {
+            "$ref": "#/$defs/Order"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "Editor": {
       "description": "When an invocation that supplied no body opens an editor for one.\n\nA closed value rather than a flag list or an expression, because the\nquestion has three answers and the commands this tool stands in front of\ngive exactly those three. The answer decides two things that used to be\none: whether the shim stands in as the editor, and whether it SAYS the\neditor is the checkpoint -- which it said for `gh pr merge --squash`, where\nno editor ever opens and the forge composed the merge message unread.",
       "oneOf": [
@@ -173,6 +196,28 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "Order": {
+      "additionalProperties": false,
+      "description": "One `[[decide.order]]`: where `prefer` and `over` disagree, the answer\nis `prefer`'s, for the reason `why` gives.",
+      "properties": {
+        "over": {
+          "type": "string"
+        },
+        "prefer": {
+          "type": "string"
+        },
+        "why": {
+          "description": "Read by whoever reviews the order; an order with no reason is refused.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prefer",
+        "over",
+        "why"
+      ],
       "type": "object"
     },
     "OverrideCommand": {
@@ -848,6 +893,10 @@
       "default": false,
       "description": "Whether every path-baseline entry must say who excused it and why.\n\nOff by default, and the default is not neutrality -- it is what every\nexisting baseline file already is. A repository turns it on when its\nbaselines stop being one homogeneous debt with a header explaining all\nof it, and start holding entries that differ from each other. The\n`.ljust(` case is the shape: one call site should take the dependency\nand another is correct as it stands, and no pattern separates them, so\nthe entry that excuses the second has to carry the judgement or the\njudgement is nowhere.\n\nPolicy-level rather than per-rule, because \"may an exemption be\nanonymous\" is one answer a repository gives once. Per-rule it would be a\nsetting every new baseline has to remember, which is the same as not\nhaving it.",
       "type": "boolean"
+    },
+    "decide": {
+      "$ref": "#/$defs/Decide",
+      "description": "`[decide]`: the records this repository's design questions are\nanswered from. See [`Decide`]."
     },
     "foreign_hosts": {
       "default": [],

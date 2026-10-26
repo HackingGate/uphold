@@ -31,7 +31,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog;
-use crate::config::Policy;
+use crate::config::{Decide, Policy};
 use crate::error::{Exit, Fatal, Result, verdict};
 
 const DECLARATION: &str = "policy/upheld.toml";
@@ -732,8 +732,14 @@ pub(crate) struct Report {
     violations: Vec<String>,
     unavailable: Vec<String>,
     notes: Vec<String>,
+    /// The policy's `[decide]`, as written, so the review of what a
+    /// repository rules by is this one report.
+    decide: Decide,
     #[serde(skip)]
     misplaced_count: usize,
+    /// How many of `violations`, at the end, are refusals of `[decide]`.
+    #[serde(skip)]
+    decide_count: usize,
     #[serde(skip)]
     fatal: Option<String>,
 }
@@ -808,6 +814,7 @@ pub(crate) fn run(
         return report_coverage(policy, &declaration, &installed, &supply);
     }
     let mut report = evaluate(&path, &declaration, &installed, &supply)?;
+    decided(&mut report, &policy.decide)?;
     let measured = probe_revision
         .map(|revision| revision.and_then(|revision| crate::probe::measure(root, &revision)));
     for claim in &mut report.claims {
@@ -956,7 +963,9 @@ fn evaluate(
         violations: installed.misplaced.clone(),
         unavailable: installed.unreadable.clone(),
         notes: installed.how.clone(),
+        decide: Decide::default(),
         misplaced_count: installed.misplaced.len(),
+        decide_count: 0,
         fatal: None,
     };
     for (index, (principle, rule)) in claims.into_iter().enumerate() {
@@ -1020,9 +1029,21 @@ fn report_human(report: &Report) -> Result<Exit> {
             eprintln!("- {misplaced}");
         }
     }
-    if report.violations.len() > report.misplaced_count {
+    let claims_end = report.violations.len().saturating_sub(report.decide_count);
+    if claims_end > report.misplaced_count {
         eprintln!("enforcement claims refused ({DECLARATION}):");
-        for failure in report.violations.iter().skip(report.misplaced_count) {
+        for failure in report
+            .violations
+            .iter()
+            .take(claims_end)
+            .skip(report.misplaced_count)
+        {
+            eprintln!("- {failure}");
+        }
+    }
+    if report.decide_count > 0 {
+        eprintln!("design rulings refused ([decide]):");
+        for failure in report.violations.iter().skip(claims_end) {
             eprintln!("- {failure}");
         }
     }
@@ -1064,7 +1085,113 @@ fn report_human(report: &Report) -> Result<Exit> {
     for note in &report.notes {
         println!("  note  {note}");
     }
+    if !report.decide.adopt.is_empty() {
+        println!(
+            "adopted {} record(s) for design rulings ([decide]):",
+            report.decide.adopt.len()
+        );
+        for id in &report.decide.adopt {
+            println!("  {id}");
+        }
+        for order in &report.decide.order {
+            println!(
+                "  order  {} over {}: {}",
+                order.prefer, order.over, order.why
+            );
+        }
+    }
     Ok(report.verdict.exit())
+}
+
+/// Hold `[decide]` to the catalog this binary carries, into `report`.
+///
+/// Every id must be a live record, every adopted pair that one names in
+/// `conflicts_with` must carry exactly one order, and every order must be over
+/// such a pair. An adopted conflict with no order is two answers to one
+/// question, which is the thing an order exists to remove; an order over
+/// records that do not conflict, or that this repository does not adopt,
+/// decides nothing and reads as though it did.
+fn decided(report: &mut Report, decide: &Decide) -> Result<()> {
+    let mut failures = Vec::new();
+    let known = catalog::ids()?.len();
+    let mut adopted: BTreeMap<&str, &catalog::Record> = BTreeMap::new();
+    for id in &decide.adopt {
+        match catalog::get(id)? {
+            None => failures.push(format!("adopt: {}", catalog::unknown(id, known))),
+            Some(record) if record.deprecated() => failures.push(format!(
+                "adopt: {id:?} is deprecated; the catalog keeps it for redirects only"
+            )),
+            Some(record) => {
+                adopted.insert(id.as_str(), record);
+            }
+        }
+    }
+    let conflicts: BTreeSet<(&str, &str)> = adopted
+        .iter()
+        .flat_map(|(id, record)| {
+            record
+                .conflicts_with
+                .iter()
+                .filter(|other| adopted.contains_key(other.as_str()))
+                .map(move |other| pair(id, other))
+        })
+        .collect();
+    let mut ordered: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    for (index, order) in decide.order.iter().enumerate() {
+        let at = format!("order[{index}] ({} over {})", order.prefer, order.over);
+        let unadopted: Vec<&str> = [order.prefer.as_str(), order.over.as_str()]
+            .into_iter()
+            .filter(|id| !adopted.contains_key(id))
+            .collect();
+        if !unadopted.is_empty() {
+            failures.push(format!(
+                "{at}: orders {}, which this repository does not adopt",
+                unadopted.join(" and ")
+            ));
+            continue;
+        }
+        let key = pair(&order.prefer, &order.over);
+        if !conflicts.contains(&key) {
+            failures.push(format!(
+                "{at}: the two records do not name each other in conflicts_with, so there \
+                 is no conflict for an order to settle"
+            ));
+            continue;
+        }
+        if let Some(first) = ordered.insert(key, index) {
+            failures.push(format!(
+                "{at}: order[{first}] already orders this pair; one pair takes one order"
+            ));
+        }
+    }
+    for (left, right) in &conflicts {
+        if !ordered.contains_key(&(*left, *right)) {
+            failures.push(format!(
+                "{left} and {right} are both adopted and conflict, and no [[decide.order]] \
+                 says which this repository prefers. Add one with prefer, over and why"
+            ));
+        }
+    }
+    report.decide = decide.clone();
+    report.decide_count = failures.len();
+    report.violations.extend(failures);
+    if report.fatal.is_none() {
+        report.verdict = match verdict(report.violations.len(), report.unavailable.len()) {
+            Exit::Clean => Verdict::Clean,
+            Exit::Violations => Verdict::Violations,
+            Exit::Broken => Verdict::CouldNotLook,
+        };
+    }
+    Ok(())
+}
+
+/// A conflict's two ends in one order, since `conflicts_with` is symmetric.
+fn pair<'a>(left: &'a str, right: &'a str) -> (&'a str, &'a str) {
+    if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    }
 }
 
 /// The denominator the reconcile cannot see: rules that run and claim nothing.
