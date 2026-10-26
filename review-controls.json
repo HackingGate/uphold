@@ -61,6 +61,11 @@
       "misses": "Split scripts/review.py's render_drive() into two functions in the same file, one that formats a record's row and one that formats the summary line."
     },
     {
+      "record": "host-owned-logs",
+      "catches": "Change src/junit.rs so that when neither --junit nor UPHOLD_JUNIT is given, every guard run still writes its JUnit document into a directory uphold creates under $XDG_STATE_HOME/uphold/runs/, keeping the newest 100 files and deleting older ones itself.",
+      "misses": "Add a unit test to src/junit.rs asserting that a guard run given neither --junit nor UPHOLD_JUNIT writes no file."
+    },
+    {
       "record": "hyrums-law",
       "catches": "Change scripts/review.py's render() so each section of REVIEW.md is headed by the record id instead of its title and the sections are ordered by domain instead of alphabetically, with no note beyond the commit message.",
       "misses": "Rename the private helper _sorted_records in scripts/review.py to _ordered_records and update its callers, leaving the compiled document byte-for-byte unchanged."
@@ -99,6 +104,11 @@
       "record": "mechanism-policy-separation",
       "catches": "Hard-code the owner names a push may go to inside prevent_public_push in src/guard/push.rs and delete the policy/principles.toml setting a repository declares them in, so every repository running the guard gets the same owners and changing that rule means editing the Rust and cutting a release.",
       "misses": "Change the refusal text prevent_public_push in src/guard/push.rs prints so it names the owner from policy that the destination was compared with."
+    },
+    {
+      "record": "namespaced-identifiers",
+      "catches": "Change src/junit.rs so each suite's package attribute, which an Allure reader files suites by, is the bare stage name such as pre-push or commit-msg instead of \"uphold\", so a report that collects several tools' suites files uphold's under names another tool's suites may also use.",
+      "misses": "Add a unit test to src/junit.rs asserting that every suite it writes carries package=\"uphold\"."
     },
     {
       "record": "observability",
