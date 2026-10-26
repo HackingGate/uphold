@@ -944,6 +944,19 @@
       "path": "principles/high-cohesion-low-coupling.toml"
     },
     {
+      "name": "Host-Owned Logs",
+      "key": "host owned logs",
+      "tokens": [
+        "host",
+        "owned",
+        "logs"
+      ],
+      "field": "title",
+      "id": "host-owned-logs",
+      "title": "Host-Owned Logs",
+      "path": "principles/host-owned-logs.toml"
+    },
+    {
       "name": "Human interface must not obstruct",
       "key": "human interface must not obstruct",
       "tokens": [
@@ -1189,6 +1202,34 @@
       "path": "principles/acyclic-dependencies.toml"
     },
     {
+      "name": "Log to the platform",
+      "key": "log to the platform",
+      "tokens": [
+        "log",
+        "to",
+        "the",
+        "platform"
+      ],
+      "field": "alias",
+      "id": "host-owned-logs",
+      "title": "Host-Owned Logs",
+      "path": "principles/host-owned-logs.toml"
+    },
+    {
+      "name": "Logs as event streams",
+      "key": "logs as event streams",
+      "tokens": [
+        "logs",
+        "as",
+        "event",
+        "streams"
+      ],
+      "field": "alias",
+      "id": "host-owned-logs",
+      "title": "Host-Owned Logs",
+      "path": "principles/host-owned-logs.toml"
+    },
+    {
       "name": "Make Illegal States Unrepresentable",
       "key": "make illegal states unrepresentable",
       "tokens": [
@@ -1292,6 +1333,30 @@
       "id": "chestertons-fence",
       "title": "Chesterton's Fence",
       "path": "principles/chestertons-fence.toml"
+    },
+    {
+      "name": "Namespaced Identifiers",
+      "key": "namespaced identifiers",
+      "tokens": [
+        "namespaced",
+        "identifiers"
+      ],
+      "field": "title",
+      "id": "namespaced-identifiers",
+      "title": "Namespaced Identifiers",
+      "path": "principles/namespaced-identifiers.toml"
+    },
+    {
+      "name": "Namespaced names",
+      "key": "namespaced names",
+      "tokens": [
+        "namespaced",
+        "names"
+      ],
+      "field": "alias",
+      "id": "namespaced-identifiers",
+      "title": "Namespaced Identifiers",
+      "path": "principles/namespaced-identifiers.toml"
     },
     {
       "name": "No bypass path",
@@ -1824,6 +1889,33 @@
       "path": "principles/reuse-maintained-components.toml"
     },
     {
+      "name": "Reverse-DNS naming",
+      "key": "reverse dns naming",
+      "tokens": [
+        "reverse",
+        "dns",
+        "naming"
+      ],
+      "field": "alias",
+      "id": "namespaced-identifiers",
+      "title": "Namespaced Identifiers",
+      "path": "principles/namespaced-identifiers.toml"
+    },
+    {
+      "name": "Reverse domain name notation",
+      "key": "reverse domain name notation",
+      "tokens": [
+        "reverse",
+        "domain",
+        "name",
+        "notation"
+      ],
+      "field": "alias",
+      "id": "namespaced-identifiers",
+      "title": "Namespaced Identifiers",
+      "path": "principles/namespaced-identifiers.toml"
+    },
+    {
       "name": "Robustness Principle",
       "key": "robustness principle",
       "tokens": [
@@ -2134,6 +2226,21 @@
       "id": "rule-of-three",
       "title": "Rule of Three",
       "path": "principles/rule-of-three.toml"
+    },
+    {
+      "name": "Treat logs as event streams",
+      "key": "treat logs as event streams",
+      "tokens": [
+        "treat",
+        "logs",
+        "as",
+        "event",
+        "streams"
+      ],
+      "field": "alias",
+      "id": "host-owned-logs",
+      "title": "Host-Owned Logs",
+      "path": "principles/host-owned-logs.toml"
     },
     {
       "name": "Two-key control",

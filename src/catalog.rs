@@ -106,6 +106,10 @@ const RECORDS: &[(&str, &str)] = &[
         "high-cohesion-low-coupling",
         include_str!("../principles/high-cohesion-low-coupling.toml"),
     ),
+    (
+        "host-owned-logs",
+        include_str!("../principles/host-owned-logs.toml"),
+    ),
     ("hyrums-law", include_str!("../principles/hyrums-law.toml")),
     (
         "idempotency",
@@ -146,6 +150,10 @@ const RECORDS: &[(&str, &str)] = &[
     (
         "minimize-attack-surface",
         include_str!("../principles/minimize-attack-surface.toml"),
+    ),
+    (
+        "namespaced-identifiers",
+        include_str!("../principles/namespaced-identifiers.toml"),
     ),
     (
         "observability",

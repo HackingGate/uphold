@@ -1,0 +1,44 @@
+id = "host-owned-logs"
+title = "Host-Owned Logs"
+aliases = ["Logs as event streams", "Treat logs as event streams", "Log to the platform"]
+kind = "principle"
+status = "seed"
+domains = ["reliability", "runtime-analysis"]
+summary = "A program's diagnostic log goes to the log facility its host already provides, which keeps, rotates and serves it; a log file of the program's own is written only where its user asks for one."
+claim = "Write a diagnostic log that must outlive the process to the facility the host already provides for logs, such as the platform log, the service manager's journal, or the standard streams handed to one, so that retention, access and reading are the host's; write a log file of the program's own only where its user names one."
+problem = "A program that keeps its own log file also takes on a writer, a rotation and retention policy, a location, permissions, and a format its operators must learn, and each program does it differently. Where it keeps no record at all, the events of a run nobody watched are gone when its terminal closes or its process is killed."
+rationale = "The host already solves retention, rotation, access control, and querying for every program it runs, and its operators already read its logs with its tools. A program that hands its events to that facility gets those properties without reimplementing them, and its log sits where a person investigating the host looks first."
+applies_when = ["A program's events must be readable after the process or its terminal is gone, as when a client hangs and is closed by hand.", "The host provides a log facility its operators already read, such as unified logging, a systemd journal, or a supervisor that collects the standard streams.", "The alternative is a writer, rotation, and retention policy of the program's own."]
+does_not_mean = ["Never write a file; a user who names a path gets one, and an artifact a caller asks for, such as a report or a test result, is not a diagnostic log.", "Log everything; what is recorded is decided by observability and data minimization, not by where it goes.", "Assume every host keeps every event; a facility that drops events unless someone is listening keeps nothing for an unwatched run, and that loss is stated rather than reported as logging.", "Require a platform facility where the host has none; the standard streams are then the facility."]
+benefits = ["Retention, rotation, and access control are the host's, configured once for every program.", "Operators read the program's events with the tools they already use for the host.", "The program opens no file of its own for writing, so it has no log location or permission to get wrong."]
+costs = ["Each platform's facility has its own API, levels, and limits, so a portable program carries one sink per platform.", "Retention and visibility are the host's policy, which the program cannot raise when a record is needed for longer.", "Some facilities keep low levels only in memory, or drop events no session subscribed to, so where an event lands must be checked per platform."]
+failure_when_overapplied = ["A short-lived command-line tool is made to talk to a platform log it gains nothing from, where its standard error is what its caller reads.", "A user's request for a file of their own is refused in the name of the host's log.", "An event the host facility will discard is treated as recorded because it was sent."]
+conflicts_with = []
+related = ["observability", "data-minimization", "reuse-maintained-components", "least-common-mechanism"]
+review_questions = ["Who rotates and deletes this log, and does the program have to?", "Can an operator read it with the tool they already read the host's logs with?", "Where the host's facility keeps an event only in memory or only while someone listens, is that loss stated, and does the level chosen survive it?", "Is any file the program writes for logging one its user asked for?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+rung = ["text", "syntax"]
+observable = ["Code that opens a log file of its own, or depends on a file-rotation crate or package, in a program whose host provides a log facility.", "A log sink that is selected by platform, and the platforms it leaves out.", "A configuration key or variable that names a log path."]
+checks = ["Flag a new file-rotation dependency or a log-file path computed by the program, and accept a waiver that names the user's request it serves.", "Require each platform's sink to name the facility it writes to and whether that facility keeps the levels the program logs."]
+limits = ["Whether an event the program sends is kept is the host's configuration, which no check of the program can see.", "Whether a file is a diagnostic log or an artifact a caller asked for is a judgment about its purpose."]
+
+[[sources]]
+title = "The Twelve-Factor App: XI. Logs"
+url = "https://12factor.net/logs"
+type = "practice"
+notes = "Wiggins, 2011. A program never concerns itself with routing or storing its output stream; the execution environment captures and routes it."
+
+[[sources]]
+title = "Logging (Apple unified logging)"
+url = "https://developer.apple.com/documentation/os/logging"
+type = "documentation"
+notes = "The platform facility on macOS and iOS: the system stores, rotates and serves the log, read with Console or `log show`, and keeps lower levels in memory only."
+
+[[sources]]
+title = "systemd-journald.service"
+url = "https://www.freedesktop.org/software/systemd/man/latest/systemd-journald.service.html"
+type = "documentation"
+notes = "The journal collects the logs of every service and user unit, with retention, rotation and access control set once for the host."

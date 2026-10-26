@@ -1,0 +1,44 @@
+id = "namespaced-identifiers"
+title = "Namespaced Identifiers"
+aliases = ["Reverse domain name notation", "Reverse-DNS naming", "Namespaced names"]
+kind = "principle"
+status = "seed"
+domains = ["interfaces", "evolution"]
+summary = "A name that tools outside a program filter, route, or subscribe on is put under a namespace its publisher controls, in the form the host's convention gives, and is changed only through announced deprecation."
+claim = "Give a name that external tooling filters, routes, or subscribes on, such as a log subsystem, a bus name, a package or provider identifier, a namespace the publisher controls, written in the form the host's convention prescribes (its domain in reverse-DNS order where the convention has one, else its registered project name), and change it only through announced deprecation."
+problem = "A short, unqualified name such as `app`, `daemon`, or `client` collides with another publisher's the moment both run on one host, and a reader filtering on it gets the other program's events too. A name that is changed silently breaks every saved filter, dashboard, and subscription that matched it, with nothing to say why the stream went quiet."
+rationale = "A namespace the publisher holds cannot be claimed by another publisher, so two programs cannot collide in it, and the host's own convention is the form its tools and readers already parse. Because outside tooling matches the name literally, it is an interface, and an interface is changed through deprecation rather than in place."
+applies_when = ["A name is read by tooling or people outside the program to find, filter, or route its output or messages.", "Two publishers could choose the same short name on one host or in one registry.", "The host or registry has a naming convention for such names, such as reverse-DNS for a unified-logging subsystem or a D-Bus name."]
+does_not_mean = ["Namespace internal identifiers that nothing outside the program reads.", "Rename existing names to fit; deprecation discipline decides whether and how an established name moves.", "Claim a domain the publisher does not hold; a project without one uses the name it is registered under.", "Lengthen names for their own sake; where the host's convention is a short identifier, the convention is followed."]
+benefits = ["Two publishers' names cannot collide, so a filter on one returns only its events.", "A reader can tell from the name who published it.", "Saved filters and subscriptions keep working, because the name changes only through a deprecation they are told about."]
+costs = ["Names are longer, and each host's convention has to be looked up and followed.", "A namespace tied to a domain outlives the domain only if the publisher keeps it.", "A deprecated name has to be emitted beside its replacement for the deprecation period."]
+failure_when_overapplied = ["Internal names nobody outside reads are prefixed with a domain, making code harder to read for no collision that can happen.", "An established, widely matched name is changed to fit the rule, breaking the readers the rule exists to protect."]
+conflicts_with = []
+related = ["follow-published-standards", "deprecation-discipline", "hyrums-law", "least-astonishment"]
+review_questions = ["Which tools or readers outside the program match this name, and what do they match it by?", "Is the namespace one the publisher holds, written in the form the host's convention prescribes?", "Could another publisher on the same host or registry choose the same name?", "If this name has changed, where is the deprecation announced, and how long is the old name emitted beside the new?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+rung = ["text"]
+observable = ["String literals passed as a log subsystem, journald identifier, bus name, or provider identifier.", "A change to such a literal in a diff."]
+checks = ["Flag a log subsystem, bus name, or provider identifier that is not under the publisher's declared namespace.", "Flag a change to an established external name that adds no deprecation note or second emission."]
+limits = ["Which names outside tooling reads is a fact about the readers, which a check of the program cannot see.", "Whether a short name will collide depends on what else runs on the host."]
+
+[[sources]]
+title = "D-Bus Specification: Valid Names"
+url = "https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-names"
+type = "standard"
+notes = "Well-known bus names and interface names are reverse-domain names, so that two publishers' names cannot collide."
+
+[[sources]]
+title = "The Java Language Specification, Java SE 21: 6.1 Declarations"
+url = "https://docs.oracle.com/javase/specs/jls/se21/html/jls-6.html#jls-6.1"
+type = "standard"
+notes = "The package naming convention: a package name begins with the publisher's Internet domain name in reverse order."
+
+[[sources]]
+title = "Logging (Apple unified logging)"
+url = "https://developer.apple.com/documentation/os/logging"
+type = "documentation"
+notes = "A log's subsystem is a reverse-DNS identifier, by which `log show` and Console filter one program's messages."

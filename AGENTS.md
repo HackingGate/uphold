@@ -204,6 +204,20 @@ Components should contain behavior that belongs to one coherent responsibility a
 - Do the things that change together live together, and do the things reused together ship together?
 - Does a stable package depend on a volatile one, and are the packages most depended on also the most abstract?
 
+## Host-Owned Logs
+Write a diagnostic log that must outlive the process to the facility the host already provides for logs, such as the platform log, the service manager's journal, or the standard streams handed to one, so that retention, access and reading are the host's; write a log file of the program's own only where its user names one.
+
+**Applies when**
+- A program's events must be readable after the process or its terminal is gone, as when a client hangs and is closed by hand.
+- The host provides a log facility its operators already read, such as unified logging, a systemd journal, or a supervisor that collects the standard streams.
+- The alternative is a writer, rotation, and retention policy of the program's own.
+
+**Ask**
+- Who rotates and deletes this log, and does the program have to?
+- Can an operator read it with the tool they already read the host's logs with?
+- Where the host's facility keeps an event only in memory or only while someone listens, is that loss stated, and does the level chosen survive it?
+- Is any file the program writes for logging one its user asked for?
+
 ## Hyrum's Law
 With a sufficient number of users of an interface, every observable behavior of it will be depended on by somebody, regardless of what the contract promises.
 
@@ -323,6 +337,20 @@ Implement stable mechanisms that provide capability, and express changeable poli
 - Which behavior is stable capability and which is changeable rule?
 - Who is authorized to change the policy?
 - Can invalid policy be rejected before execution?
+
+## Namespaced Identifiers
+Give a name that external tooling filters, routes, or subscribes on, such as a log subsystem, a bus name, a package or provider identifier, a namespace the publisher controls, written in the form the host's convention prescribes (its domain in reverse-DNS order where the convention has one, else its registered project name), and change it only through announced deprecation.
+
+**Applies when**
+- A name is read by tooling or people outside the program to find, filter, or route its output or messages.
+- Two publishers could choose the same short name on one host or in one registry.
+- The host or registry has a naming convention for such names, such as reverse-DNS for a unified-logging subsystem or a D-Bus name.
+
+**Ask**
+- Which tools or readers outside the program match this name, and what do they match it by?
+- Is the namespace one the publisher holds, written in the form the host's convention prescribes?
+- Could another publisher on the same host or registry choose the same name?
+- If this name has changed, where is the deprecation announced, and how long is the old name emitted beside the new?
 
 ## Observability
 A system should emit structured, correlated evidence sufficient to explain relevant state transitions, decisions, dependencies, latency, and failures without reproducing every incident.
