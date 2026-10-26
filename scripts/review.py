@@ -41,8 +41,11 @@ control's change, and scores what comes back against the answer key.
 from __future__ import annotations
 
 import json
+import random
+import re
 import subprocess
 from collections.abc import Callable
+from pathlib import Path
 
 #: Below the bottom of the range in which review quality was observed to
 #: degrade. A limit set at the top of a range is a limit that reaches the
@@ -453,4 +456,364 @@ def render_drive(results: list[dict], runs: int) -> str:
             lines.append(
                 f"false positives {rate:.2f} over {len(measured)} control(s) with a misses"
             )
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Rulings
+# ---------------------------------------------------------------------------
+#
+# A ruling has a different shape from a review: a question and its options in,
+# an answer and the record lines it rests on out. The harness is the same
+# argument `drive` makes one tier down -- a ruler that gives the ruled answer
+# one run in three is not one anybody can lean on -- so a ruling control is
+# asked k times, and holds only where enough runs give its answer.
+
+#: How many of the k runs must give a ruling control's answer for it to hold.
+#: None means all of them.
+DEFAULT_AGREE = None
+
+#: One answer in this many is handed to the auditor, when one is named.
+DEFAULT_AUDIT_EVERY = 5
+
+#: Taken off an option before a ruler sees it: the label is the proposer's
+#: opinion, and a ruler that reads it is ruling on the label.
+RECOMMENDED = re.compile(r"\s*\(\s*recommended\s*\)", re.IGNORECASE)
+
+RULING_PREAMBLE = """\
+# Rulings
+
+Answer the question from the records below, which this repository adopts, and
+from nothing else. Each record is its file, one line per numbered line, at the
+revision this repository pins.
+
+Print one JSON object:
+
+- `{{"answer": "<one option, exactly as written>", "citations": [...]}}`
+- `{{"none": "<why no option meets the goal>", "citations": [...]}}`
+- `{{"escalate": "<reason>"}}` when no record below applies, when two that
+  apply conflict and no order below settles it, or when the records do not
+  decide between the options.
+
+A citation is `{{"record": "<id>", "line": <n>, "quote": "<text on that line>"}}`.
+An answer cites at least one.
+
+## Orders
+
+{orders}
+"""
+
+
+class RulerFailed(Exception):
+    """The ruler or the auditor did not answer in the protocol. Exit 2."""
+
+
+def present(options: list[str], rng: random.Random) -> list[str]:
+    """The options as a ruler sees them: shuffled, with "(recommended)" removed."""
+    shown = [RECOMMENDED.sub("", option).strip() for option in options]
+    rng.shuffle(shown)
+    return shown
+
+
+def ruling_document(
+    adopted: list[str], orders: list[dict], records: dict[str, dict]
+) -> tuple[str, dict[str, list[str]]]:
+    """The document a ruler reads, and each adopted record's lines.
+
+    The whole file, numbered, rather than the compiled review entry: a ruling
+    cites a line, and a line is a position in the file at the pinned revision,
+    which only the file has.
+    """
+    listed = (
+        "\n".join(
+            f"- `{order['prefer']}` over `{order['over']}`: {order['why']}"
+            for order in orders
+        )
+        or "- (none)"
+    )
+    parts = [RULING_PREAMBLE.format(orders=listed)]
+    lines: dict[str, list[str]] = {}
+    for record_id in adopted:
+        path = records[record_id]["_path"]
+        try:
+            text = Path(path).read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError) as error:
+            raise RulerFailed(f"could not read {path}: {error}") from error
+        lines[record_id] = text
+        parts.append(f"\n## {record_id} (principles/{record_id}.toml)\n\n")
+        parts.extend(f"L{number}: {line}\n" for number, line in enumerate(text, 1))
+    return "".join(parts), lines
+
+
+def _parsed(command: list[str], payload: dict, timeout: int) -> dict:
+    """Run a ruler or an auditor once and return the object it printed."""
+    try:
+        completed = subprocess.run(
+            command,
+            input=json.dumps(payload, ensure_ascii=False),
+            capture_output=True,
+            encoding="utf-8",
+            timeout=timeout,
+            check=False,
+        )
+    except OSError as error:
+        raise RulerFailed(f"could not run {command[0]!r}: {error}") from error
+    except subprocess.TimeoutExpired as error:
+        raise RulerFailed(
+            f"{command[0]!r} did not answer within {timeout}s; pass --timeout "
+            f"for one that needs longer"
+        ) from error
+    except UnicodeDecodeError as error:
+        raise RulerFailed(
+            f"{command[0]!r} printed output that is not UTF-8: {error}"
+        ) from error
+    if completed.returncode != 0:
+        tail = completed.stderr.strip().splitlines()[-5:]
+        raise RulerFailed(
+            f"{command[0]!r} exited {completed.returncode}"
+            + (": " + " | ".join(tail) if tail else "")
+        )
+    try:
+        answered = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RulerFailed(
+            f"{command[0]!r} printed something that is not one JSON object: {error}"
+        ) from error
+    if not isinstance(answered, dict):
+        raise RulerFailed(f"{command[0]!r} printed JSON that is not an object")
+    return answered
+
+
+def ask_ruler(
+    ruler: list[str],
+    document: str,
+    question: str,
+    shown: list[str],
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict:
+    """Ask once, and return the answer as `{"kind", "value", "citations"}`.
+
+    `kind` is `answer`, `none` or `escalate`. An answer that is not one of the
+    options shown, or an object holding more or less than one of the three, is
+    the ruler breaking the protocol, which says nothing about the ruling.
+    """
+    answered = _parsed(
+        ruler, {"document": document, "question": question, "options": shown}, timeout
+    )
+    kinds = [kind for kind in ("answer", "none", "escalate") if kind in answered]
+    if len(kinds) != 1 or not set(answered) <= {
+        "answer",
+        "none",
+        "escalate",
+        "citations",
+    }:
+        raise RulerFailed(
+            f"{ruler[0]!r} printed {sorted(answered)}; one of answer, none or "
+            f"escalate is expected, with citations beside an answer or a none"
+        )
+    kind = kinds[0]
+    value = answered[kind]
+    if not isinstance(value, str) or not value.strip():
+        raise RulerFailed(f"{ruler[0]!r} gave an empty {kind}")
+    if kind == "answer" and value not in shown:
+        raise RulerFailed(
+            f"{ruler[0]!r} answered {value!r}, which is not one of the options it "
+            f"was shown. Print one option exactly as written"
+        )
+    citations = answered.get("citations", [])
+    if kind == "escalate" and citations:
+        raise RulerFailed(
+            f"{ruler[0]!r} escalated and cited; an escalation cites nothing"
+        )
+    if not isinstance(citations, list) or not all(
+        isinstance(citation, dict)
+        and set(citation) == {"record", "line", "quote"}
+        and isinstance(citation["record"], str)
+        and isinstance(citation["line"], int)
+        and not isinstance(citation["line"], bool)
+        and isinstance(citation["quote"], str)
+        for citation in citations
+    ):
+        raise RulerFailed(
+            f"{ruler[0]!r} printed citations that are not a list of "
+            f'{{"record", "line", "quote"}} objects'
+        )
+    return {"kind": kind, "value": value, "citations": citations}
+
+
+def unresolved(citations: list[dict], lines: dict[str, list[str]]) -> list[str]:
+    """Each citation that does not say what it quotes, in the document's files."""
+    found = []
+    for citation in citations:
+        record_id, number, quote = (
+            citation["record"],
+            citation["line"],
+            citation["quote"],
+        )
+        text = lines.get(record_id)
+        if text is None:
+            found.append(f"{record_id} is not an adopted record")
+        elif not 1 <= number <= len(text):
+            found.append(f"{record_id} has no line {number}")
+        elif not quote.strip() or quote not in text[number - 1]:
+            found.append(f"{record_id} L{number} does not say {quote!r}")
+    return found
+
+
+def audit(
+    auditor: list[str],
+    document: str,
+    question: str,
+    options: list[str],
+    given: dict,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> str | None:
+    """Ask a fresh auditor whether the citations support the answer.
+
+    It is handed the answer and its citations and nothing else the ruler
+    printed. Returns None where they support it, and the auditor's reason
+    where they do not.
+    """
+    answered = _parsed(
+        auditor,
+        {
+            "document": document,
+            "question": question,
+            "options": options,
+            given["kind"]: given["value"],
+            "citations": given["citations"],
+        },
+        timeout,
+    )
+    supported = answered.get("supported")
+    if not isinstance(supported, bool):
+        raise RulerFailed(f'{auditor[0]!r} printed no "supported": true or false')
+    if supported:
+        return None
+    reason = answered.get("reason")
+    return reason if isinstance(reason, str) and reason.strip() else "no reason given"
+
+
+def ruled(control: dict) -> tuple[str, str | None]:
+    """A control's ruling as `(kind, the option or None)`."""
+    if control.get("escalate"):
+        return "escalate", None
+    if control.get("none"):
+        return "none", None
+    return "answer", RECOMMENDED.sub("", control["answer"]).strip()
+
+
+def drive_rulings(
+    controls: list[dict],
+    document: str,
+    lines: dict[str, list[str]],
+    runs: int,
+    rng: random.Random,
+    ruler: Callable[[str, str, list[str]], dict],
+    auditor: Callable[[str, str, list[str], dict], str | None] | None = None,
+    audit_every: int = DEFAULT_AUDIT_EVERY,
+) -> list[dict]:
+    """Ask every ruling control `runs` times and count the runs that held.
+
+    A run holds where its kind and option are the control's and every citation
+    resolves. Then one held run in `audit_every`, at least one per control
+    with any, is handed to the auditor, and a run it finds unsupported stops
+    holding.
+    """
+    results = []
+    for control in controls:
+        kind, option = ruled(control)
+        held: list[dict] = []
+        broken: list[str] = []
+        given_kinds: list[str] = []
+        for _ in range(runs):
+            shown = present(control["options"], rng)
+            given = ruler(document, control["question"], shown)
+            given_kinds.append(
+                given["value"] if given["kind"] == "answer" else given["kind"]
+            )
+            if given["kind"] != kind or (kind == "answer" and given["value"] != option):
+                continue
+            if given["kind"] in {"answer", "none"} and not given["citations"]:
+                broken.append(f"a {given['kind']} that cites nothing")
+                continue
+            failed = unresolved(given["citations"], lines)
+            if failed:
+                broken.extend(failed)
+                continue
+            held.append(given)
+        audited = unsupported = 0
+        if auditor is not None:
+            answered = [given for given in held if given["kind"] != "escalate"]
+            sample = (
+                rng.sample(answered, -(-len(answered) // audit_every))
+                if answered
+                else []
+            )
+            for given in sample:
+                audited += 1
+                reason = auditor(
+                    document,
+                    control["question"],
+                    [
+                        RECOMMENDED.sub("", option).strip()
+                        for option in control["options"]
+                    ],
+                    given,
+                )
+                if reason is not None:
+                    unsupported += 1
+                    broken.append(
+                        f"the auditor found the citations unsupported: {reason}"
+                    )
+                    held.remove(given)
+        results.append(
+            {
+                "question": control["question"],
+                "ruled": option if kind == "answer" else kind,
+                "held": len(held),
+                "given": given_kinds,
+                "broken": broken,
+                "audited": audited,
+                "unsupported": unsupported,
+            }
+        )
+    return results
+
+
+def ruling_holds(result: dict, agree: int) -> bool:
+    """At least `agree` runs gave the ruling, and no audited one was unsupported."""
+    return result["held"] >= agree and not result["unsupported"]
+
+
+def render_rulings(
+    results: list[dict], runs: int, agree: int, seed: int, audited: bool
+) -> str:
+    """One line per control, then pass@1 and pass^k, and the seed to rerun it."""
+    lines = [f"seed {seed} (pass --seed {seed} to shuffle the options the same way)"]
+    for result in results:
+        verdict = "holds" if ruling_holds(result, agree) else "DOES NOT HOLD"
+        question = result["question"].splitlines()[0][:72]
+        audit_note = (
+            f", audited {result['audited']} ({result['unsupported']} unsupported)"
+            if audited
+            else ""
+        )
+        lines.append(
+            f"{question}: ruled {result['ruled']!r}, held {result['held']}/{runs} "
+            f"(agree {agree}){audit_note} -- {verdict}"
+        )
+        given = ", ".join(repr(value) for value in result["given"])
+        lines.append(f"  given: {given}")
+        lines.extend(f"  - {reason}" for reason in result["broken"])
+    if results:
+        pass_at_1 = sum(result["held"] for result in results) / (len(results) * runs)
+        pass_k = sum(result["held"] == runs for result in results)
+        lines.append(
+            f"pass@1 {pass_at_1:.2f}; pass^{runs} {pass_k}/{len(results)} control(s)"
+        )
+    if not audited:
+        lines.append(
+            "no --auditor named, so whether the citations support the answers is unaudited"
+        )
     return "\n".join(lines) + "\n"

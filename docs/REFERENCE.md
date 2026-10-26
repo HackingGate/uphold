@@ -20,6 +20,7 @@ namespace — that is what lets a claim in
 - [`uphold schema` — the policy file's JSON Schema](#uphold-schema--the-policy-files-json-schema)
 - [The review tier](#the-review-tier)
   - [Controls: can a record produce a finding at all?](#controls-can-a-record-produce-a-finding-at-all)
+  - [Ruling controls](#ruling-controls)
 - [Design rulings: `[decide]`](#design-rulings-decide)
 
 ## Rule shape
@@ -4408,6 +4409,71 @@ is one that has not answered within `--timeout` seconds (default 300); a person
 answering at a prompt passes a longer one. No
 model client lives here; the reviewer command carries the model, the key and
 the budget. See [DESIGN.md](DESIGN.md#a-control-is-the-probe-fixture-one-tier-up).
+
+### Ruling controls
+
+A ruling has a different shape from a review: a question and its options in,
+an answer and the record lines it rests on out. The skill that produces one is
+tracked here, in the [Agent Skills](https://agentskills.io/specification)
+format, at [`skills/design-ruling/SKILL.md`](../skills/design-ruling/SKILL.md).
+A ruling control is the question with its ruled answer, written beside the
+review controls:
+
+```toml
+# policy/upheld.toml
+[[review.ruling]]
+question = "Should the command prompt when stdin is not a terminal?"
+options = ["(a) prompt (recommended)", "(b) refuse with a non-zero exit"]
+answer = "(b) refuse with a non-zero exit"   # or: escalate = true, or: none = true
+```
+
+```sh
+uphold_check.py --review --drive --rule [--runs N] [--agree M] [--timeout SECONDS] \
+    [--audit-every N --auditor 'COMMAND'] [--seed N] -- ./my-ruler --model x
+```
+
+Everything after `--` is the ruler, run once per question per run. It reads
+`{"document", "question", "options"}` on stdin and prints one JSON object:
+`{"answer": "<an option, as shown>", "citations": [...]}`,
+`{"none": "<reason>", "citations": [...]}` where no option meets the goal, or
+`{"escalate": "<reason>"}`. A citation is `{"record", "line", "quote"}`. The
+document is every record `[decide] adopt` names, each file numbered line by
+line, and the orders; it is read from `uphold check --json`, so a binary that
+does not report `decide` is exit `2`. The options are shuffled on every run
+and any "(recommended)" is taken off them, so the ruler is not ruling on the
+proposer's label; `--seed` repeats a shuffle, and every run prints its seed.
+
+A run gives the ruling when its kind and option are the control's, an answer
+or a `none` cites at least one line, and every citation names an adopted
+record, a line its file has, and a quote that line contains. A control holds
+when at least `--agree` runs give it (default: all `--runs`, default 3). With
+`--auditor`, one run that gave the ruling in every `--audit-every` (default 5),
+at least one per control, is handed to that command as `{"document",
+"question", "options", "answer" or "none", "citations"}` and nothing else the
+ruler printed; it prints `{"supported": true}` or `{"supported": false,
+"reason": "..."}`, and an unsupported run stops the control holding. Without
+one, the report says the citations' support is unaudited. The skill's
+closest-precedent step is not scored: the document carries no issue history,
+so a precedent a ruler named could not be checked.
+
+```text
+seed 3 (pass --seed 3 to shuffle the options the same way)
+Should the command prompt when stdin is not a terminal?: ruled '(b) refuse ...', held 3/3 (agree 3), audited 1 (0 unsupported) -- holds
+  given: '(b) refuse with a non-zero exit', '(b) refuse with a non-zero exit', '(b) refuse with a non-zero exit'
+pass@1 1.00; pass^3 1/1 control(s)
+```
+
+Exit `0` when every ruling control holds and `1` when one does not, or when no
+record is adopted. What the review document would refuse (an unclaimed record,
+the line ceiling) does not stop a ruling run: a ruling is answered from the
+adopted records, not from that document. Exit `2` when no ruling control is
+declared, when an adopted id is missing from the catalog beside
+`uphold_check.py` (a binary and a script from different releases), for a control
+with no `question`, fewer than two distinct `options`, an `answer` that is not
+one of them, or not exactly one of `answer`, `escalate = true` and
+`none = true`, and for a ruler or auditor that exits non-zero, stalls past
+`--timeout`, or prints anything but the objects above, an answer that is not an
+option it was shown included.
 
 ## Design rulings: `[decide]`
 
