@@ -19,6 +19,7 @@ pub(crate) mod merge;
 pub(crate) mod message;
 pub(crate) mod names;
 pub(crate) mod push;
+pub(crate) mod ruling;
 pub(crate) mod scope;
 pub(crate) mod sets;
 pub(crate) mod unicode;
@@ -113,6 +114,10 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     // never itself, which is what keeps the dispatch finite.
     "text-guards",
     "text-literals",
+    // Text a design ruling publishes, judged against the catalog this binary
+    // carries: every catalog line an `Answered:` line cites must be at the
+    // revision the repository pins and must say what the answer quotes.
+    "ruling-citations-resolve",
     // The one built-in that reads no artifact itself. It is handed the
     // evidence every compiled-in provider reported about the change and
     // judges that -- so which parser or which diff supplied a fact is not its
@@ -291,6 +296,7 @@ pub(crate) const TEXT_GUARDS: &[&str] = &[
     "prevent-ai-author",
     "prevent-unusual-unicode",
     "no-private-repo-names",
+    "ruling-citations-resolve",
     "text-guards",
     "text-literals",
 ];
@@ -640,6 +646,7 @@ pub(crate) fn text_refusal(
         "no-private-repo-names" => {
             single(names::in_text(root, policy, rule, destination, label, text))
         }
+        "ruling-citations-resolve" => single(ruling::in_text(root, rule, label, text)),
         // The consultations. `over_text` skips the meta guards, so the
         // recursion is one level deep by construction.
         "text-guards" => over_text(root, policy, destination, published, in_scope, ledger),
@@ -984,7 +991,7 @@ mod tests {
                 "{id} is in EVERY_BUILTIN with no dispatch arm"
             );
         }
-        assert_eq!(EVERY_BUILTIN.len(), 22);
+        assert_eq!(EVERY_BUILTIN.len(), 23);
     }
 
     #[test]

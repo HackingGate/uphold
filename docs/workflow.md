@@ -118,6 +118,7 @@ flowchart LR
 | `no-published-host-identity` | `published-text` | Use neutral placeholders -- example-user, example-host, example.test, /srv/example -- instead of values taken from the local machine. |
 | `no-published-markers` | `published-text` | Published text must satisfy the repository's text-capable guards. |
 | `no-published-private-repo-names` | `published-text` | The `no-private-repo-names` guard writes its own report. |
+| `ruling-citations-resolve` | `published-text` | The `ruling-citations-resolve` guard writes its own report. |
 | `unowned-forge-target` | `published-text` | The `prevent-unowned-target` guard writes its own report. |
 | `no-announcing-sentence` | `prose-shapes` | This sentence says what the next one will say. |
 | `no-empty-hedge` | `prose-shapes` | This hedge admits no uncertainty -- it softens the claim without qualifying it. |
@@ -134,6 +135,7 @@ flowchart LR
 | `no-published-host-identity` | `published-text` | Use neutral placeholders -- example-user, example-host, example.test, /srv/example -- instead of values taken from the local machine. |
 | `no-published-markers` | `published-text` | Published text must satisfy the repository's text-capable guards. |
 | `no-published-private-repo-names` | `published-text` | The `no-private-repo-names` guard writes its own report. |
+| `ruling-citations-resolve` | `published-text` | The `ruling-citations-resolve` guard writes its own report. |
 | `no-announcing-sentence` | `prose-shapes` | This sentence says what the next one will say. |
 | `no-empty-hedge` | `prose-shapes` | This hedge admits no uncertainty -- it softens the claim without qualifying it. |
 | `no-restating-clause` | `prose-shapes` | This clause restates the one in front of it. |

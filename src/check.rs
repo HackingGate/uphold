@@ -56,7 +56,7 @@ const GITLEAKS_OWNS: &str = "it was removed from the `credentials` set after its
 /// disk beside itself, which works only in a checkout of this repository and is
 /// a second copy of a value cargo already holds. This one cannot drift from the
 /// crate it is compiled into.
-fn upstream_slug() -> Option<(&'static str, &'static str)> {
+pub(crate) fn upstream_slug() -> Option<(&'static str, &'static str)> {
     slug_of(env!("CARGO_PKG_REPOSITORY"))
 }
 

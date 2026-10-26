@@ -5154,6 +5154,7 @@ mod tests {
                 "no-published-host-identity",
                 "no-published-markers",
                 "no-published-private-repo-names",
+                "ruling-citations-resolve",
                 "unowned-forge-target",
             ],
             "{:?}",
