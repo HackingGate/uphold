@@ -240,31 +240,36 @@ fn cited(line: &str) -> Vec<Citation<'_>> {
 
 /// The answer lines of a body: `Answered:` under a questions heading, outside
 /// a code fence.
+///
+/// A heading below the questions heading's level stays inside its section
+/// whatever it says. A fence closes on a run of its own character at least as
+/// long as the one that opened it, with nothing after (`CommonMark` 0.31.2,
+/// §4.5), so a three-backtick example inside a four-backtick block stays
+/// inside it.
 fn answers(text: &str) -> Vec<&str> {
     let mut under: Option<usize> = None;
-    let mut fence: Option<&str> = None;
+    let mut fence: Option<(char, usize)> = None;
     let mut found = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim_start();
-        if let Some(marker) = fence {
-            if trimmed.starts_with(marker) {
+        let run = fence_run(trimmed);
+        if let Some((character, length)) = fence {
+            if run.is_some_and(|(closing, count, rest)| {
+                closing == character && count >= length && rest.trim().is_empty()
+            }) {
                 fence = None;
             }
             continue;
         }
-        if let Some(marker) = ["```", "~~~"]
-            .into_iter()
-            .find(|marker| trimmed.starts_with(marker))
-        {
-            fence = Some(marker);
+        if let Some((character, count, _)) = run {
+            fence = Some((character, count));
             continue;
         }
         if let Some((level, title)) = heading(trimmed) {
-            if title.to_lowercase().contains("question") {
-                under = Some(level);
-            } else if under.is_some_and(|questions| level <= questions) {
-                under = None;
+            if under.is_some_and(|questions| level > questions) {
+                continue;
             }
+            under = title.to_lowercase().contains("question").then_some(level);
             continue;
         }
         if under.is_some() && list_item(trimmed).starts_with("Answered:") {
@@ -272,6 +277,16 @@ fn answers(text: &str) -> Vec<&str> {
         }
     }
     found
+}
+
+/// A fence marker: three or more backticks or tildes, and what follows them.
+fn fence_run(line: &str) -> Option<(char, usize, &str)> {
+    let character = line
+        .chars()
+        .next()
+        .filter(|first| ['`', '~'].contains(first))?;
+    let count = line.chars().take_while(|&next| next == character).count();
+    (count >= 3).then(|| (character, count, line.get(count..).unwrap_or("")))
 }
 
 /// An ATX heading's level and title.
@@ -331,10 +346,24 @@ Answered: inside a fence
 ## Done when
 
 Answered: after the section
+
+## Questions
+
+### Question one
+
+### Wording
+
+Answered: (c)
+
+````markdown
+```
+```
+Answered: inside a longer fence
+````
 ";
         assert_eq!(
             answers(body).into_iter().map(str::trim).collect::<Vec<_>>(),
-            ["Answered: (a)", "- Answered: (b)"]
+            ["Answered: (a)", "- Answered: (b)", "Answered: (c)"]
         );
     }
 
