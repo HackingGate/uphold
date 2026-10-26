@@ -432,6 +432,15 @@ class RecordShape(unittest.TestCase):
 
                 self.assertEqual(self.problems(mutate), [])
 
+    def test_a_url_that_does_not_parse_is_refused_rather_than_raised(self):
+        def mutate(record):
+            record["status"] = "reviewed"
+            record["sources"] = [
+                {"title": "t", "url": "https://[::1", "type": "standard", "notes": "n"}
+            ]
+
+        self.assertRefused(self.problems(mutate), "sources[0]", "whole work")
+
     def test_a_seed_record_may_cite_a_whole_work(self):
         whole = {
             "title": "t",

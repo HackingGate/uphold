@@ -114,9 +114,13 @@ def located(source: dict) -> bool:
     the section, and an answer citing it cannot say which one decides.
     """
     url = source.get("url")
-    return bool(isinstance(url, str) and urlsplit(url).fragment) or bool(
-        source.get("locator")
-    )
+    try:
+        fragment = isinstance(url, str) and urlsplit(url).fragment
+    except ValueError:
+        # `https://[::1` passes the HTTP(S) prefix test and is no URL: it
+        # names no part of anything, and the read must not end the run.
+        fragment = ""
+    return bool(fragment) or bool(source.get("locator"))
 
 
 def error(errors: list[str], path: str, message: str) -> None:
