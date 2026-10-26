@@ -1438,7 +1438,8 @@ fn misplaced_range_hooks_do_not_supply_partial_claim_evidence() {
 // ── [decide]: the records design questions are answered from ─────────
 
 /// `economy-of-mechanism` and `defense-in-depth` name each other in
-/// `conflicts_with`; `unix-composability` conflicts with neither of the first.
+/// `conflicts_with`, and so do `unix-composability` and `defense-in-depth`;
+/// `unix-composability` and `economy-of-mechanism` do not.
 fn decide_fixture(decide: &str) -> PathBuf {
     let root = workspace();
     write(

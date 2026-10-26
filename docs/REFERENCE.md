@@ -4387,6 +4387,11 @@ adopt = ["unix-composability", "defense-in-depth", "economy-of-mechanism"]
 prefer = "defense-in-depth"
 over = "economy-of-mechanism"
 why = "A second control is worth the larger mechanism for anything that publishes."
+
+[[decide.order]]
+prefer = "unix-composability"
+over = "defense-in-depth"
+why = "Each layer is a separate command that can be run and tested alone."
 ```
 
 `adopt` is catalog ids. Every pair of adopted records that names the other in
@@ -4405,6 +4410,7 @@ adopted 3 record(s) for design rulings ([decide]):
   defense-in-depth
   economy-of-mechanism
   order  defense-in-depth over economy-of-mechanism: A second control is ...
+  order  unix-composability over defense-in-depth: Each layer is a separate ...
 ```
 
 Exit `1`, under `design rulings refused ([decide]):`, for an adopted id the
