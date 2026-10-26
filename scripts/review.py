@@ -535,7 +535,10 @@ def ruling_document(
     lines: dict[str, list[str]] = {}
     for record_id in adopted:
         path = records[record_id]["_path"]
-        text = Path(path).read_text(encoding="utf-8").splitlines()
+        try:
+            text = Path(path).read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError) as error:
+            raise RulerFailed(f"could not read {path}: {error}") from error
         lines[record_id] = text
         parts.append(f"\n## {record_id} (principles/{record_id}.toml)\n\n")
         parts.extend(f"L{number}: {line}\n" for number, line in enumerate(text, 1))

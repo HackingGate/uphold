@@ -71,10 +71,12 @@ the line at that revision does not contain it. Publish with `gh issue edit` or
 `gh issue create` so that check runs. Do not change the issue's `ruling:` label:
 the owner records the ruling.
 
-## 4. Score the procedure
+## 4. Score the answer and its citations
 
 `uphold_check.py --review --drive --rule -- <ruler>` asks a ruler each
 `[[review.ruling]]` control in `policy/upheld.toml` and scores it; see
 docs/REFERENCE.md, "Ruling controls". The ruler reads
 `{"document", "question", "options"}` on stdin and prints
-`{"answer", "citations"}`, `{"none", "citations"}` or `{"escalate"}`.
+`{"answer", "citations"}`, `{"none", "citations"}` or `{"escalate"}`. The
+precedent step is not scored: the ruler is handed no issue history to find one
+in.

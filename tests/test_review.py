@@ -523,6 +523,14 @@ class Rulings(unittest.TestCase):
         self.assertEqual(result["held"], 0)
         self.assertIn("a none that cites nothing", result["broken"][0])
 
+    def test_a_decide_report_with_no_adopt_list_is_two_not_an_empty_policy(self):
+        settings = {"rulings": [self.CONTROL]}
+        driving = {"seed": 1, "timeout": 1, "auditor": None, "command": ["false"]}
+        records = {record["id"]: record for record in load_catalog()}
+        self.assertEqual(
+            uphold_check.drive_rulings(driving, settings, {"decide": {}}, records), 2
+        )
+
     def test_an_adopted_id_the_scripts_catalog_lacks_is_two_rather_than_dropped(self):
         settings = {"rulings": [self.CONTROL]}
         report = {
@@ -639,6 +647,7 @@ class RuleCommand(unittest.TestCase):
         import json, sys
         payload = json.load(sys.stdin)
         assert "L1: id = \\"fail-fast\\"" in payload["document"], payload["document"]
+        assert payload["question"] == "Which?", payload["question"]
         answer = next(o for o in payload["options"] if o.startswith("(b)"))
         cited = [{"record": "fail-fast", "line": 1, "quote": "fail-fast"}]
         print(json.dumps({"answer": answer, "citations": cited}))
@@ -664,15 +673,15 @@ class RuleCommand(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        self.assertNotEqual(
-            subprocess.run(
-                [sys.executable, str(SCRIPT), "--review"],
-                cwd=self.tmp,
-                capture_output=True,
-                check=False,
-            ).returncode,
-            0,
+        review = subprocess.run(
+            [sys.executable, str(SCRIPT), "--review"],
+            cwd=self.tmp,
+            capture_output=True,
+            text=True,
+            check=False,
         )
+        self.assertEqual(review.returncode, 1, review.stderr)
+        self.assertIn("no rule here claims it", review.stderr)
         result = self.rule(self.ANSWERS_B)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("held 3/3", result.stdout)
@@ -697,6 +706,8 @@ class RuleCommand(unittest.TestCase):
             ["--agree", "4"],
             ["--auditor", ""],
             ["--audit-every", "0"],
+            ["--seed", "²"],
+            ["--runs", "²"],
         ]:
             result = self.rule("print(1)", *argv)
             self.assertEqual(result.returncode, 2, argv)

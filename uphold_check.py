@@ -851,7 +851,7 @@ def drive_arguments(argv: list[str]) -> dict | None:
                 return None
             if not auditor:
                 return None
-        elif rest[1].isdigit() and (int(rest[1]) >= 1 or rest[0] == "--seed"):
+        elif rest[1].isdecimal() and (int(rest[1]) >= 1 or rest[0] == "--seed"):
             counts[rest[0]] = int(rest[1])
         else:
             return None
@@ -1041,7 +1041,15 @@ def drive_rulings(driving: dict, settings: dict, report: dict, records: dict) ->
             file=sys.stderr,
         )
         return 2
-    adopted = list(decide.get("adopt", []))
+    adopted = decide.get("adopt")
+    if not isinstance(adopted, list):
+        print(
+            "uphold review could not look: the uphold binary reports `decide` "
+            "without an `adopt` list, so which records this repository adopts "
+            "cannot be read",
+            file=sys.stderr,
+        )
+        return 2
     missing = [record_id for record_id in adopted if record_id not in records]
     if missing:
         # The engine and this script carry different catalogs. Dropping the id
@@ -1060,9 +1068,6 @@ def drive_rulings(driving: dict, settings: dict, report: dict, records: dict) ->
             file=sys.stderr,
         )
         return 1
-    document, lines = review_mod.ruling_document(
-        adopted, decide.get("order", []), records
-    )
     seed = driving["seed"]
     if seed is None:
         seed = random.SystemRandom().randrange(2**32)
@@ -1070,6 +1075,9 @@ def drive_rulings(driving: dict, settings: dict, report: dict, records: dict) ->
     timeout = driving["timeout"]
     auditor_command = driving["auditor"]
     try:
+        document, lines = review_mod.ruling_document(
+            adopted, decide.get("order", []), records
+        )
         results = review_mod.drive_rulings(
             settings["rulings"],
             document,

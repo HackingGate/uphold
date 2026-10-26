@@ -4415,7 +4415,9 @@ at least one per control, is handed to that command as `{"document",
 "question", "options", "answer" or "none", "citations"}` and nothing else the
 ruler printed; it prints `{"supported": true}` or `{"supported": false,
 "reason": "..."}`, and an unsupported run stops the control holding. Without
-one, the report says the citations' support is unaudited.
+one, the report says the citations' support is unaudited. The skill's
+closest-precedent step is not scored: the document carries no issue history,
+so a precedent a ruler named could not be checked.
 
 ```text
 seed 3 (pass --seed 3 to shuffle the options the same way)

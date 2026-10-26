@@ -23,11 +23,20 @@ def frontmatter(text: str) -> dict[str, str]:
     if not lines or lines[0] != "---" or "---" not in lines[1:]:
         return {}
     block = lines[1 : lines.index("---", 1)]
-    return dict(
-        line.split(": ", 1)
-        for line in block
-        if ": " in line and not line.startswith(" ")
-    )
+    fields = {}
+    for line in block:
+        if line.startswith(" ") or ": " not in line:
+            continue
+        key, value = line.split(": ", 1)
+        # `>` or `|` opens a block scalar whose text is on the lines below,
+        # which this reader does not parse; reading the indicator as the value
+        # would pass an empty or over-long description.
+        if re.fullmatch(r"[|>][0-9+-]*(\s+#.*)?", value.strip()):
+            raise AssertionError(
+                f"{key}: a block scalar, which this test does not read"
+            )
+        fields[key] = value
+    return fields
 
 
 class Skills(unittest.TestCase):
@@ -43,6 +52,10 @@ class Skills(unittest.TestCase):
                 self.assertEqual(name, path.parent.name)
                 description = fields.get("description", "").strip()
                 self.assertTrue(0 < len(description) <= 1024, description)
+
+    def test_a_block_scalar_is_refused_rather_than_read_as_its_indicator(self):
+        with self.assertRaises(AssertionError):
+            frontmatter("---\nname: x\ndescription: >\n  folded text\n---\n")
 
     def test_a_directory_under_skills_is_a_skill(self):
         for path in sorted(SKILLS.iterdir()):
