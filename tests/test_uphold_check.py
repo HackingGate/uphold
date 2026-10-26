@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -208,6 +209,77 @@ class NoProseInRuntime(unittest.TestCase):
             result = run(Path(tmp), "--review")
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("Do not raise the ceiling", result.stderr)
+
+
+@needs_the_engine
+class ReviewPrintOnAFreshAdoption(unittest.TestCase):
+    """A repository that has just run `uphold init` has no rule claiming anything.
+
+    `--emit` must still refuse the records a machine could check, and `--print`
+    must hand a reviewer the document anyway and name those records apart.
+    """
+
+    def setUp(self):
+        # Under a git hook GIT_DIR points at the real repository, and a bare
+        # `git init` here would then commit into it and flip its core.bare.
+        scrubbed = {
+            name: value for name, value in os.environ.items() if name.startswith("GIT_")
+        }
+        for name in scrubbed:
+            del os.environ[name]
+        self.addCleanup(os.environ.update, scrubbed)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com"]
+        subprocess.run(["git", "init", "-q"], cwd=self.tmp, check=True)
+        (self.tmp / "a.txt").write_text("a\n", encoding="utf-8")
+        subprocess.run([*git, "add", "a.txt"], cwd=self.tmp, check=True)
+        subprocess.run([*git, "commit", "-qm", "first"], cwd=self.tmp, check=True)
+        init = uphold_check.engine(
+            self.tmp, "init", "--owner", "example", "--visibility", "private"
+        )
+        self.assertEqual(init.returncode, 0, init.stderr)
+
+    def tree(self) -> dict[str, bytes]:
+        return {
+            str(path.relative_to(self.tmp)): path.read_bytes()
+            for path in sorted(self.tmp.rglob("*"))
+            if path.is_file() and ".git" not in path.relative_to(self.tmp).parts
+        }
+
+    def test_print_exits_zero_with_the_document_and_names_the_unclaimed_apart(self):
+        result = run(self.tmp, "--review", "--print")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.startswith("# Review"))
+        unclaimed = [
+            line.split(":")[0].removeprefix("- ")
+            for line in result.stderr.splitlines()
+            if line.startswith("- ")
+        ]
+        self.assertEqual(len(unclaimed), 11, result.stderr)
+        self.assertIn("backpressure", unclaimed)
+        self.assertIn("no_subject_here", result.stderr)
+        # Apart from the document: a reviewer is never asked to judge them.
+        for record_id in unclaimed:
+            self.assertNotIn(f"- {record_id}:", result.stdout)
+        self.assertNotIn("could enforce", result.stdout)
+
+    def test_emit_still_refuses_with_todays_message(self):
+        result = run(self.tmp, "--review", "--emit")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.stderr.count("no rule here claims it"), 11)
+        self.assertIn(
+            "Build the rule, or record why this repository has no subject for it "
+            "under [review].no_subject_here.",
+            result.stderr,
+        )
+
+    def test_print_writes_no_file(self):
+        before = self.tree()
+        result = run(self.tmp, "--review", "--print")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.tree(), before)
 
 
 @needs_the_engine

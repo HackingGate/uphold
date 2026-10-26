@@ -28,6 +28,7 @@ Usage::
     uphold_check.py --list          # list catalog ids
     uphold_check.py --review        # what routes to a rule and what to a reviewer
     uphold_check.py --review --emit # write the compiled review document
+    uphold_check.py --review --print # print it, writing no file
     uphold_check.py --init          # print a starter declaration
     uphold_check.py --oscal         # emit the claims as OSCAL component-definition
     uphold_check.py --self-check    # validate the bundled catalog itself
@@ -809,7 +810,7 @@ def emit_target(root: Path, name: str) -> Path:
 
 REVIEW_USAGE = (
     "usage: uphold_check.py --review "
-    "[--emit | --check | --drive [--runs N] [--timeout SECONDS] -- REVIEWER...\n"
+    "[--emit | --check | --print | --drive [--runs N] [--timeout SECONDS] -- REVIEWER...\n"
     "       | --drive --rule [--runs N] [--timeout SECONDS] [--agree M] "
     "[--audit-every N --auditor 'COMMAND'] [--seed N] -- RULER...]"
 )
@@ -875,13 +876,14 @@ def drive_arguments(argv: list[str]) -> dict | None:
 def run_review(argv: list[str]) -> int:
     emit = argv[:1] == ["--emit"]
     check = argv[:1] == ["--check"]
+    printing = argv[:1] == ["--print"]
     driving = None
     if argv[:1] == ["--drive"]:
         driving = drive_arguments(argv)
         if driving is None:
             print(REVIEW_USAGE, file=sys.stderr)
             return 2
-    elif argv and not (emit or check):
+    elif argv and not (emit or check or printing):
         print(REVIEW_USAGE, file=sys.stderr)
         return 2
 
@@ -918,8 +920,13 @@ def run_review(argv: list[str]) -> int:
     claimed = {
         principle for principle, rule in claims if (principle, rule) in reconciled
     }
+    unclaimed: list[dict] | None = [] if printing else None
     for_review, errors, stale = review_mod.route(
-        records, claimed, settings["exempt"], settings["include_domains"]
+        records,
+        claimed,
+        settings["exempt"],
+        settings["include_domains"],
+        unclaimed,
     )
     active = sorted(
         {rule for principle, rule in claims if (principle, rule) in reconciled}
@@ -937,7 +944,8 @@ def run_review(argv: list[str]) -> int:
     # editing against.
     note = review_mod.uncontrolled_note(uncontrolled)
     if note:
-        print(note)
+        # stdout is the document under --print, and nothing else may be on it.
+        print(note, file=sys.stderr if printing else sys.stdout)
 
     over = review_mod.over_budget(document, settings["max_lines"])
     for message in errors + stale + control_errors:
@@ -969,6 +977,12 @@ def run_review(argv: list[str]) -> int:
             return 2
         print(review_mod.render_drive(results, runs), end="")
         return 0 if all(review_mod.holds(result, runs) for result in results) else 1
+
+    if printing:
+        print(document, end="")
+        if unclaimed:
+            print(review_mod.render_could_enforce(unclaimed), end="", file=sys.stderr)
+        return 0
 
     if emit:
         for name, path in control_targets:

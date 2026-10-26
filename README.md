@@ -262,6 +262,7 @@ uphold_check.py --list          # every id in the catalog
 uphold_check.py --init          # a starter declaration
 uphold_check.py --oscal         # OSCAL component-definition JSON
 uphold_check.py --review        # what routes to the review tier
+uphold_check.py --review --print  # the review document on stdout, no file written
 uphold_check.py --review --drive -- CMD   # score a reviewer against the controls
 ```
 
