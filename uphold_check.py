@@ -47,6 +47,8 @@ from __future__ import annotations
 
 import functools
 import json
+import random
+import shlex
 import subprocess
 import sys
 import tomllib
@@ -649,6 +651,7 @@ def review_settings(declaration: dict) -> dict:
         "emit_controls": emit_controls,
         "exempt": exempt,
         "controls": review_controls(settings),
+        "rulings": review_rulings(settings),
     }
 
 
@@ -713,6 +716,72 @@ def review_controls(settings: dict) -> list[dict]:
     return declared
 
 
+def review_rulings(settings: dict) -> list[dict]:
+    """Read `[[review.ruling]]`, refusing a control that could not be scored.
+
+    A ruling control is a question, its options, and what the ruling is:
+    exactly one of `answer` (one of the options), `escalate = true` or
+    `none = true`. Like `review_controls`, every refusal here is the shape of
+    the declaration, so every one is exit 2.
+    """
+    declared = settings.get("ruling", [])
+    if not isinstance(declared, list) or not all(
+        isinstance(entry, dict) for entry in declared
+    ):
+        raise CouldNotLook(
+            "`review.ruling` must be an array of `[[review.ruling]]` tables, each "
+            "a question, its options and the ruled answer"
+        )
+    for entry in declared:
+        question = entry.get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise CouldNotLook("every `[[review.ruling]]` needs a non-empty `question`")
+        at = f"the ruling control {question.splitlines()[0][:60]!r}"
+        unknown = sorted(
+            set(entry) - {"question", "options", "answer", "escalate", "none"}
+        )
+        if unknown:
+            raise CouldNotLook(
+                f"{at} declares {', '.join(unknown)}, which no ruling control has. A "
+                f"ruling control is `question`, `options`, and one of `answer`, "
+                f"`escalate` or `none`"
+            )
+        options = entry.get("options")
+        shown = (
+            [review_mod.RECOMMENDED.sub("", option).strip() for option in options]
+            if isinstance(options, list) and all(isinstance(o, str) for o in options)
+            else None
+        )
+        if (
+            shown is None
+            or len(shown) < 2
+            or not all(shown)
+            or len(set(shown)) != len(shown)
+        ):
+            raise CouldNotLook(
+                f"{at} needs `options`, two or more distinct non-empty strings once "
+                f'any "(recommended)" is taken off'
+            )
+        ruled = [key for key in ("answer", "escalate", "none") if key in entry]
+        if len(ruled) != 1:
+            raise CouldNotLook(
+                f"{at} needs exactly one of `answer`, `escalate = true` or `none = true`"
+            )
+        if ruled == ["answer"]:
+            answer = entry["answer"]
+            if not isinstance(answer, str) or (
+                review_mod.RECOMMENDED.sub("", answer).strip() not in shown
+            ):
+                raise CouldNotLook(
+                    f"{at} has an `answer` that is not one of its `options`"
+                )
+        elif entry[ruled[0]] is not True:
+            raise CouldNotLook(
+                f"{at} has `{ruled[0]}` set to something other than true"
+            )
+    return declared
+
+
 def emit_target(root: Path, name: str) -> Path:
     """Where one `review.emit` name writes to, refusing anything outside the repo.
 
@@ -740,29 +809,67 @@ def emit_target(root: Path, name: str) -> Path:
 
 REVIEW_USAGE = (
     "usage: uphold_check.py --review "
-    "[--emit | --check | --drive [--runs N] [--timeout SECONDS] -- REVIEWER...]"
+    "[--emit | --check | --drive [--runs N] [--timeout SECONDS] -- REVIEWER...\n"
+    "       | --drive --rule [--runs N] [--timeout SECONDS] [--agree M] "
+    "[--audit-every N --auditor 'COMMAND'] [--seed N] -- RULER...]"
 )
 
 
-def drive_arguments(argv: list[str]) -> tuple[int, int, list[str]] | None:
-    """`--drive [--runs N] [--timeout SECONDS] -- REVIEWER...`, or None.
+def drive_arguments(argv: list[str]) -> dict | None:
+    """`--drive [--rule] [options] -- COMMAND...`, or None.
 
-    Returns (runs, timeout, reviewer). The reviewer is everything after `--`,
-    verbatim, so its own flags never have to be told apart from these.
+    The command is everything after `--`, verbatim, so its own flags never
+    have to be told apart from these. `--auditor` is one string split the way
+    a shell would, because it is the second command on the line and `--` is
+    already the first one's. `--agree`, `--audit-every`, `--auditor` and
+    `--seed` belong to `--rule` alone.
     """
-    values = {
+    rest = argv[1:]
+    rule = rest[:1] == ["--rule"]
+    if rule:
+        rest = rest[1:]
+    counts = {
         "--runs": review_mod.DEFAULT_RUNS,
         "--timeout": review_mod.DEFAULT_TIMEOUT,
     }
-    rest = argv[1:]
-    while rest[:1] and rest[0] in values:
-        if len(rest) < 2 or not rest[1].isdigit() or int(rest[1]) < 1:
+    if rule:
+        counts.update(
+            {
+                "--agree": review_mod.DEFAULT_AGREE,
+                "--audit-every": review_mod.DEFAULT_AUDIT_EVERY,
+                "--seed": None,
+            }
+        )
+    auditor: list[str] | None = None
+    while rest[:1] and (rest[0] in counts or (rule and rest[0] == "--auditor")):
+        if len(rest) < 2:
             return None
-        values[rest[0]] = int(rest[1])
+        if rest[0] == "--auditor":
+            try:
+                auditor = shlex.split(rest[1])
+            except ValueError:
+                return None
+            if not auditor:
+                return None
+        elif rest[1].isdigit() and (int(rest[1]) >= 1 or rest[0] == "--seed"):
+            counts[rest[0]] = int(rest[1])
+        else:
+            return None
         rest = rest[2:]
     if rest[:1] != ["--"] or len(rest) < 2:
         return None
-    return values["--runs"], values["--timeout"], rest[1:]
+    if rule and counts["--agree"] is not None and counts["--agree"] > counts["--runs"]:
+        return None
+    return {
+        "rule": rule,
+        "runs": counts["--runs"],
+        "timeout": counts["--timeout"],
+        "agree": counts.get("--agree") or counts["--runs"],
+        "audit_every": counts.get("--audit-every"),
+        "auditor": auditor,
+        "seed": counts.get("--seed"),
+        "command": rest[1:],
+    }
 
 
 def run_review(argv: list[str]) -> int:
@@ -835,8 +942,15 @@ def run_review(argv: list[str]) -> int:
     if errors or stale or control_errors or over:
         return 1
 
+    if driving is not None and driving["rule"]:
+        return drive_rulings(driving, settings, report, records)
+
     if driving is not None:
-        runs, timeout, reviewer = driving
+        runs, timeout, reviewer = (
+            driving["runs"],
+            driving["timeout"],
+            driving["command"],
+        )
         carried = {record["id"]: record["title"] for record in for_review}
         try:
             results = review_mod.drive(
@@ -900,6 +1014,78 @@ def run_review(argv: list[str]) -> int:
         f"{len(document.splitlines())} lines against a ceiling of {settings['max_lines']}"
     )
     return 0
+
+
+def drive_rulings(driving: dict, settings: dict, report: dict, records: dict) -> int:
+    """`--drive --rule`: ask the ruler every ruling control, and score it.
+
+    The adopted records and their orders are the engine's answer, read off the
+    same `uphold check --json` report the routing reads, because `[decide]` is
+    in the policy and this script does not read the policy.
+    """
+    if not settings["rulings"]:
+        print(
+            "uphold review could not look: no `[[review.ruling]]` control is "
+            "declared, so there is nothing to drive",
+            file=sys.stderr,
+        )
+        return 2
+    decide = report.get("decide")
+    if not isinstance(decide, dict):
+        print(
+            "uphold review could not look: the uphold binary reports no `decide`, so "
+            "which records this repository adopts cannot be read. Build or install "
+            "an uphold that reports it",
+            file=sys.stderr,
+        )
+        return 2
+    adopted = [
+        record_id for record_id in decide.get("adopt", []) if record_id in records
+    ]
+    if not adopted:
+        print(
+            "- the ruling controls have no adopted record to be answered from. "
+            "List the records under `[decide] adopt` in the policy",
+            file=sys.stderr,
+        )
+        return 1
+    document, lines = review_mod.ruling_document(
+        adopted, decide.get("order", []), records
+    )
+    seed = driving["seed"]
+    if seed is None:
+        seed = random.SystemRandom().randrange(2**32)
+    rng = random.Random(seed)
+    timeout = driving["timeout"]
+    auditor_command = driving["auditor"]
+    try:
+        results = review_mod.drive_rulings(
+            settings["rulings"],
+            document,
+            lines,
+            driving["runs"],
+            rng,
+            lambda doc, question, shown: review_mod.ask_ruler(
+                driving["command"], doc, question, shown, timeout
+            ),
+            None
+            if auditor_command is None
+            else lambda doc, question, options, given: review_mod.audit(
+                auditor_command, doc, question, options, given, timeout
+            ),
+            driving["audit_every"],
+        )
+    except review_mod.RulerFailed as error:
+        print(f"uphold review could not look: {error}", file=sys.stderr)
+        return 2
+    agree = driving["agree"]
+    print(
+        review_mod.render_rulings(
+            results, driving["runs"], agree, seed, auditor_command is not None
+        ),
+        end="",
+    )
+    return 0 if all(review_mod.ruling_holds(result, agree) for result in results) else 1
 
 
 def main(argv: list[str]) -> int:

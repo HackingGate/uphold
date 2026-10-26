@@ -9,6 +9,7 @@ they let through.
 from __future__ import annotations
 
 import json
+import random
 import shutil
 import subprocess
 import sys
@@ -395,6 +396,296 @@ class Drive(unittest.TestCase):
 
 
 @needs_the_engine
+class Rulings(unittest.TestCase):
+    """`--drive --rule`: a ruling control is asked k times and scored.
+
+    The rulers here are functions and small scripts, so no model is involved:
+    what is tested is the scoring, the shuffle, and the refusals.
+    """
+
+    LINES: ClassVar[dict[str, list[str]]] = {
+        "fail-fast": ['id = "fail-fast"', 'title = "Fail Fast and Explicitly"']
+    }
+    CITED: ClassVar[list[dict]] = [
+        {"record": "fail-fast", "line": 1, "quote": "fail-fast"}
+    ]
+    CONTROL: ClassVar[dict] = {
+        "question": "Which?",
+        "options": ["(a) first (recommended)", "(b) second"],
+        "answer": "(b) second",
+    }
+
+    def drive(self, control: dict, ruler, auditor=None, runs: int = 3) -> dict:
+        (result,) = review_mod.drive_rulings(
+            [control], "doc", self.LINES, runs, random.Random(7), ruler, auditor
+        )
+        return result
+
+    def always(self, option: str):
+        return lambda _doc, _question, shown: {
+            "kind": "answer",
+            "value": next(value for value in shown if value.startswith(option)),
+            "citations": self.CITED,
+        }
+
+    def test_a_ruler_that_always_answers_a_fails_a_control_ruled_b(self):
+        result = self.drive(self.CONTROL, self.always("(a)"))
+        self.assertEqual(result["held"], 0)
+        self.assertFalse(review_mod.ruling_holds(result, 3))
+
+    def test_a_ruler_that_always_escalates_fails_a_control_with_an_answer(self):
+        def escalates(*_):
+            return {"kind": "escalate", "value": "no record applies", "citations": []}
+
+        result = self.drive(self.CONTROL, escalates)
+        self.assertEqual(result["given"], ["escalate"] * 3)
+        self.assertFalse(review_mod.ruling_holds(result, 3))
+
+    def test_a_ruler_giving_the_ruling_every_run_holds(self):
+        result = self.drive(self.CONTROL, self.always("(b)"))
+        self.assertEqual(result["held"], 3)
+        self.assertTrue(review_mod.ruling_holds(result, 3))
+
+    def test_an_escalation_control_holds_on_escalations_alone(self):
+        control = {**self.CONTROL, "escalate": True}
+        del control["answer"]
+
+        def escalates(*_):
+            return {"kind": "escalate", "value": "unordered conflict", "citations": []}
+
+        self.assertTrue(review_mod.ruling_holds(self.drive(control, escalates), 3))
+
+    def test_two_runs_in_three_hold_only_where_agree_is_two(self):
+        answers = iter(["(b)", "(a)", "(b)"])
+
+        def ruler(doc, question, shown):
+            return self.always(next(answers))(doc, question, shown)
+
+        result = self.drive(self.CONTROL, ruler)
+        self.assertEqual(result["held"], 2)
+        self.assertFalse(review_mod.ruling_holds(result, 3))
+        self.assertTrue(review_mod.ruling_holds(result, 2))
+
+    def test_the_ruler_sees_shuffled_options_without_the_recommendation(self):
+        seen = []
+
+        def ruler(doc, question, shown):
+            seen.append(tuple(shown))
+            return self.always("(b)")(doc, question, shown)
+
+        control = {**self.CONTROL, "options": [f"({c}) {c}" for c in "abcdef"]}
+        control["answer"] = "(b) b"
+        control["options"][0] += " (Recommended)"
+        self.drive(control, ruler, runs=5)
+        self.assertTrue(all("recommended" not in " ".join(s).lower() for s in seen))
+        self.assertEqual(
+            {frozenset(s) for s in seen}, {frozenset(f"({c}) {c}" for c in "abcdef")}
+        )
+        self.assertGreater(len(set(seen)), 1, "the order never changed across runs")
+
+    def test_a_citation_that_does_not_resolve_breaks_the_run(self):
+        for cited, says in [
+            (
+                {"record": "least-power", "line": 1, "quote": "x"},
+                "not an adopted record",
+            ),
+            ({"record": "fail-fast", "line": 9, "quote": "x"}, "has no line 9"),
+            ({"record": "fail-fast", "line": 2, "quote": "fail-fast"}, "does not say"),
+        ]:
+            with self.subTest(cited=cited):
+
+                def ruler(_doc, _question, shown, cited=cited):
+                    return {
+                        "kind": "answer",
+                        "value": "(b) second",
+                        "citations": [cited],
+                    }
+
+                result = self.drive(self.CONTROL, ruler)
+                self.assertEqual(result["held"], 0)
+                self.assertIn(says, result["broken"][0])
+
+    def test_an_answer_that_cites_nothing_breaks_the_run(self):
+        def ruler(*_):
+            return {"kind": "answer", "value": "(b) second", "citations": []}
+
+        result = self.drive(self.CONTROL, ruler)
+        self.assertEqual(result["held"], 0)
+        self.assertIn("cites nothing", result["broken"][0])
+
+    def test_one_held_answer_in_audit_every_is_audited_and_an_unsupported_one_fails(
+        self,
+    ):
+        asked = []
+
+        def auditor(_doc, question, options, given):
+            asked.append(given)
+            return "the line is about something else"
+
+        result = self.drive(self.CONTROL, self.always("(b)"), auditor)
+        self.assertEqual(result["audited"], 1)
+        self.assertEqual(result["unsupported"], 1)
+        self.assertEqual(sorted(asked[0]), ["citations", "kind", "value"])
+        self.assertFalse(review_mod.ruling_holds(result, 2))
+
+    def ruler_script(self, body: str) -> list[str]:
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        script = Path(tmp) / "ruler.py"
+        script.write_text(
+            "import json, sys\npayload = json.load(sys.stdin)\n"
+            + textwrap.dedent(body),
+            encoding="utf-8",
+        )
+        return [sys.executable, str(script)]
+
+    def test_the_ruler_reads_the_document_question_and_options_and_nothing_else(self):
+        ruler = self.ruler_script(
+            """
+            assert sorted(payload) == ["document", "options", "question"], payload
+            print(json.dumps({"answer": payload["options"][0], "citations": []}))
+            """
+        )
+        given = review_mod.ask_ruler(ruler, "doc", "Which?", ["x", "y"])
+        self.assertEqual(given, {"kind": "answer", "value": "x", "citations": []})
+
+    def test_a_ruler_breaking_the_protocol_is_refused_rather_than_scored(self):
+        for body in [
+            'print("(a)")',
+            'print(json.dumps({"answer": "z"}))',
+            'print(json.dumps({"answer": "x", "escalate": "both"}))',
+            'print(json.dumps({"escalate": "r", "citations": [{"record": "a", "line": 1, "quote": "q"}]}))',
+            'print(json.dumps({"answer": "x", "citations": [{"record": "a"}]}))',
+            'sys.exit("no key")',
+        ]:
+            with self.subTest(body=body), self.assertRaises(review_mod.RulerFailed):
+                review_mod.ask_ruler(
+                    self.ruler_script(body), "doc", "Which?", ["x", "y"]
+                )
+
+
+class RuleCommand(unittest.TestCase):
+    """`--review --drive --rule` end to end, with a stub ruler and the engine."""
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._directory.name)
+        self.addCleanup(self._directory.cleanup)
+        carried = {value for record in load_catalog() for value in record["domains"]}
+        spare = sorted(set(DOMAINS) - carried)
+        if not spare:
+            self.skipTest("every domain is carried by a record; none routes nothing")
+        (self.tmp / "policy").mkdir()
+        (self.tmp / "policy" / "principles.toml").write_text(
+            '[decide]\nadopt = ["fail-fast"]\n', encoding="utf-8"
+        )
+        (self.tmp / "policy" / "upheld.toml").write_text(
+            textwrap.dedent(
+                f"""
+                [review]
+                include_domains = ["{spare[0]}"]
+
+                [[review.ruling]]
+                question = "Which?"
+                options = ["(a) first (recommended)", "(b) second"]
+                answer = "(b) second"
+                """
+            ),
+            encoding="utf-8",
+        )
+
+    def rule(self, ruler: str, *argv: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--review",
+                "--drive",
+                "--rule",
+                *argv,
+                "--",
+                sys.executable,
+                "-c",
+                textwrap.dedent(ruler),
+            ],
+            cwd=self.tmp,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    ANSWERS_B = """
+        import json, sys
+        payload = json.load(sys.stdin)
+        assert "L1: id = \\"fail-fast\\"" in payload["document"], payload["document"]
+        answer = next(o for o in payload["options"] if o.startswith("(b)"))
+        cited = [{"record": "fail-fast", "line": 1, "quote": "fail-fast"}]
+        print(json.dumps({"answer": answer, "citations": cited}))
+        """
+
+    @needs_the_engine
+    def test_a_ruler_giving_the_ruling_holds_and_prints_the_seed(self):
+        result = self.rule(self.ANSWERS_B, "--seed", "3")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("seed 3", result.stdout)
+        self.assertIn("held 3/3 (agree 3)", result.stdout)
+        self.assertIn("unaudited", result.stdout)
+
+    @needs_the_engine
+    def test_a_ruler_that_always_escalates_is_one(self):
+        result = self.rule(
+            'import sys; sys.stdin.read(); print(\'{"escalate": "no"}\')'
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("DOES NOT HOLD", result.stdout)
+
+    @needs_the_engine
+    def test_an_auditor_that_finds_the_citations_unsupported_is_one(self):
+        auditor = f'{sys.executable} -c \'print("{{\\"supported\\": false}}")\''
+        result = self.rule(self.ANSWERS_B, "--auditor", auditor)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("audited 1 (1 unsupported)", result.stdout)
+
+    def test_rule_options_outside_rule_or_out_of_range_are_usage_errors(self):
+        for argv in [
+            ["--agree", "4"],
+            ["--auditor", ""],
+            ["--audit-every", "0"],
+        ]:
+            result = self.rule("print(1)", *argv)
+            self.assertEqual(result.returncode, 2, argv)
+            self.assertIn("--drive --rule", result.stderr)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--review",
+                "--drive",
+                "--agree",
+                "2",
+                "--",
+                "true",
+            ],
+            cwd=self.tmp,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+
+    def test_a_ruling_control_whose_answer_is_not_an_option_is_two(self):
+        upheld = self.tmp / "policy" / "upheld.toml"
+        upheld.write_text(
+            upheld.read_text(encoding="utf-8").replace(
+                'answer = "(b) second"', 'answer = "(c) third"'
+            ),
+            encoding="utf-8",
+        )
+        result = self.rule("print(1)")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("not one of its `options`", result.stderr)
+
+
 class ClaimsThatEnforceNothing(unittest.TestCase):
     """A claim naming a rule no seam supplies must not silence the review.
 
