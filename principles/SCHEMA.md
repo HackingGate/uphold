@@ -28,7 +28,8 @@ must match.
 
 ## Optional fields
 
-`enforcement.rung` and `[[tools]]` may be omitted; each is described below. No
+`enforcement.rung`, a source's `locator` and `[[tools]]` may be omitted; each
+is described below. No
 other field is accepted: a top-level, `[enforcement]`, `[[sources]]` or
 `[[tools]]` key this document does not name fails validation, so a misspelled
 field is refused rather than read as an absent one.
@@ -163,6 +164,24 @@ notes = "Foundational articulation of information hiding."
 
 Source types are free-form but should normally be one of:
 `standard`, `paper`, `book`, `essay`, `documentation`, or `practice`.
+
+A source names the part of the work that supports the record: a fragment on
+the `url`, or, where the URL cannot carry one, a `locator` naming the section,
+page or chapter as the source numbers it:
+
+```toml
+[[sources]]
+title = "RFC 9110: HTTP Semantics"
+url = "https://www.rfc-editor.org/rfc/rfc9110"
+locator = "§9.2.2"
+type = "standard"
+notes = "Idempotent methods."
+```
+
+A `seed` record may still cite a whole work. A `reviewed` record may not:
+validation refuses a source of one with neither a fragment nor a `locator`, and
+a blank `locator` anywhere. `uphold_check.py --list` prints, on stderr, how many
+of the catalog's sources name their part.
 
 ## Tools
 

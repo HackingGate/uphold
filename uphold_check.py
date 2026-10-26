@@ -57,7 +57,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
 
 import review as review_mod
 from catalog import load_catalog, resolve
-from validate import DOMAINS
+from validate import DOMAINS, located
 
 HERE = Path(__file__).resolve().parent
 DECLARATION_RELPATH = Path("policy") / "upheld.toml"
@@ -908,6 +908,16 @@ def main(argv: list[str]) -> int:
     if argv[:1] == ["--list"]:
         for value, record in sorted(records.items()):
             print(f"{value:38} {record['kind']:20} {record['summary']}")
+        # On stderr, so the listing a caller parses stays one record per line.
+        # `seed` records may still cite a whole work; this is how many do.
+        sources = [
+            source for record in records.values() for source in record["sources"]
+        ]
+        print(
+            f"{sum(map(located, sources))} of {len(sources)} sources name the part "
+            f"that supports the record (a URL fragment or a locator)",
+            file=sys.stderr,
+        )
         return 0
 
     if argv[:1] == ["--init"]:

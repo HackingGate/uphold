@@ -399,6 +399,72 @@ class RecordShape(unittest.TestCase):
             self.problems(lambda record: record.update(tools=[])), "non-empty"
         )
 
+    def test_a_reviewed_record_citing_a_whole_work_is_refused(self):
+        def mutate(record):
+            record["status"] = "reviewed"
+            record["sources"] = [
+                {
+                    "title": "t",
+                    "url": "https://example.org/rfc",
+                    "type": "standard",
+                    "notes": "n",
+                }
+            ]
+
+        self.assertRefused(self.problems(mutate), "sources[0]", "whole work")
+
+    def test_a_reviewed_record_with_a_fragment_or_a_locator_is_accepted(self):
+        whole = {
+            "title": "t",
+            "url": "https://example.org/rfc",
+            "type": "standard",
+            "notes": "n",
+        }
+        for source in (
+            {**whole, "url": "https://example.org/rfc#section-9.2.2"},
+            {**whole, "locator": "§9.2.2"},
+        ):
+            with self.subTest(source=source):
+
+                def mutate(record, source=source):
+                    record["status"] = "reviewed"
+                    record["sources"] = [source]
+
+                self.assertEqual(self.problems(mutate), [])
+
+    def test_a_url_that_does_not_parse_is_refused_rather_than_raised(self):
+        def mutate(record):
+            record["status"] = "reviewed"
+            record["sources"] = [
+                {"title": "t", "url": "https://[::1", "type": "standard", "notes": "n"}
+            ]
+
+        self.assertRefused(self.problems(mutate), "sources[0]", "whole work")
+
+    def test_a_seed_record_may_cite_a_whole_work(self):
+        whole = {
+            "title": "t",
+            "url": "https://example.org/rfc",
+            "type": "standard",
+            "notes": "n",
+        }
+        found = self.problems(
+            lambda record: record.update(status="seed", sources=[whole])
+        )
+        self.assertEqual(found, [])
+
+    def test_a_blank_locator_is_refused(self):
+        whole = {
+            "title": "t",
+            "url": "https://example.org/rfc",
+            "type": "standard",
+            "notes": "n",
+        }
+        found = self.problems(
+            lambda record: record.update(sources=[{**whole, "locator": " "}])
+        )
+        self.assertRefused(found, "sources[0].locator")
+
     def test_a_tool_named_like_a_record_is_refused(self):
         # Another record's title, spelled the way a search would fold it: the
         # index would answer a search for the concept with the product.

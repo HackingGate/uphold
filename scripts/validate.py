@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 import sys
 from collections import Counter
+from urllib.parse import urlsplit
 
 from analysis import normalize
 from catalog import load_catalog, name_entries
@@ -97,9 +98,29 @@ TOP_LEVEL_FIELDS = (
 )
 ENFORCEMENT_FIELDS = {"level", "automatable", "observable", "checks", "limits", "rung"}
 SOURCE_FIELDS = ("title", "url", "type", "notes")
+# The section, page or chapter, as the source numbers it, for a URL that cannot
+# carry the place in a fragment.
+SOURCE_OPTIONAL = ("locator",)
 TOOL_FIELDS = ("name", "url", "notes")
 # Put on each record by `catalog.load_catalog`; no file writes it.
 LOADER_FIELDS = {"_path"}
+
+
+def located(source: dict) -> bool:
+    """Whether a source names the part of the work that supports the record.
+
+    A URL fragment does, and so does a `locator`. A whole-work citation does
+    not: a reader handed RFC 9110 for a claim about one section has to find
+    the section, and an answer citing it cannot say which one decides.
+    """
+    url = source.get("url")
+    try:
+        fragment = isinstance(url, str) and urlsplit(url).fragment
+    except ValueError:
+        # `https://[::1` passes the HTTP(S) prefix test and is no URL: it
+        # names no part of anything, and the read must not end the run.
+        fragment = ""
+    return bool(fragment) or bool(source.get("locator"))
 
 
 def error(errors: list[str], path: str, message: str) -> None:
@@ -389,7 +410,13 @@ def validate_records(records: list[dict]) -> list[str]:
                 if not isinstance(source, dict):
                     error(errors, path, f"sources[{index}] must be a table")
                     continue
-                unknown_fields(errors, path, f"sources[{index}]", source, SOURCE_FIELDS)
+                unknown_fields(
+                    errors,
+                    path,
+                    f"sources[{index}]",
+                    source,
+                    SOURCE_FIELDS + SOURCE_OPTIONAL,
+                )
                 for field in SOURCE_FIELDS:
                     value = source.get(field)
                     if not isinstance(value, str) or not value.strip():
@@ -397,6 +424,25 @@ def validate_records(records: list[dict]) -> list[str]:
                 url = source.get("url")
                 if isinstance(url, str) and not url.startswith(("https://", "http://")):
                     error(errors, path, f"sources[{index}].url must be HTTP(S)")
+                locator = source.get("locator")
+                if "locator" in source and (
+                    not isinstance(locator, str) or not locator.strip()
+                ):
+                    error(
+                        errors,
+                        path,
+                        f"sources[{index}].locator must be a non-empty string",
+                    )
+                elif record.get("status") == "reviewed" and not located(source):
+                    # A seed record may keep a whole-work citation until its
+                    # sources are reviewed; reviewing them is finding the part.
+                    error(
+                        errors,
+                        path,
+                        f"sources[{index}] cites the whole work, and a reviewed "
+                        f"record names the part that supports it: a URL fragment, "
+                        f'or a `locator` such as "§9.2.2"',
+                    )
 
         if "tools" in record:
             check_tools(errors, path, record["tools"], record_names)
