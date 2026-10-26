@@ -395,7 +395,6 @@ class Drive(unittest.TestCase):
         self.assertNotIn("false positives", report)
 
 
-@needs_the_engine
 class Rulings(unittest.TestCase):
     """`--drive --rule`: a ruling control is asked k times and scored.
 
@@ -733,6 +732,7 @@ class RuleCommand(unittest.TestCase):
         self.assertIn("not one of its `options`", result.stderr)
 
 
+@needs_the_engine
 class ClaimsThatEnforceNothing(unittest.TestCase):
     """A claim naming a rule no seam supplies must not silence the review.
 
