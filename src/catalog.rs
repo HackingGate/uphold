@@ -266,6 +266,15 @@ fn catalog() -> Result<&'static BTreeMap<String, Record>> {
         .map_err(|error| Fatal::new(error.clone()))
 }
 
+/// A record's file as this binary carries it, for a caller that cites it by
+/// line.
+pub(crate) fn source(id: &str) -> Option<&'static str> {
+    RECORDS
+        .iter()
+        .find(|(name, _)| *name == id)
+        .map(|(_, source)| *source)
+}
+
 pub(crate) fn get(id: &str) -> Result<Option<&'static Record>> {
     Ok(catalog()?.get(id))
 }

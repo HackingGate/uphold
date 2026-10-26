@@ -156,6 +156,21 @@ owner_required = true
 command.before = ["gh"]
 command.scope = "always"
 
+# A design ruling's answer cites the records it was decided from, each by line
+# at the uphold revision this repository pins, with a quote of the item it
+# used. The text is what is checked: a body with no `Answered:` line under a
+# questions heading passes without a pin being read, so the forge is never
+# asked how an issue is labelled -- `gh issue edit` does not say. `gh` alone:
+# an issue or pull-request body is where a ruling is published.
+#
+# `command.scope = "always"`: a ruling on a private repository cites the same
+# public catalog, and a citation that does not resolve misleads its reader
+# there as well.
+[rule.ruling-citations-resolve]
+builtin = "ruling-citations-resolve"
+command.before = ["gh"]
+command.scope = "always"
+
 # The one question about a merge commit's subject no rule above can ask:
 # whether there is one. A bulk merge wrote ninety-five squash commits whose
 # whole subject was ` (#N)` -- an empty subject, with the forge's pull-request

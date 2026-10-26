@@ -891,6 +891,16 @@
         "visibility": "public"
       },
       {
+        "builtin": "ruling-citations-resolve",
+        "command": {
+          "before": [
+            "gh"
+          ],
+          "scope": "always"
+        },
+        "id": "ruling-citations-resolve"
+      },
+      {
         "builtin": "prevent-unowned-target",
         "command": {
           "before": [

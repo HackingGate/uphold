@@ -597,7 +597,7 @@ it refuses** so the name predicts the rule list:
 | `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |
 | `private-names` | a private organization or repository named in a commit message, a staged diff, or the tracked tree of a **public** repository — **installs five stages**, and refuses to run until the repository says whether it is published |
 | `stale-visibility` | a policy declaring `private` over a repository the forge serves as **public** — **installs `pre-push` and `manual`**, and reaches the network. Refuses that one direction only; it can never confirm privacy |
-| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push — and, as `unowned-forge-target`, a `gh` invocation bound for a repository this workspace does not own, which refuses to run until the repository says who it is, and, as `no-empty-merge-subject`, a merge commit subject that is blank once the forge's ` (#N)` is taken off, at the shim, at the harness hook and over a message given to `--text` — see [a merge with no subject](#a-merge-with-no-subject). **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [the set's command ceiling](#what-a-bundled-set-may-install) |
+| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push — and, as `unowned-forge-target`, a `gh` invocation bound for a repository this workspace does not own, which refuses to run until the repository says who it is, and, as `no-empty-merge-subject`, a merge commit subject that is blank once the forge's ` (#N)` is taken off, at the shim, at the harness hook and over a message given to `--text` — see [a merge with no subject](#a-merge-with-no-subject) — and, as `ruling-citations-resolve`, an `Answered:` line citing a catalog line that does not resolve at the uphold revision the repository pins — see [a ruling's citations](#a-rulings-citations). **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [the set's command ceiling](#what-a-bundled-set-may-install) |
 | `prose-shapes` | four sentence shapes that carry nothing — a sentence announcing what the next one will say, a clause behind a dash restating the one in front of it, a hedge admitting no uncertainty, an objection nobody raised being answered. **Installs no git hook**: its rules run in `uphold scan` and at the shim seam (`gh`, `git push`), and like `published-text` it refuses to load until the repository has declared the `[[shim]]` tables itself. `UPHOLD_ALLOW=<rule-id>` is the waiver for the sentence a rule is wrong about |
 | `narrated-history` | a document's sentence narrating how something changed, in Markdown outside `adr` directories; the near misses it lets through are listed in the set's header. **Installs no git hook and no command**: it runs in `uphold scan` only, because a commit message and a pull-request body are where a change is narrated. A baseline entry excuses the one sentence it is wrong about |
 
@@ -1512,6 +1512,7 @@ stamped on it, the range about to be pushed.
 | `no-private-repo-names-in-files` | the same, anywhere in what is being introduced — content, **path names**, and at a push the **commit messages** the push publishes |
 | `prevent-public-push` | a push to somewhere off the allow-list **and off the forge's own answer** — a GitHub destination the allow-list refused is put to `gh`, and a forge that could not be asked is exit `2` |
 | `prevent-unowned-target` | a **command** told to publish to a repository this workspace does not own. The same decision as the row above, reached from the shim seam instead of a hook — so it registers with `command.before` and never `git.hooks`, and a destination it could not resolve is exit `2`. Carried by `published-text` as `unowned-forge-target`, with `owner_required` and `command.scope = "always"` in the bundled declaration |
+| `ruling-citations-resolve` | an `Answered:` line, under a questions heading, citing a catalog line that is not at the uphold revision this repository pins, not in the catalog there, or not saying what the answer quotes. Text only, so it registers with `command.before`; a pin this binary's own catalog is not is exit `2`. Carried by `published-text`. See [A ruling's citations](#a-rulings-citations) |
 | `prevent-actor-mismatch` | a `gh` **write** about to run as anybody but the GitHub App the rule's `actor` names: no token in reach, so `gh` would use the login it stores; a personal token by its prefix; or an installation token the forge says is another App's. Registers with `command.before = ["gh"]` and `command.scope = "always"`, and is opt in: no bundled set declares it. See [who a write runs as](#who-a-write-runs-as) |
 | `no-local-merge` | a merge that would make a merge commit |
 | `no-merge-commit` | a commit finishing a merge or a squash merge |
@@ -2800,6 +2801,42 @@ The refusal is a pattern rule's: the rule id, the subject kind and where it was
 found, and the rule's message, ending at the shim with `Fix the text`, and at
 the hook as the harness's `deny` document, naming the tool and the key.
 `UPHOLD_ALLOW=no-empty-merge-subject` stands it down for one invocation.
+
+### A ruling's citations
+
+A design question is answered from the records a repository adopts (`[decide]`
+in its policy), and the answer cites each record line it
+used, linked at the uphold revision the repository pins, with the item quoted:
+
+```text
+## Questions for the ruling
+
+1. **Edit without a label.** (a) or (b)?
+   Answered: (a). [unix-composability L18](https://github.com/HackingGate/uphold/blob/v1.36.0/principles/unix-composability.toml#L18) "Can a script or an agent do everything a person at a terminal can"
+```
+
+`ruling-citations-resolve`, in `published-text`, reads every body `gh`
+publishes. An answer is a line opening `Answered:`, optionally as a list item,
+under a heading whose title contains "question" and before the next heading at
+that level or above, outside a code fence. Each link on it to
+`principles/<id>.toml#L<n>` is refused, exit `1`, when it is not
+`https://github.com/HackingGate/uphold/blob/<rev>/...`; when `<rev>` is not a
+revision a `.pre-commit-config.yaml` or lefthook `remotes:` entry here pins for
+this repository; when the catalog there has no record `<id>`, or its file has no
+line `<n>`; and when the first double-quoted text after the link, before the
+next one, is missing or is not on that line as written. Every failing citation
+is listed.
+
+The labels are not read: a body with an `Answered:` line is checked whatever
+the issue is labelled, so `gh issue edit`, which does not say, is judged like
+`gh issue create`, and no forge is asked. A body with no answer passes without
+a pin being read, and so does an answer that links no record.
+
+The catalog checked against is the one compiled into the running binary, which
+is the catalog at `v<its version>`. A citation at a pinned revision other than
+that, a branch or a commit included, is exit `2`, and so is a citation where
+nothing here pins uphold: whether it resolves cannot be read, and the cure is
+to run the uphold the repository pins.
 
 ### The stand-downs
 
