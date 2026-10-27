@@ -385,8 +385,10 @@ impl<'a> Scoping<'a> {
             format!(
                 "uphold hook: {why}, so whether rule {:?} applies could not be asked. A check \
                  that could not look is not a check that passed, so the call was refused. Give \
-                 {} a `[[hook]]` table that names its destination, or skips it as a read, or \
-                 write `unresolved = \"run\"` on that table to let it through unchecked",
+                 {} a `[[hook]]` table: one that names its destination, or skips it as a read, \
+                 or names its tools and nothing else to judge it with every rule in scope; or \
+                 write `scope = \"public-target\"` and `unresolved = \"run\"` on that table to \
+                 let it through unchecked",
                 rule.id, self.tool
             )
         })
@@ -480,6 +482,18 @@ mod tests {
     fn the_destination_is_read_at_the_pointers() {
         let input = serde_json::json!({"owner": "acme", "repo": "widget"});
         assert_eq!(github().destination(Some(&input)).unwrap(), "acme/widget");
+    }
+
+    /// Escaped pointers read the keys RFC 6901 says they name, through the
+    /// table, out of a call's input.
+    #[test]
+    fn the_destination_is_read_through_escaped_pointers() {
+        let mut written = written();
+        written.owner = Some(String::from("/a~1b"));
+        written.repo = Some(String::from("/m~0n"));
+        let table = written.load().unwrap();
+        let input = serde_json::json!({"a/b": "acme", "m~n": "widget"});
+        assert_eq!(table.destination(Some(&input)).unwrap(), "acme/widget");
     }
 
     /// A destination the call does not carry, or carries in a shape no forge
