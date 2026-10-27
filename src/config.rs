@@ -2867,7 +2867,8 @@ fn hook_defaults() -> Result<Vec<crate::hook::Written>> {
 /// `unresolved` held to the reading [`validate_shim_unresolved`] gives it on
 /// `[[shim]]`: written only where some scope this table's calls reach can fail
 /// to answer. At the hook that is `public-target`, on the table or on a rule
-/// standing at a publishing seam -- the rules a table speaks for.
+/// standing at a publishing seam -- the rules a table speaks for -- and a
+/// rule's own `public-registry`, which the hook can never answer.
 ///
 /// `shims` is the repository's own `[[shim]]` tables, given for the tables it
 /// wrote: a `shim` naming a command it shims nothing for would be judged under
@@ -2907,7 +2908,13 @@ fn load_hooks(
                     && !matches!(scope, Some(crate::shim::Scope::PublicTarget))
                     && !rules.iter().any(|rule| {
                         rule.command.as_ref().is_some_and(|where_| {
-                            matches!(where_.scope, Some(crate::shim::Scope::PublicTarget))
+                            matches!(
+                                where_.scope,
+                                Some(
+                                    crate::shim::Scope::PublicTarget
+                                        | crate::shim::Scope::PublicRegistry
+                                )
+                            )
                         })
                     })
             }
@@ -2918,9 +2925,10 @@ fn load_hooks(
                 policy_path,
                 format!(
                     "the `[[hook]]` for {:?} writes `unresolved`, and no scope its calls can \
-                     reach can fail to answer. Only `public-target` asks somebody else. Scope \
-                     the table (or a rule with a `command` section) `public-target`, or take \
-                     the field off.",
+                     reach can fail to answer. Only `public-target` asks somebody else, and a \
+                     rule's own `public-registry` has no command line to read at the hook. \
+                     Scope the table (or a rule with a `command` section) `public-target`, or \
+                     take the field off.",
                     table.tools()
                 ),
             ));

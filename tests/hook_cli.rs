@@ -1837,6 +1837,21 @@ match = ["publish"]
     let passed = hook_with_forge(&fixed, &call("mcp__github__create_issue", &body));
     assert_eq!(code(&passed), 0, "{}", stderr(&passed));
     assert_eq!(stdout(&passed), "", "{}", stderr(&passed));
+    // The other way out the refusal names: `unresolved = "run"` on a table
+    // for these calls, which the load accepts because this rule's scope is
+    // one the hook cannot answer.
+    let run = publishing(
+        "hook-public-registry-run",
+        &format!("{policy}\n[[hook]]\ntools = '^mcp__github__'\nunresolved = \"run\"\n"),
+    );
+    let ran = hook_with_forge(&run, &call("mcp__github__create_issue", &body));
+    assert_eq!(code(&ran), 0, "{}", stderr(&ran));
+    assert_eq!(stdout(&ran), "", "{}", stderr(&ran));
+    assert!(
+        stderr(&ran).contains("This is not a pass"),
+        "{}",
+        stderr(&ran)
+    );
 }
 
 /// A GitLab destination names no host, and `glab` asked without one answers
