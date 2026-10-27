@@ -142,19 +142,7 @@ impl Shim {
                 if let Some(standing) = declared_standing(root, policy, destination)? {
                     return Ok(standing);
                 }
-                match Self::visibility(destination).as_deref() {
-                    Ok("public") => Ok(Standing::Holds),
-                    Ok(_) => Ok(Standing::DoesNotHold),
-                    // The cause, in the words the forge used. A rate limit, an
-                    // unauthenticated `gh` and a deleted repository are three
-                    // different instructions to the reader, and a refusal
-                    // naming none of them is one the reader can only bypass.
-                    Err(silence) => Ok(Standing::CouldNotTell(format!(
-                        "the forge did not say whether {target} is public, so whether the \
-                         `public-target` checks apply here could not be established. {}",
-                        silence.sentence()
-                    ))),
-                }
+                Ok(forge_standing(destination, target))
             }
             Scope::PublicRegistry => {
                 if context.argv.iter().any(|argument| argument == "--dry-run") {
@@ -180,21 +168,7 @@ impl Shim {
                     Standing::DoesNotHold
                 })
             }
-            Scope::Command { command } => {
-                let status = Command::new("sh")
-                    .arg("-c")
-                    .arg(command)
-                    .current_dir(root)
-                    .status()
-                    .map_err(|error| {
-                        Fatal::new(format!("{}: scope command: {error}", self.command))
-                    })?;
-                Ok(if status.success() {
-                    Standing::Holds
-                } else {
-                    Standing::DoesNotHold
-                })
-            }
+            Scope::Command { command } => command_standing(&self.command, command, root),
         }
     }
 
@@ -272,6 +246,61 @@ impl Shim {
             &CommandContext::new(self, root, collected, argv),
         )
     }
+}
+
+/// What the forge says about `target`, as a scope answer.
+///
+/// The one reading of a forge's visibility word, shared by the shim and by
+/// `uphold hook`: a seam that read `internal` as public, or a silence as
+/// private, would be a second rule under the one scope name.
+fn forge_standing(destination: &Destination, target: &str) -> Standing {
+    match Shim::visibility(destination).as_deref() {
+        Ok("public") => Standing::Holds,
+        Ok(_) => Standing::DoesNotHold,
+        // The cause, in the words the forge used. A rate limit, an
+        // unauthenticated `gh` and a deleted repository are three different
+        // instructions to the reader, and a refusal naming none of them is one
+        // the reader can only bypass.
+        Err(silence) => Standing::CouldNotTell(format!(
+            "the forge did not say whether {target} is public, so whether the \
+             `public-target` checks apply here could not be established. {}",
+            silence.sentence()
+        )),
+    }
+}
+
+/// A `command` scope's answer: exit 0 is in scope. `seam` names the caller in
+/// the error, as the reader typed it -- the shimmed command, or `uphold hook`.
+pub(crate) fn command_standing(seam: &str, command: &str, root: &Path) -> Result<Standing> {
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(root)
+        .status()
+        .map_err(|error| Fatal::new(format!("{seam}: scope command: {error}")))?;
+    Ok(if status.success() {
+        Standing::Holds
+    } else {
+        Standing::DoesNotHold
+    })
+}
+
+/// Whether `owner/repo` on `forge` is public, for a caller that was handed
+/// the destination outright and has no command line or checkout to read it
+/// from: `uphold hook`, whose `[[hook]]` table points at it in a tool call.
+///
+/// Always asked of the forge. A declared `visibility` speaks for `origin`
+/// alone, and a destination somebody named is not `origin` however its name
+/// reads -- see [`declared_standing`].
+pub(crate) fn named_standing(forge: Forge, target: &str) -> Standing {
+    let destination = Destination {
+        target: Some(target.to_owned()),
+        forge: Some(forge),
+        hostname: None,
+        provenance: Provenance::Explicit,
+        ambient_host: false,
+    };
+    forge_standing(&destination, target)
 }
 
 /// Resolve the host-bearing spellings accepted by `gh` without treating an

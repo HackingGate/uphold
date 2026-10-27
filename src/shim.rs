@@ -53,6 +53,7 @@ mod destination;
 pub(crate) use checker::pattern_finding;
 use checker::{consult, pattern_refusal};
 use destination::{CommandContext, effective_scope};
+pub(crate) use destination::{command_standing, named_standing};
 
 /// Where an invocation is going, when that is a meaningful question at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
@@ -68,7 +69,9 @@ pub(crate) enum Target {
 }
 
 /// Whether this invocation publishes to somewhere that matters.
-#[derive(Debug, Clone, Deserialize, serde::Serialize, Default, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Deserialize, serde::Serialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Scope {
     /// `visibility == "public"` on the target repository. `internal` is
@@ -3500,7 +3503,11 @@ pub(crate) struct Collected {
 }
 
 /// The forges whose questions this tool knows how to ask.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Spelled in a `[[hook]]` table as `github` or `gitlab`, where it names the
+/// forge a tool call's `owner/repo` is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum Forge {
     GitHub,
     GitLab,

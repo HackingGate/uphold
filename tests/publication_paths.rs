@@ -27,6 +27,13 @@ command = "faux"
 match = ["pr:create"]
 text_flags = ["-b", "--body"]
 scope = "always"
+
+# The hook's counterpart: the tool call is the same act as `faux`, so it is
+# judged under the `faux` table's scope. A tool no table names is judged with
+# its destination unknown, which refuses.
+[[hook]]
+tools = '^create_publication$'
+shim = "faux"
 "#;
 
 fn workspace() -> PathBuf {

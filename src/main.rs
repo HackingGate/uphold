@@ -853,6 +853,8 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
             ),
             &root,
             &policy,
+            None,
+            &mut |_| Ok(true),
             &mut record.ledger,
         );
         let verdicts = match judged {

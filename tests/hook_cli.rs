@@ -669,8 +669,9 @@ fn string_free_calls_still_judge_the_tool_without_inventing_argument_text() {
                 }
             }
         }
-        // An explicitly supplied empty string is still a text subject.
-        let output = hook(&root, harness, &event("mcp__github__get_release", ""));
+        // An explicitly supplied empty string is still a text subject. On a
+        // write: the default `[[hook]]` table passes the GitHub reads unjudged.
+        let output = hook(&root, harness, &event("mcp__github__update_issue", ""));
         assert!(reason(&output).contains("require-argument-text"));
     }
 }
@@ -1417,4 +1418,334 @@ fn a_stop_gate_in_an_inherited_file_is_refused() {
     let stopped = turn(&root, &moment("Stop", "s-inherited"));
     assert_eq!(code(&stopped), 2, "{}", stderr(&stopped));
     assert!(stderr(&stopped).contains("`[stop]` names the commands"));
+}
+
+// -- where the call publishes ----------------------------------------------
+
+/// A repository taking the publishing checkers, with the shim tables
+/// `published-text` requires, and the GitHub `[[hook]]` table arriving from
+/// the set. `example-org` is the private owner the names guard watches for.
+const PUBLISHING_POLICY: &str = r#"
+owner = "example-user"
+private_owners_file = "xdg:principles/private-owners"
+
+[inherit]
+sets = ["published-text"]
+
+[[shim]]
+command = "gh"
+match = ["pr:create"]
+text_flags = ["-b", "--body"]
+target_flags = ["-R", "--repo"]
+target = "forge-repo"
+scope = "public-target"
+
+[[shim]]
+command = "git"
+match = ["push:*"]
+"#;
+
+/// A `gh` that knows two repositories under `example-org`, both private, and
+/// calls everything under `example-user` public. Every question it is asked
+/// is appended to `gh.asked`, so a test can say no forge was asked at all.
+fn forge_stub(root: &Path) {
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let gh = bin.join("gh");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\n\
+         printf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/../gh.asked\"\n\
+         case \"$*\" in\n\
+         'api repos/example-org/'*' --jq .visibility') echo private ;;\n\
+         'api repos/example-user/'*' --jq .visibility') echo public ;;\n\
+         'api repos/example-org/'*' --jq '*) \
+         printf 'private\\texample-org/%s\\n' \"${2##*/}\" ;;\n\
+         *) echo \"gh asked: $*\" >&2; exit 1 ;;\n\
+         esac\n",
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&gh).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&gh, permissions).unwrap();
+}
+
+/// [`hook`] with the stub forge first on PATH.
+fn hook_with_forge(root: &Path, stdin: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["hook", "claude-code"])
+        .current_dir(root)
+        .env_remove("UPHOLD_ALLOW")
+        .env("HOME", "/home/example-user")
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                root.join("bin").display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    if let Err(error) = child.stdin.as_mut().unwrap().write_all(stdin.as_bytes()) {
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
+    }
+    child.wait_with_output().unwrap()
+}
+
+fn call(tool: &str, input: &Value) -> String {
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "tool_input": input,
+    })
+    .to_string()
+}
+
+fn publishing(name: &str, policy: &str) -> PathBuf {
+    let root = workspace(name, Some(policy));
+    forge_stub(&root);
+    std::fs::create_dir_all(root.join("config/principles")).unwrap();
+    std::fs::write(
+        root.join("config/principles/private-owners"),
+        "example-org\n",
+    )
+    .unwrap();
+    root
+}
+
+/// A read publishes nothing, so a private name in it is nobody's business --
+/// and the forge is not asked about it either.
+#[test]
+fn a_read_naming_a_private_repository_passes_unjudged() {
+    let root = publishing("hook-read", PUBLISHING_POLICY);
+    let output = hook_with_forge(
+        &root,
+        &call(
+            "mcp__github__get_file_contents",
+            &serde_json::json!({
+                "owner": "example-org",
+                "repo": "private-repo",
+                "path": "notes/example-org/other-private.md",
+            }),
+        ),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "", "{}", stderr(&output));
+    assert!(!root.join("gh.asked").exists());
+}
+
+#[test]
+fn a_write_into_a_public_repository_naming_a_private_one_is_refused() {
+    let root = publishing("hook-public-write", PUBLISHING_POLICY);
+    let output = hook_with_forge(
+        &root,
+        &call(
+            "mcp__github__create_issue",
+            &serde_json::json!({
+                "owner": "example-user",
+                "repo": "public-widget",
+                "title": "A question",
+                "body": "Refs example-org/other-private#1",
+            }),
+        ),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        reason(&output).contains("no-published-private-repo-names [set: published-text]"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+/// `public-target` stands the private-name check down where the destination
+/// is private, as the `gh` table does for `gh issue create`.
+#[test]
+fn a_write_into_a_private_repository_naming_another_passes() {
+    let root = publishing("hook-private-write", PUBLISHING_POLICY);
+    let output = hook_with_forge(
+        &root,
+        &call(
+            "mcp__github__create_issue",
+            &serde_json::json!({
+                "owner": "example-org",
+                "repo": "private-repo",
+                "title": "A question",
+                "body": "Refs example-org/other-private#1",
+            }),
+        ),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "", "{}", stderr(&output));
+    let asked = std::fs::read_to_string(root.join("gh.asked")).unwrap();
+    assert!(
+        asked.contains("api repos/example-org/private-repo --jq .visibility"),
+        "{asked}"
+    );
+}
+
+/// The repository's own commit-message guard is not a rule any table scopes,
+/// so it judges a tool call as it judges the same body through `gh`: against
+/// this repository's declared visibility, wherever the text is going.
+#[test]
+fn a_guard_no_table_scopes_still_judges_a_write_into_a_private_repository() {
+    let policy = PUBLISHING_POLICY.replace(
+        "sets = [\"published-text\"]",
+        "sets = [\"private-names\", \"published-text\"]",
+    );
+    let root = publishing(
+        "hook-private-write-guarded",
+        &format!("visibility = \"public\"\n{policy}"),
+    );
+    let output = hook_with_forge(
+        &root,
+        &call(
+            "mcp__github__create_issue",
+            &serde_json::json!({
+                "owner": "example-org",
+                "repo": "private-repo",
+                "body": "Refs example-org/other-private#1",
+            }),
+        ),
+    );
+    let reason = reason(&output);
+    assert!(
+        reason.contains("no-private-repo-names [set: private-names]"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !reason.contains("no-published-private-repo-names"),
+        "{reason}"
+    );
+}
+
+/// Host identity is scoped `always`, so a private destination does not stand
+/// it down.
+#[test]
+fn host_identity_is_refused_at_a_private_destination() {
+    let root = publishing("hook-private-identity", PUBLISHING_POLICY);
+    let output = hook_with_forge(
+        &root,
+        &call(
+            "mcp__github__create_issue",
+            &serde_json::json!({
+                "owner": "example-org",
+                "repo": "private-repo",
+                "body": "The log is in /home/example-user/notes.txt",
+            }),
+        ),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        reason(&output).contains("/home/example-user"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+/// A call no table names has no destination, so a rule whose scope needs one
+/// could not be asked, and `unresolved` refuses by default.
+#[test]
+fn a_call_no_table_names_is_refused_as_unresolved() {
+    let root = publishing("hook-no-table", PUBLISHING_POLICY);
+    let output = hook_with_forge(
+        &root,
+        &call(
+            "mcp__slack__post_message",
+            &serde_json::json!({"channel": "general", "text": "An ordinary sentence."}),
+        ),
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "");
+    assert!(
+        stderr(&output).contains("no `[[hook]]` table names mcp__slack__post_message"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A table naming no destination, with `unresolved = "run"`: the call goes
+/// ahead with the destination-scoped checks stood down, and says so.
+#[test]
+fn unresolved_run_lets_the_call_through_and_says_it_is_not_a_pass() {
+    let policy = format!(
+        "{PUBLISHING_POLICY}\n[[hook]]\ntools = '^mcp__slack__'\nscope = \"public-target\"\nunresolved = \"run\"\n"
+    );
+    let root = publishing("hook-unresolved-run", &policy);
+    let output = hook_with_forge(
+        &root,
+        &call(
+            "mcp__slack__post_message",
+            &serde_json::json!({"text": "Refs example-org/other-private#1"}),
+        ),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "", "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("This is not a pass"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A call the table names that carries no destination where the table points
+/// is unresolved, and is not asked about some other repository instead.
+#[test]
+fn a_named_call_without_its_destination_is_refused_as_unresolved() {
+    let root = publishing("hook-no-destination", PUBLISHING_POLICY);
+    let output = hook_with_forge(
+        &root,
+        &call(
+            "mcp__github__create_gist",
+            &serde_json::json!({"filename": "a.md", "content": "An ordinary sentence."}),
+        ),
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no string at \"/owner\""),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_table_with_half_a_destination_is_refused_at_load() {
+    let policy = format!(
+        "{PUBLISHING_POLICY}\n[[hook]]\ntools = '^mcp__forge__'\ntarget = \"forge-repo\"\nowner = \"/owner\"\n"
+    );
+    let root = publishing("hook-half-destination", &policy);
+    let output = hook_with_forge(&root, &call("mcp__forge__write", &serde_json::json!({})));
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("without all of"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// Only `.rules` is merged from an inherited file, so a table there would
+/// vanish and leave its calls judged as no table's. Refused instead.
+#[test]
+fn a_table_in_an_inherited_file_is_refused() {
+    let root = publishing(
+        "hook-inherited-table",
+        "[inherit]\npaths = [\"policy/shared.toml\"]\n",
+    );
+    std::fs::write(
+        root.join("policy/shared.toml"),
+        "[[hook]]\ntools = '^mcp__forge__'\n",
+    )
+    .unwrap();
+    let output = hook_with_forge(&root, &call("mcp__forge__write", &serde_json::json!({})));
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("an inherited file's tables are not adopted"),
+        "{}",
+        stderr(&output)
+    );
 }

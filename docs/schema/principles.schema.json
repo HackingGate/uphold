@@ -144,6 +144,14 @@
       },
       "type": "object"
     },
+    "Forge": {
+      "description": "The forges whose questions this tool knows how to ask.\n\nSpelled in a `[[hook]]` table as `github` or `gitlab`, where it names the\nforge a tool call's `owner/repo` is on.",
+      "enum": [
+        "github",
+        "gitlab"
+      ],
+      "type": "string"
+    },
     "Git": {
       "additionalProperties": false,
       "description": "The five stage names a rule may run at: four of git's own, spelled as\ngithooks(5) spells them, and `manual`.",
@@ -561,6 +569,56 @@
       },
       "type": "object"
     },
+    "Table": {
+      "additionalProperties": false,
+      "description": "One `[[hook]]` table: the tool calls it names, and what it knows of them.",
+      "properties": {
+        "forge": {
+          "$ref": "#/$defs/Forge",
+          "description": "The forge `owner/repo` is on, and the one asked about it. Required\nwith `target = \"forge-repo\"`: a tool name says nothing about a host,\nand asking GitHub about a GitLab path answers about a stranger."
+        },
+        "owner": {
+          "description": "RFC 6901 JSON pointer into the call's input, to the owner.",
+          "type": "string"
+        },
+        "repo": {
+          "description": "RFC 6901 JSON pointer into the call's input, to the repository.",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope",
+          "description": "When a rule standing at a publishing seam applies, where the rule\nwrites no `command.scope` of its own. As on `[[shim]]`, and `always`\nwhere neither this nor `shim` says."
+        },
+        "shim": {
+          "description": "The command these calls are the same act as, whose `[[shim]]` table\nin this repository supplies `scope` and `unresolved`: a call through\nthe GitHub MCP server is judged where `gh` would be, by the answer the\nrepository already wrote for `gh`. Not written beside either field.",
+          "type": "string"
+        },
+        "skip": {
+          "default": [],
+          "description": "Regular expressions searched for in the tool name of a call that\nreads. A call matching one is not judged at all.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/Target",
+          "description": "`forge-repo`, where the call names its repository in `owner` and\n`repo`; `none` (the default), where it names none."
+        },
+        "tools": {
+          "description": "A regular expression searched for in the call's tool name. The first\ntable whose `tools` matches speaks for the call; the repository's own\ntables are read before the ones its sets ship.",
+          "type": "string"
+        },
+        "unresolved": {
+          "$ref": "#/$defs/Unresolved",
+          "description": "What to do where `scope` could not be evaluated: `refuse` (the\ndefault) or `run`. As on `[[shim]]`."
+        }
+      },
+      "required": [
+        "tools"
+      ],
+      "type": "object"
+    },
     "Target": {
       "description": "Where an invocation is going, when that is a meaningful question at all.",
       "oneOf": [
@@ -903,6 +961,13 @@
       "description": "The hosts this repository's documents cite that carry no repository the\nprivate-name guards need an answer about.\n\nA policy field rather than a rule one for the reason\n`private_owners_from` is: a rule arriving from a bundled set cannot be\nhanded a parameter, and which hosts a repository's own bibliography\nnames is a property of the repository rather than of one rule in it.\n\nHost globs, matched case-insensitively -- `\"doi.org\"`, `\"*.sr.ht\"`. What\nis NOT named here and is not GitHub is could-not-look and exits 2,\nbecause the tool cannot tell whether `git.acme.example/acme/secret` is\nprivate and silence would read as clean.\n\nExtends [`FOREIGN_HOSTS_DEFAULT`] rather than replacing it: a host that\nserves no `owner/repo` path for anybody is not a fact about this\nrepository, and the fleet had said so in 84 identical lines.",
       "items": {
         "type": "string"
+      },
+      "type": "array"
+    },
+    "hook": {
+      "description": "`[[hook]]`: which tool calls `uphold hook` judges, and where they\npublish. See [`crate::hook::Table`].",
+      "items": {
+        "$ref": "#/$defs/Table"
       },
       "type": "array"
     },

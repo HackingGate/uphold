@@ -454,10 +454,18 @@ pub(crate) struct Headline {
 /// back off it. The subject each is recorded under is the tool's name at the
 /// hook and `text` elsewhere: a `--text` label is a file name, and a record
 /// carries no path.
+///
+/// `destination` and `in_scope` are where the text is going and which rules
+/// stand there. The hook knows both where a `[[hook]]` table says; the text
+/// seams are handed text and no destination, so every rule is in scope there
+/// and the guards judge against `origin`. A literal rule is never asked: see
+/// the `text-literals` arm of [`crate::guard::text_refusal`].
 pub(crate) fn judged(
     invocation: &Invocation<'_>,
     root: &std::path::Path,
     policy: &Policy,
+    destination: Option<&str>,
+    in_scope: crate::guard::ScopeAsk<'_>,
     ledger: &mut Vec<Judgment>,
 ) -> Result<Vec<Verdict>> {
     let input = invocation.text_input()?;
@@ -492,11 +500,9 @@ pub(crate) fn judged(
         }
         match kind {
             Judged::Literals => failures_in(root, policy, whole, Some(&subject), ledger),
-            // Every inner rule is in scope here: the three seams that reach
-            // this line -- `scan --text`, `guard --text`, the harness hook --
-            // are handed text and no destination, so there is nothing to ask a
-            // `public-target` scope about. The shim, which does have one,
-            // passes its own memo.
+            // Each guard asked under the caller's scope: every one at `scan
+            // --text` and `guard --text`, and at the hook the ones its table
+            // stands down. The shim passes its own memo through `Judged::of`.
             Judged::Guards => {
                 // The prose is not a headline: what these seams are handed is a
                 // body, or a tool call's strings joined, and neither says which
@@ -513,9 +519,9 @@ pub(crate) fn judged(
                     crate::guard::over_text(
                         root,
                         policy,
-                        None,
+                        destination,
                         &published,
-                        &mut |_| Ok(true),
+                        in_scope,
                         ledger,
                     )?;
                 }
@@ -531,15 +537,17 @@ pub(crate) fn judged(
                     crate::guard::over_text(
                         root,
                         policy,
-                        None,
+                        destination,
                         &published,
-                        &mut |_| Ok(true),
+                        in_scope,
                         ledger,
                     )?;
                 }
                 Ok(())
             }
-            Judged::Prose => crate::prose::over_text(policy, seam, whole, &subject, ledger),
+            Judged::Prose => {
+                crate::prose::over_text(policy, seam, whole, &subject, in_scope, ledger)
+            }
             // The hook and the text seams consult these here, and only the
             // rules whose `seams` names them -- see `Seam::runs_by_default`.
             Judged::Patterns => patterns_over(
@@ -549,6 +557,7 @@ pub(crate) fn judged(
                 has_text.then_some(whole),
                 headlines,
                 &subject,
+                in_scope,
                 ledger,
             ),
             // The shim's, and the shim does not arrive here: it holds a subject
@@ -628,6 +637,10 @@ fn merged_by_rule(refusals: Vec<crate::guard::Refusal>) -> Vec<crate::guard::Ref
 /// mentions it. Which tool names mean which command is the rule's to say, in its
 /// own pattern: a table of MCP names per shim verb would be a list that is
 /// missing the tool a server added last week.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the three subjects, the scope each rule is asked under and the list it answers into, from the one caller"
+)]
 fn patterns_over(
     policy: &Policy,
     seam: Seam,
@@ -635,6 +648,7 @@ fn patterns_over(
     text: Option<&str>,
     headlines: &[Headline],
     recorded: &str,
+    in_scope: crate::guard::ScopeAsk<'_>,
     ledger: &mut Vec<Judgment>,
 ) -> Result<()> {
     // The shim runs its pattern rules itself, over the subjects it collected,
@@ -706,6 +720,10 @@ fn patterns_over(
             ledger.push(Judgment::of(rule, Some(recorded), Answer::Bypass(allowed)));
             continue;
         }
+        if !asked(ledger, rule, Some(recorded), in_scope(rule))? {
+            ledger.push(Judgment::of(rule, Some(recorded), Answer::OutOfScope));
+            continue;
+        }
         let mut found = Vec::new();
         for (named, subject) in subjects
             .iter()
@@ -752,7 +770,14 @@ pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<
     let invocation = Invocation::text(Seam::Scan, source, Observed::Present(&text), &[]);
     // `scan --text` writes no record; the list is what it reports from.
     let mut ledger = Vec::new();
-    let verdicts = judged(&invocation, &root, &policy, &mut ledger)?;
+    let verdicts = judged(
+        &invocation,
+        &root,
+        &policy,
+        None,
+        &mut |_| Ok(true),
+        &mut ledger,
+    )?;
 
     for verdict in &verdicts {
         match verdict {

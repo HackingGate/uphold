@@ -3186,26 +3186,89 @@ of the hook process. See the [Codex hook documentation](https://learn.chatgpt.co
 Both harnesses send `tool_name` and `tool_input` and read the same denial
 document, so the two names select one shared protocol in uphold. The hook
 checks text in the pending arguments; it does not execute the tool or resolve
-file paths in its arguments. The example matches the GitHub MCP server;
-adjust the matcher to the publishing tools you use. Codex hosted tools such
-as web search do not run these local tool hooks.
+file paths in its arguments. The example matches the GitHub MCP server, whose
+reads and destinations the compiled-in `[[hook]]` table below already
+describes. Codex hosted tools such as web search do not run these local tool
+hooks.
 
 The `.*` is required. A matcher of `mcp__github` holds only exact-match
 characters, so it is compared as a string and matches no tool.
 
-**Which calls arrive is the harness's decision, not this binary's.** Re-deciding
-it here would be a second matcher free to disagree with the first, and an
-operator would have to hold both. What arrives is checked.
+**Which calls arrive is the harness's decision; which of them are judged, and
+where they publish, is the policy's.** The matcher is one line, often shipped
+for every consumer at once, so it cannot say which of a server's tools publish
+or where to. A `[[hook]]` table says that, per server, as the next section
+describes.
 Tool-name rules also run when arguments contain only numbers, booleans, nulls,
 or empty containers. Such calls have no argument-text subject; an explicitly
 supplied empty string still has one.
 
 The hook does not infer a destination host or repository from arbitrary tool
-argument names. It checks the strings and tool identity using the policy where
-the call was made. Destination ownership and `public-target` checks remain
-command-adapter checks; raw `scan --text` and `guard --text` input likewise
-supplies no destination. A missing required argument surface is an unread
-subject and exits `2`, rather than being treated as a call with no prose.
+argument names: a `[[hook]]` table points at them. Destination ownership
+(`prevent-unowned-target`) remains a command-adapter check; raw `scan --text`
+and `guard --text` input supplies no destination. A missing required argument
+surface is an unread subject and exits `2`, rather than being treated as a
+call with no prose.
+
+### Which calls are judged, and where they go: `[[hook]]`
+
+A tool call is judged where the shim would judge the same act made through
+`gh`: a call that publishes, under each rule's scope at the repository it
+publishes to. A read that names a private repository publishes nothing and
+passes. The two facts that takes, which calls publish and where to, are a
+`[[hook]]` table:
+
+```toml
+[[hook]]
+tools = '^mcp__(plugin_[a-z0-9_-]+_)?github__'      # searched in tool_name
+skip = ['__(get|list|search)_', '_(get|list|read|search)$']   # reads: not judged
+target = "forge-repo"      # the call names a repository; "none" (the default) if not
+forge = "github"           # "github" or "gitlab": the forge asked about it
+owner = "/owner"           # RFC 6901 JSON pointers into tool_input
+repo = "/repo"
+shim = "gh"                # take scope and unresolved from this [[shim]] table
+# or, instead of shim:
+# scope = "public-target"  # as on [[shim]]; "always" where neither is written
+# unresolved = "refuse"    # as on [[shim]]; "run" is the opt-out
+```
+
+That table is compiled in, from
+[`policy/hook.default.toml`](../policy/hook.default.toml), and read after a
+repository's own: the first table whose `tools` matches speaks for the call,
+so a repository overrides it by writing a table naming the same tools. It
+skips the reads by the verbs `github/github-mcp-server` v2.0.3 names them
+with. A tool that matches no `skip` is judged, so a write the server adds
+later is checked the day it ships.
+
+- **A call a `skip` matches** is not judged, and no record is written: nothing
+  is published.
+- **A judged call** has its destination read at `owner` and `repo` and asked
+  of `forge`, once per call. A rule with a `command` section is judged under
+  its own `command.scope`, else the table's scope; with `shim = "gh"` that is
+  the repository's own `[[shim]]` for `gh`, so the two seams cannot disagree
+  about one act. A `public-target` scope at a private destination stands the
+  rule down, as at the shim. The destination's own name is exempt from
+  `no-private-repo-names`, as at the shim.
+- **A rule with no `command` section** — a git-hook guard reached as a text
+  guard, a literal rule — has no scope a table speaks for, and runs as it
+  always has. So `no-private-repo-names` from `private-names` still refuses a
+  private name bound for a private repository, at the hook and through `gh`
+  alike, because it judges against this repository's declared visibility.
+- **A judged call without its destination** — no string at `owner` or `repo`,
+  or one that is not a repository name — and **a call no table names** are
+  unresolved for every rule whose scope needs a destination. `unresolved`
+  decides: `refuse` (the default, and the only answer for a call no table
+  names) exits `2` before the call is made; `run` lets it through with those
+  rules stood down and says on stderr that this is not a pass. A server whose
+  calls should be judged as before, every rule in scope, gets a table naming
+  its tools and nothing else, since `scope` defaults to `always`.
+
+The load refuses a table whose `tools` or `skip` is not a regular
+expression, a `target = "forge-repo"` without all of `forge`, `owner` and
+`repo` (or those without the target), `target = "git-remote"`, `scope =
+"public-registry"`, `shim` beside `scope` or `unresolved`, and `unresolved`
+where no scope its calls reach can fail to answer. A table in an
+`inherit.paths` file is refused, as a shim there is.
 
 ### What runs where there is no policy
 

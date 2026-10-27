@@ -1045,6 +1045,10 @@ pub(crate) struct PolicyFile {
     overrides: BTreeMap<String, Override>,
     #[serde(default, rename = "shim")]
     pub shims: Vec<crate::shim::Shim>,
+    /// `[[hook]]`: which tool calls `uphold hook` judges, and where they
+    /// publish. See [`crate::hook::Table`].
+    #[serde(default, rename = "hook")]
+    pub hooks: Vec<crate::hook::Table>,
     /// `[supply_chain]`: what this repository has said about its own
     /// dependency scan. See [`SupplyChain`].
     #[serde(default)]
@@ -1364,6 +1368,10 @@ pub(crate) struct Policy {
     pub allowed_scripts: Vec<String>,
     pub rules: Vec<Rule>,
     pub shims: Vec<crate::shim::Shim>,
+    /// The repository's own `[[hook]]` tables, then the compiled-in ones
+    /// from `policy/hook.default.toml`. The first whose `tools` names a call
+    /// speaks for it, so a repository's own table for a tool wins.
+    pub hooks: Vec<crate::hook::Table>,
     /// The bundled sets this policy named, in the order it named them.
     ///
     /// Not derivable from `rules`: a set every one of whose rules the
@@ -1961,6 +1969,20 @@ fn inherited_rules(path: &Path, parsed: PolicyFile, origin: &Origin) -> Result<V
             ),
         ));
     }
+    // Refused for the reason a shim is: only `.rules` is merged from an
+    // inherited file, and a table that vanished would leave every call it
+    // named judged as no table's.
+    if !parsed.hooks.is_empty() {
+        return Err(Fatal::at(
+            path,
+            format!(
+                "{} declares {} `[[hook]]` table(s), and an inherited file's tables are not \
+                 adopted. Move them into the consumer's policy file",
+                path.display(),
+                parsed.hooks.len()
+            ),
+        ));
+    }
     if matches!(origin, Origin::Remote(_)) && parsed.inherit.is_some() {
         return Err(Fatal::at(
             path,
@@ -2228,6 +2250,9 @@ pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<P
     validate_shim_editor(policy_path, &file.shims)?;
     validate_shim_unresolved(policy_path, &rules, &file.shims)?;
     validate_shims(policy_path, &rules, &file.shims)?;
+    let mut hooks = file.hooks.clone();
+    hooks.extend(hook_defaults()?);
+    validate_hooks(policy_path, &rules, &hooks)?;
     // Last, and after `rule.validate`, because this one reads a rule as the
     // author meant it. A rule naming two checks or carrying a parameter its
     // check cannot read is not yet a rule whose pattern means anything, and
@@ -2253,6 +2278,7 @@ pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<P
         allowed_scripts: file.allowed_scripts,
         rules,
         shims: file.shims,
+        hooks,
         inherited_sets: inherit.sets.clone(),
         supply_chain: file.supply_chain.clone().unwrap_or_default(),
         stop: file.stop.clone().unwrap_or_default(),
@@ -2817,6 +2843,55 @@ fn validate_shim_unresolved(
                      fail to answer. Scope the table (or a rule that names this command) \
                      `public-target`, or take the field off.",
                     shim.command
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The `[[hook]]` tables `uphold hook` reads after a repository's own.
+const HOOK_DEFAULT: &str = include_str!("../policy/hook.default.toml");
+
+fn hook_defaults() -> Result<Vec<crate::hook::Table>> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Defaults {
+        hook: Vec<crate::hook::Table>,
+    }
+    toml::from_str::<Defaults>(HOOK_DEFAULT)
+        .map(|defaults| defaults.hook)
+        .map_err(|error| Fatal::new(format!("the compiled-in `[[hook]]` tables: {error}")))
+}
+
+/// Each `[[hook]]` table held to what a load can tell, and `unresolved` to the
+/// reading [`validate_shim_unresolved`] gives it on `[[shim]]`: written only
+/// where some scope this table's calls reach can fail to answer. At the hook
+/// that is `public-target`, on the table or on a rule standing at a publishing
+/// seam -- the rules a table speaks for.
+fn validate_hooks(policy_path: &Path, rules: &[Rule], hooks: &[crate::hook::Table]) -> Result<()> {
+    for table in hooks {
+        table
+            .validate()
+            .map_err(|error| Fatal::at(policy_path, error))?;
+        if table
+            .unresolved
+            .is_none_or(|unresolved| unresolved == crate::shim::Unresolved::default())
+            || matches!(table.scope, Some(crate::shim::Scope::PublicTarget))
+        {
+            continue;
+        }
+        let by_a_rule = rules.iter().any(|rule| {
+            rule.command.as_ref().is_some_and(|where_| {
+                matches!(where_.scope, Some(crate::shim::Scope::PublicTarget))
+            })
+        });
+        if !by_a_rule {
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "the `[[hook]]` for {:?} writes `unresolved`, and no scope its calls can                      reach can fail to answer. Only `public-target` asks somebody else. Scope                      the table (or a rule with a `command` section) `public-target`, or take                      the field off.",
+                    table.tools
                 ),
             ));
         }

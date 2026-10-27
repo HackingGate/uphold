@@ -16,13 +16,16 @@
 //! of it when the harness is a different one. Neither contains the other, which
 //! is why installing this is not a reason to stop installing that.
 //!
-//! ## Which calls arrive here is not this module's decision
+//! ## Which calls arrive is the harness's; which are judged is the policy's
 //!
 //! A harness matches tool names itself, in its own configuration, and invokes
-//! the hook for what matches. Re-deciding that here would be a second matcher
-//! free to disagree with the first, and the operator would have to keep both in
-//! their head. What arrives is checked; what to send is `mechanism-policy-separation`
-//! answered on the harness's side of the line.
+//! the hook for what matches. That matcher is one line serving every consumer
+//! of it, so it cannot say which of a server's tools publish, or where to:
+//! that is each repository's policy. A `[[hook]]` table says it -- see
+//! [`table`] -- and a call it names as a read is not judged, while a call it
+//! names a destination for is judged under each rule's scope at that
+//! destination, as the shim judges the same act made through `gh`. A call no
+//! table names is judged with its destination unknown.
 //!
 //! ## The shapes are data
 //!
@@ -51,6 +54,9 @@
 //! none, is the pre-call judgment below, as it was before the gate existed.
 
 mod stop;
+mod table;
+
+pub(crate) use table::Table;
 
 use std::fmt::Write as _;
 use std::io::Read;
@@ -176,8 +182,8 @@ fn drop_unsent(collected: &mut Walked) {
 /// where one was asked for. Written on every call that got as far as judging,
 /// refused or not: a hook that wrote only on a refusal would make an absent
 /// file mean "passed or never ran", which is the ambiguity the record exists
-/// to remove. Which calls arrive is the harness's matcher's decision, so the
-/// volume is the volume of publishing calls.
+/// to remove. A call its `[[hook]]` table skips as a read is not judged and
+/// writes nothing.
 pub(crate) fn run(
     harness: &str,
     found: Option<&(PathBuf, PathBuf)>,
@@ -283,6 +289,23 @@ pub(crate) fn run(
     // calls that happen to publish something.
     let (root, policy) = text::load_for(found)?;
 
+    // The first table naming the call speaks for it, and a read it names is
+    // not judged: nothing is published, so there is nothing to record.
+    let mut named = None;
+    for table in &policy.hooks {
+        if table.names(label)? {
+            named = Some(table);
+            break;
+        }
+    }
+    if let Some(table) = named
+        && table.skips(label)?
+    {
+        return Ok(Exit::Clean);
+    }
+    let mut scoping = table::Scoping::new(named, &policy.shims, label, subject, &root);
+    let destination = scoping.destination().map(str::to_owned);
+
     let mut collected = Walked::default();
     if let Some(subject) = subject {
         walk_strings(subject, None, &mut collected);
@@ -318,7 +341,14 @@ pub(crate) fn run(
         },
         &headlines,
     );
-    let verdicts = match text::judged(&invocation, &root, &policy, &mut record.ledger) {
+    let verdicts = match text::judged(
+        &invocation,
+        &root,
+        &policy,
+        destination.as_deref(),
+        &mut |rule| scoping.holds(rule),
+        &mut record.ledger,
+    ) {
         Ok(verdicts) => verdicts,
         Err(error) => return record.finish(Err(error)),
     };

@@ -1,0 +1,31 @@
+# The `[[hook]]` tables `uphold hook` reads after a repository's own. A
+# repository that wants a different answer for one of these tools writes its
+# own table naming it, and the first table naming a call speaks for it, so the
+# repository's wins.
+#
+# Compiled in rather than shipped by a set, because what a server's tools do is
+# a fact about the server and not about any repository: every set carrying a
+# rule with a `command` section would otherwise carry this table, and a
+# repository declaring such a rule of its own would carry it again.
+#
+# The GitHub MCP server's calls: the reads pass unjudged, and every other call
+# is judged at the repository it names, under each rule's scope there, as `gh`
+# is through its `[[shim]]` -- `shim = "gh"` takes the scope and `unresolved`
+# from the repository's own `[[shim]]` for `gh`, so the two seams cannot
+# disagree about one act. A read that names a private repository publishes
+# nothing. Directly installed (`mcp__github__`) and plugin-installed
+# (`mcp__plugin_<plugin>_github__`) servers both match.
+#
+# `skip` is the reads, by the verbs github/github-mcp-server v2.0.3 names them
+# with; a tool it does not name is judged, so a write the server adds later is
+# checked the day it ships. A call carrying no `owner` and `repo` -- a gist, a
+# notification -- has no destination, and `unresolved` refuses it wherever a
+# rule needs one.
+[[hook]]
+tools = '^mcp__(plugin_[a-z0-9_-]+_)?github__'
+skip = ['__(get|list|search)_', '_(get|list|read|search)$']
+target = "forge-repo"
+forge = "github"
+owner = "/owner"
+repo = "/repo"
+shim = "gh"
