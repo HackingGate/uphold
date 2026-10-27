@@ -144,14 +144,6 @@
       },
       "type": "object"
     },
-    "Forge": {
-      "description": "The forges whose questions this tool knows how to ask.\n\nSpelled in a `[[hook]]` table as `github` or `gitlab`, where it names the\nforge a tool call's `owner/repo` is on.",
-      "enum": [
-        "github",
-        "gitlab"
-      ],
-      "type": "string"
-    },
     "Git": {
       "additionalProperties": false,
       "description": "The five stage names a rule may run at: four of git's own, spelled as\ngithooks(5) spells them, and `manual`.",
@@ -172,7 +164,7 @@
       "description": "One `[[hook]]` table as the policy file writes it. Read by [`Written::load`]\nand by nothing else: what the rest of the crate holds is a [`Table`].",
       "properties": {
         "forge": {
-          "$ref": "#/$defs/Forge",
+          "$ref": "#/$defs/HookForge",
           "description": "The forge `owner/repo` is on, and the one asked about it. Required\nwith `target = \"forge-repo\"`: a tool name says nothing about a host,\nand asking GitHub about a GitLab path answers about a stranger."
         },
         "owner": {
@@ -216,6 +208,13 @@
         "tools"
       ],
       "type": "object"
+    },
+    "HookForge": {
+      "description": "The forges a `[[hook]]` destination may be on: github.com, asked by name.\n\nNot GitLab. A GitLab project is on whichever instance its server publishes\nto, nothing in a table names that host, and `glab` asked without one\nanswers for the instance it is configured for -- whose same-named private\nproject would stand a `public-target` rule down for a public one. A\nGitLab destination waits for a field that names its host.",
+      "enum": [
+        "github"
+      ],
+      "type": "string"
     },
     "Inherit": {
       "additionalProperties": false,

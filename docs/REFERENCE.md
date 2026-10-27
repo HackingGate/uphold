@@ -3228,7 +3228,7 @@ passes. The two facts that takes, which calls publish and where to, are a
 tools = '^mcp__(plugin_[a-z0-9_-]+_)?github__'      # searched in tool_name
 skip = ['__(get|list|search)_', '_(get|list|read|search)$']   # reads: not judged
 target = "forge-repo"      # the call names a repository; "none" (the default) if not
-forge = "github"           # "github" or "gitlab": the forge asked about it
+forge = "github"           # the forge asked about it; github.com is the only one
 owner = "/owner"           # RFC 6901 JSON pointers into tool_input
 repo = "/repo"
 shim = "gh"                # take scope and unresolved from this [[shim]] table
@@ -3262,8 +3262,7 @@ later is checked the day it ships.
   private name bound for a private repository, at the hook and through `gh`
   alike, because it judges against this repository's declared visibility.
 - **A judged call without its destination** — no string at `owner` or `repo`,
-  or one that is not a repository name (one path segment each, but a GitLab
-  owner may be a group path) — and **a call no table names** are
+  or one that is not a repository name (one path segment each) — and **a call no table names** are
   unresolved for every rule whose scope needs a destination. `unresolved`
   decides: `refuse` (the default, and the only answer for a call no table
   names) exits `2` before the call is made; `run` lets it through with those
@@ -3274,8 +3273,12 @@ later is checked the day it ships.
 The load refuses a table whose `tools` or `skip` is not a regular
 expression, a `target = "forge-repo"` without all of `forge`, `owner` and
 `repo` (or those without the target), `target = "git-remote"`, `scope =
-"public-registry"`, `shim` beside `scope` or `unresolved`, and `unresolved`
-where no scope its calls reach can fail to answer. A table in an
+"public-registry"`, `shim` beside `scope` or `unresolved`, a `shim` naming a
+command no `[[shim]]` in the repository stands in front of, and `unresolved`
+where no scope its calls reach can fail to answer. `forge` is `github` alone:
+a GitLab project is on whichever instance its server publishes to, no field
+names that host, and `glab` asked without one answers for the instance it is
+configured for. A table in an
 `inherit.paths` file is refused, as a shim there is. A rule the hook judges
 with `command.scope = "public-registry"` is refused too: that scope reads an
 npm command line, which no tool call has, so it could never be answered at the

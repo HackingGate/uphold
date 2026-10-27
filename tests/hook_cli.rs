@@ -1827,3 +1827,39 @@ match = ["publish"]
     assert_eq!(code(&passed), 0, "{}", stderr(&passed));
     assert_eq!(stdout(&passed), "", "{}", stderr(&passed));
 }
+
+/// A GitLab destination names no host, and `glab` asked without one answers
+/// for whichever instance it is configured for, so the table refuses it.
+#[test]
+fn a_gitlab_destination_is_refused_at_load() {
+    let policy = format!(
+        "{PUBLISHING_POLICY}\n[[hook]]\ntools = '^mcp__gitlab__'\ntarget = \"forge-repo\"\nforge = \"gitlab\"\nowner = \"/owner\"\nrepo = \"/repo\"\nscope = \"public-target\"\n"
+    );
+    let root = publishing("hook-gitlab-destination", &policy);
+    let output = hook_with_forge(
+        &root,
+        &call("mcp__gitlab__create_issue", &serde_json::json!({})),
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("unknown variant `gitlab`"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A repository's own table naming a command it shims nothing for would be
+/// judged under defaults nobody wrote, so it is refused at load.
+#[test]
+fn a_table_naming_an_undeclared_shim_is_refused_at_load() {
+    let policy =
+        format!("{PUBLISHING_POLICY}\n[[hook]]\ntools = '^mcp__forge__'\nshim = \"glab\"\n");
+    let root = publishing("hook-undeclared-shim", &policy);
+    let output = hook_with_forge(&root, &call("mcp__forge__write", &serde_json::json!({})));
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no `[[shim]]` here stands in front of \"glab\""),
+        "{}",
+        stderr(&output)
+    );
+}

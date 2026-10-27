@@ -2250,9 +2250,8 @@ pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<P
     validate_shim_editor(policy_path, &file.shims)?;
     validate_shim_unresolved(policy_path, &rules, &file.shims)?;
     validate_shims(policy_path, &rules, &file.shims)?;
-    let mut written = file.hooks.clone();
-    written.extend(hook_defaults()?);
-    let hooks = load_hooks(policy_path, &rules, written)?;
+    let mut hooks = load_hooks(policy_path, &rules, Some(&file.shims), file.hooks.clone())?;
+    hooks.extend(load_hooks(policy_path, &rules, None, hook_defaults()?)?);
     // Last, and after `rule.validate`, because this one reads a rule as the
     // author meant it. A rule naming two checks or carrying a parameter its
     // check cannot read is not yet a rule whose pattern means anything, and
@@ -2869,9 +2868,15 @@ fn hook_defaults() -> Result<Vec<crate::hook::Written>> {
 /// `[[shim]]`: written only where some scope this table's calls reach can fail
 /// to answer. At the hook that is `public-target`, on the table or on a rule
 /// standing at a publishing seam -- the rules a table speaks for.
+///
+/// `shims` is the repository's own `[[shim]]` tables, given for the tables it
+/// wrote: a `shim` naming a command it shims nothing for would be judged under
+/// defaults nobody wrote. The compiled-in tables pass `None`, because a
+/// repository with no `gh` shim is one their `shim = "gh"` must still serve.
 fn load_hooks(
     policy_path: &Path,
     rules: &[Rule],
+    shims: Option<&[crate::shim::Shim]>,
     written: Vec<crate::hook::Written>,
 ) -> Result<Vec<crate::hook::Table>> {
     let mut hooks = Vec::new();
@@ -2879,6 +2884,20 @@ fn load_hooks(
         let table = table
             .load()
             .map_err(|error| Fatal::at(policy_path, error))?;
+        if let (crate::hook::Answers::Shim(command), Some(shims)) = (&table.answers, shims)
+            && !shims.iter().any(|shim| shim.command == *command)
+        {
+            return Err(Fatal::at(
+                policy_path,
+                format!(
+                    "the `[[hook]]` for {:?} says `shim = {command:?}`, and no `[[shim]]` here \
+                     stands in front of {command:?}, so the scope it would take is one nobody \
+                     wrote. Declare that `[[shim]]`, name one that is declared, or write `scope` \
+                     on the table instead",
+                    table.tools()
+                ),
+            ));
+        }
         let unreachable = match &table.answers {
             crate::hook::Answers::Own {
                 scope,

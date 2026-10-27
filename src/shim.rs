@@ -3503,11 +3503,7 @@ pub(crate) struct Collected {
 }
 
 /// The forges whose questions this tool knows how to ask.
-///
-/// Spelled in a `[[hook]]` table as `github` or `gitlab`, where it names the
-/// forge a tool call's `owner/repo` is on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Forge {
     GitHub,
     GitLab,

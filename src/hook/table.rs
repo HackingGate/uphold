@@ -47,7 +47,7 @@ pub(crate) struct Written {
     /// with `target = "forge-repo"`: a tool name says nothing about a host,
     /// and asking GitHub about a GitLab path answers about a stranger.
     #[serde(default)]
-    forge: Option<Forge>,
+    forge: Option<HookForge>,
     /// RFC 6901 JSON pointer into the call's input, to the owner.
     #[serde(default)]
     owner: Option<String>,
@@ -71,11 +71,23 @@ pub(crate) struct Written {
     unresolved: Option<Unresolved>,
 }
 
-/// Where a table's calls name their repository: the forge, and the JSON
-/// pointers to the owner and the repository in the call's input.
+/// The forges a `[[hook]]` destination may be on: github.com, asked by name.
+///
+/// Not GitLab. A GitLab project is on whichever instance its server publishes
+/// to, nothing in a table names that host, and `glab` asked without one
+/// answers for the instance it is configured for -- whose same-named private
+/// project would stand a `public-target` rule down for a public one. A
+/// GitLab destination waits for a field that names its host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum HookForge {
+    GitHub,
+}
+
+/// Where a table's calls name their repository: the JSON pointers to the
+/// owner and the repository in the call's input, on github.com.
 #[derive(Debug, Clone)]
 struct Pointers {
-    forge: Forge,
     owner: String,
     repo: String,
 }
@@ -133,8 +145,8 @@ impl Written {
             }
         }
         let destination = match (self.target, self.forge, self.owner, self.repo) {
-            (Target::ForgeRepo, Some(forge), Some(owner), Some(repo)) => {
-                Some(Pointers { forge, owner, repo })
+            (Target::ForgeRepo, Some(HookForge::GitHub), Some(owner), Some(repo)) => {
+                Some(Pointers { owner, repo })
             }
             (Target::ForgeRepo, ..) => {
                 return Err(format!(
@@ -219,18 +231,17 @@ impl Table {
     }
 
     /// `owner/repo` as the call names it, or why it names none.
-    fn destination(&self, input: Option<&Value>) -> std::result::Result<(Forge, String), String> {
-        let Some(Pointers { forge, owner, repo }) = &self.destination else {
+    fn destination(&self, input: Option<&Value>) -> std::result::Result<String, String> {
+        let Some(Pointers { owner, repo }) = &self.destination else {
             return Err(format!(
                 "the `[[hook]]` for {:?} names no destination, so whether the \
                  `public-target` checks apply could not be established",
                 self.tools()
             ));
         };
-        // One segment each, but for a GitLab owner, which may be a namespace
-        // of nested groups: `owner = "acme/widget"` is not a GitHub owner, and
+        // One segment each: `owner = "acme/widget"` is not a GitHub owner, and
         // with `repo = "issues"` it would ask the forge about another path.
-        let read = |pointer: &str, nested: bool| -> std::result::Result<String, String> {
+        let read = |pointer: &str| -> std::result::Result<String, String> {
             let value = input
                 .and_then(|input| input.pointer(pointer))
                 .and_then(Value::as_str)
@@ -241,12 +252,7 @@ impl Table {
                          could not be established"
                     )
                 })?;
-            let named = if nested {
-                value.split('/').all(crate::shim::name_segment)
-            } else {
-                crate::shim::name_segment(value)
-            };
-            if named {
+            if crate::shim::name_segment(value) {
                 Ok(value.to_owned())
             } else {
                 Err(format!(
@@ -255,14 +261,7 @@ impl Table {
                 ))
             }
         };
-        Ok((
-            *forge,
-            format!(
-                "{}/{}",
-                read(owner, *forge == Forge::GitLab)?,
-                read(repo, false)?
-            ),
-        ))
+        Ok(format!("{}/{}", read(owner)?, read(repo)?))
     }
 }
 
@@ -275,7 +274,7 @@ pub(crate) struct Scoping<'a> {
     tool: &'a str,
     input: Option<&'a Value>,
     root: &'a Path,
-    destination: OnceCell<std::result::Result<(Forge, String), String>>,
+    destination: OnceCell<std::result::Result<String, String>>,
     answers: BTreeMap<String, Standing>,
 }
 
@@ -298,7 +297,7 @@ impl<'a> Scoping<'a> {
         }
     }
 
-    fn resolved(&self) -> &std::result::Result<(Forge, String), String> {
+    fn resolved(&self) -> &std::result::Result<String, String> {
         self.destination.get_or_init(|| {
             self.table.map_or_else(
                 || Err(self.unnamed()),
@@ -317,10 +316,7 @@ impl<'a> Scoping<'a> {
     /// `owner/repo` the call publishes to, where its table says. Handed to the
     /// text guards, which exempt the destination's own name, as at the shim.
     pub(crate) fn destination(&self) -> Option<&str> {
-        self.resolved()
-            .as_ref()
-            .ok()
-            .map(|(_, target)| target.as_str())
+        self.resolved().as_ref().ok().map(String::as_str)
     }
 
     /// Whether `rule` applies to this call.
@@ -394,7 +390,7 @@ impl<'a> Scoping<'a> {
                 crate::shim::command_standing("uphold hook", command, self.root)?
             }
             _ => match self.resolved() {
-                Ok((forge, target)) => crate::shim::named_standing(*forge, target),
+                Ok(target) => crate::shim::named_standing(Forge::GitHub, target),
                 Err(why) => Standing::CouldNotTell(why.clone()),
             },
         };
@@ -438,8 +434,7 @@ mod tests {
     #[test]
     fn the_destination_is_read_at_the_pointers() {
         let input = serde_json::json!({"owner": "acme", "repo": "widget"});
-        let (forge, target) = github().destination(Some(&input)).unwrap();
-        assert_eq!((forge, target.as_str()), (Forge::GitHub, "acme/widget"));
+        assert_eq!(github().destination(Some(&input)).unwrap(), "acme/widget");
     }
 
     /// A destination the call does not carry, or carries in a shape no forge
