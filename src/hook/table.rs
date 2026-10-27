@@ -347,11 +347,12 @@ impl<'a> Scoping<'a> {
             Standing::DoesNotHold => Ok(false),
             Standing::CouldNotTell(why) => match unresolved {
                 Unresolved::Refuse => Err(Fatal::new(format!(
-                    "uphold hook: {why}. A check that could not look is not a check that \
-                     passed, so the call was refused. Give {} a `[[hook]]` table that names \
-                     its destination, or skips it as a read, or write `unresolved = \"run\"` on \
-                     that table to let it through unchecked",
-                    self.tool
+                    "uphold hook: {why}, so whether rule {:?} applies could not be asked. A \
+                     check that could not look is not a check that passed, so the call was \
+                     refused. Give {} a `[[hook]]` table that names its destination, or skips \
+                     it as a read, or write `unresolved = \"run\"` on that table to let it \
+                     through unchecked",
+                    rule.id, self.tool
                 ))),
                 Unresolved::Run => {
                     if self
@@ -374,10 +375,13 @@ impl<'a> Scoping<'a> {
         let key = match scope {
             Scope::Always => return Ok(Standing::Holds),
             Scope::PublicTarget => String::from("public-target"),
+            // Not refused at load: the scope is right at the shim, and a policy
+            // that loads at every other seam is not broken for this one's sake.
             Scope::PublicRegistry => {
                 return Ok(Standing::CouldNotTell(String::from(
                     "a `public-registry` scope reads an npm command line, which a tool call \
-                     does not have",
+                     does not have (a pattern or prose rule stays off this seam with `seams = \
+                     [\"shim\"]`)",
                 )));
             }
             Scope::Command { command } => format!("command:{command}"),

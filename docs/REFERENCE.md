@@ -3279,10 +3279,10 @@ where no scope its calls reach can fail to answer. `forge` is `github` alone:
 a GitLab project is on whichever instance its server publishes to, no field
 names that host, and `glab` asked without one answers for the instance it is
 configured for. A table in an
-`inherit.paths` file is refused, as a shim there is. A rule the hook judges
-with `command.scope = "public-registry"` is refused too: that scope reads an
-npm command line, which no tool call has, so it could never be answered at the
-hook. A pattern or prose rule takes `seams = ["shim"]` to stay off the hook.
+`inherit.paths` file is refused, as a shim there is. A rule the hook judges with `command.scope = "public-registry"` loads, since
+the scope is right at the shim, but that scope reads an npm command line, which
+no tool call has: at the hook it is unresolved, and the refusal names the rule.
+A pattern or prose rule takes `seams = ["shim"]` to stay off the hook.
 
 ### What runs where there is no policy
 

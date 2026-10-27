@@ -1794,10 +1794,12 @@ fn a_github_destination_is_asked_of_github_com_under_an_enterprise_gh_host() {
     );
 }
 
-/// `public-registry` reads an npm command line, which no tool call has, so a
-/// rule the hook judges under it is refused at load and not on every call.
+/// `public-registry` reads an npm command line, which no tool call has, so the
+/// hook cannot answer it and refuses, naming the rule and the way out. The
+/// policy still loads: the scope is right at the shim, and every other seam
+/// is not broken for the hook's sake.
 #[test]
-fn a_public_registry_rule_the_hook_judges_is_refused_at_load() {
+fn a_public_registry_rule_is_unresolved_at_the_hook_and_loads_elsewhere() {
     let policy = r#"
 [rule.registry-prose]
 message = "State the claim."
@@ -1815,10 +1817,19 @@ match = ["publish"]
     let output = hook_with_forge(&root, &call("mcp__github__create_issue", &body));
     assert_eq!(code(&output), 2, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains(r#"seams = ["shim"]"#),
+        stderr(&output).contains(r#"seams = ["shim"]"#)
+            && stderr(&output).contains("\"registry-prose\""),
         "{}",
         stderr(&output)
     );
+    let scanned = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["scan", "--text", "-"])
+        .current_dir(&root)
+        .env("HOME", "/home/example-user")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(code(&scanned), 0, "{}", stderr(&scanned));
     let fixed = publishing(
         "hook-public-registry-shim-only",
         &policy.replace("command.scope", "seams = [\"shim\"]\ncommand.scope"),
