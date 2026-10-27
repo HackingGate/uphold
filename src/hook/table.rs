@@ -51,10 +51,13 @@ pub(crate) struct Written {
     /// and asking GitHub about a GitLab path answers about a stranger.
     #[serde(default)]
     forge: Option<HookForge>,
-    /// RFC 6901 JSON pointer into the call's input, to the owner.
+    /// JSON pointer (RFC 6901) into the call's input, to the owner. Not the
+    /// empty pointer, which names the whole input: an object is never an
+    /// owner's name.
     #[serde(default)]
     owner: Option<String>,
-    /// RFC 6901 JSON pointer into the call's input, to the repository.
+    /// JSON pointer (RFC 6901) into the call's input, to the repository. Not
+    /// the empty pointer, as for `owner`.
     #[serde(default)]
     repo: Option<String>,
     /// The command these calls are the same act as, whose `[[shim]]` table
@@ -160,19 +163,31 @@ impl Written {
         }
         let skip = self.skip.into_iter().collect();
         for (key, pointer) in [("owner", &self.owner), ("repo", &self.repo)] {
-            // RFC 6901: a pointer is empty or starts with `/`, and `~` is
-            // only ever the start of `~0` or `~1`.
-            if let Some(pointer) = pointer
-                && (!pointer.starts_with('/')
-                    || pointer
-                        .split('~')
-                        .skip(1)
-                        .any(|rest| !rest.starts_with(['0', '1'])))
+            let Some(pointer) = pointer else {
+                continue;
+            };
+            // RFC 6901 section 5 allows the empty pointer, naming the whole
+            // document. Here that is the call's input, an object and never a
+            // name, so this table takes the standard less that one pointer.
+            if pointer.is_empty() {
+                return Err(format!(
+                    "the `[[hook]]` for {tools_text:?} writes {key} = \"\", the JSON pointer to \
+                     the whole of the call's input. That is an object and never a name, so a \
+                     `[[hook]]` table does not take it; point at the field: \"/{key}\""
+                ));
+            }
+            // RFC 6901 section 3: otherwise a pointer starts with `/`, and `~`
+            // is only ever the start of `~0` or `~1`.
+            if !pointer.starts_with('/')
+                || pointer
+                    .split('~')
+                    .skip(1)
+                    .any(|rest| !rest.starts_with(['0', '1']))
             {
                 return Err(format!(
                     "the `[[hook]]` for {tools_text:?} writes {key} = {pointer:?}, which is not a \
-                     JSON pointer into the call's input. Write it as RFC 6901 spells one: \
-                     \"/{key}\""
+                     JSON pointer (RFC 6901): one starts with `/`, and writes `~` only as `~0` or \
+                     `~1`. Point at the field: \"/{key}\""
                 ));
             }
         }
@@ -505,6 +520,10 @@ mod tests {
             "JSON pointer",
         );
         refused(
+            |table| table.owner = Some(String::new()),
+            "the whole of the call's input",
+        );
+        refused(
             |table| table.skip = vec![String::from("(get|list)_")],
             "not a tool's name",
         );
@@ -513,5 +532,34 @@ mod tests {
             "one or the other",
         );
         assert!(written().load().is_ok());
+    }
+
+    /// The pointers RFC 6901 section 5 gives as examples, less the empty one,
+    /// load; and each reads the value the RFC says it does from the RFC's own
+    /// document, through the same `Value::pointer` the hook reads a call with.
+    #[test]
+    fn the_rfc_6901_examples_load_and_resolve() {
+        let document = serde_json::json!({
+            "foo": ["bar", "baz"], "": 0, "a/b": 1, "c%d": 2, "e^f": 3, "g|h": 4,
+            "i\\j": 5, "k\"l": 6, " ": 7, "m~n": 8,
+        });
+        for (pointer, expected) in [
+            ("/foo", serde_json::json!(["bar", "baz"])),
+            ("/foo/0", serde_json::json!("bar")),
+            ("/", serde_json::json!(0)),
+            ("/a~1b", serde_json::json!(1)),
+            ("/c%d", serde_json::json!(2)),
+            ("/e^f", serde_json::json!(3)),
+            ("/g|h", serde_json::json!(4)),
+            ("/i\\j", serde_json::json!(5)),
+            ("/k\"l", serde_json::json!(6)),
+            ("/ ", serde_json::json!(7)),
+            ("/m~0n", serde_json::json!(8)),
+        ] {
+            let mut table = written();
+            table.owner = Some(pointer.to_owned());
+            assert!(table.load().is_ok(), "{pointer}");
+            assert_eq!(document.pointer(pointer), Some(&expected), "{pointer}");
+        }
     }
 }

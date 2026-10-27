@@ -3229,7 +3229,7 @@ tools = '^mcp__(plugin_[a-z0-9_-]+_)?github__'      # searched in tool_name
 skip = ["get_file_contents", "issue_read"]   # reads, by the name after the tools match
 target = "forge-repo"      # the call names a repository; "none" (the default) if not
 forge = "github"           # the forge asked about it; github.com is the only one
-owner = "/owner"           # RFC 6901 JSON pointers into tool_input
+owner = "/owner"           # JSON pointers (RFC 6901) into tool_input, not ""
 repo = "/repo"
 shim = "gh"                # take scope and unresolved from this [[shim]] table
 # or, instead of shim:
@@ -3274,7 +3274,9 @@ looks like, so a write the server adds later is checked the day it ships.
   its tools and nothing else, since `scope` defaults to `always`.
 
 The load refuses a table whose `tools` is not a regular expression, a `skip`
-entry that is not a tool's name, a `target = "forge-repo"` without all of `forge`, `owner` and
+entry that is not a tool's name, an `owner` or `repo` that is not a JSON
+pointer — or is the empty one, which RFC 6901 allows for the whole document
+but which names an object and never an owner here — a `target = "forge-repo"` without all of `forge`, `owner` and
 `repo` (or those without the target), `target = "git-remote"` (a tool call has
 no remote), `scope =
 "public-registry"`, `shim` beside `scope` or `unresolved`, a `shim` naming a

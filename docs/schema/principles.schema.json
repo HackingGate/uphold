@@ -168,11 +168,11 @@
           "description": "The forge `owner/repo` is on, and the one asked about it. Required\nwith `target = \"forge-repo\"`: a tool name says nothing about a host,\nand asking GitHub about a GitLab path answers about a stranger."
         },
         "owner": {
-          "description": "RFC 6901 JSON pointer into the call's input, to the owner.",
+          "description": "JSON pointer (RFC 6901) into the call's input, to the owner. Not the\nempty pointer, which names the whole input: an object is never an\nowner's name.",
           "type": "string"
         },
         "repo": {
-          "description": "RFC 6901 JSON pointer into the call's input, to the repository.",
+          "description": "JSON pointer (RFC 6901) into the call's input, to the repository. Not\nthe empty pointer, as for `owner`.",
           "type": "string"
         },
         "scope": {
