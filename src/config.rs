@@ -1048,7 +1048,7 @@ pub(crate) struct PolicyFile {
     /// `[[hook]]`: which tool calls `uphold hook` judges, and where they
     /// publish. See [`crate::hook::Table`].
     #[serde(default, rename = "hook")]
-    pub hooks: Vec<crate::hook::Table>,
+    pub hooks: Vec<crate::hook::Written>,
     /// `[supply_chain]`: what this repository has said about its own
     /// dependency scan. See [`SupplyChain`].
     #[serde(default)]
@@ -2250,9 +2250,9 @@ pub(crate) fn load_text(root: &Path, policy_path: &Path, text: &str) -> Result<P
     validate_shim_editor(policy_path, &file.shims)?;
     validate_shim_unresolved(policy_path, &rules, &file.shims)?;
     validate_shims(policy_path, &rules, &file.shims)?;
-    let mut hooks = file.hooks.clone();
-    hooks.extend(hook_defaults()?);
-    validate_hooks(policy_path, &rules, &hooks)?;
+    let mut written = file.hooks.clone();
+    written.extend(hook_defaults()?);
+    let hooks = load_hooks(policy_path, &rules, written)?;
     // Last, and after `rule.validate`, because this one reads a rule as the
     // author meant it. A rule naming two checks or carrying a parameter its
     // check cannot read is not yet a rule whose pattern means anything, and
@@ -2853,50 +2853,62 @@ fn validate_shim_unresolved(
 /// The `[[hook]]` tables `uphold hook` reads after a repository's own.
 const HOOK_DEFAULT: &str = include_str!("../policy/hook.default.toml");
 
-fn hook_defaults() -> Result<Vec<crate::hook::Table>> {
+fn hook_defaults() -> Result<Vec<crate::hook::Written>> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Defaults {
-        hook: Vec<crate::hook::Table>,
+        hook: Vec<crate::hook::Written>,
     }
     toml::from_str::<Defaults>(HOOK_DEFAULT)
         .map(|defaults| defaults.hook)
         .map_err(|error| Fatal::new(format!("the compiled-in `[[hook]]` tables: {error}")))
 }
 
-/// Each `[[hook]]` table held to what a load can tell, and `unresolved` to the
-/// reading [`validate_shim_unresolved`] gives it on `[[shim]]`: written only
-/// where some scope this table's calls reach can fail to answer. At the hook
-/// that is `public-target`, on the table or on a rule standing at a publishing
-/// seam -- the rules a table speaks for.
-fn validate_hooks(policy_path: &Path, rules: &[Rule], hooks: &[crate::hook::Table]) -> Result<()> {
-    for table in hooks {
-        table
-            .validate()
+/// Each `[[hook]]` table parsed into the shape that carries its checks, and
+/// `unresolved` held to the reading [`validate_shim_unresolved`] gives it on
+/// `[[shim]]`: written only where some scope this table's calls reach can fail
+/// to answer. At the hook that is `public-target`, on the table or on a rule
+/// standing at a publishing seam -- the rules a table speaks for.
+fn load_hooks(
+    policy_path: &Path,
+    rules: &[Rule],
+    written: Vec<crate::hook::Written>,
+) -> Result<Vec<crate::hook::Table>> {
+    let mut hooks = Vec::new();
+    for table in written {
+        let table = table
+            .load()
             .map_err(|error| Fatal::at(policy_path, error))?;
-        if table
-            .unresolved
-            .is_none_or(|unresolved| unresolved == crate::shim::Unresolved::default())
-            || matches!(table.scope, Some(crate::shim::Scope::PublicTarget))
-        {
-            continue;
-        }
-        let by_a_rule = rules.iter().any(|rule| {
-            rule.command.as_ref().is_some_and(|where_| {
-                matches!(where_.scope, Some(crate::shim::Scope::PublicTarget))
-            })
-        });
-        if !by_a_rule {
+        let unreachable = match &table.answers {
+            crate::hook::Answers::Own {
+                scope,
+                unresolved: Some(unresolved),
+            } => {
+                *unresolved != crate::shim::Unresolved::default()
+                    && !matches!(scope, Some(crate::shim::Scope::PublicTarget))
+                    && !rules.iter().any(|rule| {
+                        rule.command.as_ref().is_some_and(|where_| {
+                            matches!(where_.scope, Some(crate::shim::Scope::PublicTarget))
+                        })
+                    })
+            }
+            _ => false,
+        };
+        if unreachable {
             return Err(Fatal::at(
                 policy_path,
                 format!(
-                    "the `[[hook]]` for {:?} writes `unresolved`, and no scope its calls can                      reach can fail to answer. Only `public-target` asks somebody else. Scope                      the table (or a rule with a `command` section) `public-target`, or take                      the field off.",
-                    table.tools
+                    "the `[[hook]]` for {:?} writes `unresolved`, and no scope its calls can \
+                     reach can fail to answer. Only `public-target` asks somebody else. Scope \
+                     the table (or a rule with a `command` section) `public-target`, or take \
+                     the field off.",
+                    table.tools()
                 ),
             ));
         }
+        hooks.push(table);
     }
-    Ok(())
+    Ok(hooks)
 }
 
 /// `editor`, `editor_unless` and `inert_flags` are read only where something

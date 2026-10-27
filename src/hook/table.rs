@@ -25,167 +25,206 @@ use crate::config::Rule;
 use crate::error::{Fatal, Result};
 use crate::shim::{Forge, Scope, Shim, Standing, Target, Unresolved};
 
-/// One `[[hook]]` table: the tool calls it names, and what it knows of them.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+/// One `[[hook]]` table as the policy file writes it. Read by [`Written::load`]
+/// and by nothing else: what the rest of the crate holds is a [`Table`].
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Table {
+#[schemars(rename = "Hook")]
+pub(crate) struct Written {
     /// A regular expression searched for in the call's tool name. The first
     /// table whose `tools` matches speaks for the call; the repository's own
-    /// tables are read before the ones its sets ship.
-    pub tools: String,
+    /// tables are read before the compiled-in ones.
+    tools: String,
     /// Regular expressions searched for in the tool name of a call that
     /// reads. A call matching one is not judged at all.
     #[serde(default)]
-    pub skip: Vec<String>,
+    skip: Vec<String>,
     /// `forge-repo`, where the call names its repository in `owner` and
     /// `repo`; `none` (the default), where it names none.
     #[serde(default)]
-    pub target: Target,
+    target: Target,
     /// The forge `owner/repo` is on, and the one asked about it. Required
     /// with `target = "forge-repo"`: a tool name says nothing about a host,
     /// and asking GitHub about a GitLab path answers about a stranger.
     #[serde(default)]
-    pub forge: Option<Forge>,
+    forge: Option<Forge>,
     /// RFC 6901 JSON pointer into the call's input, to the owner.
     #[serde(default)]
-    pub owner: Option<String>,
+    owner: Option<String>,
     /// RFC 6901 JSON pointer into the call's input, to the repository.
     #[serde(default)]
-    pub repo: Option<String>,
+    repo: Option<String>,
     /// The command these calls are the same act as, whose `[[shim]]` table
     /// in this repository supplies `scope` and `unresolved`: a call through
     /// the GitHub MCP server is judged where `gh` would be, by the answer the
     /// repository already wrote for `gh`. Not written beside either field.
     #[serde(default)]
-    pub shim: Option<String>,
+    shim: Option<String>,
     /// When a rule standing at a publishing seam applies, where the rule
     /// writes no `command.scope` of its own. As on `[[shim]]`, and `always`
     /// where neither this nor `shim` says.
     #[serde(default)]
-    pub scope: Option<Scope>,
+    scope: Option<Scope>,
     /// What to do where `scope` could not be evaluated: `refuse` (the
     /// default) or `run`. As on `[[shim]]`.
     #[serde(default)]
-    pub unresolved: Option<Unresolved>,
+    unresolved: Option<Unresolved>,
 }
 
-/// A pattern a load has already compiled, compiled again where it is used.
-fn compiled(pattern: &str) -> Result<Regex> {
-    Regex::new(pattern)
-        .map_err(|error| Fatal::new(format!("`[[hook]]` pattern {pattern:?}: {error}")))
+/// Where a table's calls name their repository: the forge, and the JSON
+/// pointers to the owner and the repository in the call's input.
+#[derive(Debug, Clone)]
+struct Pointers {
+    forge: Forge,
+    owner: String,
+    repo: String,
 }
 
-impl Table {
-    /// The scope and `unresolved` this table's calls are judged under: the
-    /// named `[[shim]]` table's, the table's own, or the defaults a `[[shim]]`
-    /// has.
-    pub(crate) fn answers(&self, shims: &[Shim]) -> (Scope, Unresolved) {
-        self.shim.as_ref().map_or_else(
-            || {
-                (
-                    self.scope.clone().unwrap_or_default(),
-                    self.unresolved.unwrap_or_default(),
+/// Where a table's scope and `unresolved` come from.
+#[derive(Debug, Clone)]
+pub(crate) enum Answers {
+    /// The `[[shim]]` table for this command, in the repository's policy.
+    Shim(String),
+    /// The table's own, each defaulting as on `[[shim]]`.
+    Own {
+        scope: Option<Scope>,
+        unresolved: Option<Unresolved>,
+    },
+}
+
+/// One `[[hook]]` table, held to what a load can tell about it: its patterns
+/// compiled, its destination whole or absent, and one source for its answers.
+#[derive(Debug, Clone)]
+pub(crate) struct Table {
+    tools: Regex,
+    skip: Vec<Regex>,
+    destination: Option<Pointers>,
+    pub(crate) answers: Answers,
+}
+
+impl Written {
+    /// The table parsed into the shape that carries its checks, or the
+    /// sentence for the refusal that names the policy file.
+    pub(crate) fn load(self) -> std::result::Result<Table, String> {
+        let tools_text = self.tools.clone();
+        let compile = |pattern: &str| {
+            Regex::new(pattern).map_err(|error| {
+                format!(
+                    "the `[[hook]]` for {tools_text:?} carries {pattern:?}, which is not a \
+                     regular expression ({error})"
                 )
-            },
-            |command| {
-                shims
-                    .iter()
-                    .find(|shim| shim.command == *command)
-                    .map_or_else(Default::default, |shim| {
-                        (shim.scope.clone(), shim.unresolved)
-                    })
-            },
-        )
-    }
-
-    /// Whether this table speaks for `tool`.
-    pub(crate) fn names(&self, tool: &str) -> Result<bool> {
-        Ok(compiled(&self.tools)?.is_match(tool))
-    }
-
-    /// Whether `tool` is one of the reads this table passes unjudged.
-    pub(crate) fn skips(&self, tool: &str) -> Result<bool> {
-        for pattern in &self.skip {
-            if compiled(pattern)?.is_match(tool) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    /// The table held to what a load can tell about it, as a sentence for the
-    /// refusal that names the policy file.
-    pub(crate) fn validate(&self) -> std::result::Result<(), String> {
-        for pattern in std::iter::once(&self.tools).chain(&self.skip) {
-            if let Err(error) = Regex::new(pattern) {
-                return Err(format!(
-                    "the `[[hook]]` for {:?} carries {pattern:?}, which is not a regular \
-                     expression ({error})",
-                    self.tools
-                ));
-            }
-        }
+            })
+        };
+        let tools = compile(&self.tools)?;
+        let skip = self
+            .skip
+            .iter()
+            .map(|pattern| compile(pattern))
+            .collect::<std::result::Result<Vec<Regex>, String>>()?;
         for (key, pointer) in [("owner", &self.owner), ("repo", &self.repo)] {
             if let Some(pointer) = pointer
                 && !pointer.starts_with('/')
             {
                 return Err(format!(
-                    "the `[[hook]]` for {:?} writes {key} = {pointer:?}, which is not a JSON \
-                     pointer into the call's input. Write it as RFC 6901 spells one: \"/{key}\"",
-                    self.tools
+                    "the `[[hook]]` for {tools_text:?} writes {key} = {pointer:?}, which is not a \
+                     JSON pointer into the call's input. Write it as RFC 6901 spells one: \
+                     \"/{key}\""
                 ));
             }
         }
-        let declared = [
-            self.forge.is_some(),
-            self.owner.is_some(),
-            self.repo.is_some(),
-        ];
-        match self.target {
-            Target::ForgeRepo if declared.contains(&false) => Err(format!(
-                "the `[[hook]]` for {:?} says `target = \"forge-repo\"` without all of \
-                 `forge`, `owner` and `repo`. A destination is a forge and a repository on it; \
-                 write the three, or take `target` off",
-                self.tools
-            )),
-            Target::None if declared.contains(&true) => Err(format!(
-                "the `[[hook]]` for {:?} writes `forge`, `owner` or `repo` without `target = \
-                 \"forge-repo\"`, so nothing reads them. Add the target, or take them off",
-                self.tools
-            )),
-            Target::GitRemote => Err(format!(
-                "the `[[hook]]` for {:?} says `target = \"git-remote\"`. A tool call has no \
-                 remote; it is `forge-repo` or `none`",
-                self.tools
-            )),
-            _ if self.shim.is_some() && (self.scope.is_some() || self.unresolved.is_some()) => {
-                Err(format!(
-                    "the `[[hook]]` for {:?} writes `shim` beside `scope` or `unresolved`. \
-                     `shim` takes both from that command's `[[shim]]` table; write one or the \
-                     other",
-                    self.tools
-                ))
+        let destination = match (self.target, self.forge, self.owner, self.repo) {
+            (Target::ForgeRepo, Some(forge), Some(owner), Some(repo)) => {
+                Some(Pointers { forge, owner, repo })
             }
-            _ => match self.scope {
-                Some(Scope::PublicRegistry) => Err(format!(
-                    "the `[[hook]]` for {:?} says `scope = \"public-registry\"`, which reads an \
-                     npm command line a tool call does not have",
-                    self.tools
-                )),
-                _ => Ok(()),
-            },
+            (Target::ForgeRepo, ..) => {
+                return Err(format!(
+                    "the `[[hook]]` for {tools_text:?} says `target = \"forge-repo\"` without all \
+                     of `forge`, `owner` and `repo`. A destination is a forge and a repository on \
+                     it; write the three, or take `target` off"
+                ));
+            }
+            (Target::GitRemote, ..) => {
+                return Err(format!(
+                    "the `[[hook]]` for {tools_text:?} says `target = \"git-remote\"`. A tool \
+                     call has no remote; it is `forge-repo` or `none`"
+                ));
+            }
+            (Target::None, None, None, None) => None,
+            (Target::None, ..) => {
+                return Err(format!(
+                    "the `[[hook]]` for {tools_text:?} writes `forge`, `owner` or `repo` without \
+                     `target = \"forge-repo\"`, so nothing reads them. Add the target, or take \
+                     them off"
+                ));
+            }
+        };
+        let answers = match (self.shim, self.scope, self.unresolved) {
+            (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
+                return Err(format!(
+                    "the `[[hook]]` for {tools_text:?} writes `shim` beside `scope` or \
+                     `unresolved`. `shim` takes both from that command's `[[shim]]` table; write \
+                     one or the other"
+                ));
+            }
+            (_, Some(Scope::PublicRegistry), _) => {
+                return Err(format!(
+                    "the `[[hook]]` for {tools_text:?} says `scope = \"public-registry\"`, which \
+                     reads an npm command line a tool call does not have"
+                ));
+            }
+            (Some(command), None, None) => Answers::Shim(command),
+            (None, scope, unresolved) => Answers::Own { scope, unresolved },
+        };
+        Ok(Table {
+            tools,
+            skip,
+            destination,
+            answers,
+        })
+    }
+}
+
+impl Table {
+    /// The `tools` pattern as written, for a sentence that names the table.
+    pub(crate) fn tools(&self) -> &str {
+        self.tools.as_str()
+    }
+
+    /// The scope and `unresolved` this table's calls are judged under: the
+    /// named `[[shim]]` table's, the table's own, or the defaults a `[[shim]]`
+    /// has.
+    fn answered(&self, shims: &[Shim]) -> (Scope, Unresolved) {
+        match &self.answers {
+            Answers::Shim(command) => shims
+                .iter()
+                .find(|shim| shim.command == *command)
+                .map_or_else(Default::default, |shim| {
+                    (shim.scope.clone(), shim.unresolved)
+                }),
+            Answers::Own { scope, unresolved } => (
+                scope.clone().unwrap_or_default(),
+                unresolved.unwrap_or_default(),
+            ),
         }
+    }
+
+    /// Whether this table speaks for `tool`.
+    pub(crate) fn names(&self, tool: &str) -> bool {
+        self.tools.is_match(tool)
+    }
+
+    /// Whether `tool` is one of the reads this table passes unjudged.
+    pub(crate) fn skips(&self, tool: &str) -> bool {
+        self.skip.iter().any(|pattern| pattern.is_match(tool))
     }
 
     /// `owner/repo` as the call names it, or why it names none.
     fn destination(&self, input: Option<&Value>) -> std::result::Result<(Forge, String), String> {
-        let (Target::ForgeRepo, Some(forge), Some(owner), Some(repo)) =
-            (self.target, self.forge, &self.owner, &self.repo)
-        else {
+        let Some(Pointers { forge, owner, repo }) = &self.destination else {
             return Err(format!(
                 "the `[[hook]]` for {:?} names no destination, so whether the \
                  `public-target` checks apply could not be established",
-                self.tools
+                self.tools()
             ));
         };
         let read = |pointer: &str| -> std::result::Result<String, String> {
@@ -218,7 +257,7 @@ impl Table {
                 ))
             }
         };
-        Ok((forge, format!("{}/{}", read(owner)?, read(repo)?)))
+        Ok((*forge, format!("{}/{}", read(owner)?, read(repo)?)))
     }
 }
 
@@ -226,7 +265,7 @@ impl Table {
 /// hook's counterpart of the shim's `CommandContext`.
 pub(crate) struct Scoping<'a> {
     table: Option<&'a Table>,
-    /// The table's scope and `unresolved`, read once. See [`Table::answers`].
+    /// The table's scope and `unresolved`, read once. See [`Table::answered`].
     answering: Option<(Scope, Unresolved)>,
     tool: &'a str,
     input: Option<&'a Value>,
@@ -245,7 +284,7 @@ impl<'a> Scoping<'a> {
     ) -> Self {
         Self {
             table,
-            answering: table.map(|table| table.answers(shims)),
+            answering: table.map(|table| table.answered(shims)),
             tool,
             input,
             root,
@@ -363,7 +402,7 @@ impl<'a> Scoping<'a> {
 mod tests {
     use super::*;
 
-    fn github() -> Table {
+    fn written() -> Written {
         toml::from_str(
             r#"
             tools = "^mcp__github__"
@@ -378,13 +417,17 @@ mod tests {
         .unwrap()
     }
 
+    fn github() -> Table {
+        written().load().unwrap()
+    }
+
     #[test]
     fn a_read_is_skipped_and_a_write_is_not() {
         let table = github();
-        assert!(table.names("mcp__github__get_file_contents").unwrap());
-        assert!(table.skips("mcp__github__get_file_contents").unwrap());
-        assert!(!table.skips("mcp__github__create_issue").unwrap());
-        assert!(!table.names("mcp__slack__search").unwrap());
+        assert!(table.names("mcp__github__get_file_contents"));
+        assert!(table.skips("mcp__github__get_file_contents"));
+        assert!(!table.skips("mcp__github__create_issue"));
+        assert!(!table.names("mcp__slack__search"));
     }
 
     #[test]
@@ -410,10 +453,10 @@ mod tests {
 
     #[test]
     fn a_table_the_load_cannot_read_is_refused_naming_why() {
-        let refused = |edit: fn(&mut Table), why: &str| {
-            let mut table = github();
+        let refused = |edit: fn(&mut Written), why: &str| {
+            let mut table = written();
             edit(&mut table);
-            let error = table.validate().unwrap_err();
+            let error = table.load().unwrap_err();
             assert!(error.contains(why), "{error}");
         };
         refused(|table| table.forge = None, "without all of");
@@ -430,6 +473,6 @@ mod tests {
             |table| table.scope = Some(Scope::Always),
             "one or the other",
         );
-        assert!(github().validate().is_ok());
+        assert!(written().load().is_ok());
     }
 }

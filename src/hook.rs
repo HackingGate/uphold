@@ -56,7 +56,7 @@
 mod stop;
 mod table;
 
-pub(crate) use table::Table;
+pub(crate) use table::{Answers, Table, Written};
 
 use std::fmt::Write as _;
 use std::io::Read;
@@ -291,16 +291,8 @@ pub(crate) fn run(
 
     // The first table naming the call speaks for it, and a read it names is
     // not judged: nothing is published, so there is nothing to record.
-    let mut named = None;
-    for table in &policy.hooks {
-        if table.names(label)? {
-            named = Some(table);
-            break;
-        }
-    }
-    if let Some(table) = named
-        && table.skips(label)?
-    {
+    let named = policy.hooks.iter().find(|table| table.names(label));
+    if named.is_some_and(|table| table.skips(label)) {
         return Ok(Exit::Clean);
     }
     let mut scoping = table::Scoping::new(named, &policy.shims, label, subject, &root);

@@ -167,6 +167,56 @@
       },
       "type": "object"
     },
+    "Hook": {
+      "additionalProperties": false,
+      "description": "One `[[hook]]` table as the policy file writes it. Read by [`Written::load`]\nand by nothing else: what the rest of the crate holds is a [`Table`].",
+      "properties": {
+        "forge": {
+          "$ref": "#/$defs/Forge",
+          "description": "The forge `owner/repo` is on, and the one asked about it. Required\nwith `target = \"forge-repo\"`: a tool name says nothing about a host,\nand asking GitHub about a GitLab path answers about a stranger."
+        },
+        "owner": {
+          "description": "RFC 6901 JSON pointer into the call's input, to the owner.",
+          "type": "string"
+        },
+        "repo": {
+          "description": "RFC 6901 JSON pointer into the call's input, to the repository.",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope",
+          "description": "When a rule standing at a publishing seam applies, where the rule\nwrites no `command.scope` of its own. As on `[[shim]]`, and `always`\nwhere neither this nor `shim` says."
+        },
+        "shim": {
+          "description": "The command these calls are the same act as, whose `[[shim]]` table\nin this repository supplies `scope` and `unresolved`: a call through\nthe GitHub MCP server is judged where `gh` would be, by the answer the\nrepository already wrote for `gh`. Not written beside either field.",
+          "type": "string"
+        },
+        "skip": {
+          "default": [],
+          "description": "Regular expressions searched for in the tool name of a call that\nreads. A call matching one is not judged at all.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/Target",
+          "description": "`forge-repo`, where the call names its repository in `owner` and\n`repo`; `none` (the default), where it names none."
+        },
+        "tools": {
+          "description": "A regular expression searched for in the call's tool name. The first\ntable whose `tools` matches speaks for the call; the repository's own\ntables are read before the compiled-in ones.",
+          "type": "string"
+        },
+        "unresolved": {
+          "$ref": "#/$defs/Unresolved",
+          "description": "What to do where `scope` could not be evaluated: `refuse` (the\ndefault) or `run`. As on `[[shim]]`."
+        }
+      },
+      "required": [
+        "tools"
+      ],
+      "type": "object"
+    },
     "Inherit": {
       "additionalProperties": false,
       "description": "What a policy inherits, named set by set.\n\n`sets` is a list and nothing else: the old `use_default = true` shorthand\ntook every bundled set without naming one, so what a repository inherited\nwas not written in the repository. Naming the sets is cheap, and each is\na separate decision -- `unmanaged-pins` refuses a shape a repository that\nvendors deliberately has on purpose, `host-identity` shells out to read the\nrunning machine, and `captured-fixtures` refuses a script a parser's own\ntest corpus is made of. None of those arguments should stand between anyone\nand `process-residue`.",
@@ -569,56 +619,6 @@
       },
       "type": "object"
     },
-    "Table": {
-      "additionalProperties": false,
-      "description": "One `[[hook]]` table: the tool calls it names, and what it knows of them.",
-      "properties": {
-        "forge": {
-          "$ref": "#/$defs/Forge",
-          "description": "The forge `owner/repo` is on, and the one asked about it. Required\nwith `target = \"forge-repo\"`: a tool name says nothing about a host,\nand asking GitHub about a GitLab path answers about a stranger."
-        },
-        "owner": {
-          "description": "RFC 6901 JSON pointer into the call's input, to the owner.",
-          "type": "string"
-        },
-        "repo": {
-          "description": "RFC 6901 JSON pointer into the call's input, to the repository.",
-          "type": "string"
-        },
-        "scope": {
-          "$ref": "#/$defs/Scope",
-          "description": "When a rule standing at a publishing seam applies, where the rule\nwrites no `command.scope` of its own. As on `[[shim]]`, and `always`\nwhere neither this nor `shim` says."
-        },
-        "shim": {
-          "description": "The command these calls are the same act as, whose `[[shim]]` table\nin this repository supplies `scope` and `unresolved`: a call through\nthe GitHub MCP server is judged where `gh` would be, by the answer the\nrepository already wrote for `gh`. Not written beside either field.",
-          "type": "string"
-        },
-        "skip": {
-          "default": [],
-          "description": "Regular expressions searched for in the tool name of a call that\nreads. A call matching one is not judged at all.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "target": {
-          "$ref": "#/$defs/Target",
-          "description": "`forge-repo`, where the call names its repository in `owner` and\n`repo`; `none` (the default), where it names none."
-        },
-        "tools": {
-          "description": "A regular expression searched for in the call's tool name. The first\ntable whose `tools` matches speaks for the call; the repository's own\ntables are read before the ones its sets ship.",
-          "type": "string"
-        },
-        "unresolved": {
-          "$ref": "#/$defs/Unresolved",
-          "description": "What to do where `scope` could not be evaluated: `refuse` (the\ndefault) or `run`. As on `[[shim]]`."
-        }
-      },
-      "required": [
-        "tools"
-      ],
-      "type": "object"
-    },
     "Target": {
       "description": "Where an invocation is going, when that is a meaningful question at all.",
       "oneOf": [
@@ -967,7 +967,7 @@
     "hook": {
       "description": "`[[hook]]`: which tool calls `uphold hook` judges, and where they\npublish. See [`crate::hook::Table`].",
       "items": {
-        "$ref": "#/$defs/Table"
+        "$ref": "#/$defs/Hook"
       },
       "type": "array"
     },
