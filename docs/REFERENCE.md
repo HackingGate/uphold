@@ -3245,10 +3245,11 @@ skips the reads `github/github-mcp-server` v2.0.3 ships, each by name. `skip`
 takes names and not patterns: a tool not listed is judged whatever its name
 looks like, so a write the server adds later is checked the day it ships.
 
-- **A call whose name, after its last `__`, is in `skip`** is not judged: nothing is published. Under
-  `--junit` its record still names every rule the hook would have asked, each
-  skipped as out of scope, so a skipped read is not mistaken for a call the
-  hook never saw.
+- **A call whose name, after its last `__`, is in `skip`** publishes no
+  text, so it is judged as a call carrying no strings: a rule that refuses a
+  tool by its name still runs, wherever the call goes. Under `--junit` its
+  record names the text rules as skipped, out of scope, so a read is not
+  mistaken for a call the hook never saw.
 - **A judged call** has its destination read at `owner` and `repo` and asked
   of `forge`, once per call. A GitHub destination is asked of github.com
   whatever `GH_HOST` names, because an enterprise repository of the same name

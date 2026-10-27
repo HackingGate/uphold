@@ -842,24 +842,23 @@ fn literal_rules(policy: &Policy) -> Vec<Rule> {
     owned
 }
 
-/// Every rule [`judged`] would ask at the hook, recorded as out of scope
-/// without being asked.
+/// The rules about published text [`judged`] would ask at the hook, recorded
+/// as out of scope without being asked.
 ///
-/// For a call its `[[hook]]` table names as a read: it publishes nothing, so
-/// nothing is judged, and a record that left the rules out would read as a
+/// For a call its `[[hook]]` table names as a read: it publishes no text, so
+/// none is judged, and a record that left these rules out would read as a
 /// call the hook never saw -- the "passed or never ran" a record exists to
-/// tell apart.
+/// tell apart. The pattern rules are not among them: the hook asks those
+/// about the call's tool name, which a read still has.
 pub(crate) fn set_aside(policy: &Policy, recorded: &str, ledger: &mut Vec<Judgment>) {
     let asked = policy.rules.iter().filter(|rule| match Judged::of(rule) {
         Some(Judged::Guards) => rule
             .builtin()
             .is_some_and(|builtin| !crate::guard::META_TEXT_GUARDS.contains(&builtin)),
-        Some(Judged::Prose | Judged::Patterns) => {
-            rule.command.is_some() && rule.judged_at(Seam::Hook)
-        }
-        // The literal rules are below, with the fallback; the consultations
-        // are the shim's alone.
-        Some(Judged::Literals | Judged::Consultation) | None => false,
+        Some(Judged::Prose) => rule.command.is_some() && rule.judged_at(Seam::Hook),
+        // The literal rules are below, with the fallback; the pattern rules
+        // are asked; the consultations are the shim's alone.
+        Some(Judged::Literals | Judged::Patterns | Judged::Consultation) | None => false,
     });
     for rule in literal_rules(policy).iter().chain(asked) {
         ledger.push(Judgment::of(rule, Some(recorded), Answer::OutOfScope));

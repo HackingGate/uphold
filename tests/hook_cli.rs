@@ -1940,3 +1940,40 @@ fn a_git_remote_target_is_refused_at_load() {
         stderr(&output)
     );
 }
+
+/// A read publishes no text, and a rule about what the call is still runs on
+/// it: a repository refusing a tool by its name keeps refusing it when the
+/// compiled-in table lists that tool as a read, and with no scope of its own
+/// the rule takes `gh`'s, which a read never has to ask a forge about.
+#[test]
+fn a_tool_name_rule_still_refuses_a_skipped_read() {
+    let policy = "\
+[[shim]]
+command = \"gh\"
+match = [\"search:code\"]
+argv_subject = true
+scope = \"public-target\"
+
+[rule.no-code-search]
+message = \"Search the local checkout instead.\"
+regexp = '^search code|__search_code$'
+subjects = [\"argv\", \"tool\"]
+seams = [\"shim\", \"hook\"]
+command.before = [\"gh\"]
+";
+    let root = publishing("hook-tool-rule-on-read", policy);
+    let output = hook_with_forge(
+        &root,
+        &call(
+            "mcp__github__search_code",
+            &serde_json::json!({"query": "anything"}),
+        ),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        reason(&output).contains("no-code-search"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!root.join("gh.asked").exists());
+}

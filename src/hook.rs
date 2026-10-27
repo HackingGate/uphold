@@ -182,8 +182,8 @@ fn drop_unsent(collected: &mut Walked) {
 /// where one was asked for. Written on every call that got as far as judging,
 /// refused or not: a hook that wrote only on a refusal would make an absent
 /// file mean "passed or never ran", which is the ambiguity the record exists
-/// to remove. A call its `[[hook]]` table skips as a read is not judged, and
-/// every rule it would have asked is written down as out of scope.
+/// to remove. A call its `[[hook]]` table skips as a read has its text rules
+/// written down as out of scope, and its tool-name rules asked.
 pub(crate) fn run(
     harness: &str,
     found: Option<&(PathBuf, PathBuf)>,
@@ -289,24 +289,23 @@ pub(crate) fn run(
     // calls that happen to publish something.
     let (root, policy) = text::load_for(found)?;
 
-    // The first table naming the call speaks for it, and a read it names is
-    // not judged: nothing is published, so there is nothing to record.
+    // The first table naming the call speaks for it. A read it names
+    // publishes nothing, so it is judged as a call carrying no strings: a rule
+    // about what the call IS -- its tool name -- still runs, as it did before
+    // any table said the call was a read, and it runs wherever the call goes,
+    // since a read goes nowhere. The rules about published text are written
+    // down as set aside rather than asked.
     let named = policy.hooks.iter().find(|table| table.names(label));
-    if named.is_some_and(|table| table.skips(label)) {
-        let mut record = Record::new(
-            evidence.map(Place::Directory),
-            Run::Hook(harness.to_owned()),
-        );
-        record.open()?;
-        text::set_aside(&policy, label, &mut record.ledger);
-        record.write(false)?;
-        return Ok(Exit::Clean);
-    }
+    let read = named.is_some_and(|table| table.skips(label));
     let mut scoping = table::Scoping::new(named, &policy.shims, label, subject, &root);
-    let destination = scoping.destination().map(str::to_owned);
+    let destination = if read {
+        None
+    } else {
+        scoping.destination().map(str::to_owned)
+    };
 
     let mut collected = Walked::default();
-    if let Some(subject) = subject {
+    if !read && let Some(subject) = subject {
         walk_strings(subject, None, &mut collected);
     }
     drop_unsent(&mut collected);
@@ -330,6 +329,9 @@ pub(crate) fn run(
         Run::Hook(harness.to_owned()),
     );
     record.open()?;
+    if read {
+        text::set_aside(&policy, label, &mut record.ledger);
+    }
     let invocation = Invocation::text(
         text::Seam::Hook,
         label,
@@ -345,7 +347,7 @@ pub(crate) fn run(
         &root,
         &policy,
         destination.as_deref(),
-        &mut |rule| scoping.holds(rule),
+        &mut |rule| if read { Ok(true) } else { scoping.holds(rule) },
         &mut record.ledger,
     ) {
         Ok(verdicts) => verdicts,
