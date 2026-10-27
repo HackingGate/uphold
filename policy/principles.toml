@@ -651,3 +651,41 @@ run = [
   ["uphold", "check"],
   ["uv", "run", "--no-project", "python", "-m", "unittest", "discover", "-s", "tests"],
 ]
+
+# The records this repository's design questions are answered from: the ones
+# its own code and docs already argue from by id, and the three its rulings on
+# the harness hooks turned on. Each order follows a choice this repository has
+# already made, named in its `why`.
+[decide]
+adopt = [
+  "explicit-unknown",
+  "parameterize-do-not-enumerate",
+  "enforcement-needs-a-trigger",
+  "psychological-acceptability",
+  "single-authoritative-source",
+  "mechanism-policy-separation",
+  "least-power",
+  "complete-mediation",
+  "fail-safe-defaults",
+  "economy-of-mechanism",
+]
+
+[[decide.order]]
+prefer = "fail-safe-defaults"
+over = "psychological-acceptability"
+why = "A scope the shim cannot evaluate refuses by default, and `unresolved = \"run\"` is the named way out."
+
+[[decide.order]]
+prefer = "explicit-unknown"
+over = "psychological-acceptability"
+why = "A seam that stands down says so on stderr; it never reports what it did not read as a pass."
+
+[[decide.order]]
+prefer = "psychological-acceptability"
+over = "complete-mediation"
+why = "A hook that refuses routine work has its matcher deleted, and then it mediates nothing."
+
+[[decide.order]]
+prefer = "least-power"
+over = "parameterize-do-not-enumerate"
+why = "`[stop] run` takes argv and no shell; a command that needs a pipeline names a script."
