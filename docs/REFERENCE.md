@@ -3245,15 +3245,23 @@ skips the reads `github/github-mcp-server` v2.0.3 ships, each by name. `skip`
 takes names and not patterns: a tool not listed is judged whatever its name
 looks like, so a write the server adds later is checked the day it ships.
 
+The compiled-in table describes the GitHub MCP server at its default host,
+github.com. The server's host is its own configuration (`--gh-host` or
+`GITHUB_HOST`), which no tool call carries, so a repository whose server
+publishes to GitHub Enterprise writes its own table for those tools: no
+destination, and `scope = "public-target"`. Every check that needs the
+destination is then unresolved and refused, or let through under `unresolved =
+"run"`, rather than asked of a github.com repository that shares the name.
+
 - **A call whose name, after where `tools` matched it, is in `skip`**
   publishes no text: only a rule that refuses a tool by its name is asked,
   wherever the call goes. Under `--junit` its record names every other rule as
   skipped, out of scope, so a read is not mistaken for a call the hook never
   saw. A name that only ends in a listed one is judged in full.
 - **A judged call** has its destination read at `owner` and `repo` and asked
-  of `forge`, once per call. A GitHub destination is asked of github.com
-  whatever `GH_HOST` names, because an enterprise repository of the same name
-  is somebody else's. A rule with a `command` section is judged under
+  of `forge`, once per call. `forge = "github"` is github.com, and is asked
+  of github.com whatever `GH_HOST` names: that is this machine's `gh`
+  setting, not the destination's. A rule with a `command` section is judged under
   its own `command.scope`, else the table's scope; with `shim = "gh"` that is
   the repository's own `[[shim]]` for `gh`, so the two seams cannot disagree
   about one act. A `public-target` scope at a private destination stands the

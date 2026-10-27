@@ -16,6 +16,16 @@
 # nothing. Directly installed (`mcp__github__`) and plugin-installed
 # (`mcp__plugin_<plugin>_github__`) servers both match.
 #
+# `forge = "github"` is github.com: where this server publishes when nothing
+# sets its host. Its host is the server's own configuration -- `--gh-host` or
+# `GITHUB_HOST` (github/github-mcp-server v2.0.3 README, "GitHub Enterprise
+# Server and Enterprise Cloud with data residency") -- which no hook call
+# carries, so this table cannot follow it. A repository whose server is set to
+# another host writes its own table for these tools, read before this one,
+# naming no destination and `scope = "public-target"`: every check that needs
+# the destination is then unresolved and refused, rather than asked of a
+# github.com repository that shares the name.
+#
 # `skip` is the reads github/github-mcp-server v2.0.3 ships, each by its
 # name: names and not patterns, so a tool not listed here is judged whatever
 # its name looks like, and a write the server adds later is checked the day it

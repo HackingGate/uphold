@@ -294,9 +294,10 @@ pub(crate) fn command_standing(seam: &str, command: &str, root: &Path) -> Result
 /// reads -- see [`declared_standing`].
 ///
 /// A GitHub destination is asked of github.com by name: `gh api` without
-/// `--hostname` answers for `GH_HOST`, and an enterprise repository of the
-/// same name would answer for this one, as `gh_repository_target` refuses
-/// at the shim.
+/// `--hostname` answers for `GH_HOST`, which is this machine's `gh` setting
+/// and not the destination's. github.com is what a `[[hook]]` table's `forge
+/// = "github"` means; a server set to publish elsewhere is not one such a
+/// table describes -- see `policy/hook.default.toml`.
 pub(crate) fn named_standing(forge: Forge, target: &str) -> Standing {
     let destination = Destination {
         target: Some(target.to_owned()),

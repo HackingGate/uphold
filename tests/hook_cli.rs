@@ -1977,3 +1977,33 @@ command.before = [\"gh\"]
     );
     assert!(!root.join("gh.asked").exists());
 }
+
+/// A server set to publish to GitHub Enterprise is not one the compiled-in
+/// table describes. The repository's own table for its tools, naming no
+/// destination, leaves every check that needs one unresolved: refused, and
+/// never asked of a github.com repository that shares the name.
+#[test]
+fn an_enterprise_servers_own_table_refuses_rather_than_ask_github_com() {
+    let policy = format!(
+        "{PUBLISHING_POLICY}\n[[hook]]\ntools = '^mcp__github__'\nskip = [\"get_file_contents\"]\nscope = \"public-target\"\n"
+    );
+    let root = publishing("hook-enterprise-server", &policy);
+    let output = hook_with_forge(
+        &root,
+        &call(
+            "mcp__github__create_issue",
+            &serde_json::json!({
+                "owner": "example-user",
+                "repo": "public-widget",
+                "body": "An ordinary sentence.",
+            }),
+        ),
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("names no destination"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!root.join("gh.asked").exists());
+}
