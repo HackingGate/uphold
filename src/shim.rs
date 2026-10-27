@@ -53,6 +53,9 @@ mod destination;
 pub(crate) use checker::pattern_finding;
 use checker::{consult, pattern_refusal};
 use destination::{CommandContext, effective_scope};
+pub(crate) use destination::{
+    command_standing, name_segment, named_standing, own_scope, ran_unchecked, runs,
+};
 
 /// Where an invocation is going, when that is a meaningful question at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
@@ -68,7 +71,9 @@ pub(crate) enum Target {
 }
 
 /// Whether this invocation publishes to somewhere that matters.
-#[derive(Debug, Clone, Deserialize, serde::Serialize, Default, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Deserialize, serde::Serialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Scope {
     /// `visibility == "public"` on the target repository. `internal` is

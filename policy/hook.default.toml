@@ -1,0 +1,103 @@
+# The `[[hook]]` tables `uphold hook` reads after a repository's own. A
+# repository that wants a different answer for one of these tools writes its
+# own table naming it, and the first table naming a call speaks for it, so the
+# repository's wins.
+#
+# Compiled in rather than shipped by a set, because what a server's tools do is
+# a fact about the server and not about any repository: every set carrying a
+# rule with a `command` section would otherwise carry this table, and a
+# repository declaring such a rule of its own would carry it again.
+#
+# The GitHub MCP server's calls: the reads pass unjudged, and every other call
+# is judged at the repository it names, under each rule's scope there, as `gh`
+# is through its `[[shim]]` -- `shim = "gh"` takes the scope and `unresolved`
+# from the repository's own `[[shim]]` for `gh`, so the two seams cannot
+# disagree about one act. A read that names a private repository publishes
+# nothing. Directly installed (`mcp__github__`) and plugin-installed
+# (`mcp__plugin_<plugin>_github__`) servers both match.
+#
+# `forge = "github"` is github.com: where this server publishes when nothing
+# sets its host. Its host is the server's own configuration -- `--gh-host` or
+# `GITHUB_HOST` (github/github-mcp-server v2.0.3 README, "GitHub Enterprise
+# Server and Enterprise Cloud with data residency") -- which no hook call
+# carries, so this table cannot follow it. A repository whose server is set to
+# another host writes its own table for these tools, read before this one,
+# naming no destination and `scope = "public-target"`: every check that needs
+# the destination is then unresolved and refused, rather than asked of a
+# github.com repository that shares the name.
+#
+# `skip` is the reads github/github-mcp-server v2.0.3 ships, each by its
+# name: names and not patterns, so a tool not listed here is judged whatever
+# its name looks like, and a write the server adds later is checked the day it
+# ships. `mark_all_notifications_read` is a write, and is not listed. A call carrying no `owner` and `repo` -- a gist, a
+# notification -- has no destination, and `unresolved` refuses it wherever a
+# rule needs one.
+[[hook]]
+tools = '^mcp__(plugin_[a-z0-9_-]+_)?github__'
+skip = [
+  "actions_get",
+  "actions_list",
+  "custom_properties_read",
+  "get_code_quality_finding",
+  "get_code_scanning_alert",
+  "get_commit",
+  "get_copilot_space",
+  "get_dependabot_alert",
+  "get_discussion",
+  "get_discussion_comments",
+  "get_file_contents",
+  "get_gist",
+  "get_global_security_advisory",
+  "get_job_logs",
+  "get_label",
+  "get_latest_release",
+  "get_me",
+  "get_notification_details",
+  "get_release_by_tag",
+  "get_repository_tree",
+  "get_secret_scanning_alert",
+  "get_tag",
+  "get_team_members",
+  "get_teams",
+  "github_support_docs_search",
+  "issue_read",
+  "list_branches",
+  "list_code_scanning_alerts",
+  "list_commits",
+  "list_copilot_spaces",
+  "list_dependabot_alerts",
+  "list_discussion_categories",
+  "list_discussions",
+  "list_gists",
+  "list_global_security_advisories",
+  "list_issue_fields",
+  "list_issue_types",
+  "list_issues",
+  "list_label",
+  "list_notifications",
+  "list_org_repository_security_advisories",
+  "list_pull_requests",
+  "list_releases",
+  "list_repository_collaborators",
+  "list_repository_security_advisories",
+  "list_secret_scanning_alerts",
+  "list_starred_repositories",
+  "list_tags",
+  "projects_get",
+  "projects_list",
+  "pull_request_read",
+  "repository_ruleset_read",
+  "search_code",
+  "search_commits",
+  "search_issues",
+  "search_orgs",
+  "search_pull_requests",
+  "search_repositories",
+  "search_users",
+  "ui_get",
+]
+target = "forge-repo"
+forge = "github"
+owner = "/owner"
+repo = "/repo"
+shim = "gh"

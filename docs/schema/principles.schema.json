@@ -159,6 +159,78 @@
       },
       "type": "object"
     },
+    "Hook": {
+      "additionalProperties": false,
+      "description": "One `[[hook]]` table as the policy file writes it. Read by [`Written::load`]\nand by nothing else: what the rest of the crate holds is a [`Table`].",
+      "properties": {
+        "forge": {
+          "$ref": "#/$defs/HookForge",
+          "description": "The forge `owner/repo` is on, and the one asked about it. Required\nwith `target = \"forge-repo\"`: a tool name says nothing about a host,\nand asking GitHub about a GitLab path answers about a stranger."
+        },
+        "owner": {
+          "description": "JSON pointer (RFC 6901) into the call's input, to the owner. Not the\nempty pointer, which names the whole input: an object is never an\nowner's name.",
+          "type": "string"
+        },
+        "repo": {
+          "description": "JSON pointer (RFC 6901) into the call's input, to the repository. Not\nthe empty pointer, as for `owner`.",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope",
+          "description": "When a rule standing at a publishing seam applies, where the rule\nwrites no `command.scope` of its own. As on `[[shim]]`, and `always`\nwhere neither this nor `shim` says."
+        },
+        "shim": {
+          "description": "The command these calls are the same act as, whose `[[shim]]` table\nin this repository supplies `scope` and `unresolved`: a call through\nthe GitHub MCP server is judged where `gh` would be, by the answer the\nrepository already wrote for `gh`. Not written beside either field.",
+          "type": "string"
+        },
+        "skip": {
+          "default": [],
+          "description": "The tools that read, each named exactly as the server names it: the\nwhole of the tool name after where `tools` matched it. A call naming\none publishes no text, so only rules about its tool name are asked.\nNames, not patterns: a tool nobody listed is judged in full, so a\nserver's next tool is checked whatever its name looks like.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/HookTarget",
+          "description": "`forge-repo`, where the call names its repository in `owner` and\n`repo`; `none` (the default), where it names none."
+        },
+        "tools": {
+          "description": "A regular expression searched for in the call's tool name. The first\ntable whose `tools` matches speaks for the call; the repository's own\ntables are read before the compiled-in ones.",
+          "type": "string"
+        },
+        "unresolved": {
+          "$ref": "#/$defs/Unresolved",
+          "description": "What to do where `scope` could not be evaluated: `refuse` (the\ndefault) or `run`. As on `[[shim]]`."
+        }
+      },
+      "required": [
+        "tools"
+      ],
+      "type": "object"
+    },
+    "HookForge": {
+      "description": "The forges a `[[hook]]` destination may be on: github.com, asked by name.\n\nNot GitLab. A GitLab project is on whichever instance its server publishes\nto, nothing in a table names that host, and `glab` asked without one\nanswers for the instance it is configured for -- whose same-named private\nproject would stand a `public-target` rule down for a public one. A\nGitLab destination waits for a field that names its host.",
+      "enum": [
+        "github"
+      ],
+      "type": "string"
+    },
+    "HookTarget": {
+      "description": "Where a `[[hook]]` table's calls are going: the `[[shim]]` targets a tool\ncall can have. Not `git-remote`: a tool call has no remote, and a type of\nits own keeps that out of the published schema as well as the load.",
+      "oneOf": [
+        {
+          "const": "forge-repo",
+          "description": "The call names its repository at `owner` and `repo`.",
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "The call names no destination.",
+          "type": "string"
+        }
+      ]
+    },
     "Inherit": {
       "additionalProperties": false,
       "description": "What a policy inherits, named set by set.\n\n`sets` is a list and nothing else: the old `use_default = true` shorthand\ntook every bundled set without naming one, so what a repository inherited\nwas not written in the repository. Naming the sets is cheap, and each is\na separate decision -- `unmanaged-pins` refuses a shape a repository that\nvendors deliberately has on purpose, `host-identity` shells out to read the\nrunning machine, and `captured-fixtures` refuses a script a parser's own\ntest corpus is made of. None of those arguments should stand between anyone\nand `process-residue`.",
@@ -903,6 +975,13 @@
       "description": "The hosts this repository's documents cite that carry no repository the\nprivate-name guards need an answer about.\n\nA policy field rather than a rule one for the reason\n`private_owners_from` is: a rule arriving from a bundled set cannot be\nhanded a parameter, and which hosts a repository's own bibliography\nnames is a property of the repository rather than of one rule in it.\n\nHost globs, matched case-insensitively -- `\"doi.org\"`, `\"*.sr.ht\"`. What\nis NOT named here and is not GitHub is could-not-look and exits 2,\nbecause the tool cannot tell whether `git.acme.example/acme/secret` is\nprivate and silence would read as clean.\n\nExtends [`FOREIGN_HOSTS_DEFAULT`] rather than replacing it: a host that\nserves no `owner/repo` path for anybody is not a fact about this\nrepository, and the fleet had said so in 84 identical lines.",
       "items": {
         "type": "string"
+      },
+      "type": "array"
+    },
+    "hook": {
+      "description": "`[[hook]]`: which tool calls `uphold hook` judges, and where they\npublish. See [`crate::hook::Table`].",
+      "items": {
+        "$ref": "#/$defs/Hook"
       },
       "type": "array"
     },

@@ -142,19 +142,7 @@ impl Shim {
                 if let Some(standing) = declared_standing(root, policy, destination)? {
                     return Ok(standing);
                 }
-                match Self::visibility(destination).as_deref() {
-                    Ok("public") => Ok(Standing::Holds),
-                    Ok(_) => Ok(Standing::DoesNotHold),
-                    // The cause, in the words the forge used. A rate limit, an
-                    // unauthenticated `gh` and a deleted repository are three
-                    // different instructions to the reader, and a refusal
-                    // naming none of them is one the reader can only bypass.
-                    Err(silence) => Ok(Standing::CouldNotTell(format!(
-                        "the forge did not say whether {target} is public, so whether the \
-                         `public-target` checks apply here could not be established. {}",
-                        silence.sentence()
-                    ))),
-                }
+                Ok(forge_standing(destination, target))
             }
             Scope::PublicRegistry => {
                 if context.argv.iter().any(|argument| argument == "--dry-run") {
@@ -180,21 +168,7 @@ impl Shim {
                     Standing::DoesNotHold
                 })
             }
-            Scope::Command { command } => {
-                let status = Command::new("sh")
-                    .arg("-c")
-                    .arg(command)
-                    .current_dir(root)
-                    .status()
-                    .map_err(|error| {
-                        Fatal::new(format!("{}: scope command: {error}", self.command))
-                    })?;
-                Ok(if status.success() {
-                    Standing::Holds
-                } else {
-                    Standing::DoesNotHold
-                })
-            }
+            Scope::Command { command } => command_standing(&self.command, command, root),
         }
     }
 
@@ -274,6 +248,80 @@ impl Shim {
     }
 }
 
+/// What the forge says about `target`, as a scope answer.
+///
+/// The one reading of a forge's visibility word, shared by the shim and by
+/// `uphold hook`: a seam that read `internal` as public, or a silence as
+/// private, would be a second rule under the one scope name.
+fn forge_standing(destination: &Destination, target: &str) -> Standing {
+    match Shim::visibility(destination).as_deref() {
+        Ok("public") => Standing::Holds,
+        Ok(_) => Standing::DoesNotHold,
+        // The cause, in the words the forge used. A rate limit, an
+        // unauthenticated `gh` and a deleted repository are three different
+        // instructions to the reader, and a refusal naming none of them is one
+        // the reader can only bypass.
+        Err(silence) => Standing::CouldNotTell(format!(
+            "the forge did not say whether {target} is public, so whether the \
+             `public-target` checks apply here could not be established. {}",
+            silence.sentence()
+        )),
+    }
+}
+
+/// A `command` scope's answer: exit 0 is in scope. `seam` names the caller in
+/// the error, as the reader typed it -- the shimmed command, or `uphold hook`.
+pub(crate) fn command_standing(seam: &str, command: &str, root: &Path) -> Result<Standing> {
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(root)
+        .status()
+        .map_err(|error| Fatal::new(format!("{seam}: scope command: {error}")))?;
+    Ok(if status.success() {
+        Standing::Holds
+    } else {
+        Standing::DoesNotHold
+    })
+}
+
+/// Whether `owner/repo` on `forge` is public, for a caller that was handed
+/// the destination outright and has no command line or checkout to read it
+/// from: `uphold hook`, whose `[[hook]]` table points at it in a tool call.
+///
+/// Always asked of the forge. A declared `visibility` speaks for `origin`
+/// alone, and a destination somebody named is not `origin` however its name
+/// reads -- see [`declared_standing`].
+///
+/// A GitHub destination is asked of github.com by name: `gh api` without
+/// `--hostname` answers for `GH_HOST`, which is this machine's `gh` setting
+/// and not the destination's. github.com is what a `[[hook]]` table's `forge
+/// = "github"` means; a server set to publish elsewhere is not one such a
+/// table describes -- see `policy/hook.default.toml`.
+pub(crate) fn named_standing(forge: Forge, target: &str) -> Standing {
+    let destination = Destination {
+        target: Some(target.to_owned()),
+        forge: Some(forge),
+        hostname: (forge == Forge::GitHub).then(|| String::from("github.com")),
+        provenance: Provenance::Explicit,
+        ambient_host: false,
+    };
+    forge_standing(&destination, target)
+}
+
+/// Whether `part` can be one segment of a forge repository path: an owner, a
+/// repository, or one group of a GitLab namespace. The value is put into a
+/// forge API path, so an empty segment, a dot path, or a character no forge
+/// name has is a request for some other endpoint.
+pub(crate) fn name_segment(part: &str) -> bool {
+    !part.is_empty()
+        && part != "."
+        && part != ".."
+        && part
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+}
+
 /// Resolve the host-bearing spellings accepted by `gh` without treating an
 /// enterprise repository as its same-named github.com counterpart. Enterprise
 /// support is deliberately absent here, as it is in `Forge::of_url`.
@@ -309,14 +357,7 @@ fn gh_repository_target(named: &str) -> Result<String> {
             _ => None,
         }
     };
-    let Some(path) = path.filter(|path| {
-        path.split('/').all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
-        })
-    }) else {
+    let Some(path) = path.filter(|path| path.split('/').all(name_segment)) else {
         return Err(Fatal::new(format!(
             "gh: destination {named:?} could not be resolved as [HOST/]OWNER/REPO. \
              Nothing was published"
@@ -386,10 +427,47 @@ fn declared_standing(
 /// The scope one rule is judged under: its own where it wrote one, the
 /// table's where it did not.
 pub(super) fn effective_scope<'a>(rule: &'a Rule, shim: &'a Shim) -> &'a Scope {
+    own_scope(rule).unwrap_or(&shim.scope)
+}
+
+/// The `command.scope` a rule wrote, which wins over any table's at every
+/// seam that judges it under one: the `[[shim]]`'s here, the `[[hook]]`'s at
+/// `uphold hook`.
+pub(crate) fn own_scope(rule: &Rule) -> Option<&Scope> {
     rule.command
         .as_ref()
         .and_then(|where_| where_.scope.as_ref())
-        .unwrap_or(&shim.scope)
+}
+
+/// Whether a rule runs on its scope's answer, `unresolved` deciding the one
+/// answer that is none.
+///
+/// The one conversion, reached from the shim and from `uphold hook`: a
+/// could-not-tell read as "does not hold" skips the checkers, and the
+/// destination guard behind them promises exit 2 on exactly that. `refusal`
+/// words the error for its seam, whose cure differs; the decision does not.
+pub(crate) fn runs(
+    answer: Standing,
+    unresolved: Unresolved,
+    refusal: impl FnOnce(&str) -> String,
+) -> Result<bool> {
+    match answer {
+        Standing::Holds => Ok(true),
+        Standing::DoesNotHold => Ok(false),
+        Standing::CouldNotTell(why) => match unresolved {
+            Unresolved::Refuse => Err(Fatal::new(refusal(&why))),
+            Unresolved::Run => Ok(false),
+        },
+    }
+}
+
+/// The `run` half of `unresolved`, said by the memo that asked the predicate,
+/// once per predicate rather than once per rule standing behind it.
+pub(crate) fn ran_unchecked(seam: &str, why: &str) {
+    eprintln!(
+        "{seam}: {why}, and it went ahead with the checks that needed that answer stood down. \
+         This is not a pass."
+    );
 }
 
 /// One invocation's scope answers, each predicate evaluated at most once.
@@ -444,21 +522,16 @@ impl<'a> CommandContext<'a> {
     /// could-not-tell read as "does not hold" skips the checkers, and the
     /// destination guard behind them promises exit 2 on exactly that.
     pub(super) fn holds(&mut self, scope: &Scope, policy: &Policy) -> Result<bool> {
-        match self.standing(scope, policy)? {
-            Standing::Holds => Ok(true),
-            Standing::DoesNotHold => Ok(false),
-            Standing::CouldNotTell(why) => match self.shim.unresolved {
-                Unresolved::Refuse => Err(Fatal::new(format!(
-                    "{}: {why}. A check that could not look is not a check that passed, so \
-                     nothing was published. Name the destination explicitly, run this where \
-                     the repository has a remote and the forge can be reached, or write \
-                     `unresolved = \"run\"` on this `[[shim]]` table to run the command \
-                     unchecked instead",
-                    self.shim.command
-                ))),
-                Unresolved::Run => Ok(false),
-            },
-        }
+        let answer = self.standing(scope, policy)?;
+        runs(answer, self.shim.unresolved, |why| {
+            format!(
+                "{}: {why}. A check that could not look is not a check that passed, so nothing \
+                 was published. Name the destination explicitly, run this where the repository \
+                 has a remote and the forge can be reached, or write `unresolved = \"run\"` on \
+                 this `[[shim]]` table to run the command unchecked instead",
+                self.shim.command
+            )
+        })
     }
 
     /// The predicate's own answer, asked once per invocation.
@@ -478,7 +551,7 @@ impl<'a> CommandContext<'a> {
         }
         let answer = self.shim.scope_answer(scope, self.root, policy, self)?;
         if let (Standing::CouldNotTell(why), Unresolved::Run) = (&answer, self.shim.unresolved) {
-            eprintln!("uphold shim: {why}, and the command ran anyway. This is not a pass.");
+            ran_unchecked("uphold shim", why);
         }
         self.answers.insert(key, answer.clone());
         Ok(answer)

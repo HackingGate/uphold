@@ -409,6 +409,7 @@ pub(crate) fn over_text(
     seam: Seam,
     text: &str,
     recorded: &str,
+    in_scope: crate::guard::ScopeAsk<'_>,
     ledger: &mut Vec<Judgment>,
 ) -> Result<()> {
     for rule in policy.of_check(CheckKind::ProseRegexp) {
@@ -429,6 +430,10 @@ pub(crate) fn over_text(
         if let Some(allowed) = crate::guard::allowed(&rule.id) {
             eprintln!("uphold: {} bypassed by UPHOLD_ALLOW", rule.id);
             ledger.push(Judgment::of(rule, Some(recorded), Answer::Bypass(allowed)));
+            continue;
+        }
+        if !asked(ledger, rule, Some(recorded), in_scope(rule))? {
+            ledger.push(Judgment::of(rule, Some(recorded), Answer::OutOfScope));
             continue;
         }
         let matcher = asked(

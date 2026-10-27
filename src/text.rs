@@ -454,10 +454,18 @@ pub(crate) struct Headline {
 /// back off it. The subject each is recorded under is the tool's name at the
 /// hook and `text` elsewhere: a `--text` label is a file name, and a record
 /// carries no path.
+///
+/// `destination` and `in_scope` are where the text is going and which rules
+/// stand there. The hook knows both where a `[[hook]]` table says; the text
+/// seams are handed text and no destination, so every rule is in scope there
+/// and the guards judge against `origin`. A literal rule is never asked: see
+/// the `text-literals` arm of [`crate::guard::text_refusal`].
 pub(crate) fn judged(
     invocation: &Invocation<'_>,
     root: &std::path::Path,
     policy: &Policy,
+    destination: Option<&str>,
+    in_scope: crate::guard::ScopeAsk<'_>,
     ledger: &mut Vec<Judgment>,
 ) -> Result<Vec<Verdict>> {
     let input = invocation.text_input()?;
@@ -492,11 +500,9 @@ pub(crate) fn judged(
         }
         match kind {
             Judged::Literals => failures_in(root, policy, whole, Some(&subject), ledger),
-            // Every inner rule is in scope here: the three seams that reach
-            // this line -- `scan --text`, `guard --text`, the harness hook --
-            // are handed text and no destination, so there is nothing to ask a
-            // `public-target` scope about. The shim, which does have one,
-            // passes its own memo.
+            // Each guard asked under the caller's scope: every one at `scan
+            // --text` and `guard --text`, and at the hook the ones its table
+            // stands down. The shim passes its own memo through `Judged::of`.
             Judged::Guards => {
                 // The prose is not a headline: what these seams are handed is a
                 // body, or a tool call's strings joined, and neither says which
@@ -513,9 +519,9 @@ pub(crate) fn judged(
                     crate::guard::over_text(
                         root,
                         policy,
-                        None,
+                        destination,
                         &published,
-                        &mut |_| Ok(true),
+                        in_scope,
                         ledger,
                     )?;
                 }
@@ -531,15 +537,17 @@ pub(crate) fn judged(
                     crate::guard::over_text(
                         root,
                         policy,
-                        None,
+                        destination,
                         &published,
-                        &mut |_| Ok(true),
+                        in_scope,
                         ledger,
                     )?;
                 }
                 Ok(())
             }
-            Judged::Prose => crate::prose::over_text(policy, seam, whole, &subject, ledger),
+            Judged::Prose => {
+                crate::prose::over_text(policy, seam, whole, &subject, in_scope, ledger)
+            }
             // The hook and the text seams consult these here, and only the
             // rules whose `seams` names them -- see `Seam::runs_by_default`.
             Judged::Patterns => patterns_over(
@@ -549,6 +557,7 @@ pub(crate) fn judged(
                 has_text.then_some(whole),
                 headlines,
                 &subject,
+                in_scope,
                 ledger,
             ),
             // The shim's, and the shim does not arrive here: it holds a subject
@@ -628,6 +637,10 @@ fn merged_by_rule(refusals: Vec<crate::guard::Refusal>) -> Vec<crate::guard::Ref
 /// mentions it. Which tool names mean which command is the rule's to say, in its
 /// own pattern: a table of MCP names per shim verb would be a list that is
 /// missing the tool a server added last week.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the three subjects, the scope each rule is asked under and the list it answers into, from the one caller"
+)]
 fn patterns_over(
     policy: &Policy,
     seam: Seam,
@@ -635,6 +648,7 @@ fn patterns_over(
     text: Option<&str>,
     headlines: &[Headline],
     recorded: &str,
+    in_scope: crate::guard::ScopeAsk<'_>,
     ledger: &mut Vec<Judgment>,
 ) -> Result<()> {
     // The shim runs its pattern rules itself, over the subjects it collected,
@@ -706,6 +720,10 @@ fn patterns_over(
             ledger.push(Judgment::of(rule, Some(recorded), Answer::Bypass(allowed)));
             continue;
         }
+        if !asked(ledger, rule, Some(recorded), in_scope(rule))? {
+            ledger.push(Judgment::of(rule, Some(recorded), Answer::OutOfScope));
+            continue;
+        }
         let mut found = Vec::new();
         for (named, subject) in subjects
             .iter()
@@ -752,7 +770,14 @@ pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<
     let invocation = Invocation::text(Seam::Scan, source, Observed::Present(&text), &[]);
     // `scan --text` writes no record; the list is what it reports from.
     let mut ledger = Vec::new();
-    let verdicts = judged(&invocation, &root, &policy, &mut ledger)?;
+    let verdicts = judged(
+        &invocation,
+        &root,
+        &policy,
+        None,
+        &mut |_| Ok(true),
+        &mut ledger,
+    )?;
 
     for verdict in &verdicts {
         match verdict {
@@ -792,16 +817,9 @@ pub(crate) fn load_for(found: Option<&(PathBuf, PathBuf)>) -> Result<(PathBuf, P
 /// already-loaded policy, each answering into `ledger` once per needle found
 /// or once to pass.
 ///
-/// Over the loaded policy for the `text-literals` built-in: a shim consulting
-/// it already holds the policy that named the rule, and loading it again from
-/// disk would be a second reading free to disagree with the first.
-pub(crate) fn failures_in(
-    root: &std::path::Path,
-    policy: &Policy,
-    text: &str,
-    recorded: Option<&str>,
-    ledger: &mut Vec<Judgment>,
-) -> Result<()> {
+/// The literal rules a text seam runs: the policy's, and the running-host
+/// fallback where none of them reads the running host's identity.
+fn literal_rules(policy: &Policy) -> Vec<Rule> {
     // The test is for the identity rule itself, not for the CHECK KIND it
     // happens to use. Asking whether any `forbidden_literals` rule existed made
     // an unrelated one -- a repository's own list of literals, a command
@@ -821,6 +839,43 @@ pub(crate) fn failures_in(
     {
         owned.push(fallback_rule());
     }
+    owned
+}
+
+/// The rules about published text [`judged`] would ask at the hook, recorded
+/// as out of scope without being asked.
+///
+/// For a call its `[[hook]]` table names as a read: it publishes no text, so
+/// none is judged, and a record that left these rules out would read as a
+/// call the hook never saw -- the "passed or never ran" a record exists to
+/// tell apart. The pattern rules are not among them: the hook asks those
+/// about the call's tool name, which a read still has.
+pub(crate) fn set_aside(policy: &Policy, recorded: &str, ledger: &mut Vec<Judgment>) {
+    let asked = policy.rules.iter().filter(|rule| match Judged::of(rule) {
+        Some(Judged::Guards) => rule
+            .builtin()
+            .is_some_and(|builtin| !crate::guard::META_TEXT_GUARDS.contains(&builtin)),
+        Some(Judged::Prose) => rule.command.is_some() && rule.judged_at(Seam::Hook),
+        // The literal rules are below, with the fallback; the pattern rules
+        // are asked; the consultations are the shim's alone.
+        Some(Judged::Literals | Judged::Patterns | Judged::Consultation) | None => false,
+    });
+    for rule in literal_rules(policy).iter().chain(asked) {
+        ledger.push(Judgment::of(rule, Some(recorded), Answer::OutOfScope));
+    }
+}
+
+/// Over the loaded policy for the `text-literals` built-in: a shim consulting
+/// it already holds the policy that named the rule, and loading it again from
+/// disk would be a second reading free to disagree with the first.
+pub(crate) fn failures_in(
+    root: &std::path::Path,
+    policy: &Policy,
+    text: &str,
+    recorded: Option<&str>,
+    ledger: &mut Vec<Judgment>,
+) -> Result<()> {
+    let owned = literal_rules(policy);
 
     for rule in &owned {
         let needles = asked(
