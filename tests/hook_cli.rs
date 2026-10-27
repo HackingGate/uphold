@@ -1874,3 +1874,37 @@ fn a_table_naming_an_undeclared_shim_is_refused_at_load() {
         stderr(&output)
     );
 }
+
+/// A read the table skips is judged by nothing, and its record says so rule
+/// by rule: an absent document would read as a call the hook never saw.
+#[test]
+fn a_skipped_read_writes_a_record_of_rules_set_aside() {
+    let root = workspace(
+        "hook-junit-skipped",
+        Some(&format!("{POLICY}\n{PROSE_POLICY}{SHIMS}")),
+    );
+    let evidence = root.join("evidence");
+    std::fs::create_dir_all(&evidence).unwrap();
+    let tool = "mcp__github__get_file_contents";
+    let output = hook_recorded(
+        &root,
+        &["claude-code"],
+        &event(tool, "Arguably fine.\n\nGenerated with Claude Code"),
+        Some(&evidence),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "", "{}", stdout(&output));
+    let files = support::junit::files_in(&evidence);
+    assert_eq!(files.len(), 1, "{files:?}");
+    let (suite, _) = support::junit::suite(files.first().unwrap());
+    for id in [
+        "prevent-ai-author",
+        "no-empty-hedge-here",
+        "no-running-os-identity-metadata",
+    ] {
+        let case = support::junit::case(&suite, id);
+        assert_eq!(support::junit::state(case).0, "skipped", "{id}");
+        assert_eq!(support::junit::properties(case, "subject"), [tool]);
+    }
+    assert_eq!((suite.tests, suite.failures), (3, 0), "{suite:?}");
+}

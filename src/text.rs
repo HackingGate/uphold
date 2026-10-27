@@ -817,16 +817,9 @@ pub(crate) fn load_for(found: Option<&(PathBuf, PathBuf)>) -> Result<(PathBuf, P
 /// already-loaded policy, each answering into `ledger` once per needle found
 /// or once to pass.
 ///
-/// Over the loaded policy for the `text-literals` built-in: a shim consulting
-/// it already holds the policy that named the rule, and loading it again from
-/// disk would be a second reading free to disagree with the first.
-pub(crate) fn failures_in(
-    root: &std::path::Path,
-    policy: &Policy,
-    text: &str,
-    recorded: Option<&str>,
-    ledger: &mut Vec<Judgment>,
-) -> Result<()> {
+/// The literal rules a text seam runs: the policy's, and the running-host
+/// fallback where none of them reads the running host's identity.
+fn literal_rules(policy: &Policy) -> Vec<Rule> {
     // The test is for the identity rule itself, not for the CHECK KIND it
     // happens to use. Asking whether any `forbidden_literals` rule existed made
     // an unrelated one -- a repository's own list of literals, a command
@@ -846,6 +839,44 @@ pub(crate) fn failures_in(
     {
         owned.push(fallback_rule());
     }
+    owned
+}
+
+/// Every rule [`judged`] would ask at the hook, recorded as out of scope
+/// without being asked.
+///
+/// For a call its `[[hook]]` table names as a read: it publishes nothing, so
+/// nothing is judged, and a record that left the rules out would read as a
+/// call the hook never saw -- the "passed or never ran" a record exists to
+/// tell apart.
+pub(crate) fn set_aside(policy: &Policy, recorded: &str, ledger: &mut Vec<Judgment>) {
+    let asked = policy.rules.iter().filter(|rule| match Judged::of(rule) {
+        Some(Judged::Guards) => rule
+            .builtin()
+            .is_some_and(|builtin| !crate::guard::META_TEXT_GUARDS.contains(&builtin)),
+        Some(Judged::Prose | Judged::Patterns) => {
+            rule.command.is_some() && rule.judged_at(Seam::Hook)
+        }
+        // The literal rules are below, with the fallback; the consultations
+        // are the shim's alone.
+        Some(Judged::Literals | Judged::Consultation) | None => false,
+    });
+    for rule in literal_rules(policy).iter().chain(asked) {
+        ledger.push(Judgment::of(rule, Some(recorded), Answer::OutOfScope));
+    }
+}
+
+/// Over the loaded policy for the `text-literals` built-in: a shim consulting
+/// it already holds the policy that named the rule, and loading it again from
+/// disk would be a second reading free to disagree with the first.
+pub(crate) fn failures_in(
+    root: &std::path::Path,
+    policy: &Policy,
+    text: &str,
+    recorded: Option<&str>,
+    ledger: &mut Vec<Judgment>,
+) -> Result<()> {
+    let owned = literal_rules(policy);
 
     for rule in &owned {
         let needles = asked(

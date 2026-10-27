@@ -182,8 +182,8 @@ fn drop_unsent(collected: &mut Walked) {
 /// where one was asked for. Written on every call that got as far as judging,
 /// refused or not: a hook that wrote only on a refusal would make an absent
 /// file mean "passed or never ran", which is the ambiguity the record exists
-/// to remove. A call its `[[hook]]` table skips as a read is not judged and
-/// writes nothing.
+/// to remove. A call its `[[hook]]` table skips as a read is not judged, and
+/// every rule it would have asked is written down as out of scope.
 pub(crate) fn run(
     harness: &str,
     found: Option<&(PathBuf, PathBuf)>,
@@ -293,6 +293,13 @@ pub(crate) fn run(
     // not judged: nothing is published, so there is nothing to record.
     let named = policy.hooks.iter().find(|table| table.names(label));
     if named.is_some_and(|table| table.skips(label)) {
+        let mut record = Record::new(
+            evidence.map(Place::Directory),
+            Run::Hook(harness.to_owned()),
+        );
+        record.open()?;
+        text::set_aside(&policy, label, &mut record.ledger);
+        record.write(false)?;
         return Ok(Exit::Clean);
     }
     let mut scoping = table::Scoping::new(named, &policy.shims, label, subject, &root);

@@ -3245,8 +3245,10 @@ skips the reads by the verbs `github/github-mcp-server` v2.0.3 names them
 with. A tool that matches no `skip` is judged, so a write the server adds
 later is checked the day it ships.
 
-- **A call a `skip` matches** is not judged, and no record is written: nothing
-  is published.
+- **A call a `skip` matches** is not judged: nothing is published. Under
+  `--junit` its record still names every rule the hook would have asked, each
+  skipped as out of scope, so a skipped read is not mistaken for a call the
+  hook never saw.
 - **A judged call** has its destination read at `owner` and `repo` and asked
   of `forge`, once per call. A GitHub destination is asked of github.com
   whatever `GH_HOST` names, because an enterprise repository of the same name
