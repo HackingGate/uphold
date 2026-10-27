@@ -192,7 +192,7 @@
           "type": "array"
         },
         "target": {
-          "$ref": "#/$defs/Target",
+          "$ref": "#/$defs/HookTarget",
           "description": "`forge-repo`, where the call names its repository in `owner` and\n`repo`; `none` (the default), where it names none."
         },
         "tools": {
@@ -215,6 +215,21 @@
         "github"
       ],
       "type": "string"
+    },
+    "HookTarget": {
+      "description": "Where a `[[hook]]` table's calls are going: the `[[shim]]` targets a tool\ncall can have. Not `git-remote`: a tool call has no remote, and a type of\nits own keeps that out of the published schema as well as the load.",
+      "oneOf": [
+        {
+          "const": "forge-repo",
+          "description": "The call names its repository at `owner` and `repo`.",
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "The call names no destination.",
+          "type": "string"
+        }
+      ]
     },
     "Inherit": {
       "additionalProperties": false,

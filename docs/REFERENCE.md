@@ -3274,7 +3274,8 @@ later is checked the day it ships.
 
 The load refuses a table whose `tools` or `skip` is not a regular
 expression, a `target = "forge-repo"` without all of `forge`, `owner` and
-`repo` (or those without the target), `target = "git-remote"`, `scope =
+`repo` (or those without the target), `target = "git-remote"` (a tool call has
+no remote), `scope =
 "public-registry"`, `shim` beside `scope` or `unresolved`, a `shim` naming a
 command no `[[shim]]` in the repository stands in front of, and `unresolved`
 where no scope its calls reach can fail to answer. `forge` is `github` alone:

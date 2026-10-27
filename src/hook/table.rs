@@ -23,7 +23,7 @@ use serde_json::Value;
 
 use crate::config::Rule;
 use crate::error::Result;
-use crate::shim::{Forge, Scope, Shim, Standing, Target, Unresolved};
+use crate::shim::{Forge, Scope, Shim, Standing, Unresolved};
 
 /// One `[[hook]]` table as the policy file writes it. Read by [`Written::load`]
 /// and by nothing else: what the rest of the crate holds is a [`Table`].
@@ -42,7 +42,7 @@ pub(crate) struct Written {
     /// `forge-repo`, where the call names its repository in `owner` and
     /// `repo`; `none` (the default), where it names none.
     #[serde(default)]
-    target: Target,
+    target: HookTarget,
     /// The forge `owner/repo` is on, and the one asked about it. Required
     /// with `target = "forge-repo"`: a tool name says nothing about a host,
     /// and asking GitHub about a GitLab path answers about a stranger.
@@ -69,6 +69,19 @@ pub(crate) struct Written {
     /// default) or `run`. As on `[[shim]]`.
     #[serde(default)]
     unresolved: Option<Unresolved>,
+}
+
+/// Where a `[[hook]]` table's calls are going: the `[[shim]]` targets a tool
+/// call can have. Not `git-remote`: a tool call has no remote, and a type of
+/// its own keeps that out of the published schema as well as the load.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum HookTarget {
+    /// The call names its repository at `owner` and `repo`.
+    ForgeRepo,
+    /// The call names no destination.
+    #[default]
+    None,
 }
 
 /// The forges a `[[hook]]` destination may be on: github.com, asked by name.
@@ -145,24 +158,18 @@ impl Written {
             }
         }
         let destination = match (self.target, self.forge, self.owner, self.repo) {
-            (Target::ForgeRepo, Some(HookForge::GitHub), Some(owner), Some(repo)) => {
+            (HookTarget::ForgeRepo, Some(HookForge::GitHub), Some(owner), Some(repo)) => {
                 Some(Pointers { owner, repo })
             }
-            (Target::ForgeRepo, ..) => {
+            (HookTarget::ForgeRepo, ..) => {
                 return Err(format!(
                     "the `[[hook]]` for {tools_text:?} says `target = \"forge-repo\"` without all \
                      of `forge`, `owner` and `repo`. A destination is a forge and a repository on \
                      it; write the three, or take `target` off"
                 ));
             }
-            (Target::GitRemote, ..) => {
-                return Err(format!(
-                    "the `[[hook]]` for {tools_text:?} says `target = \"git-remote\"`. A tool \
-                     call has no remote; it is `forge-repo` or `none`"
-                ));
-            }
-            (Target::None, None, None, None) => None,
-            (Target::None, ..) => {
+            (HookTarget::None, None, None, None) => None,
+            (HookTarget::None, ..) => {
                 return Err(format!(
                     "the `[[hook]]` for {tools_text:?} writes `forge`, `owner` or `repo` without \
                      `target = \"forge-repo\"`, so nothing reads them. Add the target, or take \
@@ -454,7 +461,10 @@ mod tests {
             assert!(error.contains(why), "{error}");
         };
         refused(|table| table.forge = None, "without all of");
-        refused(|table| table.target = Target::None, "nothing reads them");
+        refused(
+            |table| table.target = HookTarget::None,
+            "nothing reads them",
+        );
         refused(
             |table| table.owner = Some(String::from("owner")),
             "JSON pointer",

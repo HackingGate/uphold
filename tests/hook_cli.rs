@@ -1908,3 +1908,20 @@ fn a_skipped_read_writes_a_record_of_rules_set_aside() {
     }
     assert_eq!((suite.tests, suite.failures), (3, 0), "{suite:?}");
 }
+
+/// A tool call has no remote, so `git-remote` is not a `[[hook]]` target: the
+/// load refuses it, naming the two that are.
+#[test]
+fn a_git_remote_target_is_refused_at_load() {
+    let policy = format!(
+        "{PUBLISHING_POLICY}\n[[hook]]\ntools = '^mcp__forge__'\ntarget = \"git-remote\"\n"
+    );
+    let root = publishing("hook-git-remote", &policy);
+    let output = hook_with_forge(&root, &call("mcp__forge__write", &serde_json::json!({})));
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("unknown variant `git-remote`, expected `forge-repo` or `none`"),
+        "{}",
+        stderr(&output)
+    );
+}
