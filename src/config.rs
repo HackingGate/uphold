@@ -2907,15 +2907,16 @@ fn load_hooks(
                 *unresolved != crate::shim::Unresolved::default()
                     && !matches!(scope, Some(crate::shim::Scope::PublicTarget))
                     && !rules.iter().any(|rule| {
-                        rule.command.as_ref().is_some_and(|where_| {
-                            matches!(
-                                where_.scope,
-                                Some(
-                                    crate::shim::Scope::PublicTarget
-                                        | crate::shim::Scope::PublicRegistry
+                        rule.judged_at(crate::text::Seam::Hook)
+                            && rule.command.as_ref().is_some_and(|where_| {
+                                matches!(
+                                    where_.scope,
+                                    Some(
+                                        crate::shim::Scope::PublicTarget
+                                            | crate::shim::Scope::PublicRegistry
+                                    )
                                 )
-                            )
-                        })
+                            })
                     })
             }
             _ => false,

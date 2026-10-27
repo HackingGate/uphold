@@ -347,7 +347,16 @@ pub(crate) fn run(
         &root,
         &policy,
         destination.as_deref(),
-        &mut |rule| if read { Ok(true) } else { scoping.holds(rule) },
+        // On a read, only a pattern rule about the tool name is in scope: the
+        // text rules were set aside above, and a pattern rule about text has
+        // none to read, so it is recorded as set aside rather than as a pass.
+        &mut |rule| {
+            if read {
+                Ok(rule.selects_subject("tool"))
+            } else {
+                scoping.holds(rule)
+            }
+        },
         &mut record.ledger,
     ) {
         Ok(verdicts) => verdicts,

@@ -185,7 +185,7 @@
         },
         "skip": {
           "default": [],
-          "description": "The tools that read, each named exactly as the server names it -- the\npart of the tool name after its last `__`. A call naming one is not\njudged at all. Names, not patterns: a tool nobody listed is judged,\nso a server's next tool is checked whatever its name looks like.",
+          "description": "The tools that read, each named exactly as the server names it: the\nwhole of the tool name after where `tools` matched it. A call naming\none publishes no text, so only rules about its tool name are asked.\nNames, not patterns: a tool nobody listed is judged in full, so a\nserver's next tool is checked whatever its name looks like.",
           "items": {
             "type": "string"
           },

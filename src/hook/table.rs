@@ -35,10 +35,11 @@ pub(crate) struct Written {
     /// table whose `tools` matches speaks for the call; the repository's own
     /// tables are read before the compiled-in ones.
     tools: String,
-    /// The tools that read, each named exactly as the server names it -- the
-    /// part of the tool name after its last `__`. A call naming one is not
-    /// judged at all. Names, not patterns: a tool nobody listed is judged,
-    /// so a server's next tool is checked whatever its name looks like.
+    /// The tools that read, each named exactly as the server names it: the
+    /// whole of the tool name after where `tools` matched it. A call naming
+    /// one publishes no text, so only rules about its tool name are asked.
+    /// Names, not patterns: a tool nobody listed is judged in full, so a
+    /// server's next tool is checked whatever its name looks like.
     #[serde(default)]
     skip: Vec<String>,
     /// `forge-repo`, where the call names its repository in `owner` and
@@ -149,18 +150,24 @@ impl Written {
                 || name.is_empty()
                 || !name
                     .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_-.".contains(&byte))
         }) {
             return Err(format!(
                 "the `[[hook]]` for {tools_text:?} skips {name:?}, which is not a tool's name. \
-                 `skip` names each read exactly as the server does, after the last `__` of \
-                 the tool name: \"get_file_contents\", not a pattern"
+                 `skip` names each read exactly as the server does, after the server's prefix \
+                 that `tools` matches: \"get_file_contents\", not a pattern"
             ));
         }
         let skip = self.skip.into_iter().collect();
         for (key, pointer) in [("owner", &self.owner), ("repo", &self.repo)] {
+            // RFC 6901: a pointer is empty or starts with `/`, and `~` is
+            // only ever the start of `~0` or `~1`.
             if let Some(pointer) = pointer
-                && !pointer.starts_with('/')
+                && (!pointer.starts_with('/')
+                    || pointer
+                        .split('~')
+                        .skip(1)
+                        .any(|rest| !rest.starts_with(['0', '1'])))
             {
                 return Err(format!(
                     "the `[[hook]]` for {tools_text:?} writes {key} = {pointer:?}, which is not a \
@@ -244,10 +251,15 @@ impl Table {
         self.tools.is_match(tool)
     }
 
-    /// Whether `tool` is one of the reads this table passes unjudged.
+    /// Whether `tool` is one of the reads this table names: the whole of the
+    /// tool name after where `tools` matched it, so `create_issue__get_file_contents`
+    /// is not `get_file_contents`. A `tools` pattern that stops short of the
+    /// separator leaves a remainder no name equals, and the call is judged.
     pub(crate) fn skips(&self, tool: &str) -> bool {
-        tool.rsplit_once("__")
-            .is_some_and(|(_, name)| self.skip.contains(name))
+        self.tools
+            .find(tool)
+            .and_then(|found| tool.get(found.end()..))
+            .is_some_and(|name| self.skip.contains(name))
     }
 
     /// `owner/repo` as the call names it, or why it names none.
@@ -418,7 +430,7 @@ mod tests {
     fn written() -> Written {
         toml::from_str(
             r#"
-            tools = "^mcp__github__"
+            tools = '^mcp__(plugin_[a-z0-9_-]+_)?github__'
             skip = ["get_file_contents", "issue_read"]
             target = "forge-repo"
             forge = "github"
@@ -441,7 +453,9 @@ mod tests {
         assert!(table.skips("mcp__github__get_file_contents"));
         assert!(!table.skips("mcp__github__create_issue"));
         assert!(table.skips("mcp__plugin_engineering_github__issue_read"));
-        // A name nobody listed is judged, whatever it looks like.
+        // A name nobody listed is judged, whatever it looks like, and so is
+        // one that only ends in a listed name.
+        assert!(!table.skips("mcp__github__create_issue__get_file_contents"));
         assert!(!table.skips("mcp__github__get_something_new"));
         assert!(!table.skips("mcp__github__mark_all_notifications_read"));
         assert!(!table.names("mcp__slack__search"));
@@ -484,6 +498,10 @@ mod tests {
         );
         refused(
             |table| table.owner = Some(String::from("owner")),
+            "JSON pointer",
+        );
+        refused(
+            |table| table.owner = Some(String::from("/owner~2")),
             "JSON pointer",
         );
         refused(

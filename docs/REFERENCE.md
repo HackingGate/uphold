@@ -3226,7 +3226,7 @@ passes. The two facts that takes, which calls publish and where to, are a
 ```toml
 [[hook]]
 tools = '^mcp__(plugin_[a-z0-9_-]+_)?github__'      # searched in tool_name
-skip = ["get_file_contents", "issue_read"]   # reads, by name after the last __
+skip = ["get_file_contents", "issue_read"]   # reads, by the name after the tools match
 target = "forge-repo"      # the call names a repository; "none" (the default) if not
 forge = "github"           # the forge asked about it; github.com is the only one
 owner = "/owner"           # RFC 6901 JSON pointers into tool_input
@@ -3245,11 +3245,11 @@ skips the reads `github/github-mcp-server` v2.0.3 ships, each by name. `skip`
 takes names and not patterns: a tool not listed is judged whatever its name
 looks like, so a write the server adds later is checked the day it ships.
 
-- **A call whose name, after its last `__`, is in `skip`** publishes no
-  text, so it is judged as a call carrying no strings: a rule that refuses a
-  tool by its name still runs, wherever the call goes. Under `--junit` its
-  record names the text rules as skipped, out of scope, so a read is not
-  mistaken for a call the hook never saw.
+- **A call whose name, after where `tools` matched it, is in `skip`**
+  publishes no text: only a rule that refuses a tool by its name is asked,
+  wherever the call goes. Under `--junit` its record names every other rule as
+  skipped, out of scope, so a read is not mistaken for a call the hook never
+  saw. A name that only ends in a listed one is judged in full.
 - **A judged call** has its destination read at `owner` and `repo` and asked
   of `forge`, once per call. A GitHub destination is asked of github.com
   whatever `GH_HOST` names, because an enterprise repository of the same name
