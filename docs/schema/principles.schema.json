@@ -185,7 +185,7 @@
         },
         "skip": {
           "default": [],
-          "description": "Regular expressions searched for in the tool name of a call that\nreads. A call matching one is not judged at all.",
+          "description": "The tools that read, each named exactly as the server names it -- the\npart of the tool name after its last `__`. A call naming one is not\njudged at all. Names, not patterns: a tool nobody listed is judged,\nso a server's next tool is checked whatever its name looks like.",
           "items": {
             "type": "string"
           },

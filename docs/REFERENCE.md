@@ -3226,7 +3226,7 @@ passes. The two facts that takes, which calls publish and where to, are a
 ```toml
 [[hook]]
 tools = '^mcp__(plugin_[a-z0-9_-]+_)?github__'      # searched in tool_name
-skip = ['__(get|list|search)_', '_(get|list|read|search)$']   # reads: not judged
+skip = ["get_file_contents", "issue_read"]   # reads, by name after the last __
 target = "forge-repo"      # the call names a repository; "none" (the default) if not
 forge = "github"           # the forge asked about it; github.com is the only one
 owner = "/owner"           # RFC 6901 JSON pointers into tool_input
@@ -3241,11 +3241,11 @@ That table is compiled in, from
 [`policy/hook.default.toml`](../policy/hook.default.toml), and read after a
 repository's own: the first table whose `tools` matches speaks for the call,
 so a repository overrides it by writing a table naming the same tools. It
-skips the reads by the verbs `github/github-mcp-server` v2.0.3 names them
-with. A tool that matches no `skip` is judged, so a write the server adds
-later is checked the day it ships.
+skips the reads `github/github-mcp-server` v2.0.3 ships, each by name. `skip`
+takes names and not patterns: a tool not listed is judged whatever its name
+looks like, so a write the server adds later is checked the day it ships.
 
-- **A call a `skip` matches** is not judged: nothing is published. Under
+- **A call whose name, after its last `__`, is in `skip`** is not judged: nothing is published. Under
   `--junit` its record still names every rule the hook would have asked, each
   skipped as out of scope, so a skipped read is not mistaken for a call the
   hook never saw.
@@ -3272,8 +3272,8 @@ later is checked the day it ships.
   calls should be judged as before, every rule in scope, gets a table naming
   its tools and nothing else, since `scope` defaults to `always`.
 
-The load refuses a table whose `tools` or `skip` is not a regular
-expression, a `target = "forge-repo"` without all of `forge`, `owner` and
+The load refuses a table whose `tools` is not a regular expression, a `skip`
+entry that is not a tool's name, a `target = "forge-repo"` without all of `forge`, `owner` and
 `repo` (or those without the target), `target = "git-remote"` (a tool call has
 no remote), `scope =
 "public-registry"`, `shim` beside `scope` or `unresolved`, a `shim` naming a

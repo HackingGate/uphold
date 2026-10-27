@@ -16,14 +16,76 @@
 # nothing. Directly installed (`mcp__github__`) and plugin-installed
 # (`mcp__plugin_<plugin>_github__`) servers both match.
 #
-# `skip` is the reads, by the verbs github/github-mcp-server v2.0.3 names them
-# with; a tool it does not name is judged, so a write the server adds later is
-# checked the day it ships. A call carrying no `owner` and `repo` -- a gist, a
+# `skip` is the reads github/github-mcp-server v2.0.3 ships, each by its
+# name: names and not patterns, so a tool not listed here is judged whatever
+# its name looks like, and a write the server adds later is checked the day it
+# ships. `mark_all_notifications_read` is a write, and is not listed. A call carrying no `owner` and `repo` -- a gist, a
 # notification -- has no destination, and `unresolved` refuses it wherever a
 # rule needs one.
 [[hook]]
 tools = '^mcp__(plugin_[a-z0-9_-]+_)?github__'
-skip = ['__(get|list|search)_', '_(get|list|read|search)$']
+skip = [
+  "actions_get",
+  "actions_list",
+  "custom_properties_read",
+  "get_code_quality_finding",
+  "get_code_scanning_alert",
+  "get_commit",
+  "get_copilot_space",
+  "get_dependabot_alert",
+  "get_discussion",
+  "get_discussion_comments",
+  "get_file_contents",
+  "get_gist",
+  "get_global_security_advisory",
+  "get_job_logs",
+  "get_label",
+  "get_latest_release",
+  "get_me",
+  "get_notification_details",
+  "get_release_by_tag",
+  "get_repository_tree",
+  "get_secret_scanning_alert",
+  "get_tag",
+  "get_team_members",
+  "get_teams",
+  "github_support_docs_search",
+  "issue_read",
+  "list_branches",
+  "list_code_scanning_alerts",
+  "list_commits",
+  "list_copilot_spaces",
+  "list_dependabot_alerts",
+  "list_discussion_categories",
+  "list_discussions",
+  "list_gists",
+  "list_global_security_advisories",
+  "list_issue_fields",
+  "list_issue_types",
+  "list_issues",
+  "list_label",
+  "list_notifications",
+  "list_org_repository_security_advisories",
+  "list_pull_requests",
+  "list_releases",
+  "list_repository_collaborators",
+  "list_repository_security_advisories",
+  "list_secret_scanning_alerts",
+  "list_starred_repositories",
+  "list_tags",
+  "projects_get",
+  "projects_list",
+  "pull_request_read",
+  "repository_ruleset_read",
+  "search_code",
+  "search_commits",
+  "search_issues",
+  "search_orgs",
+  "search_pull_requests",
+  "search_repositories",
+  "search_users",
+  "ui_get",
+]
 target = "forge-repo"
 forge = "github"
 owner = "/owner"

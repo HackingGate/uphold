@@ -35,8 +35,10 @@ pub(crate) struct Written {
     /// table whose `tools` matches speaks for the call; the repository's own
     /// tables are read before the compiled-in ones.
     tools: String,
-    /// Regular expressions searched for in the tool name of a call that
-    /// reads. A call matching one is not judged at all.
+    /// The tools that read, each named exactly as the server names it -- the
+    /// part of the tool name after its last `__`. A call naming one is not
+    /// judged at all. Names, not patterns: a tool nobody listed is judged,
+    /// so a server's next tool is checked whatever its name looks like.
     #[serde(default)]
     skip: Vec<String>,
     /// `forge-repo`, where the call names its repository in `owner` and
@@ -117,12 +119,13 @@ pub(crate) enum Answers {
     },
 }
 
-/// One `[[hook]]` table, held to what a load can tell about it: its patterns
-/// compiled, its destination whole or absent, and one source for its answers.
+/// One `[[hook]]` table, held to what a load can tell about it: its pattern
+/// compiled, its reads named, its destination whole or absent, and one source
+/// for its answers.
 #[derive(Debug, Clone)]
 pub(crate) struct Table {
     tools: Regex,
-    skip: Vec<Regex>,
+    skip: std::collections::BTreeSet<String>,
     destination: Option<Pointers>,
     pub(crate) answers: Answers,
 }
@@ -141,11 +144,20 @@ impl Written {
             })
         };
         let tools = compile(&self.tools)?;
-        let skip = self
-            .skip
-            .iter()
-            .map(|pattern| compile(pattern))
-            .collect::<std::result::Result<Vec<Regex>, String>>()?;
+        if let Some(name) = self.skip.iter().find(|name| {
+            name.contains("__")
+                || name.is_empty()
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+        }) {
+            return Err(format!(
+                "the `[[hook]]` for {tools_text:?} skips {name:?}, which is not a tool's name. \
+                 `skip` names each read exactly as the server does, after the last `__` of \
+                 the tool name: \"get_file_contents\", not a pattern"
+            ));
+        }
+        let skip = self.skip.into_iter().collect();
         for (key, pointer) in [("owner", &self.owner), ("repo", &self.repo)] {
             if let Some(pointer) = pointer
                 && !pointer.starts_with('/')
@@ -234,7 +246,8 @@ impl Table {
 
     /// Whether `tool` is one of the reads this table passes unjudged.
     pub(crate) fn skips(&self, tool: &str) -> bool {
-        self.skip.iter().any(|pattern| pattern.is_match(tool))
+        tool.rsplit_once("__")
+            .is_some_and(|(_, name)| self.skip.contains(name))
     }
 
     /// `owner/repo` as the call names it, or why it names none.
@@ -406,7 +419,7 @@ mod tests {
         toml::from_str(
             r#"
             tools = "^mcp__github__"
-            skip = ["__(get|list|search)_"]
+            skip = ["get_file_contents", "issue_read"]
             target = "forge-repo"
             forge = "github"
             owner = "/owner"
@@ -427,6 +440,10 @@ mod tests {
         assert!(table.names("mcp__github__get_file_contents"));
         assert!(table.skips("mcp__github__get_file_contents"));
         assert!(!table.skips("mcp__github__create_issue"));
+        assert!(table.skips("mcp__plugin_engineering_github__issue_read"));
+        // A name nobody listed is judged, whatever it looks like.
+        assert!(!table.skips("mcp__github__get_something_new"));
+        assert!(!table.skips("mcp__github__mark_all_notifications_read"));
         assert!(!table.names("mcp__slack__search"));
     }
 
@@ -470,8 +487,8 @@ mod tests {
             "JSON pointer",
         );
         refused(
-            |table| table.skip = vec![String::from("(")],
-            "regular expression",
+            |table| table.skip = vec![String::from("(get|list)_")],
+            "not a tool's name",
         );
         refused(
             |table| table.scope = Some(Scope::Always),
