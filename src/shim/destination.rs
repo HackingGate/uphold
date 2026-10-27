@@ -426,10 +426,47 @@ fn declared_standing(
 /// The scope one rule is judged under: its own where it wrote one, the
 /// table's where it did not.
 pub(super) fn effective_scope<'a>(rule: &'a Rule, shim: &'a Shim) -> &'a Scope {
+    own_scope(rule).unwrap_or(&shim.scope)
+}
+
+/// The `command.scope` a rule wrote, which wins over any table's at every
+/// seam that judges it under one: the `[[shim]]`'s here, the `[[hook]]`'s at
+/// `uphold hook`.
+pub(crate) fn own_scope(rule: &Rule) -> Option<&Scope> {
     rule.command
         .as_ref()
         .and_then(|where_| where_.scope.as_ref())
-        .unwrap_or(&shim.scope)
+}
+
+/// Whether a rule runs on its scope's answer, `unresolved` deciding the one
+/// answer that is none.
+///
+/// The one conversion, reached from the shim and from `uphold hook`: a
+/// could-not-tell read as "does not hold" skips the checkers, and the
+/// destination guard behind them promises exit 2 on exactly that. `refusal`
+/// words the error for its seam, whose cure differs; the decision does not.
+pub(crate) fn runs(
+    answer: Standing,
+    unresolved: Unresolved,
+    refusal: impl FnOnce(&str) -> String,
+) -> Result<bool> {
+    match answer {
+        Standing::Holds => Ok(true),
+        Standing::DoesNotHold => Ok(false),
+        Standing::CouldNotTell(why) => match unresolved {
+            Unresolved::Refuse => Err(Fatal::new(refusal(&why))),
+            Unresolved::Run => Ok(false),
+        },
+    }
+}
+
+/// The `run` half of `unresolved`, said by the memo that asked the predicate,
+/// once per predicate rather than once per rule standing behind it.
+pub(crate) fn ran_unchecked(seam: &str, why: &str) {
+    eprintln!(
+        "{seam}: {why}, and it went ahead with the checks that needed that answer stood down. \
+         This is not a pass."
+    );
 }
 
 /// One invocation's scope answers, each predicate evaluated at most once.
@@ -484,21 +521,16 @@ impl<'a> CommandContext<'a> {
     /// could-not-tell read as "does not hold" skips the checkers, and the
     /// destination guard behind them promises exit 2 on exactly that.
     pub(super) fn holds(&mut self, scope: &Scope, policy: &Policy) -> Result<bool> {
-        match self.standing(scope, policy)? {
-            Standing::Holds => Ok(true),
-            Standing::DoesNotHold => Ok(false),
-            Standing::CouldNotTell(why) => match self.shim.unresolved {
-                Unresolved::Refuse => Err(Fatal::new(format!(
-                    "{}: {why}. A check that could not look is not a check that passed, so \
-                     nothing was published. Name the destination explicitly, run this where \
-                     the repository has a remote and the forge can be reached, or write \
-                     `unresolved = \"run\"` on this `[[shim]]` table to run the command \
-                     unchecked instead",
-                    self.shim.command
-                ))),
-                Unresolved::Run => Ok(false),
-            },
-        }
+        let answer = self.standing(scope, policy)?;
+        runs(answer, self.shim.unresolved, |why| {
+            format!(
+                "{}: {why}. A check that could not look is not a check that passed, so nothing \
+                 was published. Name the destination explicitly, run this where the repository \
+                 has a remote and the forge can be reached, or write `unresolved = \"run\"` on \
+                 this `[[shim]]` table to run the command unchecked instead",
+                self.shim.command
+            )
+        })
     }
 
     /// The predicate's own answer, asked once per invocation.
@@ -518,7 +550,7 @@ impl<'a> CommandContext<'a> {
         }
         let answer = self.shim.scope_answer(scope, self.root, policy, self)?;
         if let (Standing::CouldNotTell(why), Unresolved::Run) = (&answer, self.shim.unresolved) {
-            eprintln!("uphold shim: {why}, and the command ran anyway. This is not a pass.");
+            ran_unchecked("uphold shim", why);
         }
         self.answers.insert(key, answer.clone());
         Ok(answer)

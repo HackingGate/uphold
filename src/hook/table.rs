@@ -22,7 +22,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::config::Rule;
-use crate::error::{Fatal, Result};
+use crate::error::Result;
 use crate::shim::{Forge, Scope, Shim, Standing, Target, Unresolved};
 
 /// One `[[hook]]` table as the policy file writes it. Read by [`Written::load`]
@@ -327,77 +327,65 @@ impl<'a> Scoping<'a> {
     /// table at it would stand down a check nobody scoped, which is the line
     /// the shim draws for a rule its consultation reaches.
     pub(crate) fn holds(&mut self, rule: &Rule) -> Result<bool> {
-        let Some(command) = &rule.command else {
+        if rule.command.is_none() {
             return Ok(true);
-        };
-        let scope = command
-            .scope
-            .clone()
-            .or_else(|| self.answering.as_ref().map(|(scope, _)| scope.clone()));
-        let standing = match scope {
-            Some(scope) => self.standing(&scope)?,
-            None => Standing::CouldNotTell(self.unnamed()),
-        };
-        let unresolved = self
-            .answering
-            .as_ref()
-            .map_or_else(Unresolved::default, |(_, unresolved)| *unresolved);
-        match standing {
-            Standing::Holds => Ok(true),
-            Standing::DoesNotHold => Ok(false),
-            Standing::CouldNotTell(why) => match unresolved {
-                Unresolved::Refuse => Err(Fatal::new(format!(
-                    "uphold hook: {why}, so whether rule {:?} applies could not be asked. A \
-                     check that could not look is not a check that passed, so the call was \
-                     refused. Give {} a `[[hook]]` table that names its destination, or skips \
-                     it as a read, or write `unresolved = \"run\"` on that table to let it \
-                     through unchecked",
-                    rule.id, self.tool
-                ))),
-                Unresolved::Run => {
-                    if self
-                        .answers
-                        .insert(String::from("unresolved"), Standing::DoesNotHold)
-                        .is_none()
-                    {
-                        eprintln!(
-                            "uphold hook: {why}, and the call went ahead with its \
-                             destination-scoped checks stood down. This is not a pass."
-                        );
-                    }
-                    Ok(false)
-                }
-            },
         }
+        let scope = crate::shim::own_scope(rule)
+            .or_else(|| self.answering.as_ref().map(|(scope, _)| scope))
+            .cloned();
+        let answer = self.standing(scope.as_ref())?;
+        crate::shim::runs(answer, self.unresolved(), |why| {
+            format!(
+                "uphold hook: {why}, so whether rule {:?} applies could not be asked. A check \
+                 that could not look is not a check that passed, so the call was refused. Give \
+                 {} a `[[hook]]` table that names its destination, or skips it as a read, or \
+                 write `unresolved = \"run\"` on that table to let it through unchecked",
+                rule.id, self.tool
+            )
+        })
     }
 
-    fn standing(&mut self, scope: &Scope) -> Result<Standing> {
+    /// The table's `unresolved`, and the default where no table names the call.
+    fn unresolved(&self) -> Unresolved {
+        self.answering
+            .as_ref()
+            .map_or_else(Unresolved::default, |(_, unresolved)| *unresolved)
+    }
+
+    /// The predicate's own answer, asked once per call. `None` is the scope of
+    /// a rule no table speaks for. The `run` half of `unresolved` says its
+    /// piece here, once per predicate, as the shim's memo does.
+    fn standing(&mut self, scope: Option<&Scope>) -> Result<Standing> {
         let key = match scope {
-            Scope::Always => return Ok(Standing::Holds),
-            Scope::PublicTarget => String::from("public-target"),
-            // Not refused at load: the scope is right at the shim, and a policy
-            // that loads at every other seam is not broken for this one's sake.
-            Scope::PublicRegistry => {
-                return Ok(Standing::CouldNotTell(String::from(
-                    "a `public-registry` scope reads an npm command line, which a tool call \
-                     does not have (a pattern or prose rule stays off this seam with `seams = \
-                     [\"shim\"]`)",
-                )));
-            }
-            Scope::Command { command } => format!("command:{command}"),
+            Some(Scope::Always) => return Ok(Standing::Holds),
+            Some(Scope::PublicTarget) => String::from("public-target"),
+            Some(Scope::PublicRegistry) => String::from("public-registry"),
+            Some(Scope::Command { command }) => format!("command:{command}"),
+            None => String::from("unnamed"),
         };
         if let Some(answer) = self.answers.get(&key) {
             return Ok(answer.clone());
         }
         let answer = match scope {
-            Scope::Command { command } => {
+            Some(Scope::Command { command }) => {
                 crate::shim::command_standing("uphold hook", command, self.root)?
             }
+            // Not refused at load: the scope is right at the shim, and a policy
+            // that loads at every other seam is not broken for this one's sake.
+            Some(Scope::PublicRegistry) => Standing::CouldNotTell(String::from(
+                "a `public-registry` scope reads an npm command line, which a tool call does \
+                 not have (a pattern or prose rule stays off this seam with `seams = \
+                 [\"shim\"]`)",
+            )),
+            None => Standing::CouldNotTell(self.unnamed()),
             _ => match self.resolved() {
                 Ok(target) => crate::shim::named_standing(Forge::GitHub, target),
                 Err(why) => Standing::CouldNotTell(why.clone()),
             },
         };
+        if let (Standing::CouldNotTell(why), Unresolved::Run) = (&answer, self.unresolved()) {
+            crate::shim::ran_unchecked("uphold hook", why);
+        }
         self.answers.insert(key, answer.clone());
         Ok(answer)
     }
