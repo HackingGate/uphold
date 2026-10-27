@@ -292,15 +292,33 @@ pub(crate) fn command_standing(seam: &str, command: &str, root: &Path) -> Result
 /// Always asked of the forge. A declared `visibility` speaks for `origin`
 /// alone, and a destination somebody named is not `origin` however its name
 /// reads -- see [`declared_standing`].
+///
+/// A GitHub destination is asked of github.com by name: `gh api` without
+/// `--hostname` answers for `GH_HOST`, and an enterprise repository of the
+/// same name would answer for this one, as `gh_repository_target` refuses
+/// at the shim.
 pub(crate) fn named_standing(forge: Forge, target: &str) -> Standing {
     let destination = Destination {
         target: Some(target.to_owned()),
         forge: Some(forge),
-        hostname: None,
+        hostname: (forge == Forge::GitHub).then(|| String::from("github.com")),
         provenance: Provenance::Explicit,
         ambient_host: false,
     };
     forge_standing(&destination, target)
+}
+
+/// Whether `part` can be one segment of a forge repository path: an owner, a
+/// repository, or one group of a GitLab namespace. The value is put into a
+/// forge API path, so an empty segment, a dot path, or a character no forge
+/// name has is a request for some other endpoint.
+pub(crate) fn name_segment(part: &str) -> bool {
+    !part.is_empty()
+        && part != "."
+        && part != ".."
+        && part
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
 }
 
 /// Resolve the host-bearing spellings accepted by `gh` without treating an
@@ -338,14 +356,7 @@ fn gh_repository_target(named: &str) -> Result<String> {
             _ => None,
         }
     };
-    let Some(path) = path.filter(|path| {
-        path.split('/').all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
-        })
-    }) else {
+    let Some(path) = path.filter(|path| path.split('/').all(name_segment)) else {
         return Err(Fatal::new(format!(
             "gh: destination {named:?} could not be resolved as [HOST/]OWNER/REPO. \
              Nothing was published"

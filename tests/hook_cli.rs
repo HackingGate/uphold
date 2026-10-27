@@ -1447,7 +1447,9 @@ match = ["push:*"]
 
 /// A `gh` that knows two repositories under `example-org`, both private, and
 /// calls everything under `example-user` public. Every question it is asked
-/// is appended to `gh.asked`, so a test can say no forge was asked at all.
+/// is appended to `gh.asked`, so a test can say no forge was asked at all. A
+/// visibility question is answered only when it names github.com: asked
+/// without `--hostname`, `gh` answers for whatever `GH_HOST` says.
 fn forge_stub(root: &Path) {
     let bin = root.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -1457,8 +1459,8 @@ fn forge_stub(root: &Path) {
         "#!/bin/sh\n\
          printf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/../gh.asked\"\n\
          case \"$*\" in\n\
-         'api repos/example-org/'*' --jq .visibility') echo private ;;\n\
-         'api repos/example-user/'*' --jq .visibility') echo public ;;\n\
+         'api repos/example-org/'*' --jq .visibility --hostname github.com') echo private ;;\n\
+         'api repos/example-user/'*' --jq .visibility --hostname github.com') echo public ;;\n\
          'api repos/example-org/'*' --jq '*) \
          printf 'private\\texample-org/%s\\n' \"${2##*/}\" ;;\n\
          *) echo \"gh asked: $*\" >&2; exit 1 ;;\n\
@@ -1470,9 +1472,19 @@ fn forge_stub(root: &Path) {
     std::fs::set_permissions(&gh, permissions).unwrap();
 }
 
-/// [`hook`] with the stub forge first on PATH.
+/// [`hook`] with the stub forge first on PATH, and `GH_HOST` unset.
 fn hook_with_forge(root: &Path, stdin: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
+    hook_with_forge_at(root, stdin, None)
+}
+
+/// [`hook_with_forge`] with `GH_HOST` set to `host`, where one is given.
+fn hook_with_forge_at(root: &Path, stdin: &str, host: Option<&str>) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command.env_remove("GH_HOST");
+    if let Some(host) = host {
+        command.env("GH_HOST", host);
+    }
+    let mut child = command
         .args(["hook", "claude-code"])
         .current_dir(root)
         .env_remove("UPHOLD_ALLOW")
@@ -1583,7 +1595,7 @@ fn a_write_into_a_private_repository_naming_another_passes() {
     assert_eq!(stdout(&output), "", "{}", stderr(&output));
     let asked = std::fs::read_to_string(root.join("gh.asked")).unwrap();
     assert!(
-        asked.contains("api repos/example-org/private-repo --jq .visibility"),
+        asked.contains("api repos/example-org/private-repo --jq .visibility --hostname github.com"),
         "{asked}"
     );
 }
@@ -1748,4 +1760,70 @@ fn a_table_in_an_inherited_file_is_refused() {
         "{}",
         stderr(&output)
     );
+}
+
+/// A github.com destination is asked of github.com, whatever `GH_HOST` names:
+/// an enterprise repository of the same name is a stranger, and its answer
+/// would stand the private-name check down for the public one.
+#[test]
+fn a_github_destination_is_asked_of_github_com_under_an_enterprise_gh_host() {
+    let root = publishing("hook-enterprise-host", PUBLISHING_POLICY);
+    let output = hook_with_forge_at(
+        &root,
+        &call(
+            "mcp__github__create_issue",
+            &serde_json::json!({
+                "owner": "example-user",
+                "repo": "public-widget",
+                "body": "Refs example-org/other-private#1",
+            }),
+        ),
+        Some("github.example.com"),
+    );
+    assert!(
+        reason(&output).contains("no-published-private-repo-names"),
+        "{}",
+        stderr(&output)
+    );
+    let asked = std::fs::read_to_string(root.join("gh.asked")).unwrap();
+    assert!(
+        asked.contains(
+            "api repos/example-user/public-widget --jq .visibility --hostname github.com"
+        ),
+        "{asked}"
+    );
+}
+
+/// `public-registry` reads an npm command line, which no tool call has, so a
+/// rule the hook judges under it is refused at load and not on every call.
+#[test]
+fn a_public_registry_rule_the_hook_judges_is_refused_at_load() {
+    let policy = r#"
+[rule.registry-prose]
+message = "State the claim."
+prose_regexp = '(?i)\barguably\b'
+files.include = ["."]
+command.before = ["npm"]
+command.scope = "public-registry"
+
+[[shim]]
+command = "npm"
+match = ["publish"]
+"#;
+    let body = serde_json::json!({"body": "An ordinary sentence."});
+    let root = publishing("hook-public-registry", policy);
+    let output = hook_with_forge(&root, &call("mcp__github__create_issue", &body));
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains(r#"seams = ["shim"]"#),
+        "{}",
+        stderr(&output)
+    );
+    let fixed = publishing(
+        "hook-public-registry-shim-only",
+        &policy.replace("command.scope", "seams = [\"shim\"]\ncommand.scope"),
+    );
+    let passed = hook_with_forge(&fixed, &call("mcp__github__create_issue", &body));
+    assert_eq!(code(&passed), 0, "{}", stderr(&passed));
+    assert_eq!(stdout(&passed), "", "{}", stderr(&passed));
 }

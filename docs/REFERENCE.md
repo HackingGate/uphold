@@ -3194,6 +3194,11 @@ hooks.
 The `.*` is required. A matcher of `mcp__github` holds only exact-match
 characters, so it is compared as a string and matches no tool.
 
+The example matcher does not match a GitHub server installed through a
+plugin, whose tools are named `mcp__plugin_<plugin>_github__…`: those calls
+never reach the hook. The compiled-in `[[hook]]` table below would judge them,
+so widening the matcher is the operator's change to make.
+
 **Which calls arrive is the harness's decision; which of them are judged, and
 where they publish, is the policy's.** The matcher is one line, often shipped
 for every consumer at once, so it cannot say which of a server's tools publish
@@ -3243,7 +3248,9 @@ later is checked the day it ships.
 - **A call a `skip` matches** is not judged, and no record is written: nothing
   is published.
 - **A judged call** has its destination read at `owner` and `repo` and asked
-  of `forge`, once per call. A rule with a `command` section is judged under
+  of `forge`, once per call. A GitHub destination is asked of github.com
+  whatever `GH_HOST` names, because an enterprise repository of the same name
+  is somebody else's. A rule with a `command` section is judged under
   its own `command.scope`, else the table's scope; with `shim = "gh"` that is
   the repository's own `[[shim]]` for `gh`, so the two seams cannot disagree
   about one act. A `public-target` scope at a private destination stands the
@@ -3255,7 +3262,8 @@ later is checked the day it ships.
   private name bound for a private repository, at the hook and through `gh`
   alike, because it judges against this repository's declared visibility.
 - **A judged call without its destination** — no string at `owner` or `repo`,
-  or one that is not a repository name — and **a call no table names** are
+  or one that is not a repository name (one path segment each, but a GitLab
+  owner may be a group path) — and **a call no table names** are
   unresolved for every rule whose scope needs a destination. `unresolved`
   decides: `refuse` (the default, and the only answer for a call no table
   names) exits `2` before the call is made; `run` lets it through with those
@@ -3268,7 +3276,10 @@ expression, a `target = "forge-repo"` without all of `forge`, `owner` and
 `repo` (or those without the target), `target = "git-remote"`, `scope =
 "public-registry"`, `shim` beside `scope` or `unresolved`, and `unresolved`
 where no scope its calls reach can fail to answer. A table in an
-`inherit.paths` file is refused, as a shim there is.
+`inherit.paths` file is refused, as a shim there is. A rule the hook judges
+with `command.scope = "public-registry"` is refused too: that scope reads an
+npm command line, which no tool call has, so it could never be answered at the
+hook. A pattern or prose rule takes `seams = ["shim"]` to stay off the hook.
 
 ### What runs where there is no policy
 

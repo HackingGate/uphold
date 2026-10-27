@@ -227,7 +227,10 @@ impl Table {
                 self.tools()
             ));
         };
-        let read = |pointer: &str| -> std::result::Result<String, String> {
+        // One segment each, but for a GitLab owner, which may be a namespace
+        // of nested groups: `owner = "acme/widget"` is not a GitHub owner, and
+        // with `repo = "issues"` it would ask the forge about another path.
+        let read = |pointer: &str, nested: bool| -> std::result::Result<String, String> {
             let value = input
                 .and_then(|input| input.pointer(pointer))
                 .and_then(Value::as_str)
@@ -238,17 +241,12 @@ impl Table {
                          could not be established"
                     )
                 })?;
-            // The value goes into a forge API path. A segment that is empty, a
-            // dot path, or carries a character no forge name has is a request
-            // for some other endpoint, and is not asked.
-            if value.split('/').all(|segment| {
-                !segment.is_empty()
-                    && segment != "."
-                    && segment != ".."
-                    && segment
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
-            }) {
+            let named = if nested {
+                value.split('/').all(crate::shim::name_segment)
+            } else {
+                crate::shim::name_segment(value)
+            };
+            if named {
                 Ok(value.to_owned())
             } else {
                 Err(format!(
@@ -257,7 +255,14 @@ impl Table {
                 ))
             }
         };
-        Ok((*forge, format!("{}/{}", read(owner)?, read(repo)?)))
+        Ok((
+            *forge,
+            format!(
+                "{}/{}",
+                read(owner, *forge == Forge::GitLab)?,
+                read(repo, false)?
+            ),
+        ))
     }
 }
 
@@ -446,6 +451,8 @@ mod tests {
             serde_json::json!({"owner": "acme", "repo": 7}),
             serde_json::json!({"owner": "..", "repo": "widget"}),
             serde_json::json!({"owner": "acme", "repo": "widget?per_page=1"}),
+            serde_json::json!({"owner": "acme/widget", "repo": "issues"}),
+            serde_json::json!({"owner": "acme", "repo": "widget/issues"}),
         ] {
             assert!(github().destination(Some(&input)).is_err(), "{input}");
         }

@@ -53,7 +53,7 @@ mod destination;
 pub(crate) use checker::pattern_finding;
 use checker::{consult, pattern_refusal};
 use destination::{CommandContext, effective_scope};
-pub(crate) use destination::{command_standing, named_standing};
+pub(crate) use destination::{command_standing, name_segment, named_standing};
 
 /// Where an invocation is going, when that is a meaningful question at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]

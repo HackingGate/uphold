@@ -1944,6 +1944,28 @@ impl Rule {
     /// rule's kind can run at, beside the table that makes it published-text
     /// rule at all.
     fn validate_seams(&self) -> Result<()> {
+        // `public-registry` reads an npm command line, and a tool call has
+        // none, so at `uphold hook` the scope can never answer and every call
+        // carrying text would be refused as unresolved. Refused here instead,
+        // where the cure can be named.
+        if self.judged_at(Seam::Hook)
+            && self.command.as_ref().is_some_and(|where_| {
+                matches!(where_.scope, Some(crate::shim::Scope::PublicRegistry))
+            })
+        {
+            return Err(Fatal::new(format!(
+                "rule {:?}: `command.scope = \"public-registry\"` reads an npm command line, and \
+                 `uphold hook` judges this rule over tool calls, which have none -- so the scope \
+                 could never be answered there and every call would be refused. {}",
+                self.id,
+                if matches!(Judged::of(self), Some(Judged::Prose | Judged::Patterns)) {
+                    "Write `seams` without `hook`, such as `seams = [\"shim\"]`"
+                } else {
+                    "A guard runs at every seam its kind runs at; give it a scope the hook can \
+                     answer"
+                }
+            )));
+        }
         let Some(seams) = self.at_seams.as_ref() else {
             return Ok(());
         };
