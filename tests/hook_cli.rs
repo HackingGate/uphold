@@ -1342,6 +1342,7 @@ fn stop_waits_for_a_baseline_that_is_still_being_written() {
             // Renamed into place, as `SessionStart` writes it. Written in
             // place instead, the file exists empty for an instant, and a Stop
             // polling for it can read that instant as an unreadable baseline.
+            // The partial file's name is not the baseline's, so no poll opens it.
             let partial = directory.join("s-wait.json.partial");
             std::fs::write(&partial, baseline).unwrap();
             std::fs::rename(&partial, directory.join("s-wait.json")).unwrap();
