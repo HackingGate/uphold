@@ -400,7 +400,7 @@
           "type": "string"
         },
         "why": {
-          "description": "Why this repository adopts the record, in its own words. Refused when\nblank, or when it is the record's `summary` or `claim` copied.",
+          "description": "Why this repository adopts the record, in its own words. Refused at\nload when blank; `uphold check` refuses one that copies the record's\n`summary` or `claim`.",
           "type": "string"
         }
       },

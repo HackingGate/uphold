@@ -765,8 +765,9 @@ pub(crate) enum Adopt {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Reasoned {
     pub id: String,
-    /// Why this repository adopts the record, in its own words. Refused when
-    /// blank, or when it is the record's `summary` or `claim` copied.
+    /// Why this repository adopts the record, in its own words. Refused at
+    /// load when blank; `uphold check` refuses one that copies the record's
+    /// `summary` or `claim`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
 }
@@ -842,18 +843,6 @@ impl Decide {
                     "`[decide] adopt` entry {id:?} has a blank `why`. Give this repository's \
                      reason for adopting it, or write the id alone"
                 ));
-            }
-            // An id the catalog lacks is `uphold check`'s to report, at exit 1.
-            if let Some(record) = crate::catalog::get(id).map_err(|error| error.to_string())? {
-                for (field, text) in [("summary", &record.summary), ("claim", &record.claim)] {
-                    if why.trim() == text.trim() {
-                        return Err(format!(
-                            "`[decide] adopt` entry {id:?} has a `why` that is the record's \
-                             `{field}`. The catalog already says what the record holds; `why` \
-                             says why this repository adopts it"
-                        ));
-                    }
-                }
             }
         }
         for order in &self.order {

@@ -4628,13 +4628,14 @@ adopted 3 record(s) for design rulings ([decide]):
 ```
 
 Exit `1`, under `design rulings refused ([decide]):`, for an adopted id the
-catalog does not define or keeps only as deprecated, an adopted conflict with no
+catalog does not define or keeps only as deprecated, an adoption `why` that is
+the record's `summary` or `claim` copied, an adopted conflict with no
 order, an order naming a record the repository does not adopt, an order over two
 records that do not conflict, and a second order over a pair already ordered.
 Exit `2`, at load and so from every command that reads the policy, for a table
 whose shape is wrong: an unknown key, an `order` missing `prefer`, `over` or
-`why` or holding a blank one, an id adopted twice, an adopt table with a key
-other than `id` and `why`, a blank `why` on one, or a `why` that is the
-record's `summary` or `claim` copied, and `[decide]` in a bundled
+`why` or holding a blank one, an id adopted twice, an adopt entry that is
+neither an id nor a table, an adopt table with a key other than `id` and
+`why` or a blank `why`, and `[decide]` in a bundled
 set or an `inherit.paths` file, since which records a repository rules by is
 that repository's own declaration. `uphold schema` describes the table.

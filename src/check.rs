@@ -1106,9 +1106,21 @@ fn report_human(report: &Report) -> Result<Exit> {
     Ok(report.verdict.exit())
 }
 
+/// The record field an adoption's `why` repeats verbatim, if any: the
+/// catalog's text in a second place, which drifts from it and says nothing
+/// about why this repository adopted the record.
+fn copied_field(entry: &Adopt, record: &catalog::Record) -> Option<&'static str> {
+    let why = entry.why()?.trim();
+    [("summary", &record.summary), ("claim", &record.claim)]
+        .into_iter()
+        .find(|(_, text)| text.trim() == why)
+        .map(|(field, _)| field)
+}
+
 /// Hold `[decide]` to the catalog this binary carries, into `report`.
 ///
-/// Every id must be a live record, every adopted pair that one names in
+/// Every id must be a live record, no adoption's `why` may copy the record's
+/// text, every adopted pair that one names in
 /// `conflicts_with` must carry exactly one order, and every order must be over
 /// such a pair. An adopted conflict with no order is two answers to one
 /// question, which is the thing an order exists to remove; an order over
@@ -1118,13 +1130,21 @@ fn decided(report: &mut Report, decide: &Decide) -> Result<()> {
     let mut failures = Vec::new();
     let known = catalog::ids()?.len();
     let mut adopted: BTreeMap<&str, &catalog::Record> = BTreeMap::new();
-    for id in decide.adopt.iter().map(Adopt::id) {
+    for entry in &decide.adopt {
+        let id = entry.id();
         match catalog::get(id)? {
             None => failures.push(format!("adopt: {}", catalog::unknown(id, known))),
             Some(record) if record.deprecated() => failures.push(format!(
                 "adopt: {id:?} is deprecated; the catalog keeps it for redirects only"
             )),
             Some(record) => {
+                if let Some(copied) = copied_field(entry, record) {
+                    failures.push(format!(
+                        "adopt: {id:?} has a `why` that is the record's `{copied}`. The \
+                         catalog already says what the record holds; `why` says why this \
+                         repository adopts it"
+                    ));
+                }
                 adopted.insert(id, record);
             }
         }
