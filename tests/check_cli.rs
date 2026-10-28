@@ -1612,6 +1612,96 @@ fn a_malformed_decide_table_is_two() {
 }
 
 #[test]
+fn an_adopt_entry_with_a_why_prints_it_beside_the_id() {
+    let output = check(
+        &decide_fixture(
+            "[decide]\nadopt = [\n    \"economy-of-mechanism\",\n    \
+             { id = \"unix-composability\", why = \"every gate here is a separate command\" },\n]\n",
+        ),
+        &[],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let printed = stdout(&output);
+    assert!(printed.contains("adopted 2 record(s)"), "{printed}");
+    assert!(printed.contains("\n  economy-of-mechanism\n"), "{printed}");
+    assert!(
+        printed.contains("\n  unix-composability: every gate here is a separate command\n"),
+        "{printed}"
+    );
+}
+
+#[test]
+fn the_json_report_keeps_each_adopt_entry_in_its_written_form() {
+    let output = check(
+        &decide_fixture(
+            "[decide]\nadopt = [\"economy-of-mechanism\", \
+             { id = \"unix-composability\", why = \"separate commands\" }]\n",
+        ),
+        &["--json"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report.pointer("/decide/adopt/0").unwrap(),
+        "economy-of-mechanism"
+    );
+    assert_eq!(
+        report.pointer("/decide/adopt/1/why").unwrap(),
+        "separate commands"
+    );
+}
+
+#[test]
+fn an_adopt_entry_of_the_wrong_shape_is_two_and_named() {
+    for (entry, says) in [
+        (
+            "{ id = \"economy-of-mechanism\", why = \"  \" }",
+            "\"economy-of-mechanism\" has a blank `why`",
+        ),
+        (
+            "{ id = \"economy-of-mechanism\", because = \"small\" }",
+            "unknown field `because`",
+        ),
+        ("1", "expected a record id, or a table `{ id, why }`"),
+    ] {
+        let decide = format!("[decide]\nadopt = [{entry}]\n");
+        let output = check(&decide_fixture(&decide), &[]);
+        assert_eq!(code(&output), 2, "{decide}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains(says),
+            "{decide}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+/// Whether a `why` copies the record is a question about the catalog this
+/// binary carries, so `uphold check` answers it at exit 1, as it does an
+/// unknown id; the policy still loads for every other command.
+#[test]
+fn an_adopt_why_that_copies_the_record_is_one() {
+    // `economy-of-mechanism`'s own text, copied.
+    let summary = "Keep a protection mechanism small and simple enough that every path through \
+                   it can be inspected and tested.";
+    let claim = "A mechanism whose errors stay invisible in normal use must be small and simple \
+                 enough to verify completely, because its flaws surface only under the attack or \
+                 accident it exists to stop.";
+    for (text, field) in [(summary, "summary"), (claim, "claim")] {
+        let decide =
+            format!("[decide]\nadopt = [{{ id = \"economy-of-mechanism\", why = \"{text}\" }}]\n");
+        let output = check(&decide_fixture(&decide), &[]);
+        assert_eq!(code(&output), 1, "{decide}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains(&format!(
+                "adopt: \"economy-of-mechanism\" has a `why` that is the record's `{field}`"
+            )),
+            "{decide}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
 fn a_decide_table_in_an_inherited_file_is_two() {
     let root = workspace();
     write(
