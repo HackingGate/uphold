@@ -725,7 +725,9 @@ fn collect_range(
             crate::git::run_elsewhere(&directory, args)
         }
     };
-    for line in ask(&["diff", "--name-only", "--diff-filter=ACMR", &range])?.lines() {
+    // `T` as well: a path whose type changed -- a gitlink, a symlink -- into a
+    // regular file is new content at that path, and a scanner reads files.
+    for line in ask(&["diff", "--name-only", "--diff-filter=ACMRT", &range])?.lines() {
         let path = prefix.join(line);
         if interesting(&path) {
             out.insert(path);
@@ -742,10 +744,16 @@ fn collect_range(
             continue;
         };
         let fields: Vec<&str> = meta.split_whitespace().collect();
-        let [source_mode, destination_mode, old, new, ..] = fields[..] else {
+        let [_, destination_mode, old, new, ..] = fields[..] else {
             continue;
         };
-        if source_mode != ":160000" && destination_mode != "160000" {
+        // Only a pointer that is still a gitlink at the end of the range has a
+        // tree to read. One deleted in the range -- the submodule removed, or
+        // replaced by files tracked in its place -- points at nothing, and
+        // whatever stands at the path now is in the diff above as files.
+        // Expanding it demanded a checkout of a submodule that no longer
+        // exists and refused the push for it.
+        if destination_mode != "160000" {
             continue;
         }
         let submodule = prefix.join(path);
