@@ -1,5 +1,18 @@
 {
   "$defs": {
+    "Adopt": {
+      "anyOf": [
+        {
+          "description": "A record id.",
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/Reasoned",
+          "description": "A record id with this repository's reason for adopting it."
+        }
+      ],
+      "description": "One `[decide] adopt` entry: a record id, written alone or as `{ id, why }`.\n\nThe `why` is the consumer's fact, not the catalog's: the record says what it\nholds, and this says why this repository rules by it. It is printed by\n`uphold check` and never parsed, so it is context for a ruling and never a\ncitation in one. It is optional, where an order's is required: an adoption\nis reviewable from the record alone, an order is not.\n\nSerialized in the form it was written, so a string entry stays a string in\n`uphold check --json`."
+    },
     "Collect": {
       "description": "How this command's subjects are found.",
       "oneOf": [
@@ -45,9 +58,9 @@
       "properties": {
         "adopt": {
           "default": [],
-          "description": "Catalog record ids, each at most once.",
+          "description": "Catalog record ids, each at most once. An entry is an id, or a table\n`{ id, why }` whose `why` is this repository's reason for adopting it.",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/Adopt"
           },
           "type": "array"
         },
@@ -378,6 +391,23 @@
           "type": "string"
         }
       ]
+    },
+    "Reasoned": {
+      "additionalProperties": false,
+      "description": "The table form of an adopt entry.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "why": {
+          "description": "Why this repository adopts the record, in its own words. Refused when\nblank, or when it is the record's `summary` or `claim` copied.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
     },
     "Remote": {
       "additionalProperties": false,

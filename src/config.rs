@@ -731,13 +731,87 @@ impl Stop {
 #[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Decide {
-    /// Catalog record ids, each at most once.
+    /// Catalog record ids, each at most once. An entry is an id, or a table
+    /// `{ id, why }` whose `why` is this repository's reason for adopting it.
     #[serde(default)]
-    pub adopt: Vec<String>,
+    pub adopt: Vec<Adopt>,
     /// `[[decide.order]]`: one per pair of adopted records that names the
     /// other in `conflicts_with`.
     #[serde(default)]
     pub order: Vec<Order>,
+}
+
+/// One `[decide] adopt` entry: a record id, written alone or as `{ id, why }`.
+///
+/// The `why` is the consumer's fact, not the catalog's: the record says what it
+/// holds, and this says why this repository rules by it. It is printed by
+/// `uphold check` and never parsed, so it is context for a ruling and never a
+/// citation in one. It is optional, where an order's is required: an adoption
+/// is reviewable from the record alone, an order is not.
+///
+/// Serialized in the form it was written, so a string entry stays a string in
+/// `uphold check --json`.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub(crate) enum Adopt {
+    /// A record id.
+    Id(String),
+    /// A record id with this repository's reason for adopting it.
+    Reasoned(Reasoned),
+}
+
+/// The table form of an adopt entry.
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Reasoned {
+    pub id: String,
+    /// Why this repository adopts the record, in its own words. Refused when
+    /// blank, or when it is the record's `summary` or `claim` copied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+}
+
+impl Adopt {
+    pub(crate) fn id(&self) -> &str {
+        match self {
+            Self::Id(id) | Self::Reasoned(Reasoned { id, .. }) => id,
+        }
+    }
+
+    pub(crate) fn why(&self) -> Option<&str> {
+        match self {
+            Self::Id(_) => None,
+            Self::Reasoned(reasoned) => reasoned.why.as_deref(),
+        }
+    }
+}
+
+/// Written by hand rather than `#[serde(untagged)]`, whose only error is "did
+/// not match any variant": a table with a misspelt key must be told which key,
+/// as every other table in the policy is.
+impl<'de> Deserialize<'de> for Adopt {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Adopt;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a record id, or a table `{ id, why }`")
+            }
+            fn visit_str<E: serde::de::Error>(self, id: &str) -> std::result::Result<Adopt, E> {
+                Ok(Adopt::Id(id.to_owned()))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> std::result::Result<Adopt, A::Error> {
+                Reasoned::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map(Adopt::Reasoned)
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
 }
 
 /// One `[[decide.order]]`: where `prefer` and `over` disagree, the answer
@@ -754,12 +828,32 @@ pub(crate) struct Order {
 impl Decide {
     fn validate(&self) -> std::result::Result<(), String> {
         let mut seen = BTreeSet::new();
-        for id in &self.adopt {
+        for entry in &self.adopt {
+            let id = entry.id();
             if id.trim().is_empty() {
                 return Err("`[decide] adopt` holds a blank id".to_owned());
             }
-            if !seen.insert(id.as_str()) {
+            if !seen.insert(id) {
                 return Err(format!("`[decide] adopt` names {id:?} twice"));
+            }
+            let Some(why) = entry.why() else { continue };
+            if why.trim().is_empty() {
+                return Err(format!(
+                    "`[decide] adopt` entry {id:?} has a blank `why`. Give this repository's \
+                     reason for adopting it, or write the id alone"
+                ));
+            }
+            // An id the catalog lacks is `uphold check`'s to report, at exit 1.
+            if let Some(record) = crate::catalog::get(id).map_err(|error| error.to_string())? {
+                for (field, text) in [("summary", &record.summary), ("claim", &record.claim)] {
+                    if why.trim() == text.trim() {
+                        return Err(format!(
+                            "`[decide] adopt` entry {id:?} has a `why` that is the record's \
+                             `{field}`. The catalog already says what the record holds; `why` \
+                             says why this repository adopts it"
+                        ));
+                    }
+                }
             }
         }
         for order in &self.order {

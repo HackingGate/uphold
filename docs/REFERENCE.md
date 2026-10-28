@@ -4585,7 +4585,11 @@ the repository's own policy:
 ```toml
 # policy/principles.toml
 [decide]
-adopt = ["unix-composability", "defense-in-depth", "economy-of-mechanism"]
+adopt = [
+    { id = "unix-composability", why = "every gate here is a command a script can run" },
+    "defense-in-depth",
+    "economy-of-mechanism",
+]
 
 [[decide.order]]
 prefer = "defense-in-depth"
@@ -4598,7 +4602,13 @@ over = "defense-in-depth"
 why = "Each layer is a separate command that can be run and tested alone."
 ```
 
-`adopt` is catalog ids. Every pair of adopted records that names the other in
+`adopt` is catalog ids. An entry is the id alone, or a table `{ id, why }`
+whose `why` is this repository's reason for adopting the record; both forms
+mix in one list. The record says what it holds and is the same text for every
+consumer, so the reason belongs to the consumer. `why` is optional, where an
+order's is required, because an adoption is reviewable from the record alone.
+It is printed and never parsed: a ruling cites the records and the orders, and
+reads an adoption's `why` as context. Every pair of adopted records that names the other in
 `conflicts_with` takes exactly one `[[decide.order]]`: `prefer` is the record
 whose answer wins where the two disagree, `over` the one it wins over, and `why`
 the reason, for whoever reviews the order. `conflicts_with` is symmetric, so
@@ -4610,7 +4620,7 @@ what a repository rules by is one command:
 
 ```text
 adopted 3 record(s) for design rulings ([decide]):
-  unix-composability
+  unix-composability: every gate here is a command a script can run
   defense-in-depth
   economy-of-mechanism
   order  defense-in-depth over economy-of-mechanism: A second control is ...
@@ -4623,6 +4633,8 @@ order, an order naming a record the repository does not adopt, an order over two
 records that do not conflict, and a second order over a pair already ordered.
 Exit `2`, at load and so from every command that reads the policy, for a table
 whose shape is wrong: an unknown key, an `order` missing `prefer`, `over` or
-`why` or holding a blank one, an id adopted twice, and `[decide]` in a bundled
+`why` or holding a blank one, an id adopted twice, an adopt table with a key
+other than `id` and `why`, a blank `why` on one, or a `why` that is the
+record's `summary` or `claim` copied, and `[decide]` in a bundled
 set or an `inherit.paths` file, since which records a repository rules by is
 that repository's own declaration. `uphold schema` describes the table.

@@ -15,6 +15,9 @@ must be traceable to them.
 Run `uphold check --json` from the repository root and read `decide`:
 
 - `adopt` is the record ids the repository answers design questions from.
+  An entry may be a table `{id, why}` instead of an id. Its `why` is the
+  repository's reason for adopting the record: context for reading the
+  record's scope, never a citation, and never a ground for an answer.
 - `order` is one `{prefer, over, why}` per adopted pair that conflicts.
 
 If `uphold check` exits 1 with `design rulings refused ([decide])`, escalate

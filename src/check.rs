@@ -31,7 +31,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog;
-use crate::config::{Decide, Policy};
+use crate::config::{Adopt, Decide, Policy};
 use crate::error::{Exit, Fatal, Result, verdict};
 
 const DECLARATION: &str = "policy/upheld.toml";
@@ -1090,8 +1090,11 @@ fn report_human(report: &Report) -> Result<Exit> {
             "adopted {} record(s) for design rulings ([decide]):",
             report.decide.adopt.len()
         );
-        for id in &report.decide.adopt {
-            println!("  {id}");
+        for entry in &report.decide.adopt {
+            match entry.why() {
+                Some(why) => println!("  {}: {why}", entry.id()),
+                None => println!("  {}", entry.id()),
+            }
         }
         for order in &report.decide.order {
             println!(
@@ -1115,14 +1118,14 @@ fn decided(report: &mut Report, decide: &Decide) -> Result<()> {
     let mut failures = Vec::new();
     let known = catalog::ids()?.len();
     let mut adopted: BTreeMap<&str, &catalog::Record> = BTreeMap::new();
-    for id in &decide.adopt {
+    for id in decide.adopt.iter().map(Adopt::id) {
         match catalog::get(id)? {
             None => failures.push(format!("adopt: {}", catalog::unknown(id, known))),
             Some(record) if record.deprecated() => failures.push(format!(
                 "adopt: {id:?} is deprecated; the catalog keeps it for redirects only"
             )),
             Some(record) => {
-                adopted.insert(id.as_str(), record);
+                adopted.insert(id, record);
             }
         }
     }

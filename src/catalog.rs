@@ -211,6 +211,12 @@ pub(crate) struct Record {
     pub id: String,
     #[serde(default)]
     pub status: String,
+    /// Read so `[decide]` can refuse an adoption `why` that copies it.
+    #[serde(default)]
+    pub summary: String,
+    /// As `summary`.
+    #[serde(default)]
+    pub claim: String,
     #[serde(default)]
     pub enforcement: Enforcement,
     /// Symmetric, as `scripts/validate.py` holds it: an adopted pair in it is
