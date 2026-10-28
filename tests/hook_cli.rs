@@ -1339,9 +1339,9 @@ fn stop_waits_for_a_baseline_that_is_still_being_written() {
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(1));
             let baseline = r#"{"ran":[["test","!","-e","red"]],"red":[["test","!","-e","red"]]}"#;
-            // Renamed into place, as `SessionStart` writes it: written in
-            // place, the file exists empty for an instant, and a Stop polling
-            // for it can read that instant as an unreadable baseline.
+            // Renamed into place, as `SessionStart` writes it. Written in
+            // place instead, the file exists empty for an instant, and a Stop
+            // polling for it can read that instant as an unreadable baseline.
             let partial = directory.join("s-wait.json.partial");
             std::fs::write(&partial, baseline).unwrap();
             std::fs::rename(&partial, directory.join("s-wait.json")).unwrap();
