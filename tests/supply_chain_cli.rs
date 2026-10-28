@@ -1387,6 +1387,58 @@ fn a_submodule_that_is_not_checked_out_is_refused_rather_than_widened() {
     assert!(said.contains("sub"), "{said}");
 }
 
+/// A submodule folded into the superproject is files, not a moved pointer.
+///
+/// The gitlink is deleted and the member's tree is tracked at the same path,
+/// which is how a repository is merged into its superproject with its history.
+/// The pointer then points at nothing, so there is no member checkout to read
+/// and none was asked for -- the push was refused for one, naming a
+/// submodule that no longer exists. What stands at the path now is the
+/// superproject's own files, and the lockfile among them is what gets scanned.
+#[test]
+fn a_submodule_replaced_by_its_own_files_is_scanned_as_files() {
+    let root = tracked();
+    with_a_submodule(&root);
+    let before = head(&root);
+    support::git(&root, &["rm", "-q", "--cached", "sub"]);
+    support::git(&root, &["rm", "-q", "-f", ".gitmodules"]);
+    std::fs::remove_dir_all(root.join("sub")).unwrap();
+    write(
+        &root,
+        "sub/uv.lock",
+        "version = 1\n# now the superproject's own\n",
+    );
+    let after = commit(&root, "fold the member in");
+    let tools = stubs(&[
+        ("osv-scanner", &recording("exit 0")),
+        ("uv", &recording("echo 'requests==2.0.0'")),
+    ]);
+    let output = pushed(&root, &tools, &before, &after);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let said = text(&output);
+    assert!(!said.contains("not checked out"), "{said}");
+    assert!(said.contains("1 lockfile(s) in this range"), "{said}");
+}
+
+/// A submodule removed outright leaves nothing in the range to read.
+///
+/// The pointer is gone and nothing replaces it, so the range adds no manifest.
+/// Demanding a checkout of the removed member would refuse every push that
+/// drops a dependency, which is the push least likely to add a risk.
+#[test]
+fn a_removed_submodule_needs_no_checkout() {
+    let root = tracked();
+    with_a_submodule(&root);
+    let before = head(&root);
+    support::git(&root, &["rm", "-q", "-f", "sub"]);
+    let after = commit(&root, "drop the member");
+    let tools = stubs(&[("osv-scanner", &recording("exit 0"))]);
+    let output = pushed(&root, &tools, &before, &after);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    let said = text(&output);
+    assert!(!said.contains("not checked out"), "{said}");
+}
+
 /// cargo-vet's finding and cargo-vet's refusal to start share exit 255.
 ///
 /// A dependency carrying no audit and a store that does not parse are the same
