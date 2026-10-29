@@ -179,10 +179,14 @@ jobs:
     # survives; running it once per runner here would build the tree
     # instrumented three more times to answer the same question. The Kani
     # proofs are skipped for the same reason, and have a job of their own below.
+    # So are the engine's tests and clippy, which the `engine` job runs on the
+    # same commit: ubuntu-slim cancels a job at its time cap, and building the
+    # test binaries a second time on its one CPU is what pushed the pre-commit
+    # leg past it. Their hook entries still run at every local pre-push.
     # What this job asks is whether each runner can DRIVE the configuration,
     # and the hooks left in it answer that.
     env:
-      SKIP: coverage,kani
+      SKIP: coverage,kani,engine-tests,engine-clippy
       # The private-name guards ask the forge whether a name is a private
       # repository, and they ask through `gh`. With no token `gh` answers
       # nothing -- and until an unaskable forge became its own state, that was
