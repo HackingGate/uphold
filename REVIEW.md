@@ -506,12 +506,14 @@ Each authoritative fact should have one explicitly designated ownership and upda
 - Conflicting updates would be materially expensive or unsafe.
 - A responsible owner can be assigned at an appropriate domain boundary.
 - One fact arrives in several spellings, such as case, encoding, or path form, and is normalized to one canonical form at the boundary so that two copies can be compared for equality.
+- Text shown to readers, such as documentation, help text, a message, or a footnote, restates facts another party owns, such as a vendor's documented behavior.
 
 **Ask**
 - Which component owns the canonical meaning and writes?
 - Can every copy explain its source and refresh policy?
 - What happens when the authority is unavailable?
 - Is there exactly one writer for this fact, and what stops a second component from writing it?
+- Where text shown to readers restates another party's facts, does it name the source, and does it say anything as that source's fact which the source does not say?
 
 ## Unix Composability
 Prefer small, focused mechanisms connected through stable, inspectable interfaces so that complex behavior can be assembled rather than embedded in one indivisible program.
