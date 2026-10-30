@@ -267,6 +267,24 @@
       "path": "principles/chestertons-fence.toml"
     },
     {
+      "name": "Choose what is current, not what is inherited",
+      "key": "choose what is current not what is inherited",
+      "tokens": [
+        "choose",
+        "what",
+        "is",
+        "current",
+        "not",
+        "what",
+        "is",
+        "inherited"
+      ],
+      "field": "alias",
+      "id": "current-stack",
+      "title": "Current Stack",
+      "path": "principles/current-stack.toml"
+    },
+    {
       "name": "Cohesion and coupling",
       "key": "cohesion and coupling",
       "tokens": [
@@ -445,6 +463,18 @@
       "path": "principles/conways-law.toml"
     },
     {
+      "name": "Current Stack",
+      "key": "current stack",
+      "tokens": [
+        "current",
+        "stack"
+      ],
+      "field": "title",
+      "id": "current-stack",
+      "title": "Current Stack",
+      "path": "principles/current-stack.toml"
+    },
+    {
       "name": "Data Minimization",
       "key": "data minimization",
       "tokens": [
@@ -568,6 +598,25 @@
       "id": "explicit-unknown",
       "title": "Explicit Unknown",
       "path": "principles/explicit-unknown.toml"
+    },
+    {
+      "name": "Do not keep a choice because it was there",
+      "key": "do not keep a choice because it was there",
+      "tokens": [
+        "do",
+        "not",
+        "keep",
+        "a",
+        "choice",
+        "because",
+        "it",
+        "was",
+        "there"
+      ],
+      "field": "alias",
+      "id": "current-stack",
+      "title": "Current Stack",
+      "path": "principles/current-stack.toml"
     },
     {
       "name": "Do not reinvent the wheel",
@@ -1045,6 +1094,20 @@
       "id": "high-cohesion-low-coupling",
       "title": "High Cohesion, Low Coupling",
       "path": "principles/high-cohesion-low-coupling.toml"
+    },
+    {
+      "name": "Judge the stack afresh",
+      "key": "judge the stack afresh",
+      "tokens": [
+        "judge",
+        "the",
+        "stack",
+        "afresh"
+      ],
+      "field": "alias",
+      "id": "current-stack",
+      "title": "Current Stack",
+      "path": "principles/current-stack.toml"
     },
     {
       "name": "Keep it simple",

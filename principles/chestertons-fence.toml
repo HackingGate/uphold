@@ -13,7 +13,7 @@ does_not_mean = ["Keep everything whose purpose nobody can recover; after a boun
 benefits = ["Latent protections are not removed by accident.", "Removals leave evidence of intent in history.", "Unwritten knowledge is surfaced and written down at the moment it is needed."]
 costs = ["Cleanup slows while purposes are researched.", "Some purposes are unrecoverable, and the search has no natural end.", "Obsolete code accumulates when every removal must be justified at length."]
 failure_when_overapplied = ["Nothing is ever removed, and the system accumulates controls nobody understands and everyone is afraid to touch.", "The stated reason becomes a formula such as 'no longer needed' that satisfies the check while carrying no evidence.", "Removal waits on an author who has left, when a staged removal with monitoring would answer the question sooner.", "Only removals carry the burden, while additions without a stated purpose keep building new fences."]
-conflicts_with = []
+conflicts_with = ["current-stack"]
 related = ["reversible-decisions", "observability", "hyrums-law", "deprecation-discipline"]
 review_questions = ["What did the removed thing prevent or provide, and where is that written?", "If its purpose could not be found, what was searched, and what would show that the removal was wrong?", "Is the purpose now served elsewhere, and does that place carry a test?", "Could a reader who meets the old failure again find this removal from the history alone?"]
 

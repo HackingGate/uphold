@@ -58,6 +58,10 @@ const RECORDS: &[(&str, &str)] = &[
         include_str!("../principles/conways-law.toml"),
     ),
     (
+        "current-stack",
+        include_str!("../principles/current-stack.toml"),
+    ),
+    (
         "data-minimization",
         include_str!("../principles/data-minimization.toml"),
     ),
