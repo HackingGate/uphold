@@ -1,0 +1,55 @@
+id = "current-stack"
+title = "Current Stack"
+aliases = ["Judge the stack afresh", "Choose what is current, not what is inherited", "Do not keep a choice because it was there"]
+kind = "principle"
+status = "seed"
+domains = ["architecture", "evolution"]
+summary = "When a design picks a language, runtime, framework, library, toolchain, or service, pick what is current and maintained today, judged afresh against the need; do not keep a choice only because it was already there."
+claim = "Each choice of language, runtime, framework, library, toolchain, or service is made on today's evidence of fit and upkeep, and a choice carried forward from an earlier design needs a reason that holds now; that it was already in use is not one."
+problem = "A stack is inherited and then extended. The runtime is past its support window, the framework's maintainers have moved on, the toolchain is two majors behind, and each new component is chosen to match the old ones. Nobody decided to rely on any of it; the choice was made once, in a different year, and every later design copied it."
+rationale = "A choice is evidence about the options available when it was made, and the options, the maintenance of each, and the project's needs have changed since. People weigh the existing option more heavily than an equal alternative, and weigh what is already spent on it as a reason to stay, so left alone the default drifts toward the inherited stack whatever its merits. Asking the question afresh at each design turns the inheritance into a candidate that has to win on current evidence, beside the others."
+applies_when = ["A design or change picks a language, runtime, framework, library, toolchain, or hosted service, including by extending an existing one.", "The incumbent choice is chosen in the proposal because other parts already use it, not because of what it offers now.", "The incumbent is past its support window, is no longer maintained, or no longer receives security fixes.", "A newer option has a maintained release line and a migration path whose cost can be estimated."]
+does_not_mean = ["Adopt the newest release or the newest tool; current means maintained and in use by its community today, and a version released last week has no such record.", "Rewrite working code to follow fashion; the incumbent keeps its place when it is still maintained and still fits, and the record says so.", "Remove what exists without finding out why it is there; the purpose of an inherited guard or choice is learned before it is dropped.", "Treat an inherited choice as a fault; judged afresh, it often wins, and then it is chosen and not merely kept.", "Choose several stacks, one per component; every new kind of technology has a cost in people who can run it, and a choice made afresh counts that cost."]
+benefits = ["Choices rest on present evidence of support and fit, so end-of-life components are found at design time and not in an incident.", "Security fixes and platform support arrive from upstream instead of being carried locally.", "The reasons for a stack are written down where a later reader can test them."]
+costs = ["Every design repeats an evaluation that inheriting would have skipped.", "Moving to a different option costs migration work, and the new option's pitfalls are not yet known to the team.", "A stack of mixed vintage is harder to operate than a uniform old one until the move finishes."]
+failure_when_overapplied = ["The stack changes with each design, and no component lives long enough for anyone to learn it.", "Novelty is mistaken for currency, and an unproven tool replaces a maintained one.", "Migrations are started for components that are maintained and fit, consuming the effort the product needed.", "The judgment is repeated so often that decisions are never closed, and every review reopens the language."]
+conflicts_with = ["chestertons-fence"]
+related = ["reuse-maintained-components", "deprecation-discipline", "reversible-decisions", "follow-published-standards"]
+review_questions = ["Which language, runtime, framework, library, toolchain, or service does this design choose, and is each maintained today, judged by its release history, support window, and advisories?", "Where the choice is the one already in use, what current reason supports it other than that it was there?", "What would it cost to move to the alternative, and is that cost smaller or larger than the cost of staying put as the incumbent ages?", "Is the reason for the choice written where a later reader will find it, with the date it was judged?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+rung = ["text", "semantic"]
+observable = ["Versions of runtimes, toolchains, and dependencies in manifests and lock files, and the support status the publisher gives each release.", "Dependencies and runtimes that the publisher marks end-of-life or that carry an open advisory.", "A design or change description that names the stack choices it makes and the reason for each."]
+checks = ["Flag a runtime, toolchain, or dependency whose release the publisher lists as past its support window, naming the supported release line.", "Report a dependency that has received no release in a stated period and whose repository is marked archived.", "Require a change that adds a component to state, beside it, why this component was chosen, and refuse an empty reason."]
+limits = ["Whether an option fits the need is a judgment, and a version number says nothing about it.", "A support window is the publisher's claim, and a tool reads the published date, not whether the community still maintains the project.", "A tool cannot tell a choice judged afresh from an old choice with a new sentence beside it."]
+
+[[tools]]
+name = "endoflife.date"
+url = "https://endoflife.date/"
+notes = "Publishes release and end-of-life dates for runtimes, frameworks, and operating systems, with an API; one way to observe whether a pinned version is still supported."
+
+[[sources]]
+title = "Status Quo Bias in Decision Making"
+url = "https://doi.org/10.1007/BF00055564"
+type = "paper"
+notes = "Samuelson and Zeckhauser, Journal of Risk and Uncertainty 1(1), 1988. Experiments and field data showing that decision makers favour the status quo option out of proportion to its merits; the drift this record's rationale names."
+
+[[sources]]
+title = "The Psychology of Sunk Cost"
+url = "https://doi.org/10.1016/0749-5978(85)90049-4"
+type = "paper"
+notes = "Arkes and Blumer, Organizational Behavior and Human Decision Processes 35(1), 1985. Prior investment makes people continue a course they would not now choose; the reason an inherited stack is not a reason for the next design."
+
+[[sources]]
+title = "Choose Boring Technology"
+url = "https://boringtechnology.club/"
+type = "essay"
+notes = "McKinley, 2015. The counterweight this record's does_not_mean carries: a team has a limited budget for new technology, and each new kind of component has a cost beyond its features."
+
+[[sources]]
+title = "OWASP Top 10:2021 A06 Vulnerable and Outdated Components"
+url = "https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/"
+type = "documentation"
+notes = "Names unsupported, out-of-date, and unmaintained components as a security risk, and a missing process for keeping versions current as the cause."

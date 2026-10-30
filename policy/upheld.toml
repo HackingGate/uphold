@@ -266,6 +266,11 @@ catches = "Move principles/ and scripts/validate.py into a separate repository r
 misses = "Add a CODEOWNERS entry that names the people who write records as reviewers for principles/, leaving the directory and the build in this repository."
 
 [[review.control]]
+record = "current-stack"
+catches = "Pin rust-toolchain.toml `channel` to a release line the Rust project no longer supports, with the comment \"kept because every contributor already has it installed\" as the only reason, so the toolchain is retained for being there and not for any support it has today."
+misses = "Raise rust-toolchain.toml `channel` from `stable` to an explicit current release number, with a comment saying the number is the supported line on the date the pin was written."
+
+[[review.control]]
 record = "defense-in-depth"
 catches = "Delete the \"The policy over its own tree\" step from the scan engine job in .github/workflows/test.yml because the uphold-scan command in hooks/lefthook.yml already runs `uphold scan` on every commit, so a commit made with --no-verify is no longer scanned anywhere."
 misses = "Move the \"The policy over its own tree\" step in .github/workflows/test.yml ahead of `cargo test --locked` so a policy failure is reported first, keeping both steps."

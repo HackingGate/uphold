@@ -71,6 +71,21 @@ Any organization that designs a system will produce a design whose structure is 
 - Did a recent reorganization change communication paths this design assumes?
 - Is a team change being proposed in order to reshape the architecture, and is that stated as its intent?
 
+## Current Stack
+Each choice of language, runtime, framework, library, toolchain, or service is made on today's evidence of fit and upkeep, and a choice carried forward from an earlier design needs a reason that holds now; that it was already in use is not one.
+
+**Applies when**
+- A design or change picks a language, runtime, framework, library, toolchain, or hosted service, including by extending an existing one.
+- The incumbent choice is chosen in the proposal because other parts already use it, not because of what it offers now.
+- The incumbent is past its support window, is no longer maintained, or no longer receives security fixes.
+- A newer option has a maintained release line and a migration path whose cost can be estimated.
+
+**Ask**
+- Which language, runtime, framework, library, toolchain, or service does this design choose, and is each maintained today, judged by its release history, support window, and advisories?
+- Where the choice is the one already in use, what current reason supports it other than that it was there?
+- What would it cost to move to the alternative, and is that cost smaller or larger than the cost of staying put as the incumbent ages?
+- Is the reason for the choice written where a later reader will find it, with the date it was judged?
+
 ## Defense in Depth
 Protect critical assets and actions with multiple controls that fail differently and cover prevention, detection, containment, and recovery.
 
