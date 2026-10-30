@@ -166,6 +166,11 @@
       "misses": "Change scripts/review.py's render() so the compiled document prints applies_when before the claim."
     },
     {
+      "record": "single-authoritative-source",
+      "catches": "Add to the osv-scanner bullet in docs/REFERENCE.md that osv-scanner retries a query once before it exits 127, which osv-scanner's own documentation does not say, and link no page for it.",
+      "misses": "Reflow the osv-scanner bullet in docs/REFERENCE.md onto different line breaks, keeping every exit code and the meaning given for it."
+    },
+    {
       "record": "unix-composability",
       "catches": "Make `uphold_check.py --review --emit` ask \"Overwrite REVIEW.md? [y/N]\" through input() before writing, with no flag to answer it, so a script or agent without a terminal hangs or gets an end-of-file error and the exit status is 0 either way.",
       "misses": "Make `uphold_check.py --review --emit` print a one-line summary of the files it wrote to stderr, leaving the files written and the exit status as they are."
