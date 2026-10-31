@@ -975,7 +975,7 @@ def run_review(argv: list[str]) -> int:
         except review_mod.ReviewerFailed as error:
             print(f"uphold review could not look: {error}", file=sys.stderr)
             return 2
-        print(review_mod.render_drive(results, runs), end="")
+        print(review_mod.render_drive(results, runs, reviewer), end="")
         return 0 if all(review_mod.holds(result, runs) for result in results) else 1
 
     if printing:
@@ -1114,7 +1114,12 @@ def drive_rulings(driving: dict, settings: dict, report: dict, records: dict) ->
     agree = driving["agree"]
     print(
         review_mod.render_rulings(
-            results, driving["runs"], agree, seed, auditor_command is not None
+            results,
+            driving["runs"],
+            agree,
+            seed,
+            driving["command"],
+            auditor_command,
         ),
         end="",
     )

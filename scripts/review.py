@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 import random
 import re
+import shlex
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -453,8 +454,12 @@ def holds(result: dict, runs: int) -> bool:
     return result["caught"] == runs and not result["fired"]
 
 
-def render_drive(results: list[dict], runs: int) -> str:
-    """One line per control, then pass@1 and pass^k over all of them.
+def render_drive(results: list[dict], runs: int, reviewer: list[str]) -> str:
+    """The reviewer, one line per control, then pass@1 and pass^k over all.
+
+    The reviewer command comes first, as run: a score pasted on its own is a
+    copy of this run, and the command is the source that copy has to name. Two
+    reviewers scoring the same would otherwise print the same text.
 
     pass@1 is the mean share of runs that caught the plant: what one review
     would be expected to do. pass^k is the share of controls caught on every
@@ -462,7 +467,7 @@ def render_drive(results: list[dict], runs: int) -> str:
     it. Both are printed because a reviewer can score well on the first and
     still be a coin toss on the second.
     """
-    lines = []
+    lines = [f"reviewer: {shlex.join(reviewer)}"]
     for result in results:
         fired = result["fired"]
         quiet = (
@@ -817,10 +822,22 @@ def ruling_holds(result: dict, agree: int) -> bool:
 
 
 def render_rulings(
-    results: list[dict], runs: int, agree: int, seed: int, audited: bool
+    results: list[dict],
+    runs: int,
+    agree: int,
+    seed: int,
+    ruler: list[str],
+    auditor: list[str] | None,
 ) -> str:
-    """One line per control, then pass@1 and pass^k, and the seed to rerun it."""
-    lines = [f"seed {seed} (pass --seed {seed} to shuffle the options the same way)"]
+    """The ruler and auditor as run, the seed to rerun, one line per control,
+    then pass@1 and pass^k."""
+    lines = [f"ruler: {shlex.join(ruler)}"]
+    if auditor is not None:
+        lines.append(f"auditor: {shlex.join(auditor)}")
+    lines.append(
+        f"seed {seed} (pass --seed {seed} to shuffle the options the same way)"
+    )
+    audited = auditor is not None
     for result in results:
         verdict = "holds" if ruling_holds(result, agree) else "DOES NOT HOLD"
         question = result["question"].splitlines()[0][:72]

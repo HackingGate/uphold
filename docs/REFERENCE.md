@@ -4574,10 +4574,16 @@ violation. It is never told which record was planted.
 Each control runs `N` times on each side (default 3):
 
 ```text
+reviewer: ./my-reviewer --model x
 single-authoritative-source: caught 3/3, misses fired 0/3 -- holds
 pass@1 1.00; pass^3 1/1 control(s)
 false positives 0.00 over 1 control(s) with a misses
 ```
+
+The first line is the reviewer command as run, quoted the way a shell would
+read it, so a score pasted on its own still says what produced it: two
+reviewers scoring the same print different reports. Keep a key in the
+environment, not in the command, because the command is printed.
 
 A control holds when every run named the record against `catches` and none
 named it against `misses`. pass@1 is the mean share of runs that caught their
@@ -4637,6 +4643,8 @@ closest-precedent step is not scored: the document carries no issue history,
 so a precedent a ruler named could not be checked.
 
 ```text
+ruler: ./my-ruler --model x
+auditor: ./my-auditor
 seed 3 (pass --seed 3 to shuffle the options the same way)
 Should the command prompt when stdin is not a terminal?: ruled '(b) refuse ...', held 3/3 (agree 3), audited 1 (0 unsupported) -- holds
   given: '(b) refuse with a non-zero exit', '(b) refuse with a non-zero exit', '(b) refuse with a non-zero exit'
