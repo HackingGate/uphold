@@ -172,9 +172,10 @@ command.before = ["gh"]
 command.scope = "always"
 
 # A citation of a numbered standard or an identifier -- an RFC, an
-# Internet-Draft, a BCP or STD, a CVE, a CWE, a GHSA, a DOI, an arXiv id --
-# links to what it cites, and an RFC or draft section cited links to that
-# section. Read from a closed table of families compiled into the binary, so
+# Internet-Draft, a BCP or STD, a CVE, a CWE, a GHSA, a DOI, an arXiv id, a
+# WCAG success criterion, a PEP, a Unicode report -- links to what it cites,
+# and a section cited links to that section as far as the family's anchors
+# can be told from the citation. Read from a closed table of families compiled into the binary, so
 # a family added is a row and not a policy regular expression; no link is
 # fetched, because the section anchors follow from the number. `gh` alone, as
 # above: a pull-request or issue body is where a citation is published.

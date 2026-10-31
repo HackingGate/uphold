@@ -12,11 +12,13 @@
 //! section ends with. The rows are data compiled into the binary: a family
 //! added is a row, never a second built-in.
 //!
-//! EACH FAMILY IS HELD TO THE STRONGEST CHECK ITS LINKS ALLOW. A Section row
-//! checks that the link is to that document and, when a section is cited, to
-//! that section. A Record row checks that the link is to that record. Which
-//! class a row is follows from what its links can carry, recorded in the
-//! design issue with the date each page was read.
+//! EACH FAMILY IS HELD TO THE STRONGEST CHECK ITS LINKS ALLOW. Every row
+//! checks that the link is to the cited document. Past that, a row's
+//! [`Locate`] says how far a cited section can be checked: to the anchor the
+//! number spells (RFC, Internet-Draft), to the prefix it spells (WCAG), to the
+//! presence of some anchor (PEP, Unicode), or not at all (a record). Which a
+//! row is follows from what its pages carry, recorded in the design issue with
+//! the date each page was read.
 //!
 //! WHAT IS READ. The text as `pulldown-cmark` parses it, the way a forge
 //! renders a body: code blocks and code spans are left out, and a link's
@@ -38,23 +40,54 @@ use regex::Regex;
 use crate::config::Rule;
 use crate::guard::Refusal;
 
-/// How far a family's links let a check go.
+/// How a cited section becomes the fragment a link to it must carry, which
+/// is how far a family's links let a check go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Class {
-    /// Linked, to that document, and to the cited section.
-    Section,
-    /// Linked, to that record.
-    Record,
+enum Locate {
+    /// Nothing past the document: a record, whose id names one page.
+    Nothing,
+    /// `#section-<s>` or `#appendix-<X>`, or a paragraph of it, from the
+    /// number: the RFC series' anchors.
+    Numbered,
+    /// A fragment beginning `#x<a>-<b>-<c>-`, from a WCAG 2.1 or 2.2 success
+    /// criterion's number; the rest of the anchor is its name.
+    Criterion,
+    /// Some fragment, when a section is cited: a document whose anchors are
+    /// names, which no number can be turned into.
+    Named,
+}
+
+/// How a family's id is spelled inside its links.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Spelling {
+    /// As the citation writes it.
+    AsWritten,
+    /// Zero-padded to four digits: `PEP 8` is `pep-0008`.
+    FourDigits,
+    /// With its dots taken out: `WCAG 2.2` is `WCAG22`.
+    NoDots,
+}
+
+/// The fragment a link to a cited section must carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Anchor {
+    /// This anchor, or a paragraph of it.
+    Exact(String),
+    /// An anchor beginning with this.
+    Begins(String),
+    /// Any anchor at all.
+    Any,
 }
 
 /// One family of citations.
 struct Family {
     name: &'static str,
-    class: Class,
+    locate: Locate,
     /// Recognizes one citation. Named groups: `id`, the document id the link
     /// templates take; `version`, where a citation may state one the link
     /// must then carry; `section` and `appendix`, a cited locator.
     pattern: &'static str,
+    spelling: Spelling,
     /// The family's links to document `<id>`, matched against the whole URL
     /// with its fragment taken off. `*` is one path segment.
     links: &'static [&'static str],
@@ -74,13 +107,23 @@ macro_rules! locator {
     };
 }
 
-/// The families of the first version. The order is the order a citation is
+/// A section of a document whose anchors are names: `§` or `Section` and the
+/// word after it. Only that one is cited is read, so the word is never
+/// compared with the anchor.
+macro_rules! named_locator {
+    () => {
+        r"(?:,?[ \u{a0}]*(?P<section>§[ \u{a0}]?[^\s,;.)]+|[Ss]ection[ \u{a0}]+[^\s,;.)]+))?"
+    };
+}
+
+/// The families. The order is the order a citation is
 /// looked for in, which matters only where two rows could claim the same
 /// text; none here can.
 const FAMILIES: &[Family] = &[
     Family {
         name: "RFC",
-        class: Class::Section,
+        locate: Locate::Numbered,
+        spelling: Spelling::AsWritten,
         pattern: concat!(r"\bRFC[ \u{a0}]*(?P<id>[1-9][0-9]{0,4})\b", locator!()),
         links: &[
             "https://www.rfc-editor.org/rfc/rfc<id>.html",
@@ -91,7 +134,8 @@ const FAMILIES: &[Family] = &[
     },
     Family {
         name: "Internet-Draft",
-        class: Class::Section,
+        locate: Locate::Numbered,
+        spelling: Spelling::AsWritten,
         pattern: concat!(
             r"\b(?P<id>draft-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{2})\b",
             locator!()
@@ -102,7 +146,8 @@ const FAMILIES: &[Family] = &[
     },
     Family {
         name: "BCP",
-        class: Class::Record,
+        locate: Locate::Nothing,
+        spelling: Spelling::AsWritten,
         pattern: r"\bBCP[ \u{a0}]*(?P<id>[1-9][0-9]*)\b",
         links: &["https://www.rfc-editor.org/info/bcp<id>"],
         id_any_case: false,
@@ -110,7 +155,8 @@ const FAMILIES: &[Family] = &[
     },
     Family {
         name: "STD",
-        class: Class::Record,
+        locate: Locate::Nothing,
+        spelling: Spelling::AsWritten,
         pattern: r"\bSTD[ \u{a0}]*(?P<id>[1-9][0-9]*)\b",
         links: &["https://www.rfc-editor.org/info/std<id>"],
         id_any_case: false,
@@ -118,7 +164,8 @@ const FAMILIES: &[Family] = &[
     },
     Family {
         name: "CVE",
-        class: Class::Record,
+        locate: Locate::Nothing,
+        spelling: Spelling::AsWritten,
         pattern: r"\b(?P<id>CVE-[0-9]{4}-[0-9]{4,})\b",
         links: &[
             "https://www.cve.org/CVERecord?id=<id>",
@@ -129,7 +176,8 @@ const FAMILIES: &[Family] = &[
     },
     Family {
         name: "CWE",
-        class: Class::Record,
+        locate: Locate::Nothing,
+        spelling: Spelling::AsWritten,
         pattern: r"\bCWE-(?P<id>[1-9][0-9]*)\b",
         links: &["https://cwe.mitre.org/data/definitions/<id>.html"],
         id_any_case: false,
@@ -137,7 +185,8 @@ const FAMILIES: &[Family] = &[
     },
     Family {
         name: "GHSA",
-        class: Class::Record,
+        locate: Locate::Nothing,
+        spelling: Spelling::AsWritten,
         pattern: r"\b(?P<id>GHSA(?:-[0-9a-z]{4}){3})\b",
         links: &[
             "https://github.com/advisories/<id>",
@@ -148,7 +197,8 @@ const FAMILIES: &[Family] = &[
     },
     Family {
         name: "DOI",
-        class: Class::Record,
+        locate: Locate::Nothing,
+        spelling: Spelling::AsWritten,
         pattern: r"(?:\bdoi:[ \u{a0}]?|\b)(?P<id>10\.[0-9]{4,9}/(?:[^\s<>()\[\]]|\([^\s<>()\[\]]*\))*(?:[^\s<>()\[\].,;:!?'`]|\([^\s<>()\[\]]*\)))",
         links: &["https://doi.org/<id>"],
         id_any_case: true,
@@ -156,11 +206,48 @@ const FAMILIES: &[Family] = &[
     },
     Family {
         name: "arXiv",
-        class: Class::Record,
-        pattern: r"\barXiv:[ \u{a0}]?(?P<id>[0-9]{4}\.[0-9]{4,5})(?P<version>v[0-9]+)?\b",
+        locate: Locate::Nothing,
+        spelling: Spelling::AsWritten,
+        pattern: r"\barXiv:[ \u{a0}]*(?P<id>[0-9]{4}\.[0-9]{4,5})(?P<version>v[0-9]+)?\b",
         links: &["https://arxiv.org/abs/<id>", "https://arxiv.org/pdf/<id>"],
         id_any_case: false,
         id_suffix: "(?:v[0-9]+)?",
+    },
+    Family {
+        name: "WCAG",
+        locate: Locate::Criterion,
+        spelling: Spelling::NoDots,
+        pattern: r"\bWCAG[ \u{a0}]*(?P<id>2\.[12])[ \u{a0}]+(?:SC|[Ss]uccess [Cc]riterion)[ \u{a0}]+(?P<section>[1-4]\.[0-9]{1,2}\.[0-9]{1,2})\b",
+        links: &[
+            "https://www.w3.org/TR/WCAG<id>/",
+            "https://www.w3.org/TR/*/REC-WCAG<id>-*/",
+        ],
+        id_any_case: false,
+        id_suffix: "",
+    },
+    Family {
+        name: "PEP",
+        locate: Locate::Named,
+        spelling: Spelling::FourDigits,
+        pattern: concat!(r"\bPEP[ \u{a0}]*(?P<id>[0-9]{1,4})\b", named_locator!()),
+        links: &["https://peps.python.org/pep-<id>/"],
+        id_any_case: false,
+        id_suffix: "",
+    },
+    Family {
+        name: "Unicode",
+        locate: Locate::Named,
+        spelling: Spelling::AsWritten,
+        pattern: concat!(
+            r"\b(?:UAX|UTS)[ \u{a0}]*#(?P<id>[1-9][0-9]*)\b",
+            named_locator!()
+        ),
+        links: &[
+            "https://www.unicode.org/reports/tr<id>/",
+            "https://www.unicode.org/reports/tr<id>/tr<id>-*.html",
+        ],
+        id_any_case: false,
+        id_suffix: "",
     },
 ];
 
@@ -269,9 +356,9 @@ struct Citation {
     written: String,
     id: String,
     version: Option<String>,
-    /// The anchor a link to the cited section ends with, where a section is
-    /// cited and the family's links carry one.
-    anchor: Option<String>,
+    /// The fragment a link to the cited section must carry, where a section
+    /// is cited and the family's links can be checked for it.
+    anchor: Option<Anchor>,
     link: Option<String>,
 }
 
@@ -314,9 +401,9 @@ fn judge(citation: &Citation) -> Option<String> {
         .any(|template| links_to(template, &citation.id, family, document))
     {
         return Some(format!(
-            "links to {link}, which is not {} {}; link it to {}",
+            "links to {link}, which is not a {} link to {}; link it to {}",
             family.name,
-            citation.id,
+            citation.written,
             wanted(family, citation)
         ));
     }
@@ -328,24 +415,38 @@ fn judge(citation: &Citation) -> Option<String> {
             citation.id
         ));
     }
-    if family.class == Class::Section
-        && let Some(anchor) = &citation.anchor
-        && !fragment.is_some_and(|fragment| in_section(fragment, anchor))
-    {
-        return Some(format!(
-            "cites #{anchor} and links to {link}; link it to {document}#{anchor}"
-        ));
+    let fragment = fragment.filter(|fragment| !fragment.is_empty());
+    match &citation.anchor {
+        Some(Anchor::Exact(anchor))
+            if !fragment.is_some_and(|fragment| in_section(fragment, anchor)) =>
+        {
+            Some(format!(
+                "cites #{anchor} and links to {link}; link it to {document}#{anchor}"
+            ))
+        }
+        Some(Anchor::Begins(start))
+            if !fragment.is_some_and(|fragment| fragment.starts_with(start.as_str())) =>
+        {
+            Some(format!(
+                "cites the anchor beginning #{start} and links to {link}; link it to {document}#{start}…"
+            ))
+        }
+        Some(Anchor::Any) if fragment.is_none() => Some(format!(
+            "cites a section and links to {link}, which names none; add the section's anchor"
+        )),
+        _ => None,
     }
-    None
 }
 
 /// The links a citation should have, for its message: each of the family's
 /// links to its document, with the cited section's anchor where there is one.
 fn wanted(family: &Family, citation: &Citation) -> String {
-    let anchor = citation
-        .anchor
-        .as_ref()
-        .map_or_else(String::new, |anchor| format!("#{anchor}"));
+    let anchor = match &citation.anchor {
+        None => String::new(),
+        Some(Anchor::Exact(anchor)) => format!("#{anchor}"),
+        Some(Anchor::Begins(start)) => format!("#{start}…"),
+        Some(Anchor::Any) => String::from("#<the section's anchor>"),
+    };
     // A version the citation states is part of the link it should have.
     let linked_id = format!(
         "{}{}",
@@ -407,20 +508,34 @@ fn citations(block: &Block) -> Vec<Citation> {
             {
                 continue;
             }
-            let anchor = captures
-                .name("section")
-                .map(|section| format!("section-{}", section.as_str()))
-                .or_else(|| {
-                    captures
-                        .name("appendix")
-                        .map(|appendix| format!("appendix-{}", appendix.as_str()))
-                });
+            let Some(family) = FAMILIES.get(index) else {
+                continue;
+            };
+            let section = captures.name("section").map(|section| section.as_str());
+            let appendix = captures.name("appendix").map(|appendix| appendix.as_str());
+            let anchor = match family.locate {
+                Locate::Nothing => None,
+                Locate::Numbered => section
+                    .map(|section| format!("section-{section}"))
+                    .or_else(|| appendix.map(|appendix| format!("appendix-{appendix}")))
+                    .map(Anchor::Exact),
+                Locate::Criterion => {
+                    section.map(|number| Anchor::Begins(format!("x{}-", number.replace('.', "-"))))
+                }
+                Locate::Named => section.map(|_| Anchor::Any),
+            };
+            let written_id = id.as_str();
+            let spelled = match family.spelling {
+                Spelling::AsWritten => written_id.to_owned(),
+                Spelling::FourDigits => format!("{written_id:0>4}"),
+                Spelling::NoDots => written_id.replace('.', ""),
+            };
             found.push((
                 whole.range(),
                 Citation {
                     family: index,
                     written: whole.as_str().trim().to_owned(),
-                    id: id.as_str().to_owned(),
+                    id: spelled,
                     version: captures
                         .name("version")
                         .map(|version| version.as_str().to_owned()),
@@ -473,7 +588,7 @@ fn blank(text: &mut String, range: Range<usize>) {
 mod tests {
     use super::*;
 
-    fn read(text: &str) -> Vec<(String, Option<String>, Option<String>)> {
+    fn read(text: &str) -> Vec<(String, Option<Anchor>, Option<String>)> {
         blocks(text)
             .iter()
             .flat_map(citations)
@@ -489,7 +604,7 @@ mod tests {
             ),
             [(
                 String::from("RFC 9110 §10.2.3"),
-                Some(String::from("section-10.2.3")),
+                Some(Anchor::Exact(String::from("section-10.2.3"))),
                 Some(String::from(
                     "https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3"
                 ))
