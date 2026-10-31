@@ -1,0 +1,14 @@
+{
+  "name": "uphold",
+  "description": "uphold's hooks for Claude Code, pinned by the tag this marketplace is added at",
+  "owner": {
+    "name": "HackingGate"
+  },
+  "plugins": [
+    {
+      "name": "uphold",
+      "description": "Runs uphold hook claude-code on GitHub MCP tool calls, at session start and at the end of a turn",
+      "source": "./plugins/claude-code"
+    }
+  ]
+}

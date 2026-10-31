@@ -1,13 +1,11 @@
 {
-  "hooks": {
-    "SessionStart": [
-      {"hooks": [{"type": "command", "command": "uphold hook claude-code", "async": true}]}
-    ],
-    "Stop": [
-      {"hooks": [{"type": "command", "command": "uphold hook claude-code", "timeout": 600}]}
-    ]
-  },
   "extraKnownMarketplaces": {
+    "uphold": {
+      "source": {
+        "source": "directory",
+        "path": "."
+      }
+    },
     "ast-grep-pinned": {
       "source": {
         "source": "settings",
@@ -31,6 +29,7 @@
     }
   },
   "enabledPlugins": {
+    "uphold@uphold": true,
     "ast-grep@ast-grep-pinned": true
   }
 }

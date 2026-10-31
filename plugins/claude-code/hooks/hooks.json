@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__github__.*",
+        "hooks": [
+          {"type": "command", "command": "uphold hook claude-code", "onFailure": "block"}
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {"type": "command", "command": "uphold hook claude-code", "async": true}
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {"type": "command", "command": "uphold hook claude-code", "timeout": 900, "onFailure": "block"}
+        ]
+      }
+    ]
+  }
+}

@@ -199,6 +199,24 @@ files.exclude = ["**/tests/**", "**/test/**"]
 # that it still covers something is written where the run can check it.
 files.min_selected = 1
 
+# The Claude Code hooks have one copy, `plugins/claude-code/hooks/hooks.json`,
+# and it is the one that carries `onFailure: "block"`. A settings block pasted
+# from a page fails open, and beside the enabled plugin it runs every hook a
+# second time, because Claude Code deduplicates handlers across settings files
+# and not between a settings file and a plugin. So the pasted form is refused
+# where it would be documented and where it would be pasted in this repository.
+# A user's own `~/.claude/settings.json` is outside any repository rule.
+[rule.claude-code-hooks-come-from-the-plugin]
+message = """
+Enable the uphold plugin instead of pasting hook JSON for Claude Code:
+docs/REFERENCE.md, "Configuring it", gives the install lines and the
+.claude/settings.json form. The plugin's hooks fail closed; a pasted copy fails
+open, and beside the plugin it runs each hook twice.
+"""
+regexp = '"command"\s*:\s*"uphold hook claude-code"'
+files.glob = ["*.md", ".claude/settings*.json"]
+files.exclude = ["CHANGELOG*"]
+
 # A comment carrying no word its own code does not already name.
 #
 # The test is a subset and not a list of boring verbs: every word the comment
@@ -639,8 +657,8 @@ files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "READ
 [override.no-pinned-versioned-fetch]
 files.exclude = ["**/tests/**", "**/test/**", "**/*_test.go", "policy/**", "README.md", "third_party/**", "vendor/**", ".github/workflows/release.yml"]
 
-# What an agent's turn may not end red. `uphold hook claude-code`, configured
-# for SessionStart and Stop in .claude/settings.json, runs these at session
+# What an agent's turn may not end red. `uphold hook claude-code`, run by the
+# uphold plugin .claude/settings.json enables, runs these at session
 # start and again when the agent stops, and blocks once on a command that was
 # green when the session started. The reconcile and the Python suite, and not
 # `cargo test`: these run at the end of every turn, and a gate that adds a
