@@ -171,6 +171,20 @@ builtin = "ruling-citations-resolve"
 command.before = ["gh"]
 command.scope = "always"
 
+# A citation of a numbered standard or an identifier -- an RFC, an
+# Internet-Draft, a BCP or STD, a CVE, a CWE, a GHSA, a DOI, an arXiv id --
+# links to what it cites, and an RFC or draft section cited links to that
+# section. Read from a closed table of families compiled into the binary, so
+# a family added is a row and not a policy regular expression; no link is
+# fetched, because the section anchors follow from the number. `gh` alone, as
+# above: a pull-request or issue body is where a citation is published.
+# `command.scope = "always"`: a citation in a private repository's body
+# misleads its reader as much as one in a public one.
+[rule.citations-linked]
+builtin = "citations-linked"
+command.before = ["gh"]
+command.scope = "always"
+
 # The one question about a merge commit's subject no rule above can ask:
 # whether there is one. A bulk merge wrote ninety-five squash commits whose
 # whole subject was ` (#N)` -- an empty subject, with the forge's pull-request

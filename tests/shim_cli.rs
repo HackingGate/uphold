@@ -9600,3 +9600,184 @@ fn the_gh_seam_refuses_an_issue_body_whose_citation_does_not_resolve() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
 }
+
+// ── citations link to what they cite ────────────────────────────────
+
+const CITATIONS_POLICY: &str = r#"
+[[shim]]
+command = "faux"
+match = ["pr:*"]
+text_flags = ["-b", "--body"]
+scope = "always"
+
+[rule.citations-linked]
+builtin = "citations-linked"
+
+[rule.citations-linked.command]
+before = ["faux"]
+"#;
+
+fn cited(body: &str) -> Output {
+    let root = workspace(CITATIONS_POLICY);
+    shim(&root, &["faux", "pr", "create", "--body", body])
+}
+
+/// Per family: a citation, a correct link, and links that must be refused --
+/// to another document of the family and, for a Section row, to another
+/// section. An unlinked citation is refused for every row.
+const CITATION_ROWS: &[(&str, &str, &[&str])] = &[
+    (
+        "RFC 9110 §10.2.3",
+        "https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3",
+        &[
+            "https://www.rfc-editor.org/rfc/rfc9111.html#section-10.2.3",
+            "https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.4",
+            "https://www.rfc-editor.org/rfc/rfc9110.html",
+            "https://www.rfc-editor.org/rfc/rfc9110",
+            "https://www.rfc-editor.org/rfc/rfc9110#section-10.2.3",
+        ],
+    ),
+    (
+        "RFC 9110 §10.2.3",
+        "https://datatracker.ietf.org/doc/html/rfc9110#section-10.2.3",
+        &["https://datatracker.ietf.org/doc/html/rfc9111#section-10.2.3"],
+    ),
+    (
+        "RFC 9110 Appendix A",
+        "https://www.rfc-editor.org/rfc/rfc9110.html#appendix-A",
+        &["https://www.rfc-editor.org/rfc/rfc9110.html#appendix-B"],
+    ),
+    (
+        "RFC 9110",
+        "https://www.rfc-editor.org/rfc/rfc9110.html",
+        &["https://www.rfc-editor.org/rfc/rfc9111.html"],
+    ),
+    (
+        "draft-ietf-httpbis-cache-groups-04 §2",
+        "https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-cache-groups-04#section-2",
+        &[
+            "https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-cache-groups-03#section-2",
+            "https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-cache-groups-04#section-3",
+        ],
+    ),
+    (
+        "BCP 14",
+        "https://www.rfc-editor.org/info/bcp14",
+        &["https://www.rfc-editor.org/info/bcp15"],
+    ),
+    (
+        "STD 66",
+        "https://www.rfc-editor.org/info/std66",
+        &["https://www.rfc-editor.org/info/std67"],
+    ),
+    (
+        "CVE-2024-3094",
+        "https://www.cve.org/CVERecord?id=CVE-2024-3094",
+        &["https://www.cve.org/CVERecord?id=CVE-2024-3095"],
+    ),
+    (
+        "CVE-2024-3094",
+        "https://nvd.nist.gov/vuln/detail/CVE-2024-3094",
+        &["https://nvd.nist.gov/vuln/detail/CVE-2023-3094"],
+    ),
+    (
+        "CWE-79",
+        "https://cwe.mitre.org/data/definitions/79.html",
+        &["https://cwe.mitre.org/data/definitions/89.html"],
+    ),
+    (
+        "GHSA-jfh8-c2jp-5v3q",
+        "https://github.com/advisories/GHSA-jfh8-c2jp-5v3q",
+        &["https://github.com/advisories/GHSA-aaaa-bbbb-cccc"],
+    ),
+    (
+        "GHSA-jfh8-c2jp-5v3q",
+        "https://github.com/apache/logging-log4j2/security/advisories/GHSA-jfh8-c2jp-5v3q",
+        &["https://github.com/apache/security/advisories/GHSA-jfh8-c2jp-5v3q"],
+    ),
+    (
+        "doi:10.1145/361598.361623",
+        "https://doi.org/10.1145/361598.361623",
+        &["https://doi.org/10.1145/361598.361624"],
+    ),
+    (
+        "arXiv:1706.03762",
+        "https://arxiv.org/abs/1706.03762v7",
+        &["https://arxiv.org/abs/1706.03763"],
+    ),
+    (
+        "arXiv:1706.03762v7",
+        "https://arxiv.org/pdf/1706.03762v7",
+        &["https://arxiv.org/abs/1706.03762v6"],
+    ),
+];
+
+#[test]
+fn each_family_passes_its_own_link_and_refuses_the_wrong_one() {
+    for (citation, good, bad) in CITATION_ROWS {
+        let body = format!("Per [{citation}]({good}), this holds.");
+        let output = cited(&body);
+        assert_eq!(code(&output), 0, "{body}\n{}", stderr(&output));
+        assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
+
+        for body in std::iter::once(format!("Per {citation}, this holds.")).chain(
+            bad.iter()
+                .map(|link| format!("Per [{citation}]({link}), this holds.")),
+        ) {
+            let output = cited(&body);
+            assert_eq!(code(&output), 1, "{body}\n{}", stderr(&output));
+            assert!(
+                stderr(&output).contains("a citation does not link to what it cites"),
+                "{body}\n{}",
+                stderr(&output)
+            );
+            assert!(!stdout(&output).contains("faux ran"), "{}", stdout(&output));
+        }
+    }
+}
+
+#[test]
+fn a_bare_url_after_the_citation_is_its_link() {
+    let output = cited(
+        "RFC 9110 §10.2.3 (https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3) says so.",
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn a_reference_link_is_resolved_through_its_definition() {
+    let output = cited(
+        "See [RFC 9110 §10.2.3][retry].\n\n\
+         [retry]: https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3\n",
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let output = cited(
+        "See [RFC 9110 §10.2.3][retry].\n\n\
+         [retry]: https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.4\n",
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+}
+
+#[test]
+fn a_citation_in_code_passes_unlinked() {
+    for body in [
+        "Run `grep 'RFC 9110 §10.2.3'` here.",
+        "```text\nRFC 9110 §10.2.3\nCVE-2024-3094\n```\n",
+        "    RFC 9110 §10.2.3, indented code\n",
+    ] {
+        let output = cited(body);
+        assert_eq!(code(&output), 0, "{body}\n{}", stderr(&output));
+    }
+}
+
+#[test]
+fn the_refusal_names_the_citation_and_the_link_it_wants() {
+    let output = cited("Retry-After is in RFC 9110 §10.2.3.");
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("RFC 9110 §10.2.3: no link"), "{text}");
+    assert!(
+        text.contains("https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3 or"),
+        "{text}"
+    );
+}

@@ -171,11 +171,11 @@ page or chapter as the source numbers it:
 
 ```toml
 [[sources]]
-title = "RFC 9110: HTTP Semantics"
-url = "https://www.rfc-editor.org/rfc/rfc9110"
-locator = "§9.2.2"
-type = "standard"
-notes = "Idempotent methods."
+title = "The Protection of Information in Computer Systems"
+url = "https://doi.org/10.1109/PROC.1975.9939"
+locator = "§I.A.3"
+type = "paper"
+notes = "The eight design principles."
 ```
 
 A `seed` record may still cite a whole work. A `reviewed` record may not:

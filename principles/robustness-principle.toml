@@ -26,12 +26,12 @@ limits = ["Whether a deviation's meaning is unambiguous is a judgment about the 
 
 [[sources]]
 title = "RFC 1122: Requirements for Internet Hosts -- Communication Layers"
-url = "https://www.rfc-editor.org/rfc/rfc1122"
+url = "https://www.rfc-editor.org/rfc/rfc1122.html"
 type = "standard"
 notes = "Section 1.2.2, Robustness Principle, restates Postel's rule from the IP and TCP specifications and adds that software should expect every conceivable error from peers."
 
 [[sources]]
 title = "RFC 9413: Maintaining Robust Protocols"
-url = "https://www.rfc-editor.org/rfc/rfc9413"
+url = "https://www.rfc-editor.org/rfc/rfc9413.html"
 type = "standard"
 notes = "Informational RFC and the counter-argument. Section 4.1, Protocol Decay, describes how tolerated flaws become entrenched as de facto standards; section 5 recommends active protocol maintenance and deliberate intolerance instead."
