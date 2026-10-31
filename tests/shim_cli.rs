@@ -9711,6 +9711,54 @@ const CITATION_ROWS: &[(&str, &str, &[&str])] = &[
         &["https://arxiv.org/abs/1706.03763"],
     ),
     (
+        "WCAG 2.2 SC 1.4.3",
+        "https://www.w3.org/TR/WCAG22/#x1-4-3-contrast-minimum",
+        &[
+            "https://www.w3.org/TR/WCAG21/#x1-4-3-contrast-minimum",
+            "https://www.w3.org/TR/WCAG22/#x1-4-4-resize-text",
+            "https://www.w3.org/TR/WCAG22/",
+        ],
+    ),
+    (
+        "WCAG 2.2 SC 1.4.3",
+        "https://www.w3.org/TR/2023/REC-WCAG22-20231005/#x1-4-3-contrast-minimum",
+        &["https://www.w3.org/TR/2018/REC-WCAG21-20180605/#x1-4-3-contrast-minimum"],
+    ),
+    (
+        "WCAG 2.1 success criterion 2.4.7",
+        "https://www.w3.org/TR/WCAG21/#x2-4-7-focus-visible",
+        &["https://www.w3.org/TR/WCAG22/#x2-4-7-focus-visible"],
+    ),
+    (
+        "PEP 8",
+        "https://peps.python.org/pep-0008/",
+        &[
+            "https://peps.python.org/pep-0080/",
+            "https://peps.python.org/pep-8/",
+        ],
+    ),
+    (
+        "PEP 440 §Version",
+        "https://peps.python.org/pep-0440/#version-specifiers",
+        &[
+            "https://peps.python.org/pep-0440/",
+            "https://peps.python.org/pep-0441/#version-specifiers",
+        ],
+    ),
+    (
+        "UAX #9",
+        "https://www.unicode.org/reports/tr9/",
+        &["https://www.unicode.org/reports/tr39/"],
+    ),
+    (
+        "UTS #39 Section 5",
+        "https://www.unicode.org/reports/tr39/tr39-30.html#Mixed_Script_Detection",
+        &[
+            "https://www.unicode.org/reports/tr39/",
+            "https://www.unicode.org/reports/tr9/#Mixed_Script_Detection",
+        ],
+    ),
+    (
         "arXiv:1706.03762v7",
         "https://arxiv.org/pdf/1706.03762v7",
         &["https://arxiv.org/abs/1706.03762v6"],
