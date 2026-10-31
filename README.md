@@ -325,13 +325,18 @@ second matcher in this binary. An unknown harness name is refused rather than
 guessed at, because where to find the text in its event cannot be derived from
 its name.
 
-```jsonc
-// ~/.claude/settings.json
-{"hooks": {"PreToolUse": [
-  {"matcher": "mcp__github__.*",
-   "hooks": [{"type": "command", "command": "uphold hook claude-code"}]}
-]}}
+For Claude Code, enable the `uphold` plugin this repository ships, at the tag
+of the release you installed:
+
+```text
+/plugin marketplace add HackingGate/uphold@<tag>
+/plugin install uphold@uphold
 ```
+
+Its hooks fail closed: when `uphold` cannot start, the tool call or the turn's
+end is refused rather than let through. A repository enables it for every
+collaborator in `.claude/settings.json`; see
+[configuring it](docs/REFERENCE.md#configuring-it).
 
 Codex uses the same event and denial format. Add this to `.codex/hooks.json`
 in the repository, or `~/.codex/hooks.json` for all projects:
@@ -349,8 +354,8 @@ publish your text; the example covers the GitHub MCP server. See
 [Codex hooks](https://learn.chatgpt.com/docs/hooks) and the
 [configuration reference](docs/REFERENCE.md#configuring-it) for inline TOML.
 
-The same command, configured for `SessionStart` and `Stop`, keeps an agent from
-ending its turn with the gate red: `[stop] run` names the commands, and a turn
+The plugin also runs the command at `SessionStart` and `Stop`, which keeps an
+agent from ending its turn with the gate red: `[stop] run` names the commands, and a turn
 is blocked only on one that was green when the session started. See
 [the end of a turn](docs/REFERENCE.md#the-end-of-a-turn-stop).
 

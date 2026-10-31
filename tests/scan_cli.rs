@@ -3466,3 +3466,62 @@ fn a_pattern_selection_reads_differently_from_its_text_is_refused_at_load() {
         );
     }
 }
+
+// `claude-code-hooks-come-from-the-plugin`, read out of the shipped policy for
+// the same reason as above. The pasted settings form is refused in a page and
+// in a project settings file; the plugin's own hooks.json, which is the one
+// copy, and a page naming the command in prose are not.
+#[test]
+fn the_pasted_claude_code_hook_is_refused_and_the_plugin_copy_is_not() {
+    let shipped: toml::Value = toml::from_str(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("policy/principles.toml"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let mut rules = toml::value::Table::new();
+    rules.insert(
+        "claude-code-hooks-come-from-the-plugin".into(),
+        shipped
+            .get("rule")
+            .and_then(|table| table.get("claude-code-hooks-come-from-the-plugin"))
+            .unwrap()
+            .clone(),
+    );
+    let mut policy = toml::value::Table::new();
+    policy.insert("rule".into(), toml::Value::Table(rules));
+
+    let root = workspace();
+    write(
+        &root,
+        "policy/principles.toml",
+        &toml::to_string(&toml::Value::Table(policy)).unwrap(),
+    );
+    let pasted = r#"{"hooks": [{"type": "command", "command": "uphold hook claude-code"}]}"#;
+    write(&root, "docs/setup.md", &format!("```json\n{pasted}\n```\n"));
+    write(&root, ".claude/settings.json", &format!("{pasted}\n"));
+    write(&root, ".claude/settings.local.json", &format!("{pasted}\n"));
+    write(
+        &root,
+        "plugins/claude-code/hooks/hooks.json",
+        &format!("{pasted}\n"),
+    );
+    write(
+        &root,
+        "docs/prose.md",
+        "The plugin runs `uphold hook claude-code` at every turn's end.\n",
+    );
+    let output = scan(&root);
+    assert_eq!(code(&output), 1);
+    let text = stderr(&output);
+    for path in [
+        "docs/setup.md:2:",
+        ".claude/settings.json:1:",
+        ".claude/settings.local.json:1:",
+    ] {
+        assert!(text.contains(path), "{text}");
+    }
+    assert!(!text.contains("hooks.json"), "{text}");
+    assert!(!text.contains("docs/prose.md"), "{text}");
+}

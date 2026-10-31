@@ -1,0 +1,7 @@
+{
+  "name": "uphold",
+  "description": "Runs uphold hook claude-code on GitHub MCP tool calls, at session start and at the end of a turn",
+  "author": {
+    "name": "HackingGate"
+  }
+}

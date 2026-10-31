@@ -3145,15 +3145,45 @@ still reads the subject after the fact.
 
 ### Configuring it
 
-For Claude Code:
+For Claude Code, enable the `uphold` plugin. This repository is its
+marketplace, and the tag you add it at is the release you get:
+
+```text
+/plugin marketplace add HackingGate/uphold@<tag>
+/plugin install uphold@uphold
+```
+
+A repository enables it for every collaborator in `.claude/settings.json`. The
+plugin's source is a path inside the marketplace, so a collaborator who trusts
+the folder needs no install of their own:
 
 ```jsonc
-// ~/.claude/settings.json
-{"hooks": {"PreToolUse": [
-  {"matcher": "mcp__github__.*",
-   "hooks": [{"type": "command", "command": "uphold hook claude-code"}]}
-]}}
+// .claude/settings.json
+{
+  "extraKnownMarketplaces": {
+    "uphold": {"source": {"source": "github", "repo": "HackingGate/uphold", "ref": "<tag>"}}
+  },
+  "enabledPlugins": {"uphold@uphold": true}
+}
 ```
+
+The plugin's `hooks/hooks.json` holds three entries, each running
+`uphold hook claude-code`:
+
+| event | matcher | options |
+|---|---|---|
+| `PreToolUse` | `mcp__github__.*` | `onFailure: "block"` |
+| `SessionStart` | | `async: true` |
+| `Stop` | | `timeout: 900`, `onFailure: "block"` |
+
+`onFailure: "block"` makes a hook that cannot start (`uphold` not on `PATH`,
+exit 127) refuse the call or the turn's end; without it Claude Code treats the
+failure as non-blocking and proceeds. It needs Claude Code v2.1.295 or later.
+Claude Code runs a plugin's hook separately from an identical one in a settings
+file, so a hook block pasted beside the enabled plugin runs every hook twice:
+remove it. A cloud session does not add marketplaces from a repository's
+`extraKnownMarketplaces`, so the plugin does not reach one through project
+settings.
 
 For Codex, put this in `.codex/hooks.json` in the repository or
 `~/.codex/hooks.json` for all projects:
@@ -3382,8 +3412,9 @@ five values is derivable from a name.
 
 An agent can finish, say it is done, and leave a tree the repository's own gate
 refuses; the refusal then arrives at the next commit, often in another session.
-The same `uphold hook claude-code` entry, configured for `SessionStart` and
-`Stop`, holds the end of a turn to the commands a repository names:
+The plugin's `SessionStart` and `Stop` entries for `uphold hook claude-code`
+(see [configuring it](#configuring-it)) hold the end of a turn to the commands
+a repository names:
 
 ```toml
 # policy/principles.toml
@@ -3395,14 +3426,6 @@ Each entry is one command as argv, run from the repository root with no shell.
 A command that needs a pipeline names a script holding it. An entry with no
 program is refused at load, and so is `[stop]` in a file read through
 `[inherit]`: what a tree has to pass is that repository's own declaration.
-
-```jsonc
-// .claude/settings.json
-{"hooks": {
-  "SessionStart": [{"hooks": [{"type": "command", "command": "uphold hook claude-code", "async": true}]}],
-  "Stop":         [{"hooks": [{"type": "command", "command": "uphold hook claude-code", "timeout": 900}]}]
-}}
-```
 
 `hook_event_name` says which arrived. Every other event, and an event naming
 none, is judged as a pending tool call, as above.
@@ -3426,8 +3449,8 @@ none, is judged as a pending tool call, as above.
   person. With no baseline, because `SessionStart` is not configured or the
   id was unusable, every failing command blocks and the reason says so. A
   baseline still being written is waited for, up to 300 seconds from when it
-  started (a killed one is not waited on again), so the
-  `timeout` above covers that wait plus one run of the gate.
+  started (a killed one is not waited on again), so the `Stop` entry's
+  `timeout` covers that wait plus one run of the gate.
 
 A turn's end is blocked once. When `stop_hook_active` says this stop follows
 a block, a gate still red is named in `systemMessage` and the turn ends: the
