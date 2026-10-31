@@ -175,6 +175,21 @@
       "path": "principles/defense-in-depth.toml"
     },
     {
+      "name": "Break freely before 1.0",
+      "key": "break freely before 1 0",
+      "tokens": [
+        "break",
+        "freely",
+        "before",
+        "1",
+        "0"
+      ],
+      "field": "alias",
+      "id": "replace-before-release",
+      "title": "Replace Before Release",
+      "path": "principles/replace-before-release.toml"
+    },
+    {
       "name": "Build versus buy",
       "key": "build versus buy",
       "tokens": [
@@ -600,6 +615,21 @@
       "path": "principles/explicit-unknown.toml"
     },
     {
+      "name": "Do not cover the content",
+      "key": "do not cover the content",
+      "tokens": [
+        "do",
+        "not",
+        "cover",
+        "the",
+        "content"
+      ],
+      "field": "alias",
+      "id": "unobstructed-work-area",
+      "title": "Unobstructed Work Area",
+      "path": "principles/unobstructed-work-area.toml"
+    },
+    {
       "name": "Do not keep a choice because it was there",
       "key": "do not keep a choice because it was there",
       "tokens": [
@@ -927,6 +957,22 @@
       "path": "principles/defense-in-depth.toml"
     },
     {
+      "name": "Fix forward with a new version",
+      "key": "fix forward with a new version",
+      "tokens": [
+        "fix",
+        "forward",
+        "with",
+        "a",
+        "new",
+        "version"
+      ],
+      "field": "alias",
+      "id": "immutable-releases",
+      "title": "Immutable Releases",
+      "path": "principles/immutable-releases.toml"
+    },
+    {
       "name": "Flow control under load",
       "key": "flow control under load",
       "tokens": [
@@ -1055,6 +1101,18 @@
       "id": "idempotency",
       "title": "Idempotency",
       "path": "principles/idempotency.toml"
+    },
+    {
+      "name": "Immutable Releases",
+      "key": "immutable releases",
+      "tokens": [
+        "immutable",
+        "releases"
+      ],
+      "field": "title",
+      "id": "immutable-releases",
+      "title": "Immutable Releases",
+      "path": "principles/immutable-releases.toml"
     },
     {
       "name": "Information Hiding",
@@ -1384,6 +1442,19 @@
       "path": "principles/conways-law.toml"
     },
     {
+      "name": "Name no vendor",
+      "key": "name no vendor",
+      "tokens": [
+        "name",
+        "no",
+        "vendor"
+      ],
+      "field": "alias",
+      "id": "vendor-neutral-interfaces",
+      "title": "Vendor-Neutral Interfaces",
+      "path": "principles/vendor-neutral-interfaces.toml"
+    },
+    {
       "name": "Name what you remove",
       "key": "name what you remove",
       "tokens": [
@@ -1422,6 +1493,34 @@
       "path": "principles/namespaced-identifiers.toml"
     },
     {
+      "name": "Never move a tag",
+      "key": "never move a tag",
+      "tokens": [
+        "never",
+        "move",
+        "a",
+        "tag"
+      ],
+      "field": "alias",
+      "id": "immutable-releases",
+      "title": "Immutable Releases",
+      "path": "principles/immutable-releases.toml"
+    },
+    {
+      "name": "No always-on overlays",
+      "key": "no always on overlays",
+      "tokens": [
+        "no",
+        "always",
+        "on",
+        "overlays"
+      ],
+      "field": "alias",
+      "id": "unobstructed-work-area",
+      "title": "Unobstructed Work Area",
+      "path": "principles/unobstructed-work-area.toml"
+    },
+    {
       "name": "No bypass path",
       "key": "no bypass path",
       "tokens": [
@@ -1433,6 +1532,22 @@
       "id": "complete-mediation",
       "title": "Complete Mediation",
       "path": "principles/complete-mediation.toml"
+    },
+    {
+      "name": "No compatibility before the first consumer",
+      "key": "no compatibility before the first consumer",
+      "tokens": [
+        "no",
+        "compatibility",
+        "before",
+        "the",
+        "first",
+        "consumer"
+      ],
+      "field": "alias",
+      "id": "replace-before-release",
+      "title": "Replace Before Release",
+      "path": "principles/replace-before-release.toml"
     },
     {
       "name": "No dependency cycles",
@@ -1859,6 +1974,35 @@
       "path": "principles/data-minimization.toml"
     },
     {
+      "name": "Published formats, not providers",
+      "key": "published formats not providers",
+      "tokens": [
+        "published",
+        "formats",
+        "not",
+        "providers"
+      ],
+      "field": "alias",
+      "id": "vendor-neutral-interfaces",
+      "title": "Vendor-Neutral Interfaces",
+      "path": "principles/vendor-neutral-interfaces.toml"
+    },
+    {
+      "name": "Published versions do not change",
+      "key": "published versions do not change",
+      "tokens": [
+        "published",
+        "versions",
+        "do",
+        "not",
+        "change"
+      ],
+      "field": "alias",
+      "id": "immutable-releases",
+      "title": "Immutable Releases",
+      "path": "principles/immutable-releases.toml"
+    },
+    {
       "name": "Purpose limitation",
       "key": "purpose limitation",
       "tokens": [
@@ -1898,6 +2042,33 @@
       "id": "minimize-attack-surface",
       "title": "Minimize Attack Surface",
       "path": "principles/minimize-attack-surface.toml"
+    },
+    {
+      "name": "Replace Before Release",
+      "key": "replace before release",
+      "tokens": [
+        "replace",
+        "before",
+        "release"
+      ],
+      "field": "title",
+      "id": "replace-before-release",
+      "title": "Replace Before Release",
+      "path": "principles/replace-before-release.toml"
+    },
+    {
+      "name": "Replace outright before release",
+      "key": "replace outright before release",
+      "tokens": [
+        "replace",
+        "outright",
+        "before",
+        "release"
+      ],
+      "field": "alias",
+      "id": "replace-before-release",
+      "title": "Replace Before Release",
+      "path": "principles/replace-before-release.toml"
     },
     {
       "name": "Report could-not-check",
@@ -2250,6 +2421,19 @@
       "path": "principles/follow-published-standards.toml"
     },
     {
+      "name": "Status without interruption",
+      "key": "status without interruption",
+      "tokens": [
+        "status",
+        "without",
+        "interruption"
+      ],
+      "field": "alias",
+      "id": "unobstructed-work-area",
+      "title": "Unobstructed Work Area",
+      "path": "principles/unobstructed-work-area.toml"
+    },
+    {
       "name": "System of Record",
       "key": "system of record",
       "tokens": [
@@ -2261,6 +2445,22 @@
       "id": "single-authoritative-source",
       "title": "Single Authoritative Source",
       "path": "principles/single-authoritative-source.toml"
+    },
+    {
+      "name": "Take a format, not a provider",
+      "key": "take a format not a provider",
+      "tokens": [
+        "take",
+        "a",
+        "format",
+        "not",
+        "a",
+        "provider"
+      ],
+      "field": "alias",
+      "id": "vendor-neutral-interfaces",
+      "title": "Vendor-Neutral Interfaces",
+      "path": "principles/vendor-neutral-interfaces.toml"
     },
     {
       "name": "Tamper-evident history",
@@ -2396,6 +2596,19 @@
       "path": "principles/unix-composability.toml"
     },
     {
+      "name": "Unobstructed Work Area",
+      "key": "unobstructed work area",
+      "tokens": [
+        "unobstructed",
+        "work",
+        "area"
+      ],
+      "field": "title",
+      "id": "unobstructed-work-area",
+      "title": "Unobstructed Work Area",
+      "path": "principles/unobstructed-work-area.toml"
+    },
+    {
       "name": "Usable security",
       "key": "usable security",
       "tokens": [
@@ -2406,6 +2619,19 @@
       "id": "psychological-acceptability",
       "title": "Psychological Acceptability",
       "path": "principles/psychological-acceptability.toml"
+    },
+    {
+      "name": "Vendor-Neutral Interfaces",
+      "key": "vendor neutral interfaces",
+      "tokens": [
+        "vendor",
+        "neutral",
+        "interfaces"
+      ],
+      "field": "title",
+      "id": "vendor-neutral-interfaces",
+      "title": "Vendor-Neutral Interfaces",
+      "path": "principles/vendor-neutral-interfaces.toml"
     },
     {
       "name": "Wait for the third instance",

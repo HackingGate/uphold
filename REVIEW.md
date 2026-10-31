@@ -248,6 +248,18 @@ With a sufficient number of users of an interface, every observable behavior of 
 - Has this unpromised behavior been stable long enough that reliance has probably formed, and should it be varied deliberately instead?
 - If a consumer breaks, is there a deprecation path, or only a changelog entry?
 
+## Immutable Releases
+Once a version is published, its tag and its assets do not change; fix a defect by publishing a new version, and withdraw a release that is incomplete or compromised rather than rewrite it.
+
+**Applies when**
+- Others pin, verify, cache or mirror releases by version or tag.
+- Assets are signed or checksummed.
+
+**Ask**
+- Does any script move, delete or force-push a tag?
+- Can an asset be replaced under an existing version?
+- Is the platform's immutable-release setting on where it exists?
+
 ## Information Hiding
 Module boundaries should conceal design decisions likely to change, exposing only the stable information required by clients.
 
@@ -410,6 +422,19 @@ Protection mechanisms must be easy enough to apply correctly and routinely that 
 - Is there a scoped way in for a tree that does not yet comply, such as a baseline or a ratchet?
 - Six months from now, what evidence would show this is still enabled everywhere it was installed?
 
+## Replace Before Release
+While an interface has no consumer outside the code released with it, make an incompatible change by replacing the old shape in one step; pay for compatibility paths, staged migrations and parallel old shapes only once someone outside depends on the interface.
+
+**Applies when**
+- The product or interface is pre-release, such as a 0.y.z version with no public users.
+- Every consumer is changed and released together with the interface, or is pinned by its own maintainer.
+- Data can be recreated, or migrated in one step.
+
+**Ask**
+- Does anything outside this release depend on the old shape?
+- Is the old shape removed in the same change, or kept beside the new one?
+- Does the version say the change breaks?
+
 ## Reuse Maintained Components
 Do not hand-roll a function that a maintained component already provides at adequate fit, because the component carries the edge cases, platform coverage, and fixes of every user it has, while a private copy carries only the cases its author met.
 
@@ -530,3 +555,27 @@ Prefer small, focused mechanisms connected through stable, inspectable interface
 - Can a script or an agent do everything a person at a terminal can, without a TTY, and tell success from failure by exit status?
 - Does a prompt appear only when stdin is a terminal, with a flag, stdin, or structured output as the equivalent?
 - Would combining these components preserve a stronger transaction or invariant?
+
+## Unobstructed Work Area
+Do not cover, or take input away from, the content the person is working in; send status and diagnostics to a non-overlapping area or to a log, and keep a modal interruption for a decision the person must make before the work can go on.
+
+**Applies when**
+- The interface has one primary work area, such as a terminal, an editor, a canvas or a video.
+- Overlays, banners, toasts or modal dialogs are being considered for status or notices.
+
+**Ask**
+- Does anything overlap the work area while the person works in it?
+- Does any overlay take focus or keystrokes from the content?
+- Could this notice be a log entry or a non-overlapping indicator instead?
+
+## Vendor-Neutral Interfaces
+Take a mechanism's input as a published format on a file or standard input, so that the caller chooses where it comes from; a provider's name appears only in an example or in the caller's configuration, never in a flag, a type, a source file or a check.
+
+**Applies when**
+- An input could come from more than one provider.
+- A published format covers the data, such as OpenSSH keys, JWK, PEM, OCI references or URLs.
+
+**Ask**
+- Does any flag, type or test name a vendor?
+- Could a second provider feed this input without a code change?
+- Which published format does the input follow?

@@ -1,0 +1,38 @@
+id = "vendor-neutral-interfaces"
+title = "Vendor-Neutral Interfaces"
+aliases = ["Published formats, not providers", "Name no vendor", "Take a format, not a provider"]
+kind = "principle"
+status = "seed"
+domains = ["architecture", "interfaces"]
+summary = "A mechanism's inputs are published formats, not providers; a provider's name appears only in an example or in the caller's configuration."
+claim = "Take a mechanism's input as a published format on a file or standard input, so that the caller chooses where it comes from; a provider's name appears only in an example or in the caller's configuration, never in a flag, a type, a source file or a check."
+problem = "A mechanism with a flag, a type or a client for one provider can be fed by that provider only. A second provider needs a code change, a test fixture of its own and a new flag, and the mechanism's release schedule now follows the provider's API."
+rationale = "A published format is a contract many providers already meet, and a provider's output reaches it through a small adapter the caller owns. The mechanism then has one input to test, and swapping the source is a change to a deployment, as the twelve-factor treatment of backing services puts it, not to the code."
+applies_when = ["An input could come from more than one provider.", "A published format covers the data, such as OpenSSH keys, JWK, PEM, OCI references or URLs."]
+does_not_mean = ["Never integrate with a provider; an adapter that turns a provider's output into the format lives with the caller.", "Avoid every proprietary format when no published one covers the data."]
+benefits = ["A second provider feeds the input without a code change.", "The mechanism is tested against the format, with no provider's service in the test.", "No provider's outage, rate limit or API change reaches the mechanism."]
+costs = ["The caller owns an adapter, and each caller writes its own.", "A format carries what its standard defines, so a provider-specific field has no place in it.", "Two steps, an adapter and a mechanism, replace one call."]
+failure_when_overapplied = ["A format is invented for data that a published one covers, only to avoid naming a provider.", "A single provider-specific call, plainly smaller and used by one caller, is replaced by a format and an adapter nobody else uses.", "A provider's name is scrubbed from documentation where an example would have helped the reader."]
+conflicts_with = ["economy-of-mechanism"]
+related = ["mechanism-policy-separation", "parameterize-do-not-enumerate", "reuse-maintained-components", "unix-composability"]
+review_questions = ["Does any flag, type or test name a vendor?", "Could a second provider feed this input without a code change?", "Which published format does the input follow?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+rung = ["text", "syntax"]
+observable = ["A flag, option name, type or module whose name carries a provider's name.", "A hard-coded provider URL or host in source that is not an example or a test fixture.", "A dependency on a provider's client library in a mechanism that reads a format a published standard defines."]
+checks = ["Flag a command-line flag, a type or a file name that carries a name from a list of providers the project keeps, and accept a waiver that names the adapter's owner.", "Require each input of a mechanism to name the published format it follows."]
+limits = ["Which providers count as vendors is a list the project keeps and no check can derive.", "Whether a published format covers the data is a judgment about the format's fit.", "A neutral name can hide a provider-specific assumption in the data a mechanism accepts."]
+
+[[sources]]
+title = "sshd(8), AUTHORIZED_KEYS FILE FORMAT"
+url = "https://man.openbsd.org/sshd#AUTHORIZED_KEYS_FILE_FORMAT"
+type = "documentation"
+notes = "A published, line-oriented key format many tools read from a file or standard input, whatever service issued the keys."
+
+[[sources]]
+title = "The Twelve-Factor App: IV. Backing services"
+url = "https://12factor.net/backing-services"
+type = "practice"
+notes = "Wiggins, 2011. A deploy swaps a resource without changes to the code, because the program treats each as an attached resource named by configuration."

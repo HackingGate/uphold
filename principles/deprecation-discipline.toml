@@ -13,7 +13,7 @@ does_not_mean = ["That a version number proves compatibility; a semantic version
 benefits = ["Consumers can tell safe updates from breaking ones without reading every diff.", "Old paths are removed, so the cost of maintaining them stays bounded.", "Staleness is measured, so large version jumps are avoided."]
 costs = ["Two paths are maintained through the deprecation window.", "Migration has to be communicated and tracked across consumers.", "Version numbers invite false confidence where the contract is underspecified."]
 failure_when_overapplied = ["Every change is released as a major version out of caution, so the version stops distinguishing breaking changes from safe ones.", "Deprecation windows are so long that the old path gains users faster than migration removes them.", "Automated update pressure churns pins daily and consumers learn to merge updates unread.", "Removal dates are enforced against consumers who were given no migration path, turning the process into a scheduled outage."]
-conflicts_with = ["robustness-principle"]
+conflicts_with = ["robustness-principle", "replace-before-release"]
 related = ["hyrums-law", "reversible-decisions", "single-authoritative-source", "chestertons-fence"]
 review_questions = ["Is this change compatible under the interface's versioning promise, and does the version bump say so?", "If something is deprecated here, where is its replacement, and when is the old path removed?", "How far is each pin in this tree behind the newest release of what it names, and who closes that gap?", "Which consumers still use the old path, and how would the maintainer know?", "Which component in this stack is past its end of life, or behind a release that fixes a published advisory, and what is the plan to move off it?"]
 

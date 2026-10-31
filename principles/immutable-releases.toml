@@ -1,0 +1,44 @@
+id = "immutable-releases"
+title = "Immutable Releases"
+aliases = ["Never move a tag", "Published versions do not change", "Fix forward with a new version"]
+kind = "principle"
+status = "seed"
+domains = ["security", "evolution"]
+summary = "Once a version is published, its tag and its assets do not change; any fix is a new version."
+claim = "Once a version is published, its tag and its assets do not change; fix a defect by publishing a new version, and withdraw a release that is incomplete or compromised rather than rewrite it."
+problem = "A tag that is moved or an asset that is replaced under an existing version gives two different artifacts the same name. A consumer that pinned, verified, cached or mirrored the first one holds a copy that no longer matches the publisher's, and a signature or checksum recorded for it no longer means what its reader thinks."
+rationale = "A version is a name consumers use to refer to one artifact. Pins, checksums, signatures, caches and mirrors all rely on the name keeping its meaning, so changing what the name points at breaks each of them without a visible error. A new version costs the publisher one more number and costs no consumer a surprise."
+applies_when = ["Others pin, verify, cache or mirror releases by version or tag.", "Assets are signed or checksummed."]
+does_not_mean = ["Never remove a release; an incomplete or compromised one is withdrawn, and the withdrawal is recorded.", "Never edit release notes, where the platform keeps notes apart from assets."]
+benefits = ["A pin, checksum or signature stays true for as long as the version exists.", "A mirror or cache needs no invalidation rule for a published version.", "What was released on a date can be reproduced and audited later."]
+costs = ["A defect found after publication costs a new version and its notice, not a quiet repair.", "An incomplete release must be withdrawn and released again, and the withdrawal needs an owner with the authority to do it.", "A release withdrawn for a compromise leaves a gap in the version numbers that readers must be told about."]
+failure_when_overapplied = ["A release that never completed is left published, because withdrawing it feels like changing history.", "A compromised asset stays downloadable under its version in the name of immutability.", "The rule is extended to a release's notes or to a pre-release channel nobody pins."]
+conflicts_with = []
+related = ["reproducible-derived-state", "single-authoritative-source", "deprecation-discipline"]
+review_questions = ["Does any script move, delete or force-push a tag?", "Can an asset be replaced under an existing version?", "Is the platform's immutable-release setting on where it exists?"]
+
+[enforcement]
+level = "lint"
+automatable = "partially"
+rung = ["text"]
+observable = ["A command or workflow step that force-pushes, deletes or re-creates a tag.", "A release step that uploads an asset with an option that overwrites one of the same name.", "A repository setting for immutable releases, where the platform has one."]
+checks = ["Flag a tag deletion, a forced tag push or an asset upload that overwrites, in any script or workflow the repository keeps.", "Require the platform's immutable-release setting to be on where the platform provides it, and report it as unavailable where it does not."]
+limits = ["A tag moved or an asset replaced by hand on the host leaves no trace in the repository's files.", "Whether a release is incomplete or compromised, and so may be withdrawn, is a judgment by its owner.", "A mirror or cache that already copied the old artifact is outside the publisher's reach."]
+
+[[sources]]
+title = "Semantic Versioning 2.0.0, item 3"
+url = "https://semver.org/#spec-item-3"
+type = "specification"
+notes = "Once a versioned package has been released, the contents of that version MUST NOT be modified. Any modifications MUST be released as a new version."
+
+[[sources]]
+title = "git-tag, On Re-tagging"
+url = "https://git-scm.com/docs/git-tag#_on_re_tagging"
+type = "documentation"
+notes = "Changing a tag that others have fetched means each of them has to be told to update it; the documentation advises taking a new tag name instead."
+
+[[sources]]
+title = "GitHub Docs, Immutable releases"
+url = "https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/immutable-releases"
+type = "documentation"
+notes = "The platform's setting that locks a published release's tag and assets against change."
