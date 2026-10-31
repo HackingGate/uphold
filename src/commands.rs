@@ -371,55 +371,6 @@ pub(crate) struct Mention {
     pub verb: String,
 }
 
-/// `(line number, code)` for every fenced-block line and every inline span.
-///
-/// Prose is not read at all. An instruction is written in a code span, and a
-/// sentence that happens to contain the same two words in a row is not an
-/// instruction -- matching it is how this check would earn a blanket waiver.
-fn code_spans(text: &str) -> Vec<(u64, String)> {
-    let mut spans: Vec<(u64, String)> = Vec::new();
-    let mut fence: Option<char> = None;
-    for (index, line) in text.lines().enumerate() {
-        let number = index as u64 + 1;
-        let trimmed = line.trim_start();
-        let opener = trimmed
-            .starts_with("```")
-            .then_some('`')
-            .or_else(|| trimmed.starts_with("~~~").then_some('~'));
-        if let Some(marker) = opener {
-            match fence {
-                None => fence = Some(marker),
-                Some(open) if open == marker => fence = None,
-                Some(_) => {}
-            }
-            continue;
-        }
-        if fence.is_some() {
-            spans.push((number, line.to_owned()));
-            continue;
-        }
-        // An inline span is non-greedy and single-line: one that opened and never
-        // closed on its line is not a span.
-        let mut rest = line;
-        while let Some(open) = rest.find('`') {
-            let Some(after) = rest.get(open + 1..) else {
-                break;
-            };
-            let Some(close) = after.find('`') else {
-                break;
-            };
-            if let Some(code) = after.get(..close) {
-                spans.push((number, code.to_owned()));
-            }
-            let Some(remainder) = after.get(close + 1..) else {
-                break;
-            };
-            rest = remainder;
-        }
-    }
-    spans
-}
-
 /// Every invocation a document names, for the commands whose verbs are trusted.
 pub(crate) fn mentions(text: &str, commands: &BTreeMap<String, BTreeSet<String>>) -> Vec<Mention> {
     let mut found = Vec::new();
@@ -433,7 +384,11 @@ pub(crate) fn mentions(text: &str, commands: &BTreeMap<String, BTreeSet<String>>
         let Some(pattern) = invocation(command) else {
             continue;
         };
-        for (line, code) in code_spans(text) {
+        // Prose is not read at all. An instruction is written in code, and a
+        // sentence that happens to contain the same two words in a row is not
+        // an instruction -- matching it is how this check would earn a blanket
+        // waiver.
+        for (line, code) in crate::markdown::code(text) {
             if let Some((verb, _)) = invoked(&code, &pattern) {
                 found.push(Mention {
                     line,

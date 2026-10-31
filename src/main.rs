@@ -91,6 +91,7 @@ mod init;
 mod install;
 mod invocation;
 mod junit;
+mod markdown;
 mod out;
 mod pins;
 mod policy;

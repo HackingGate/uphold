@@ -262,7 +262,9 @@ fn a_link_rule_does_not_read_inside_an_inline_code_span() {
     let output = scan(&root);
     assert_eq!(code(&output), 1);
     let text = stderr(&output);
-    assert!(text.contains("\\.\\d+ -> no such file"), "{text}");
+    // The destination as CommonMark reads it: `\.` is an escaped period,
+    // and `\d` is not an escape, so its backslash stays.
+    assert!(text.contains(".\\d+ -> no such file"), "{text}");
 }
 
 #[test]

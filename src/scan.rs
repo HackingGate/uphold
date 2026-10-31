@@ -2063,110 +2063,21 @@ fn predicate_implies_test(operands: &[Vec<tree_sitter::Node<'_>>], text: &str) -
 /// than a reference, and resolving one would fail on every README that
 /// documents a link.
 fn link_targets(text: &str) -> Vec<(u64, String)> {
-    static INLINE: OnceLock<Regex> = OnceLock::new();
-    static REFERENCE: OnceLock<Regex> = OnceLock::new();
-    static FENCE: OnceLock<Regex> = OnceLock::new();
     static SCHEME: OnceLock<Regex> = OnceLock::new();
-
-    let inline = INLINE.get_or_init(|| {
-        engine::literal_pattern(r"!?\[[^\]]*\]\(\s*(?:<(?P<angled>[^>]*)>|(?P<bare>[^()\s]+))")
-    });
-    let reference = REFERENCE.get_or_init(|| {
-        engine::literal_pattern(r"^\s{0,3}\[[^\]]+\]:\s*(?:<(?P<angled>[^>]*)>|(?P<bare>\S+))")
-    });
-    let fence_re = FENCE.get_or_init(|| engine::literal_pattern(r"^\s{0,3}(?P<fence>`{3,}|~{3,})"));
     // A target with a scheme is out of scope. Resolving it would need the
     // network, which a commit-time check must not touch, and a check that
     // silently skips what it claims to cover is worse than one that says where
     // its boundary is.
     let scheme = SCHEME.get_or_init(|| engine::literal_pattern(r"^[A-Za-z][A-Za-z0-9+.-]*:"));
-
-    let mut found = Vec::new();
-    let mut fence: Option<String> = None;
-    for (index, line) in text.lines().enumerate() {
-        let line_number = index as u64 + 1;
-        if let Some(opener) = fence_re.captures(line) {
-            let marker = opener
-                .name("fence")
-                .map(|m| m.as_str().to_owned())
-                .unwrap_or_default();
-            match &fence {
-                None => {
-                    fence = Some(marker);
-                }
-                Some(open) => {
-                    if marker.starts_with(&open[0..1]) && marker.len() >= open.len() {
-                        fence = None;
-                    }
-                }
-            }
-            continue;
-        }
-        if fence.is_some() {
-            continue;
-        }
-
-        let line = without_code_spans(line);
-        let line = line.as_str();
-        let mut targets: Vec<String> = Vec::new();
-        if let Some(captures) = reference.captures(line) {
-            targets.push(capture_target(&captures));
-        }
-        for captures in inline.captures_iter(line) {
-            targets.push(capture_target(&captures));
-        }
-        for target in targets {
-            let target = target.trim().to_owned();
-            // A pure fragment points inside this same document; an empty target
-            // is not a reference to anything.
-            if target.is_empty() || target.starts_with('#') || scheme.is_match(&target) {
-                continue;
-            }
-            found.push((line_number, target));
-        }
-    }
-    found
-}
-
-/// `line` with its inline code spans removed, as `CommonMark` delimits them: a
-/// run of N backticks opens a span that the next run of exactly N closes. A run
-/// with no matching closer is literal text and stays.
-fn without_code_spans(line: &str) -> String {
-    let run_at = |from: usize| line[from..].len() - line[from..].trim_start_matches('`').len();
-    let mut kept = String::with_capacity(line.len());
-    let mut rest = 0;
-    while let Some(offset) = line[rest..].find('`') {
-        let open = rest + offset;
-        let width = run_at(open);
-        let mut search = open + width;
-        let mut close = None;
-        while let Some(found) = line[search..].find('`') {
-            let start = search + found;
-            let run = run_at(start);
-            if run == width {
-                close = Some(start + run);
-                break;
-            }
-            search = start + run;
-        }
-        if let Some(end) = close {
-            kept.push_str(&line[rest..open]);
-            rest = end;
-        } else {
-            kept.push_str(&line[rest..open + width]);
-            rest = open + width;
-        }
-    }
-    kept.push_str(&line[rest..]);
-    kept
-}
-
-fn capture_target(captures: &regex::Captures<'_>) -> String {
-    captures
-        .name("angled")
-        .or_else(|| captures.name("bare"))
-        .map(|m| m.as_str().to_owned())
-        .unwrap_or_default()
+    crate::markdown::link_destinations(text)
+        .into_iter()
+        .map(|(line, target)| (line, target.trim().to_owned()))
+        // A pure fragment points inside this same document; an empty target
+        // is not a reference to anything.
+        .filter(|(_, target)| {
+            !target.is_empty() && !target.starts_with('#') && !scheme.is_match(target)
+        })
+        .collect()
 }
 
 /// Resolve a link target to a filesystem path.
