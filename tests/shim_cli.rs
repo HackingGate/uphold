@@ -9701,6 +9701,11 @@ const CITATION_ROWS: &[(&str, &str, &[&str])] = &[
         &["https://doi.org/10.1145/361598.361624"],
     ),
     (
+        "doi:10.1002/SPE.4380120706",
+        "https://doi.org/10.1002/spe.4380120706",
+        &["https://doi.org/10.1002/spe.4380120707"],
+    ),
+    (
         "arXiv:1706.03762",
         "https://arxiv.org/abs/1706.03762v7",
         &["https://arxiv.org/abs/1706.03763"],

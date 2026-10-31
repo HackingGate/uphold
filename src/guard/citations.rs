@@ -81,7 +81,7 @@ const FAMILIES: &[Family] = &[
     Family {
         name: "RFC",
         class: Class::Section,
-        pattern: concat!(r"\bRFC[ \u{a0}]?(?P<id>[1-9][0-9]{0,4})\b", locator!()),
+        pattern: concat!(r"\bRFC[ \u{a0}]*(?P<id>[1-9][0-9]{0,4})\b", locator!()),
         links: &[
             "https://www.rfc-editor.org/rfc/rfc<id>.html",
             "https://datatracker.ietf.org/doc/html/rfc<id>",
@@ -103,7 +103,7 @@ const FAMILIES: &[Family] = &[
     Family {
         name: "BCP",
         class: Class::Record,
-        pattern: r"\bBCP[ \u{a0}]?(?P<id>[1-9][0-9]*)\b",
+        pattern: r"\bBCP[ \u{a0}]*(?P<id>[1-9][0-9]*)\b",
         links: &["https://www.rfc-editor.org/info/bcp<id>"],
         id_any_case: false,
         id_suffix: "",
@@ -111,7 +111,7 @@ const FAMILIES: &[Family] = &[
     Family {
         name: "STD",
         class: Class::Record,
-        pattern: r"\bSTD[ \u{a0}]?(?P<id>[1-9][0-9]*)\b",
+        pattern: r"\bSTD[ \u{a0}]*(?P<id>[1-9][0-9]*)\b",
         links: &["https://www.rfc-editor.org/info/std<id>"],
         id_any_case: false,
         id_suffix: "",
@@ -149,7 +149,7 @@ const FAMILIES: &[Family] = &[
     Family {
         name: "DOI",
         class: Class::Record,
-        pattern: r"(?:\bdoi:[ \u{a0}]?|\b)(?P<id>10\.[0-9]{4,9}/[^\s<>()\[\]]*[^\s<>()\[\].,;:!?'`])",
+        pattern: r"(?:\bdoi:[ \u{a0}]?|\b)(?P<id>10\.[0-9]{4,9}/(?:[^\s<>()\[\]]|\([^\s<>()\[\]]*\))*(?:[^\s<>()\[\].,;:!?'`]|\([^\s<>()\[\]]*\)))",
         links: &["https://doi.org/<id>"],
         id_any_case: true,
         id_suffix: "",
@@ -239,7 +239,10 @@ fn blocks(text: &str) -> Vec<Block> {
                 }
             }
             Event::Text(prose) if in_code == 0 => block.push(&prose, link.is_some()),
-            Event::Code(_) | Event::SoftBreak | Event::HardBreak | Event::InlineHtml(_) => {
+            Event::Code(_) | Event::SoftBreak | Event::HardBreak => block.text.push(' '),
+            // A formatting tag joins the text on either side, as a browser
+            // renders it; a line break separates it.
+            Event::InlineHtml(tag) if tag.to_ascii_lowercase().starts_with("<br") => {
                 block.text.push(' ');
             }
             Event::Start(Tag::List(_))
@@ -343,10 +346,16 @@ fn wanted(family: &Family, citation: &Citation) -> String {
         .anchor
         .as_ref()
         .map_or_else(String::new, |anchor| format!("#{anchor}"));
+    // A version the citation states is part of the link it should have.
+    let linked_id = format!(
+        "{}{}",
+        citation.id,
+        citation.version.as_deref().unwrap_or("")
+    );
     family
         .links
         .iter()
-        .map(|link| format!("{}{anchor}", link.replace("<id>", &citation.id)))
+        .map(|link| format!("{}{anchor}", link.replace("<id>", &linked_id)))
         .collect::<Vec<_>>()
         .join(" or ")
 }
@@ -522,6 +531,34 @@ mod tests {
     #[test]
     fn a_fenced_block_and_a_code_span_are_not_read() {
         assert_eq!(read("```\nRFC 9110\n```\n\nRun `RFC 9110` here.").len(), 0);
+    }
+
+    #[test]
+    fn spacing_and_formatting_tags_do_not_hide_a_citation() {
+        for text in [
+            "RFC  9110 says so.",
+            "<em>RFC 9110</em> says so.",
+            "<em>RFC</em> 9110 says so.",
+            "Line one<br>RFC 9110 says so.",
+        ] {
+            assert_eq!(read(text).len(), 1, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_doi_keeps_its_balanced_parentheses_and_drops_a_closing_one() {
+        let found = read("(doi:10.1016/0012-365X(95)00186-7)");
+        assert_eq!(
+            found.first().map(|citation| citation.0.as_str()),
+            Some("doi:10.1016/0012-365X(95)00186-7")
+        );
+    }
+
+    #[test]
+    fn a_versioned_arxiv_citation_is_told_its_versioned_link() {
+        let citation = citations(&blocks("arXiv:1706.03762v7").remove(0)).remove(0);
+        let family = FAMILIES.get(citation.family).expect("a row");
+        assert!(wanted(family, &citation).starts_with("https://arxiv.org/abs/1706.03762v7"));
     }
 
     #[test]

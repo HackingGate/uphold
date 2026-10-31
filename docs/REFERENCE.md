@@ -2845,7 +2845,8 @@ to run the uphold the repository pins.
 A body that says `RFC 9110 §10.2.3` asks its reader to find the section. A
 link to the whole RFC, or to another section, looks the same as the right one
 until it is followed. `citations-linked`, in `published-text`, reads every body
-`gh` publishes, the text a tool call carries at `uphold hook`, and `--text`,
+`gh` publishes, the text a tool call carries at `uphold hook`, and the text
+given to `uphold guard --text` (not `uphold scan --text`, which runs no guard),
 and refuses, exit `1`, a citation with no link, a citation whose link is not
 one of its family's links to that document, and a cited section whose link
 does not name that section. Every failing citation is listed with the links it
