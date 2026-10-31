@@ -42,6 +42,17 @@ ignore = "0.4"
 # The engine under `grep-regex`, used directly where a pattern is matched
 # against a string already in memory rather than searched through a file.
 regex = "1"
+# Where a URL written out in prose ends and the sentence's punctuation begins,
+# for `citations-linked`. A URL pattern of our own gets that boundary wrong on
+# a trailing period, a closing parenthesis and a quote; this crate's tests are
+# about exactly those cases.
+linkify = "0.11"
+# A CommonMark parser, for `citations-linked`: which text is a link's, its
+# destination with reference links resolved through their definitions, and
+# what is code. Reading those by pattern is a second Markdown parser that
+# agrees with a forge's rendering only on the cases its author met. No default
+# features: the command-line tool and SIMD are not needed.
+pulldown-cmark = { version = "0.13", default-features = false }
 # The policy file is read into typed structs, so an unknown or misspelled field
 # is refused by the deserializer rather than ignored.
 serde = { version = "1", features = ["derive"] }

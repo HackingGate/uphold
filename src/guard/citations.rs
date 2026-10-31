@@ -18,16 +18,21 @@
 //! class a row is follows from what its links can carry, recorded in the
 //! design issue with the date each page was read.
 //!
-//! WHAT IS READ. The prose of the text, as [`crate::prose::of_text`] finds it,
-//! so fenced and indented code are left out; inline code spans are blanked
-//! here. A citation is checked against the Markdown link whose text it is, or
-//! else against the first bare URL after it and before the next citation in
-//! the same paragraph. No link is fetched: the section anchors follow from the
-//! number, so there is no network call and no exit 2 of this guard's own.
+//! WHAT IS READ. The text as `pulldown-cmark` parses it, the way a forge
+//! renders a body: code blocks and code spans are left out, and a link's
+//! destination is the parser's, reference links resolved through their
+//! definitions. A URL written out in prose is found by `linkify`, which knows
+//! where a URL ends and the sentence's punctuation begins. A citation is
+//! checked against the link whose text it is, or else against the first URL
+//! written out after it and before the next citation in the same block. No
+//! link is fetched: the section anchors follow from the number, so there is no
+//! network call and no exit 2 of this guard's own.
 
 use std::ops::Range;
 use std::sync::OnceLock;
 
+use linkify::{LinkFinder, LinkKind};
+use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 use regex::Regex;
 
 use crate::config::Rule;
@@ -169,49 +174,89 @@ fn compiled() -> &'static [Regex] {
     })
 }
 
-/// A Markdown inline link: `[text](destination)`, with an optional title.
-fn inline_link() -> &'static Regex {
-    static LINK: OnceLock<Regex> = OnceLock::new();
-    LINK.get_or_init(|| {
-        crate::engine::literal_pattern(
-            r#"\[(?P<text>[^\[\]]*)\]\(\s*<?(?P<url>[^\s()<>]+)>?(?:\s+"[^"]*")?\s*\)"#,
-        )
-    })
+/// One block of prose -- a paragraph, a heading, a list item, a table cell --
+/// as text, with where its links are.
+#[derive(Debug, Default)]
+struct Block {
+    /// The block's text, a code span or a break each one space, and every URL
+    /// written out blanked so that an id inside one is not a citation.
+    text: String,
+    /// The ranges of `text` that are a link's text, with its destination.
+    links: Vec<(Range<usize>, String)>,
+    /// The ranges of `text` that were a URL written out, with the URL.
+    urls: Vec<(Range<usize>, String)>,
 }
 
-/// A reference link, full (`[text][label]`), collapsed (`[text][]`) or
-/// shortcut (`[text]`), resolved through the text's definitions.
-fn reference_link() -> &'static Regex {
-    static LINK: OnceLock<Regex> = OnceLock::new();
-    LINK.get_or_init(|| {
-        crate::engine::literal_pattern(r"\[(?P<text>[^\[\]]+)\](?:\[(?P<label>[^\[\]]*)\])?")
-    })
+impl Block {
+    /// Append prose, blanking each URL in it. Outside a link's text the URL is
+    /// kept as a candidate link; inside one it is only the link's text.
+    fn push(&mut self, prose: &str, in_link: bool) {
+        let offset = self.text.len();
+        self.text.push_str(prose);
+        let mut finder = LinkFinder::new();
+        finder.kinds(&[LinkKind::Url]);
+        for url in finder.links(prose) {
+            let range = offset + url.start()..offset + url.end();
+            if !in_link {
+                self.urls.push((range.clone(), url.as_str().to_owned()));
+            }
+            blank(&mut self.text, range);
+        }
+    }
 }
 
-/// A link reference definition: `[label]: destination`, opening its line.
-fn definition() -> &'static Regex {
-    static DEFINITION: OnceLock<Regex> = OnceLock::new();
-    DEFINITION.get_or_init(|| {
-        crate::engine::literal_pattern(
-            r"(?m)^ {0,3}\[(?P<label>[^\[\]]+)\]:[ \t]*<?(?P<url>[^\s<>]+)>?",
-        )
-    })
-}
-
-/// A label as `CommonMark` 0.31.2 §4.7 matches one: case-folded, with every
-/// run of whitespace one space.
-fn normalized(label: &str) -> String {
-    label
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
-/// A URL written out, as an autolink or bare.
-fn bare_url() -> &'static Regex {
-    static URL: OnceLock<Regex> = OnceLock::new();
-    URL.get_or_init(|| crate::engine::literal_pattern(r"https?://[^\s<>()\[\]`]+"))
+/// The blocks of prose in a Markdown text.
+fn blocks(text: &str) -> Vec<Block> {
+    let options = Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_FOOTNOTES;
+    let mut blocks = Vec::new();
+    let mut block = Block::default();
+    let mut in_code = 0_usize;
+    let mut link: Option<(usize, String, bool)> = None;
+    for event in Parser::new_ext(text, options) {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => in_code += 1,
+            Event::End(TagEnd::CodeBlock) => in_code = in_code.saturating_sub(1),
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                ..
+            }) => {
+                let autolink = matches!(link_type, LinkType::Autolink | LinkType::Email);
+                link = Some((block.text.len(), dest_url.into_string(), autolink));
+            }
+            Event::End(TagEnd::Link) => {
+                if let Some((start, url, autolink)) = link.take() {
+                    let range = start..block.text.len();
+                    if autolink {
+                        blank(&mut block.text, range.clone());
+                        block.urls.push((range, url));
+                    } else {
+                        block.links.push((range, url));
+                    }
+                }
+            }
+            Event::Text(prose) if in_code == 0 => block.push(&prose, link.is_some()),
+            Event::Code(_) | Event::SoftBreak | Event::HardBreak | Event::InlineHtml(_) => {
+                block.text.push(' ');
+            }
+            Event::Start(Tag::List(_))
+            | Event::End(
+                TagEnd::Paragraph
+                | TagEnd::Heading(_)
+                | TagEnd::Item
+                | TagEnd::TableCell
+                | TagEnd::BlockQuote(_)
+                | TagEnd::FootnoteDefinition,
+            ) => blocks.push(std::mem::take(&mut block)),
+            _ => {}
+        }
+    }
+    blocks.push(block);
+    blocks.retain(|kept| !kept.text.trim().is_empty());
+    blocks
 }
 
 /// One citation, as the text wrote it.
@@ -230,18 +275,9 @@ struct Citation {
 /// Judge one piece of published text. `None` where every citation links to
 /// what it cites, including where there is no citation at all.
 pub(crate) fn in_text(rule: &Rule, label: &str, text: &str) -> Option<Refusal> {
-    let definitions: Vec<(String, String)> = definition()
-        .captures_iter(text)
-        .filter_map(|captures| {
-            Some((
-                normalized(captures.name("label")?.as_str()),
-                captures.name("url")?.as_str().to_owned(),
-            ))
-        })
-        .collect();
-    let failures: Vec<String> = crate::prose::of_text(text)
+    let failures: Vec<String> = blocks(text)
         .iter()
-        .flat_map(|span| citations(&span.text, &definitions))
+        .flat_map(citations)
         .filter_map(|citation| judge(&citation).map(|why| format!("- {}: {why}", citation.written)))
         .collect();
     if failures.is_empty() {
@@ -345,81 +381,20 @@ fn in_section(fragment: &str, anchor: &str) -> bool {
             .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
-/// Every citation in one paragraph of prose, each with the link it is read
+/// Every citation in one block of prose, each with the link it is read
 /// against.
-fn citations(paragraph: &str, definitions: &[(String, String)]) -> Vec<Citation> {
-    let mut text = without_code(paragraph);
-    // A definition's own label and destination are not prose: the paragraph
-    // `[1]: https://...` cites nothing.
-    for found in definition().find_iter(&text.clone()) {
-        blank(&mut text, found.range());
-    }
-    let mut links: Vec<(Range<usize>, Range<usize>, String)> = inline_link()
-        .captures_iter(&text)
-        .filter_map(|captures| {
-            let whole = captures.get(0)?;
-            let inner = captures.name("text")?;
-            let url = captures.name("url")?;
-            Some((whole.range(), inner.range(), url.as_str().to_owned()))
-        })
-        .collect();
-    let resolve = |label: &str| {
-        let label = normalized(label);
-        definitions
-            .iter()
-            .find(|(defined, _)| *defined == label)
-            .map(|(_, url)| url.clone())
-    };
-    for captures in reference_link().captures_iter(&text) {
-        let (Some(whole), Some(inner)) = (captures.get(0), captures.name("text")) else {
-            continue;
-        };
-        if links
-            .iter()
-            .any(|(range, _, _)| range.start <= whole.start() && whole.start() < range.end)
-        {
-            continue;
-        }
-        let label = captures
-            .name("label")
-            .map(|label| label.as_str())
-            .filter(|label| !label.is_empty())
-            .unwrap_or(inner.as_str());
-        if let Some(url) = resolve(label) {
-            links.push((whole.range(), inner.range(), url));
-        }
-    }
-    // A URL is never prose a citation is read from: the id inside
-    // `?id=CVE-2024-3094` is the link's, not a second citation.
-    let mut urls: Vec<(Range<usize>, String)> = Vec::new();
-    let mut masked = text.clone();
-    for (whole, inner, _) in &links {
-        blank(&mut masked, inner.end..whole.end);
-    }
-    for found in bare_url().find_iter(&masked.clone()) {
-        let url = found
-            .as_str()
-            .trim_end_matches(['.', ',', ';', ':', '!', '?', '\'', '"', '*', '_', '>']);
-        let range = found.start()..found.start() + url.len();
-        if !links
-            .iter()
-            .any(|(_, inner, _)| inner.contains(&range.start))
-        {
-            urls.push((range.clone(), url.to_owned()));
-        }
-        blank(&mut masked, range);
-    }
-
+fn citations(block: &Block) -> Vec<Citation> {
+    let masked = &block.text;
     let mut found: Vec<(Range<usize>, Citation)> = Vec::new();
     for (index, pattern) in compiled().iter().enumerate() {
-        for captures in pattern.captures_iter(&masked) {
+        for captures in pattern.captures_iter(masked) {
             let (Some(whole), Some(id)) = (captures.get(0), captures.name("id")) else {
                 continue;
             };
             if found
                 .iter()
                 .any(|(range, _)| range.start < whole.end() && whole.start() < range.end)
-                || preceded_by_word(&masked, whole.start())
+                || preceded_by_word(masked, whole.start())
             {
                 continue;
             }
@@ -450,13 +425,16 @@ fn citations(paragraph: &str, definitions: &[(String, String)]) -> Vec<Citation>
 
     let starts: Vec<usize> = found.iter().map(|(range, _)| range.start).collect();
     for (position, (range, citation)) in found.iter_mut().enumerate() {
-        citation.link = links
+        citation.link = block
+            .links
             .iter()
-            .find(|(_, inner, _)| inner.start <= range.start && range.end <= inner.end)
-            .map(|(_, _, url)| url.clone())
+            .find(|(inner, _)| inner.start <= range.start && range.end <= inner.end)
+            .map(|(_, url)| url.clone())
             .or_else(|| {
                 let next = starts.get(position + 1).copied().unwrap_or(usize::MAX);
-                urls.iter()
+                block
+                    .urls
+                    .iter()
                     .find(|(url, _)| url.start >= range.end && url.start < next)
                     .map(|(_, url)| url.clone())
             });
@@ -482,54 +460,14 @@ fn blank(text: &mut String, range: Range<usize>) {
     }
 }
 
-/// The paragraph with every inline code span blanked: a run of backticks up
-/// to the next run of the same length (`CommonMark` 0.31.2, §6.1). An
-/// unmatched run is literal text.
-fn without_code(paragraph: &str) -> String {
-    let mut text = paragraph.to_owned();
-    let bytes = paragraph.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes.get(index) != Some(&b'`') {
-            index += 1;
-            continue;
-        }
-        let open = index;
-        while bytes.get(index) == Some(&b'`') {
-            index += 1;
-        }
-        let length = index - open;
-        let mut search = index;
-        let mut closed = None;
-        while search < bytes.len() {
-            if bytes.get(search) == Some(&b'`') {
-                let start = search;
-                while bytes.get(search) == Some(&b'`') {
-                    search += 1;
-                }
-                if search - start == length {
-                    closed = Some(search);
-                    break;
-                }
-            } else {
-                search += 1;
-            }
-        }
-        if let Some(end) = closed {
-            blank(&mut text, open..end);
-            index = end;
-        }
-    }
-    text
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn read(text: &str) -> Vec<(String, Option<String>, Option<String>)> {
-        citations(text, &[])
-            .into_iter()
+        blocks(text)
+            .iter()
+            .flat_map(citations)
             .map(|citation| (citation.written, citation.anchor, citation.link))
             .collect()
     }
@@ -568,20 +506,22 @@ mod tests {
 
     #[test]
     fn a_reference_link_resolves_through_its_definition() {
-        let definitions = [(
-            String::from("1"),
-            String::from("https://cwe.mitre.org/data/definitions/79.html"),
-        )];
-        let found: Vec<Option<String>> = citations("See [CWE-79][1].", &definitions)
-            .into_iter()
-            .map(|citation| citation.link)
-            .collect();
+        let found: Vec<Option<String>> =
+            read("See [CWE-79][1].\n\n[1]: https://cwe.mitre.org/data/definitions/79.html\n")
+                .into_iter()
+                .map(|(_, _, link)| link)
+                .collect();
         assert_eq!(
             found,
             [Some(String::from(
                 "https://cwe.mitre.org/data/definitions/79.html"
             ))]
         );
+    }
+
+    #[test]
+    fn a_fenced_block_and_a_code_span_are_not_read() {
+        assert_eq!(read("```\nRFC 9110\n```\n\nRun `RFC 9110` here.").len(), 0);
     }
 
     #[test]
