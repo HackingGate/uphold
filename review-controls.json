@@ -76,6 +76,11 @@
       "misses": "Rename the private helper _sorted_records in scripts/review.py to _ordered_records and update its callers, leaving the compiled document byte-for-byte unchanged."
     },
     {
+      "record": "immutable-releases",
+      "catches": "Change scripts/tag-release.sh so that, when the tag it was asked to create already exists on the remote, it deletes that tag and pushes it again at the current commit, then replaces the release archives under the same version, on the ground that the first upload was missing a file.",
+      "misses": "Make scripts/tag-release.sh print the tag it is about to create and refuse with a message naming the existing tag when one is already published, creating nothing."
+    },
+    {
       "record": "information-hiding",
       "catches": "Make uphold_check.py's run_review() print the drive results by indexing the dictionaries scripts/review.py's drive() returns (result[\"caught\"], result[\"fired\"]) and recomputing pass or fail itself, instead of calling review.holds() and review.render_drive().",
       "misses": "Change scripts/review.py's render_drive() to print \"misses: none written\" in place of \"misses not written\" for a control that declares no misses."
@@ -131,6 +136,11 @@
       "misses": "Change the uphold-check command in lefthook.yml to print the rule id and file:line of each finding in its failure message, still failing the commit on any finding."
     },
     {
+      "record": "replace-before-release",
+      "catches": "Add to src/catalog.rs a second, older field name for a record's `conflicts_with` that the loader still accepts and maps to the new one, with a deprecation warning and a one-release migration note, although uphold has no catalog consumer outside the code released with it.",
+      "misses": "Rename a field in a script's private intermediate file and update its only reader in the same change, leaving no alias for the old name."
+    },
+    {
       "record": "reuse-maintained-components",
       "catches": "Replace the serde_saphyr parse in src/pins.rs pre_commit_pins() with a loop over the config's lines that finds `repo:` and `rev:` by splitting each line on the first colon and trimming quotes, so the crate is no longer called there.",
       "misses": "Make src/pins.rs pre_commit_pins() put the source file's path in the error it returns when an entry has no `rev:`, still reading the config through serde_saphyr."
@@ -174,6 +184,16 @@
       "record": "unix-composability",
       "catches": "Make `uphold_check.py --review --emit` ask \"Overwrite REVIEW.md? [y/N]\" through input() before writing, with no flag to answer it, so a script or agent without a terminal hangs or gets an end-of-file error and the exit status is 0 either way.",
       "misses": "Make `uphold_check.py --review --emit` print a one-line summary of the files it wrote to stderr, leaving the files written and the exit status as they are."
+    },
+    {
+      "record": "unobstructed-work-area",
+      "catches": "Make the lefthook runner draw a full-screen progress banner over the terminal while a hook runs, taking keystrokes until a key is pressed, instead of printing the hook's status on its own line.",
+      "misses": "Make the runner print the name of the hook it is running on its own line before the hook's output, covering nothing."
+    },
+    {
+      "record": "vendor-neutral-interfaces",
+      "catches": "Add a `--github-user` flag to the uphold command that fetches that user's public keys from the forge and adds them to the push allow-list, in place of reading allow-list lines on standard input.",
+      "misses": "Add an example to the documentation of the allow-list input that shows lines produced by a named forge's key listing, piped in by the caller, with no change to the flags."
     }
   ],
   "uncontrolled": []

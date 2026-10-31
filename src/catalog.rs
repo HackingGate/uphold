@@ -120,6 +120,10 @@ const RECORDS: &[(&str, &str)] = &[
         include_str!("../principles/idempotency.toml"),
     ),
     (
+        "immutable-releases",
+        include_str!("../principles/immutable-releases.toml"),
+    ),
+    (
         "information-hiding",
         include_str!("../principles/information-hiding.toml"),
     ),
@@ -172,6 +176,10 @@ const RECORDS: &[(&str, &str)] = &[
         include_str!("../principles/psychological-acceptability.toml"),
     ),
     (
+        "replace-before-release",
+        include_str!("../principles/replace-before-release.toml"),
+    ),
+    (
         "reproducible-derived-state",
         include_str!("../principles/reproducible-derived-state.toml"),
     ),
@@ -206,6 +214,14 @@ const RECORDS: &[(&str, &str)] = &[
     (
         "unix-composability",
         include_str!("../principles/unix-composability.toml"),
+    ),
+    (
+        "unobstructed-work-area",
+        include_str!("../principles/unobstructed-work-area.toml"),
+    ),
+    (
+        "vendor-neutral-interfaces",
+        include_str!("../principles/vendor-neutral-interfaces.toml"),
     ),
 ];
 

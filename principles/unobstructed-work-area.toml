@@ -1,0 +1,44 @@
+id = "unobstructed-work-area"
+title = "Unobstructed Work Area"
+aliases = ["Do not cover the content", "No always-on overlays", "Status without interruption"]
+kind = "principle"
+status = "seed"
+domains = ["interfaces", "socio-technical"]
+summary = "An interface does not cover, or take input away from, the content a person is working in; status goes to a non-overlapping area or a log."
+claim = "Do not cover, or take input away from, the content the person is working in; send status and diagnostics to a non-overlapping area or to a log, and keep a modal interruption for a decision the person must make before the work can go on."
+problem = "A banner, toast or dialog drawn over the work area hides the content, takes focus or keystrokes meant for it, and interrupts the person for a notice that needed no answer. In a terminal, editor or video, the thing the person came to see is the thing that gets covered."
+rationale = "The work area is the reason the person opened the interface. Anything drawn over it spends their attention and their view for the program's convenience, while a notice in a separate area or a log is read when the person looks for it. Only a decision that blocks the work earns an interruption."
+applies_when = ["The interface has one primary work area, such as a terminal, an editor, a canvas or a video.", "Overlays, banners, toasts or modal dialogs are being considered for status or notices."]
+does_not_mean = ["Never ask anything; a consequential, irreversible action still asks, as informed consent requires.", "Hide errors; they go to a log or to a non-overlapping area the person can open."]
+benefits = ["The content stays visible and keeps its input while the person works.", "Notices wait to be read instead of demanding a dismissal.", "Focus is never stolen, which also keeps keyboard and assistive-technology users in place."]
+costs = ["A notice the person does not look for may go unread.", "Non-overlapping status needs space the layout must reserve, or a log the person must know to open.", "An urgent condition has no loud channel short of a modal one."]
+failure_when_overapplied = ["A consequential action proceeds without asking, because asking would interrupt.", "An error is written to a log nobody reads and the person is left with a failure they cannot see.", "A screen is kept free of every indicator, so state the person needs to act on is not shown."]
+conflicts_with = ["informed-consent"]
+related = ["psychological-acceptability", "least-astonishment", "host-owned-logs", "observability"]
+review_questions = ["Does anything overlap the work area while the person works in it?", "Does any overlay take focus or keystrokes from the content?", "Could this notice be a log entry or a non-overlapping indicator instead?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+rung = ["text", "syntax"]
+observable = ["A call that draws a modal dialog, toast, banner or overlay from code that runs while the person works in the primary area.", "A handler that takes keyboard focus from the content when a notice appears.", "A status or diagnostic message written to the screen, not to a log, in an interface with one work area."]
+checks = ["Flag a use of the toolkit's modal, toast or overlay calls outside a list of places the project names as decisions the person must make, and accept a waiver that names the decision.", "Require a notice raised by background code to name the log or non-overlapping indicator it goes to."]
+limits = ["Whether an element covers the content depends on the layout and the window size at run time, which no static check sees.", "Whether a decision must be made before work can go on is a judgment about its consequences.", "What the person looks at, and so what an indicator costs them, cannot be observed from code."]
+
+[[sources]]
+title = "WCAG 2.2, Success Criterion 2.4.11 Focus Not Obscured (Minimum)"
+url = "https://www.w3.org/WAI/WCAG22/Understanding/focus-not-obscured-minimum.html"
+type = "standard"
+notes = "When a component receives keyboard focus, it is not entirely hidden by content the author created, such as a sticky banner or a non-modal dialog."
+
+[[sources]]
+title = "Nielsen Norman Group, Modal & Nonmodal Dialogs: When (& When Not) to Use Them"
+url = "https://www.nngroup.com/articles/modal-nonmodal-dialog/"
+type = "essay"
+notes = "Modal dialogs interrupt the task and are for critical information or a decision; a nonmodal dialog or inline message lets the person keep working."
+
+[[sources]]
+title = "Apple Human Interface Guidelines, Alerts"
+url = "https://developer.apple.com/design/human-interface-guidelines/alerts"
+type = "documentation"
+notes = "An alert interrupts the person and is reserved for important information that affects them, with a choice where one is needed."

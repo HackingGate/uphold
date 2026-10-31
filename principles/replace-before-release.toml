@@ -1,0 +1,32 @@
+id = "replace-before-release"
+title = "Replace Before Release"
+aliases = ["Break freely before 1.0", "No compatibility before the first consumer", "Replace outright before release"]
+kind = "principle"
+status = "seed"
+domains = ["architecture", "evolution"]
+summary = "While an interface has no consumer outside the code released with it, an incompatible change replaces the old shape in one step; compatibility is paid for once someone outside depends on it."
+claim = "While an interface has no consumer outside the code released with it, make an incompatible change by replacing the old shape in one step; pay for compatibility paths, staged migrations and parallel old shapes only once someone outside depends on the interface."
+problem = "A design that keeps the old column, type or route beside the new one, and migrates in stages, spends the cost of a public contract before there is a public. The old shape stays in the code, is tested, documented and misread as supported, and the replacement is never the only way."
+rationale = "Compatibility protects a consumer who cannot be changed in the same step as the producer. Where every consumer is released together with the interface, or pinned by its own maintainer, no such consumer exists, so the protection buys nothing and the two shapes together cost more than one. The versioning scheme states the same freedom: before the first stable release anything may change."
+applies_when = ["The product or interface is pre-release, such as a 0.y.z version with no public users.", "Every consumer is changed and released together with the interface, or is pinned by its own maintainer.", "Data can be recreated, or migrated in one step."]
+does_not_mean = ["Skip the version bump; a minor version before 1.0 still signals the break.", "Break released consumers; from the first outside consumer on, deprecation applies.", "Change without tests; the replacement passes the same gate the old shape did."]
+benefits = ["One shape of the interface exists, so nothing is kept, tested or documented twice.", "No migration path has to be written, run or later removed.", "The design that is released is the one that was chosen, not a compromise with its predecessor."]
+costs = ["A consumer that was never counted breaks without a warning period.", "A copy of the data that cannot be recreated is lost or needs a one-time migration anyway.", "The line between pre-release and released is a decision someone must make and state."]
+failure_when_overapplied = ["An interface with one outside consumer is treated as pre-release because its version begins with 0.", "Replacing the shape is taken as leave to drop the tests, the version bump or the note that tells pinned consumers what changed.", "The practice carries on after the first outside consumer, and a break reaches someone with no way to follow it."]
+conflicts_with = ["deprecation-discipline", "reversible-decisions"]
+related = ["hyrums-law"]
+review_questions = ["Does anything outside this release depend on the old shape?", "Is the old shape removed in the same change, or kept beside the new one?", "Does the version say the change breaks?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+rung = ["text", "syntax"]
+observable = ["A change that adds a new column, type, field or route and leaves the old one in place, in a repository whose version is below 1.0.", "A migration or compatibility shim added in a repository that declares no released consumer.", "A manifest version that did not change in a change that removes or renames a public name."]
+checks = ["Flag a compatibility alias, a dual-write or a migration step added in a repository whose version is 0.y.z, and accept a waiver that names the outside consumer it serves.", "Require a version bump in a change that removes or renames a public name."]
+limits = ["Whether anything outside the release depends on the old shape is a fact about other people's code that no check of this repository can see.", "Whether data can be recreated is a judgment about its owner's needs.", "A 0.y.z version is not evidence that nobody uses the interface."]
+
+[[sources]]
+title = "Semantic Versioning 2.0.0, item 4"
+url = "https://semver.org/#spec-item-4"
+type = "specification"
+notes = "Major version zero (0.y.z) is for initial development. Anything MAY change at any time. The public API SHOULD NOT be considered stable."
