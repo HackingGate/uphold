@@ -44,7 +44,8 @@ use crate::guard::Refusal;
 /// is how far a family's links let a check go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Locate {
-    /// Nothing past the document: a record, whose id names one page.
+    /// Nothing past the document: a record, whose id names one page, or a
+    /// catalogue, whose page cannot be told from the citation at all.
     Nothing,
     /// `#section-<s>` or `#appendix-<X>`, or a paragraph of it, from the
     /// number: the RFC series' anchors.
@@ -89,7 +90,9 @@ struct Family {
     pattern: &'static str,
     spelling: Spelling,
     /// The family's links to document `<id>`, matched against the whole URL
-    /// with its fragment taken off. `*` is one path segment.
+    /// with its fragment taken off. `*` is one path segment and `**` the
+    /// rest of the path; a template with no `<id>` is a catalogue host,
+    /// where no page can be told from the citation.
     links: &'static [&'static str],
     /// Whether `<id>` compares without regard to case, as a DOI does.
     id_any_case: bool,
@@ -249,6 +252,33 @@ const FAMILIES: &[Family] = &[
         id_any_case: false,
         id_suffix: "",
     },
+    // A catalogue row. An ISO catalogue page is numbered by the catalogue,
+    // not by the standard (ISO 8601-1:2019 is /standard/70907.html), and the
+    // text is sold, so the link is held to the catalogue's host and no
+    // further.
+    Family {
+        name: "ISO",
+        locate: Locate::Nothing,
+        spelling: Spelling::AsWritten,
+        pattern: r"\bISO(?:/IEC)?[ \u{a0}]*(?P<id>[1-9][0-9]{1,5}(?:-[0-9]+)*)(?::[0-9]{4})?\b",
+        links: &["https://www.iso.org/standard/**"],
+        id_any_case: false,
+        id_suffix: "",
+    },
+    // The same for IEEE: its standards pages and Xplore documents are
+    // numbered by the site.
+    Family {
+        name: "IEEE",
+        locate: Locate::Nothing,
+        spelling: Spelling::AsWritten,
+        pattern: r"\bIEEE(?:[ \u{a0}]+Std)?[ \u{a0}]*(?P<id>[1-9][0-9]{2,4}(?:\.[0-9]+)*[a-z]*)(?:-[0-9]{4})?\b",
+        links: &[
+            "https://standards.ieee.org/**",
+            "https://ieeexplore.ieee.org/document/**",
+        ],
+        id_any_case: false,
+        id_suffix: "",
+    },
 ];
 
 fn compiled() -> &'static [Regex] {
@@ -401,9 +431,9 @@ fn judge(citation: &Citation) -> Option<String> {
         .any(|template| links_to(template, &citation.id, family, document))
     {
         return Some(format!(
-            "links to {link}, which is not a {} link to {}; link it to {}",
-            family.name,
+            "links to {link}, which is not a link to {} ({}); link it to {}",
             citation.written,
+            family.name,
             wanted(family, citation)
         ));
     }
@@ -456,7 +486,12 @@ fn wanted(family: &Family, citation: &Citation) -> String {
     family
         .links
         .iter()
-        .map(|link| format!("{}{anchor}", link.replace("<id>", &linked_id)))
+        .map(|link| {
+            format!(
+                "{}{anchor}",
+                link.replace("**", "…").replace("<id>", &linked_id)
+            )
+        })
         .collect::<Vec<_>>()
         .join(" or ")
 }
@@ -475,7 +510,11 @@ fn links_to(template: &str, id: &str, family: &Family, document: &str) -> bool {
             }
             pattern.push_str(family.id_suffix);
         }
-        pattern.push_str(&regex::escape(part).replace(r"\*", "[^/?#]+"));
+        pattern.push_str(
+            &regex::escape(part)
+                .replace(r"\*\*", "[^?#]*")
+                .replace(r"\*", "[^/?#]+"),
+        );
     }
     pattern.push('$');
     Regex::new(&pattern).is_ok_and(|compiled| compiled.is_match(document))
@@ -674,6 +713,16 @@ mod tests {
         let citation = citations(&blocks("arXiv:1706.03762v7").remove(0)).remove(0);
         let family = FAMILIES.get(citation.family).expect("a row");
         assert!(wanted(family, &citation).starts_with("https://arxiv.org/abs/1706.03762v7"));
+    }
+
+    #[test]
+    fn a_dotted_ieee_number_with_letters_and_a_year_is_read_whole() {
+        assert_eq!(
+            read("IEEE Std 802.11ax-2021 says so.")
+                .first()
+                .map(|citation| citation.0.as_str()),
+            Some("IEEE Std 802.11ax-2021")
+        );
     }
 
     #[test]

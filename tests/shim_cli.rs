@@ -9706,6 +9706,31 @@ const CITATION_ROWS: &[(&str, &str, &[&str])] = &[
         &["https://doi.org/10.1002/spe.4380120707"],
     ),
     (
+        "ISO 8601-1:2019",
+        "https://www.iso.org/standard/70907.html",
+        &["https://www.iso.org/obp/ui/#iso:std:iso:8601:-1:ed-1:v1:en"],
+    ),
+    (
+        "ISO/IEC 27001",
+        "https://www.iso.org/standard/27001",
+        &["https://en.wikipedia.org/wiki/ISO/IEC_27001"],
+    ),
+    (
+        "IEEE 754-2019",
+        "https://standards.ieee.org/ieee/754/6210/",
+        &["https://en.wikipedia.org/wiki/IEEE_754"],
+    ),
+    (
+        "IEEE Std 802.11ax-2021",
+        "https://standards.ieee.org/ieee/802.11ax/7180/",
+        &["https://en.wikipedia.org/wiki/IEEE_802.11ax"],
+    ),
+    (
+        "IEEE Std 802.3",
+        "https://ieeexplore.ieee.org/document/9844436",
+        &["https://ieeexplore.ieee.org/xpl/conhome/1000/all-proceedings"],
+    ),
+    (
         "arXiv:1706.03762",
         "https://arxiv.org/abs/1706.03762v7",
         &["https://arxiv.org/abs/1706.03763"],

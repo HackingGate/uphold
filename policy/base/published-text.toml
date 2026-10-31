@@ -173,14 +173,14 @@ command.scope = "always"
 
 # A citation of a numbered standard or an identifier -- an RFC, an
 # Internet-Draft, a BCP or STD, a CVE, a CWE, a GHSA, a DOI, an arXiv id, a
-# WCAG success criterion, a PEP, a Unicode report -- links to what it cites,
-# and a section cited links to that section as far as the family's anchors
-# can be told from the citation. Read from a closed table of families compiled into the binary, so
-# a family added is a row and not a policy regular expression; no link is
-# fetched, because the section anchors follow from the number. `gh` alone, as
-# above: a pull-request or issue body is where a citation is published.
-# `command.scope = "always"`: a citation in a private repository's body
-# misleads its reader as much as one in a public one.
+# WCAG success criterion, a PEP, a Unicode report, an ISO or IEEE standard --
+# links to what it cites, and a section cited links to that section as far as
+# the family's anchors can be told from the citation. Read from a closed table
+# of families compiled into the binary, so a family added is a row and not a
+# policy regular expression; no link is fetched, because the section anchors
+# follow from the number. `gh` alone, as above: a pull-request or issue body is
+# where a citation is published. `command.scope = "always"`: a citation in a
+# private repository's body misleads its reader as much as one in a public one.
 [rule.citations-linked]
 builtin = "citations-linked"
 command.before = ["gh"]
