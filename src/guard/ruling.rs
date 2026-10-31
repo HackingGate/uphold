@@ -239,65 +239,38 @@ fn cited(line: &str) -> Vec<Citation<'_>> {
 }
 
 /// The answer lines of a body: `Answered:` under a questions heading, outside
-/// a code fence.
+/// code.
 ///
 /// A heading below the questions heading's level stays inside its section
-/// whatever it says. A fence closes on a run of its own character at least as
-/// long as the one that opened it, with nothing after (`CommonMark` 0.31.2,
-/// §4.5), so a three-backtick example inside a four-backtick block stays
-/// inside it.
+/// whatever it says. Which lines are code and which are headings is the
+/// parser's answer ([`crate::markdown`]), so a three-backtick example inside a
+/// four-backtick block stays inside it, and a `#` line in a block is not a
+/// heading.
 fn answers(text: &str) -> Vec<&str> {
+    let code = crate::markdown::code_lines(text);
+    let headings: std::collections::BTreeMap<u64, (usize, String)> =
+        crate::markdown::headings(text)
+            .into_iter()
+            .map(|(line, level, title)| (line, (level, title)))
+            .collect();
     let mut under: Option<usize> = None;
-    let mut fence: Option<(char, usize)> = None;
     let mut found = Vec::new();
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let run = fence_run(trimmed);
-        if let Some((character, length)) = fence {
-            if run.is_some_and(|(closing, count, rest)| {
-                closing == character && count >= length && rest.trim().is_empty()
-            }) {
-                fence = None;
-            }
+    for (index, line) in text.lines().enumerate() {
+        if code.get(index).copied().unwrap_or(false) {
             continue;
         }
-        if let Some((character, count, _)) = run {
-            fence = Some((character, count));
-            continue;
-        }
-        if let Some((level, title)) = heading(trimmed) {
-            if under.is_some_and(|questions| level > questions) {
+        if let Some((level, title)) = headings.get(&(index as u64 + 1)) {
+            if under.is_some_and(|questions| *level > questions) {
                 continue;
             }
-            under = title.to_lowercase().contains("question").then_some(level);
+            under = title.to_lowercase().contains("question").then_some(*level);
             continue;
         }
-        if under.is_some() && list_item(trimmed).starts_with("Answered:") {
+        if under.is_some() && list_item(line.trim_start()).starts_with("Answered:") {
             found.push(line);
         }
     }
     found
-}
-
-/// A fence marker: three or more backticks or tildes, and what follows them.
-fn fence_run(line: &str) -> Option<(char, usize, &str)> {
-    let character = line
-        .chars()
-        .next()
-        .filter(|first| ['`', '~'].contains(first))?;
-    let count = line.chars().take_while(|&next| next == character).count();
-    (count >= 3).then(|| (character, count, line.get(count..).unwrap_or("")))
-}
-
-/// An ATX heading's level and title.
-fn heading(line: &str) -> Option<(usize, &str)> {
-    let level = line
-        .chars()
-        .take_while(|&character| character == '#')
-        .count();
-    let rest = line.get(level..)?;
-    ((1..=6).contains(&level) && (rest.is_empty() || rest.starts_with([' ', '\t'])))
-        .then(|| (level, rest.trim()))
 }
 
 /// A line with one list marker taken off its front, if it opens with one.

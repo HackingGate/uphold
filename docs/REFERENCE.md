@@ -1288,7 +1288,7 @@ The extractor is chosen by the file's kind:
 
 | file | what is prose |
 |---|---|
-| `.md` | the whole file, minus fenced blocks (` ``` `, `~~~`) and indented code (4+ spaces), read by the CommonMark rules for both |
+| `.md` | the whole file, minus fenced blocks (` ``` `, `~~~`) and indented code, as a CommonMark parser places them |
 | `.rst`, `.txt`, `.adoc`, and a file with **no extension** | the whole file, minus fenced blocks, at any indentation |
 | `.rs`, `.py`, `.pyi`, `.go` | the comments, read by the grammar — **doc comments included** |
 | `.toml`, `.yaml`, `.yml`, `.sh`, `.bash`, `.zsh`, `.ini`, `.cfg`, and a dotfile with no extension (`.gitignore`) | the lines whose first non-space character is `#`, with the `#` stripped |
@@ -1304,14 +1304,18 @@ somebody wrote badly. That silence is indistinguishable from prose with nothing
 wrong in it, so a prose rule is the one most worth giving a
 [`files.min_selected`](#a-rule-may-declare-a-floor-under-what-it-selects).
 
-**Code is found where a CommonMark renderer finds it.** A fence closes only on
-a run of its own character at least as long as the one that opened it, with no
-info string after it, so a ` ```bash ` line inside an open ` ```sh ` block is a
-line of that block, and a fence never closed runs to the end of the file.
-Four spaces open indented code only where they do not continue a paragraph,
-and inside a list item they are counted from where the item's text starts, so
-a nested bullet or a continuation line under an item is prose. Lists are
-approximated line by line rather than parsed; block quotes are not modelled.
+**Code is found where a CommonMark renderer finds it**, because a CommonMark
+parser ([pulldown-cmark](https://github.com/raphlinus/pulldown-cmark)) says
+which lines are code. A fence closes only on a run of its own character at
+least as long as the one that opened it, with no info string after it, so a
+` ```bash ` line inside an open ` ```sh ` block is a line of that block, and a
+fence never closed runs to the end of the file. Four spaces open indented code
+only where they do not continue a paragraph, counted inside a list item or a
+block quote from where its content starts, so a nested bullet or a
+continuation line under an item is prose. The prose itself is the lines as
+written, list markers and all; only where the code is comes from the parser.
+`links-resolve`, `commands-resolve` and a ruling's `Answered:` lines read
+code, links and headings from the same parser.
 
 **Doc comments are included**, which is the one place this parts company with
 `comment_regexp`. That check excludes them because acting on its findings
@@ -1473,7 +1477,7 @@ reported as a failure, never dropped from the count.
 
 What it deliberately does not do:
 
-- **Only code spans**, fenced or inline, and only where the command is the
+- **Only code**, a fenced or indented block or an inline span, and only where the command is the
   **first token** of the span. An invocation begins with the binary; a sentence
   that happens to contain the same two words in a row does not, and neither does
   a column of an ASCII diagram. Restricting the check to that shape avoids false

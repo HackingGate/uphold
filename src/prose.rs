@@ -185,68 +185,27 @@ fn closes(fence: Fence, rest: &str) -> bool {
             .is_empty()
 }
 
-/// The column a list item's text starts at, if the line opens one: a bullet
-/// (`-`, `*`, `+`) or up to nine digits and `.` or `)`, then a space or the end
-/// of the line. One to four spaces after the marker are part of it; past four,
-/// the text starts one space after the marker and the rest is its indentation.
-fn item_of(width: usize, rest: &str) -> Option<usize> {
-    let digits = rest.chars().take_while(char::is_ascii_digit).count();
-    let marker = match rest.chars().nth(digits)? {
-        '-' | '*' | '+' if digits == 0 => 1,
-        '.' | ')' if (1..=9).contains(&digits) => digits + 1,
-        _ => return None,
-    };
-    let (gap, text) = indented(rest.get(marker..)?);
-    match (gap, text.is_empty()) {
-        (_, true) | (5.., false) => Some(width + marker + 1),
-        (0, false) => None,
-        (_, false) => Some(width + marker + gap),
-    }
-}
-
-/// Whether a line is an ATX heading: one to six `#` and then a space or the end
-/// of the line. A heading is not a paragraph, so code may follow it directly.
-fn heading(rest: &str) -> bool {
-    let hashes = rest.chars().take_while(|found| *found == '#').count();
-    (1..=6).contains(&hashes)
-        && rest
-            .trim_start_matches('#')
-            .chars()
-            .next()
-            .is_none_or(|after| matches!(after, ' ' | '\t'))
-}
-
-/// The paragraphs of a document, by the `CommonMark` rules for where code
-/// starts and ends.
+/// The paragraphs of a document.
 ///
-/// A fence opens on three or more backticks or tildes and closes on the rules
-/// of [`closes`]; one never closed runs to the end of the document, as it does
-/// in `CommonMark`. In Markdown a fence or a closing fence indented four spaces
-/// past its container is not one, and four spaces open an indented code block
-/// only where they do not continue a paragraph and are counted from the text of
-/// the list item the line sits in, not from the margin.
-///
-/// Lists are approximated rather than parsed. A line opening a list item pushes
-/// the column its text starts at, and a line indented less than that column --
-/// after a blank line, or when it opens something itself -- pops it. A line
-/// under paragraph text that opens no fence, item or heading continues the
-/// paragraph however it is indented, which is the lazy continuation
-/// `CommonMark` allows. Not modelled: block quotes, an item's first line
-/// holding a fence or code of its own, the rule that only an ordinal of 1 and
-/// a non-empty item may interrupt a paragraph, and a fence ending because the
-/// list item around it ended -- here it ends only at its closing line.
+/// In Markdown, which lines are code is the parser's answer
+/// ([`crate::markdown::code_lines`]): a fenced block, open or closed, and an
+/// indented block, inside a list item or not, as `CommonMark` places them. What
+/// is left is prose, and a run of it ends at a blank line or at code. Each run
+/// keeps its lines as written, markers included, because a prose rule matches
+/// the sentence the author wrote.
 ///
 /// A plain text file has no indented code and no lists, so there a fence opens
 /// and closes at any indentation and every other line is prose.
 fn of_document(text: &str, markdown: bool) -> Vec<Span> {
+    let code = if markdown {
+        crate::markdown::code_lines(text)
+    } else {
+        Vec::new()
+    };
     let mut spans = Vec::new();
     let mut run: Vec<&str> = Vec::new();
     let mut start = 0_u64;
     let mut fence: Option<Fence> = None;
-    // The column each open list item's text starts at, innermost last.
-    let mut items: Vec<usize> = Vec::new();
-    // Whether the last line was paragraph text the next one may continue.
-    let mut paragraph = false;
 
     let mut flush = |pending: &mut Vec<&str>, from: u64| {
         if !pending.is_empty() {
@@ -260,52 +219,24 @@ fn of_document(text: &str, markdown: bool) -> Vec<Span> {
 
     for (index, line) in text.lines().enumerate() {
         let number = index as u64 + 1;
-        let (width, rest) = indented(line);
-        if let Some(open) = fence {
-            if closes(open, rest) && (!markdown || width < open.base + 4) {
+        let (_, rest) = indented(line);
+        if markdown {
+            if code.get(index).copied().unwrap_or(false) {
+                flush(&mut run, start);
+                continue;
+            }
+        } else if let Some(open) = fence {
+            if closes(open, rest) {
                 fence = None;
             }
+            continue;
+        } else if let Some(opened) = fence_of(rest, 0) {
+            flush(&mut run, start);
+            fence = Some(opened);
             continue;
         }
         if rest.trim_start().is_empty() {
             flush(&mut run, start);
-            paragraph = false;
-            continue;
-        }
-        if markdown {
-            let inside = items.last().copied().unwrap_or(0);
-            let opens = width < inside + 4
-                && (fence_of(rest, inside).is_some()
-                    || item_of(width, rest).is_some()
-                    || heading(rest));
-            if opens || !paragraph {
-                while items.last().is_some_and(|column| *column > width) {
-                    items.pop();
-                }
-                let base = items.last().copied().unwrap_or(0);
-                // An indented block is code in Markdown and is a sentence
-                // somebody indented anywhere else. Refusing a shape inside a
-                // four-space block of a plain text file would be refusing the
-                // indentation, not the prose.
-                if width >= base + 4 {
-                    flush(&mut run, start);
-                    paragraph = false;
-                    continue;
-                }
-                if let Some(opened) = fence_of(rest, base) {
-                    flush(&mut run, start);
-                    fence = Some(opened);
-                    paragraph = false;
-                    continue;
-                }
-                if let Some(column) = item_of(width, rest) {
-                    items.push(column);
-                }
-                paragraph = !heading(rest);
-            }
-        } else if let Some(opened) = fence_of(rest, 0) {
-            flush(&mut run, start);
-            fence = Some(opened);
             continue;
         }
         if run.is_empty() {
