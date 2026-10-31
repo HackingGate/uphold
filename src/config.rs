@@ -5430,6 +5430,7 @@ mod tests {
         assert_eq!(
             arrived,
             [
+                "citations-linked",
                 "no-empty-merge-subject",
                 "no-published-host-identity",
                 "no-published-markers",

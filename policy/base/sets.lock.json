@@ -836,6 +836,16 @@
     ],
     "rules": [
       {
+        "builtin": "citations-linked",
+        "command": {
+          "before": [
+            "gh"
+          ],
+          "scope": "always"
+        },
+        "id": "citations-linked"
+      },
+      {
         "command": {
           "before": [
             "gh pr merge",

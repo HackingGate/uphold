@@ -27,13 +27,13 @@ limits = ["Which standard applies to a part is a judgment; a tool checks only th
 
 [[sources]]
 title = "RFC 2026: The Internet Standards Process -- Revision 3"
-url = "https://www.rfc-editor.org/rfc/rfc2026"
+url = "https://www.rfc-editor.org/rfc/rfc2026.html"
 type = "standard"
 notes = "Defines the IETF's maturity levels and the review a specification passes before it becomes a standard; the review history this record counts as evidence."
 
 [[sources]]
 title = "RFC 7282: On Consensus and Humming in the IETF"
-url = "https://www.rfc-editor.org/rfc/rfc7282"
+url = "https://www.rfc-editor.org/rfc/rfc7282.html"
 type = "standard"
 notes = "Describes rough consensus: that every objection raised was addressed, not that everyone agreed. That is why a standard carries more review than a private design."
 

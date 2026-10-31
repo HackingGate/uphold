@@ -598,7 +598,7 @@ it refuses** so the name predicts the rule list:
 | `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |
 | `private-names` | a private organization or repository named in a commit message, a staged diff, or the tracked tree of a **public** repository — **installs five stages**, and refuses to run until the repository says whether it is published |
 | `stale-visibility` | a policy declaring `private` over a repository the forge serves as **public** — **installs `pre-push` and `manual`**, and reaches the network. Refuses that one direction only; it can never confirm privacy |
-| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push — and, as `unowned-forge-target`, a `gh` invocation bound for a repository this workspace does not own, which refuses to run until the repository says who it is, and, as `no-empty-merge-subject`, a merge commit subject that is blank once the forge's ` (#N)` is taken off, at the shim, at the harness hook and over a message given to `--text` — see [a merge with no subject](#a-merge-with-no-subject) — and, as `ruling-citations-resolve`, an `Answered:` line citing a catalog line that does not resolve at the uphold revision the repository pins — see [a ruling's citations](#a-rulings-citations). **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [the set's command ceiling](#what-a-bundled-set-may-install) |
+| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push — and, as `unowned-forge-target`, a `gh` invocation bound for a repository this workspace does not own, which refuses to run until the repository says who it is, and, as `no-empty-merge-subject`, a merge commit subject that is blank once the forge's ` (#N)` is taken off, at the shim, at the harness hook and over a message given to `--text` — see [a merge with no subject](#a-merge-with-no-subject) — and, as `ruling-citations-resolve`, an `Answered:` line citing a catalog line that does not resolve at the uphold revision the repository pins — see [a ruling's citations](#a-rulings-citations) — and, as `citations-linked`, a citation of an RFC, an Internet-Draft, a BCP or STD, a CVE, a CWE, a GHSA, a DOI or an arXiv id that does not link to what it cites — see [citations of standards and identifiers](#citations-of-standards-and-identifiers). **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [the set's command ceiling](#what-a-bundled-set-may-install) |
 | `prose-shapes` | four sentence shapes that carry nothing — a sentence announcing what the next one will say, a clause behind a dash restating the one in front of it, a hedge admitting no uncertainty, an objection nobody raised being answered. **Installs no git hook**: its rules run in `uphold scan` and at the shim seam (`gh`, `git push`), and like `published-text` it refuses to load until the repository has declared the `[[shim]]` tables itself. `UPHOLD_ALLOW=<rule-id>` is the waiver for the sentence a rule is wrong about |
 | `narrated-history` | a document's sentence narrating how something changed, in Markdown outside `adr` directories; the near misses it lets through are listed in the set's header. **Installs no git hook and no command**: it runs in `uphold scan` only, because a commit message and a pull-request body are where a change is narrated. A baseline entry excuses the one sentence it is wrong about |
 
@@ -1514,6 +1514,7 @@ stamped on it, the range about to be pushed.
 | `prevent-public-push` | a push to somewhere off the allow-list **and off the forge's own answer** — a GitHub destination the allow-list refused is put to `gh`, and a forge that could not be asked is exit `2` |
 | `prevent-unowned-target` | a **command** told to publish to a repository this workspace does not own. The same decision as the row above, reached from the shim seam instead of a hook — so it registers with `command.before` and never `git.hooks`, and a destination it could not resolve is exit `2`. Carried by `published-text` as `unowned-forge-target`, with `owner_required` and `command.scope = "always"` in the bundled declaration |
 | `ruling-citations-resolve` | an `Answered:` line, under a questions heading, citing a catalog line that is not at the uphold revision this repository pins, not in the catalog there, or not saying what the answer quotes. Text only, so it registers with `command.before`; a pin this binary's own catalog is not is exit `2`. Carried by `published-text`. See [A ruling's citations](#a-rulings-citations) |
+| `citations-linked` | a citation of a numbered standard or an identifier in prose with no link, a link to another document of its family, or, for an RFC or Internet-Draft section, a link to another section. Text only, so it registers with `command.before`; no link is fetched, so there is no exit `2`. Carried by `published-text`. See [Citations of standards and identifiers](#citations-of-standards-and-identifiers) |
 | `prevent-actor-mismatch` | a `gh` **write** about to run as anybody but the GitHub App the rule's `actor` names: no token in reach, so `gh` would use the login it stores; a personal token by its prefix; or an installation token the forge says is another App's. Registers with `command.before = ["gh"]` and `command.scope = "always"`, and is opt in: no bundled set declares it. See [who a write runs as](#who-a-write-runs-as) |
 | `no-local-merge` | a merge that would make a merge commit |
 | `no-merge-commit` | a commit finishing a merge or a squash merge |
@@ -2838,6 +2839,51 @@ is the catalog at `v<its version>`. A citation at a pinned revision other than
 that, a branch or a commit included, is exit `2`, and so is a citation where
 nothing here pins uphold: whether it resolves cannot be read, and the cure is
 to run the uphold the repository pins.
+
+### Citations of standards and identifiers
+
+A body that says `RFC 9110 §10.2.3` asks its reader to find the section. A
+link to the whole RFC, or to another section, looks the same as the right one
+until it is followed. `citations-linked`, in `published-text`, reads every body
+`gh` publishes, the text a tool call carries at `uphold hook`, and the text
+given to `uphold guard --text` (not `uphold scan --text`, which runs no guard),
+and refuses, exit `1`, a citation with no link, a citation whose link is not
+one of its family's links to that document, and a cited section whose link
+does not name that section. Every failing citation is listed with the links it
+should have.
+
+The families are a closed table compiled into the binary. Each row is held to
+the strongest check its links allow:
+
+| Family | Recognized as | Links | Section |
+|---|---|---|---|
+| RFC | `RFC <n>` or `RFC<n>`, optionally followed by `§<s>`, `Section <s>` or `Appendix <X>` | `https://www.rfc-editor.org/rfc/rfc<n>.html`, `https://datatracker.ietf.org/doc/html/rfc<n>` | `#section-<s>`, `#appendix-<X>` |
+| Internet-Draft | `draft-<name>-<nn>`, with the same locators | `https://datatracker.ietf.org/doc/html/draft-<name>-<nn>` | `#section-<s>`, `#appendix-<X>` |
+| BCP, STD | `BCP <n>`, `STD <n>` | `https://www.rfc-editor.org/info/bcp<n>`, `…/info/std<n>` | — |
+| CVE | `CVE-<yyyy>-<n>` | `https://www.cve.org/CVERecord?id=<id>`, `https://nvd.nist.gov/vuln/detail/<id>` | — |
+| CWE | `CWE-<n>` | `https://cwe.mitre.org/data/definitions/<n>.html` | — |
+| GHSA | `GHSA-xxxx-xxxx-xxxx` | `https://github.com/advisories/<id>`, `https://github.com/<owner>/<repo>/security/advisories/<id>` | — |
+| DOI | `doi:<doi>`, or a bare `10.<registrant>/<suffix>` | `https://doi.org/<doi>`, compared without regard to case | — |
+| arXiv | `arXiv:<id>`, optionally with a version | `https://arxiv.org/abs/<id>`, `https://arxiv.org/pdf/<id>` | — |
+
+A section cited is matched by its anchor, which follows from the number, so
+no link is fetched and no forge is asked; a fragment naming a paragraph of the
+section, `#section-10.2.3-1`, is in it. A section not cited leaves the fragment
+free. An arXiv citation that states a version must link to that version; one
+that does not may link to any. `https://www.rfc-editor.org/rfc/rfc<n>`, with no
+`.html`, is not an RFC link here: it answers with a redirect to the RFC's info
+page, where a fragment names nothing.
+
+A citation's link is the Markdown link whose text it is, inline or by reference
+(`[RFC 9110 §10.2.3][retry]` with `[retry]: https://…`), or else the first
+bare URL after it and before the next citation in the same paragraph. An id
+inside a URL is the URL's, not a citation of its own, and fenced code,
+indented code and inline code are not read.
+
+Not in the table: a family cited only by name ("the HTML spec"), which carries
+no id a row could recognize; and families whose section anchors are not yet
+confirmed in the rendered page. A repository cannot add a row.
+`UPHOLD_ALLOW=citations-linked` stands the rule down for one invocation.
 
 ### The stand-downs
 

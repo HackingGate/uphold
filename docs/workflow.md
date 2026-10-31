@@ -114,6 +114,7 @@ flowchart LR
 
 | Rule | Set | Message |
 |---|---|---|
+| `citations-linked` | `published-text` | The `citations-linked` guard writes its own report. |
 | `no-empty-merge-subject` | `published-text` | Give the merge commit a subject, or leave the subject off so the forge writes the pull request's title. |
 | `no-published-host-identity` | `published-text` | Use neutral placeholders -- example-user, example-host, example.test, /srv/example -- instead of values taken from the local machine. |
 | `no-published-markers` | `published-text` | Published text must satisfy the repository's text-capable guards. |
@@ -131,6 +132,7 @@ flowchart LR
 
 | Rule | Set | Message |
 |---|---|---|
+| `citations-linked` | `published-text` | The `citations-linked` guard writes its own report. |
 | `no-empty-merge-subject` | `published-text` | Give the merge commit a subject, or leave the subject off so the forge writes the pull request's title. |
 | `no-published-host-identity` | `published-text` | Use neutral placeholders -- example-user, example-host, example.test, /srv/example -- instead of values taken from the local machine. |
 | `no-published-markers` | `published-text` | Published text must satisfy the repository's text-capable guards. |

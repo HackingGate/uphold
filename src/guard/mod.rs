@@ -14,6 +14,7 @@
 //! workspaces, and a per-workspace file IS the workspace scope.
 
 pub(crate) mod actor;
+pub(crate) mod citations;
 pub(crate) mod identity;
 pub(crate) mod merge;
 pub(crate) mod message;
@@ -118,6 +119,10 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     // carries: every catalog line an `Answered:` line cites must be at the
     // revision the repository pins and must say what the answer quotes.
     "ruling-citations-resolve",
+    // Text citing a numbered standard or an identifier, judged against a
+    // table of families compiled in: each citation must link to the document
+    // it names, and to the section where the family's anchors allow.
+    "citations-linked",
     // The one built-in that reads no artifact itself. It is handed the
     // evidence every compiled-in provider reported about the change and
     // judges that -- so which parser or which diff supplied a fact is not its
@@ -297,6 +302,7 @@ pub(crate) const TEXT_GUARDS: &[&str] = &[
     "prevent-unusual-unicode",
     "no-private-repo-names",
     "ruling-citations-resolve",
+    "citations-linked",
     "text-guards",
     "text-literals",
 ];
@@ -647,6 +653,7 @@ pub(crate) fn text_refusal(
             single(names::in_text(root, policy, rule, destination, label, text))
         }
         "ruling-citations-resolve" => single(ruling::in_text(root, rule, label, text)),
+        "citations-linked" => single(Ok(citations::in_text(rule, label, text))),
         // The consultations. `over_text` skips the meta guards, so the
         // recursion is one level deep by construction.
         "text-guards" => over_text(root, policy, destination, published, in_scope, ledger),
@@ -991,7 +998,7 @@ mod tests {
                 "{id} is in EVERY_BUILTIN with no dispatch arm"
             );
         }
-        assert_eq!(EVERY_BUILTIN.len(), 23);
+        assert_eq!(EVERY_BUILTIN.len(), 24);
     }
 
     #[test]
