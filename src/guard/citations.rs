@@ -271,7 +271,7 @@ const FAMILIES: &[Family] = &[
         name: "IEEE",
         locate: Locate::Nothing,
         spelling: Spelling::AsWritten,
-        pattern: r"\bIEEE(?:[ \u{a0}]+Std)?[ \u{a0}]*(?P<id>[1-9][0-9]{2,4}(?:\.[0-9]+)*[a-z]?)(?:-[0-9]{4})?\b",
+        pattern: r"\bIEEE(?:[ \u{a0}]+Std)?[ \u{a0}]*(?P<id>[1-9][0-9]{2,4}(?:\.[0-9]+)*[a-z]*)(?:-[0-9]{4})?\b",
         links: &[
             "https://standards.ieee.org/**",
             "https://ieeexplore.ieee.org/document/**",
@@ -489,7 +489,7 @@ fn wanted(family: &Family, citation: &Citation) -> String {
         .map(|link| {
             format!(
                 "{}{anchor}",
-                link.replace("<id>", &linked_id).replace("**", "…")
+                link.replace("**", "…").replace("<id>", &linked_id)
             )
         })
         .collect::<Vec<_>>()
@@ -713,6 +713,16 @@ mod tests {
         let citation = citations(&blocks("arXiv:1706.03762v7").remove(0)).remove(0);
         let family = FAMILIES.get(citation.family).expect("a row");
         assert!(wanted(family, &citation).starts_with("https://arxiv.org/abs/1706.03762v7"));
+    }
+
+    #[test]
+    fn a_dotted_ieee_number_with_letters_and_a_year_is_read_whole() {
+        assert_eq!(
+            read("IEEE Std 802.11ax-2021 says so.")
+                .first()
+                .map(|citation| citation.0.as_str()),
+            Some("IEEE Std 802.11ax-2021")
+        );
     }
 
     #[test]

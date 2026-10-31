@@ -9721,6 +9721,11 @@ const CITATION_ROWS: &[(&str, &str, &[&str])] = &[
         &["https://en.wikipedia.org/wiki/IEEE_754"],
     ),
     (
+        "IEEE Std 802.11ax-2021",
+        "https://standards.ieee.org/ieee/802.11ax/7180/",
+        &["https://en.wikipedia.org/wiki/IEEE_802.11ax"],
+    ),
+    (
         "IEEE Std 802.3",
         "https://ieeexplore.ieee.org/document/9844436",
         &["https://ieeexplore.ieee.org/xpl/conhome/1000/all-proceedings"],
