@@ -5826,16 +5826,6 @@ fn unpacked_argv(name: &str, packed: Option<&str>) -> Result<Vec<String>> {
     })
 }
 
-/// One word for a shell that is going to split what it is handed.
-///
-/// The editor variable holds a command LINE rather than a path -- `code --wait`
-/// and `emacsclient -nw` are ordinary values -- so the command runs it through a
-/// shell, and this binary's own path would otherwise arrive as two words the
-/// first time somebody installs it under a directory with a space in it.
-fn shell_word(word: &str) -> String {
-    format!("'{}'", word.replace('\'', "'\\''"))
-}
-
 /// The stdin this shim consumed, in something the real command can inherit.
 ///
 /// A pipe cannot carry it. The bytes have to be written by somebody, and after
@@ -5930,12 +5920,17 @@ fn install_editor(
     // a `git` that inherits them is a `git` that does nothing with them. What
     // says "you are the editor" is the flag below, which only the process the
     // command actually launches as its editor is given. See `Invoked::AsEditor`.
+    // The editor variable holds a command LINE rather than a path -- `code
+    // --wait` and `emacsclient -nw` are ordinary values -- so the command runs
+    // it through a shell, and this binary's own path would otherwise arrive as
+    // two words the first time somebody installs it under a directory with a
+    // space in it. `shell_words::quote` is the quoting `EDITOR_ARGV` uses too.
     command.env(
         variable,
         format!(
             "{} shim {EDITOR_FLAG} {}",
-            shell_word(&exe.to_string_lossy()),
-            shell_word(name)
+            shell_words::quote(&exe.to_string_lossy()),
+            shell_words::quote(name)
         ),
     );
     // Said only where it is true. An offered editor opens if the person picks
@@ -7359,8 +7354,10 @@ mod tests {
     fn a_word_with_a_quote_in_it_survives_the_shell_that_splits_it() {
         // The editor variable is handed to a shell, so this binary's own path
         // has to arrive as one word whatever is in it.
-        assert_eq!(shell_word("/opt/my tools/uphold"), "'/opt/my tools/uphold'");
-        assert_eq!(shell_word("it's"), r"'it'\''s'");
+        for word in ["/opt/my tools/uphold", "it's", "/usr/bin/uphold", ""] {
+            let quoted = shell_words::quote(word);
+            assert_eq!(shell_words::split(&quoted).unwrap(), [word], "{quoted}");
+        }
     }
 
     #[test]
@@ -8538,7 +8535,7 @@ mod tests {
             .collect();
         let installed = &environment["FAUX_EDITOR"];
         assert_eq!(
-            installed, "'/opt/my tools/uphold' shim --as-editor 'faux'",
+            installed, "'/opt/my tools/uphold' shim --as-editor faux",
             "the editor line has to survive a shell that splits it"
         );
         // The command line the editor was opened FOR, so the pass on the way

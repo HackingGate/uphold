@@ -566,29 +566,12 @@ pub(crate) fn declarations(root: &Path) -> Result<Vec<Declaration>> {
 /// flag on `serde_json` that any dependency in the tree may switch on, so the
 /// key order is normalized here rather than assumed -- two repositories that
 /// wrote the same declaration with `args:` above `stages:` and below it are
-/// not two declarations.
+/// not two declarations. `Value::sort_all_objects` is that normalization, and
+/// it is the identity where the flag is off.
 fn canonical(value: &serde_json::Value) -> String {
-    fn sorted(value: &serde_json::Value) -> serde_json::Value {
-        match value {
-            serde_json::Value::Object(mapping) => {
-                let mut keyed: Vec<(&String, serde_json::Value)> = mapping
-                    .iter()
-                    .map(|(key, item)| (key, sorted(item)))
-                    .collect();
-                keyed.sort_by(|left, right| left.0.cmp(right.0));
-                let mut out = serde_json::Map::new();
-                for (key, item) in keyed {
-                    out.insert(key.clone(), item);
-                }
-                serde_json::Value::Object(out)
-            }
-            serde_json::Value::Array(items) => {
-                serde_json::Value::Array(items.iter().map(sorted).collect())
-            }
-            other => other.clone(),
-        }
-    }
-    serde_saphyr::to_string(&sorted(value))
+    let mut sorted = value.clone();
+    sorted.sort_all_objects();
+    serde_saphyr::to_string(&sorted)
         .unwrap_or_default()
         .trim_end()
         .to_owned()

@@ -272,20 +272,11 @@ fn running_os_identity() -> Vec<Needle> {
 }
 
 fn is_routable(address: &str) -> bool {
-    let octets: Vec<&str> = address.split('.').collect();
-    if octets.len() != 4 {
-        return false;
-    }
-    let parsed: Option<Vec<u8>> = octets.iter().map(|part| part.parse::<u8>().ok()).collect();
-    let Some(parsed) = parsed else {
-        return false;
-    };
-    let [first, second, ..] = parsed.as_slice() else {
-        return false;
-    };
     // Loopback, link-local and multicast say nothing about which machine this
     // is, so searching for them would only produce findings on ordinary text.
-    !(*first == 127 || (*first == 169 && *second == 254) || (224..=239).contains(first))
+    address
+        .parse::<std::net::Ipv4Addr>()
+        .is_ok_and(|ip| !(ip.is_loopback() || ip.is_link_local() || ip.is_multicast()))
 }
 
 fn running_default_route() -> Vec<Needle> {
@@ -497,6 +488,25 @@ pub(crate) fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_address_says_which_machine_unless_it_is_loopback_link_local_or_multicast() {
+        for address in ["192.168.1.20", "10.0.0.5", "8.8.8.8"] {
+            assert!(is_routable(address), "{address}");
+        }
+        for address in [
+            "127.0.0.1",
+            "169.254.3.4",
+            "224.0.0.1",
+            "239.255.255.250",
+            "fe80::1",
+            "300.1.1.1",
+            "1.2.3",
+            "",
+        ] {
+            assert!(!is_routable(address), "{address}");
+        }
+    }
 
     /// A shared build account is not a person, and a path is not exempt from
     /// that just because it is a path.
