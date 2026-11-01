@@ -365,7 +365,7 @@ fn a_body_composed_in_an_editor_makes_the_editor_the_checkpoint() {
         // `--as-editor` is the word that routes the re-entry. It was an
         // environment variable, which every descendant of the checking pass
         // inherited -- see `an_editor_pass_does_not_re_enter_the_git_it_runs`.
-        stdout(&output).contains("editor: ") && stdout(&output).contains("shim --as-editor 'faux'"),
+        stdout(&output).contains("editor: ") && stdout(&output).contains("shim --as-editor faux"),
         "the command was handed no checkpoint to open: {}",
         stdout(&output)
     );
@@ -754,7 +754,7 @@ fn a_close_opens_no_editor_and_announces_none() {
     let output = shim(&root, &["gh", "pr", "create"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(
-        stdout(&output).contains("shim --as-editor 'gh'"),
+        stdout(&output).contains("shim --as-editor gh"),
         "{}",
         stdout(&output)
     );
@@ -837,7 +837,7 @@ fn an_initialized_policy_keeps_the_body_editor_checkpoint_after_a_title() {
         assert_eq!(code(&output), 0, "{args:?}: {}", stderr(&output));
         assert!(stdout(&output).contains("gh ran:"), "{}", stdout(&output));
         assert!(
-            stdout(&output).contains("shim --as-editor 'gh'"),
+            stdout(&output).contains("shim --as-editor gh"),
             "{args:?}: {}",
             stdout(&output)
         );
