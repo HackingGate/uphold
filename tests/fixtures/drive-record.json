@@ -1,0 +1,47 @@
+{
+  "format": "uphold-drive-record/1",
+  "reviewer": [
+    "./reviewer",
+    "--model",
+    "example-model"
+  ],
+  "prompt_sha256": "4d275b92304b90a95eef385c506bc3714c0c46a2b888d68efbc0394e9301584b",
+  "document_sha256": "1a19868d3b6b3f57f523b3202b9ae40155dc1491b3727c608f573acc615d9a0c",
+  "runs": 3,
+  "controls": [
+    {
+      "record": "fail-fast",
+      "catches": [
+        [
+          "fail-fast"
+        ],
+        [],
+        [
+          "fail-fast"
+        ]
+      ],
+      "misses": null
+    },
+    {
+      "record": "single-authoritative-source",
+      "catches": [
+        [
+          "single-authoritative-source"
+        ],
+        [
+          "single-authoritative-source"
+        ],
+        [
+          "single-authoritative-source"
+        ]
+      ],
+      "misses": [
+        [],
+        [],
+        [
+          "fail-fast"
+        ]
+      ]
+    }
+  ]
+}

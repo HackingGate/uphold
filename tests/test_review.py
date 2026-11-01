@@ -330,11 +330,20 @@ class Drive(unittest.TestCase):
     def test_the_reviewer_is_handed_the_document_and_the_change_and_not_the_key(self):
         reviewer = self.reviewer(
             """
-            assert sorted(payload) == ["change", "document"], sorted(payload)
-            assert payload == {"document": "doc", "change": "plant"}, payload
+            assert sorted(payload) == ["change", "document", "prompt"], sorted(payload)
+            assert payload == {
+                "prompt": "p", "document": "doc", "change": "plant"
+            }, payload
             """
         )
-        self.assertEqual(review_mod.ask(reviewer, "doc", "plant", self.CARRIED), set())
+        self.assertEqual(
+            review_mod.ask(reviewer, "doc", "plant", self.CARRIED, prompt="p"), set()
+        )
+
+    def test_the_reference_prompt_ships_beside_the_harness(self):
+        prompt = review_mod.reference_prompt()
+        self.assertIn("one per line", prompt)
+        self.assertIn("print nothing", prompt)
 
     def test_a_name_outside_the_document_is_refused_rather_than_scored(self):
         reviewer = self.reviewer('print("Single Authoritative Source.")')
@@ -371,7 +380,17 @@ class Drive(unittest.TestCase):
         results = review_mod.drive(
             declared, "doc", {"a": "A"}, 3, lambda *_: next(answers)
         )
-        self.assertEqual(results, [{"record": "a", "caught": 1, "fired": 0}])
+        self.assertEqual(
+            results,
+            [
+                {
+                    "record": "a",
+                    "caught": 1,
+                    "fired": 0,
+                    "answers": {"catches": [["a"], [], []], "misses": [[], [], []]},
+                }
+            ],
+        )
         self.assertFalse(review_mod.holds(results[0], 3))
         report = review_mod.render_drive(results, 3, ["rev"])
         self.assertIn("a: caught 1/3, misses fired 0/3 -- DOES NOT HOLD", report)
@@ -437,6 +456,132 @@ class Drive(unittest.TestCase):
         report = review_mod.render_drive(results, 2, ["rev"])
         self.assertIn("misses not written", report)
         self.assertNotIn("false positives", report)
+
+
+class RunRecord(unittest.TestCase):
+    """`--record` and `--replay`: a drive scored again with no model.
+
+    Scoring a result again needs only its record; producing it again needs a
+    model, which stays the caller's. The fixture record is checked in so the
+    replay is tested against a file, not only a round trip.
+    """
+
+    FIXTURE = ROOT / "tests" / "fixtures" / "drive-record.json"
+
+    def results(self) -> list[dict]:
+        answers = iter([{"a"}, {"a"}, set(), set(), {"b"}, set()])
+        return review_mod.drive(
+            [
+                {"record": "a", "catches": "plant", "misses": "clean"},
+                {"record": "b", "catches": "plant"},
+            ],
+            "doc",
+            {"a": "A", "b": "B"},
+            2,
+            lambda *_: next(answers),
+        )
+
+    def test_a_record_replays_to_the_report_the_live_drive_printed(self):
+        results = self.results()
+        record = review_mod.run_record(results, 2, ["./rev", "-m", "x"], "p", "doc")
+        self.assertEqual(record["prompt_sha256"], review_mod.sha256("p"))
+        self.assertEqual(record["document_sha256"], review_mod.sha256("doc"))
+        again, runs, reviewer, prompt_hash = review_mod.replayed(
+            json.loads(json.dumps(record))
+        )
+        self.assertEqual(
+            review_mod.render_drive(again, runs, reviewer, prompt_hash),
+            review_mod.render_drive(results, 2, ["./rev", "-m", "x"], prompt_hash),
+        )
+
+    def test_the_report_names_the_prompt_and_the_record_it_replayed(self):
+        lines = review_mod.render_drive(
+            self.results(), 2, ["./rev"], "ab12", replay="run.json"
+        ).splitlines()
+        self.assertEqual(
+            lines[:3],
+            ["reviewer: ./rev", "prompt: sha256:ab12", "replayed from: run.json"],
+        )
+
+    def test_a_record_that_run_record_could_not_have_written_is_refused(self):
+        good = review_mod.run_record(self.results(), 2, ["./rev"], "p", "doc")
+        for broken in (
+            [],
+            {**good, "format": "uphold-drive-record/0"},
+            {**good, "runs": 0},
+            {**good, "runs": True},
+            {**good, "reviewer": []},
+            {**good, "controls": [{"record": "a", "catches": [["a"]], "misses": None}]},
+            {**good, "controls": [{"catches": [[], []], "misses": None}]},
+            {
+                **good,
+                "controls": [{"record": "a", "catches": [[1], []], "misses": None}],
+            },
+        ):
+            with (
+                self.subTest(broken=broken),
+                self.assertRaises(review_mod.RecordRefused),
+            ):
+                review_mod.replayed(broken)
+
+    def test_the_checked_in_record_replays_with_no_reviewer_and_no_catalog(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        replayed = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--review",
+                "--drive",
+                "--replay",
+                str(self.FIXTURE),
+            ],
+            capture_output=True,
+            encoding="utf-8",
+            cwd=tmp,
+            check=False,
+        )
+        self.assertEqual(replayed.returncode, 1, replayed.stderr)
+        lines = replayed.stdout.splitlines()
+        self.assertEqual(lines[0], "reviewer: ./reviewer --model example-model")
+        self.assertTrue(lines[1].startswith("prompt: sha256:"), lines[1])
+        self.assertIn(
+            "single-authoritative-source: caught 3/3, misses fired 0/3 -- holds", lines
+        )
+        self.assertIn(
+            "fail-fast: caught 2/3, misses not written -- DOES NOT HOLD", lines
+        )
+        self.assertIn("pass@1 0.83; pass^3 1/2 control(s)", lines)
+
+    def test_an_unreadable_record_is_exit_two(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        bad = Path(tmp) / "bad.json"
+        bad.write_text("{", encoding="utf-8")
+        replayed = subprocess.run(
+            [sys.executable, str(SCRIPT), "--review", "--drive", "--replay", str(bad)],
+            capture_output=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(replayed.returncode, 2)
+        self.assertIn("could not look", replayed.stderr)
+
+    def test_replay_takes_the_file_and_nothing_else(self):
+        self.assertIsNone(uphold_check.drive_arguments(["--drive", "--replay"]))
+        self.assertIsNone(
+            uphold_check.drive_arguments(["--drive", "--replay", "a", "--", "rev"])
+        )
+        self.assertIsNone(
+            uphold_check.drive_arguments(
+                ["--drive", "--rule", "--record", "x", "--", "r"]
+            )
+        )
+        recorded = uphold_check.drive_arguments(
+            ["--drive", "--record", "x", "--", "rev"]
+        )
+        self.assertEqual(recorded["record"], "x")
+        self.assertEqual(recorded["command"], ["rev"])
 
 
 class Rulings(unittest.TestCase):

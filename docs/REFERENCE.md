@@ -4576,12 +4576,15 @@ carrying a second copy of the compiled document.
 `--drive` plants the controls itself, against a reviewer command you name:
 
 ```sh
-uphold_check.py --review --drive [--runs N] [--timeout SECONDS] -- ./my-reviewer --model x
+uphold_check.py --review --drive [--runs N] [--timeout SECONDS] [--record FILE] \
+    -- ./my-reviewer --model x
+uphold_check.py --review --drive --replay FILE
 ```
 
 Everything after `--` is the reviewer, run once per plant. It reads one JSON
-object on stdin, `{"document": ..., "change": ...}`, where `document` is the
-compiled review and `change` is one control's `catches` or `misses`. It prints
+object on stdin, `{"prompt": ..., "document": ..., "change": ...}`, where
+`prompt` is the reference reviewer's instruction, `document` is the compiled
+review and `change` is one control's `catches` or `misses`. It prints
 one line per record the change violates, the record's id or its title as the
 document spells it, in any case; blank lines are skipped, and no lines means no
 violation. It is never told which record was planted.
@@ -4590,6 +4593,7 @@ Each control runs `N` times on each side (default 3):
 
 ```text
 reviewer: ./my-reviewer --model x
+prompt: sha256:3f1c…
 single-authoritative-source: caught 3/3, misses fired 0/3 -- holds
 pass@1 1.00; pass^3 1/1 control(s)
 false positives 0.00 over 1 control(s) with a misses
@@ -4598,7 +4602,58 @@ false positives 0.00 over 1 control(s) with a misses
 The first line is the reviewer command as run, quoted the way a shell would
 read it, so a score pasted on its own still says what produced it: two
 reviewers scoring the same print different reports. Keep a key in the
-environment, not in the command, because the command is printed.
+environment, not in the command, because the command is printed. Name the
+model in the command too, as `--model x` does above: the drive cannot ask a
+command which model it called.
+
+The second line is the hash of the prompt the reviewer was handed.
+
+**The reference reviewer is a prompt, not a client.**
+[`scripts/reviewers/prompt.md`](../scripts/reviewers/prompt.md) is the
+instruction a reviewer gives its model, and the drive sends it in every
+payload. It is part of what is measured, since a pass^k describes the prompt
+as much as the document, so it is versioned here and hashed in every result.
+A reviewer that uses its own prompt still runs, but its score is not a score
+of this one. uphold ships no model client: the command carries the model, the
+key and the budget, and these two are examples, not shipped files.
+
+```sh
+#!/bin/sh
+# Claude Code, non-interactive. --setting-sources "" and --strict-mcp-config
+# keep the user's settings and MCP servers out, so the model sees only the
+# payload. --bare cannot be used: it skips the login.
+payload=$(cat)
+cd "$(mktemp -d)" || exit 1
+printf '%s' "$payload" | jq -r '"Document:\n" + .document + "\n\nChange:\n" + .change' |
+  claude -p --setting-sources "" --strict-mcp-config --no-session-persistence \
+    --tools "" --model "${MODEL:?}" \
+    --system-prompt "$(printf '%s' "$payload" | jq -r .prompt)"
+```
+
+```sh
+#!/bin/sh
+# A provider's HTTP API. The key comes from the environment.
+jq '{model: env.MODEL, max_tokens: 256, system: .prompt,
+     messages: [{role: "user",
+                 content: ("Document:\n" + .document + "\n\nChange:\n" + .change)}]}' |
+  curl -sf https://api.anthropic.com/v1/messages \
+    -H "x-api-key: ${ANTHROPIC_API_KEY:?}" -H "anthropic-version: 2023-06-01" \
+    -H "content-type: application/json" --data-binary @- |
+  jq -r '.content[0].text'
+```
+
+**A run record is checked without a model.** `--record FILE` writes what the
+drive saw: the reviewer command, the hashes of the prompt and the document,
+the run count, and each run's raw answer per control. It does not copy the
+plants, which stay in `[[review.control]]`. `--replay FILE` scores a record
+again and prints the same report with a `replayed from:` line. It reads only
+the record, so it needs no key, no reviewer and no checkout of the repository
+the record came from. A pull request that cites a drive attaches its record,
+and a reviewer of the pull request checks the numbers with `--replay`. A
+record that is not one `--record` could have written is exit `2`.
+
+"Rerun by anyone" is two jobs. Anyone can score a result again from its
+record. Producing a result again needs a model, and the caller chooses it.
 
 A control holds when every run named the record against `catches` and none
 named it against `misses`. pass@1 is the mean share of runs that caught their
@@ -4607,9 +4662,7 @@ every control holds and `1` when one does not. A reviewer that exits non-zero,
 cannot be run, or prints a line that names no record in the document is exit
 `2`: it has said nothing about the record, so it is not scored as a miss. So
 is one that has not answered within `--timeout` seconds (default 300); a person
-answering at a prompt passes a longer one. No
-model client lives here; the reviewer command carries the model, the key and
-the budget. See [DESIGN.md](DESIGN.md#a-control-is-the-probe-fixture-one-tier-up).
+answering at a prompt passes a longer one. See [DESIGN.md](DESIGN.md#a-control-is-the-probe-fixture-one-tier-up).
 
 ### Ruling controls
 

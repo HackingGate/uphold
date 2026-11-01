@@ -40,6 +40,7 @@ control's change, and scores what comes back against the answer key.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import re
@@ -61,6 +62,16 @@ DEFAULT_RUNS = 3
 #: a reviewer that has not answered in five minutes has stalled, and waiting on
 #: it holds every control after it. A person at a prompt passes a longer one.
 DEFAULT_TIMEOUT = 300
+
+#: The reference reviewer: the instruction a reviewer hands its model, sent to
+#: every reviewer in the payload. It is part of what a drive measures -- a
+#: pass^k is about this prompt as much as about the document -- so it is a
+#: versioned file whose hash every result names, not text inside a wrapper.
+PROMPT_PATH = Path(__file__).resolve().parent / "reviewers" / "prompt.md"
+
+#: The `format` of a run record. A record in another format is refused rather
+#: than read as this one.
+RECORD_FORMAT = "uphold-drive-record/1"
 
 #: The standing asymmetry, and it points one way on purpose: a static rule has
 #: no length ceiling and a prompt rule does, so every mechanizable rule is
@@ -354,17 +365,27 @@ class ReviewerFailed(Exception):
     """
 
 
+def sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def reference_prompt() -> str:
+    """The reference reviewer's prompt, as `PROMPT_PATH` holds it."""
+    return PROMPT_PATH.read_text(encoding="utf-8")
+
+
 def ask(
     reviewer: list[str],
     document: str,
     change: str,
     carried: dict[str, str],
     timeout: int = DEFAULT_TIMEOUT,
+    prompt: str = "",
 ) -> set[str]:
     """Run the reviewer once and return the record ids it names.
 
-    The reviewer reads one JSON object on stdin, `{"document": ..., "change":
-    ...}`, and prints one line per record the change violates: the record's
+    The reviewer reads one JSON object on stdin, `{"prompt": ..., "document":
+    ..., "change": ...}`, and prints one line per record the change violates: the record's
     id, or its title as the document's heading spells it. Blank lines are
     skipped, and printing nothing says the change violates nothing. It is never told
     which record the change was planted for -- that is the answer key.
@@ -374,7 +395,9 @@ def ask(
     person at a prompt, a fixture in a test -- answers the same way.
     """
     by_title = {title.casefold(): record_id for record_id, title in carried.items()}
-    payload = json.dumps({"document": document, "change": change}, ensure_ascii=False)
+    payload = json.dumps(
+        {"prompt": prompt, "document": document, "change": change}, ensure_ascii=False
+    )
     try:
         completed = subprocess.run(
             reviewer,
@@ -428,25 +451,117 @@ def drive(
 
     `caught` is how many runs named the record against `catches`; `fired` is
     how many named it against `misses`, or None where no `misses` was written,
-    because an unmeasured false-positive rate is not a rate of zero.
+    because an unmeasured false-positive rate is not a rate of zero. `answers`
+    keeps what each run named, which is what a run record carries and what
+    `--replay` scores again.
     """
     results = []
     for control in sorted(declared, key=lambda control: control["record"]):
-        record_id = control["record"]
-        caught = sum(
-            record_id in reviewer(document, control["catches"], carried)
-            for _ in range(runs)
-        )
+        catches = [
+            sorted(reviewer(document, control["catches"], carried)) for _ in range(runs)
+        ]
         misses = control.get("misses")
-        fired = (
+        missed = (
             None
             if misses is None
-            else sum(
-                record_id in reviewer(document, misses, carried) for _ in range(runs)
-            )
+            else [sorted(reviewer(document, misses, carried)) for _ in range(runs)]
         )
-        results.append({"record": record_id, "caught": caught, "fired": fired})
+        results.append(scored(control["record"], catches, missed))
     return results
+
+
+def scored(
+    record_id: str, catches: list[list[str]], misses: list[list[str]] | None
+) -> dict:
+    """One control's score from what each run named. The one place a score
+    is computed, so a live drive and a replay cannot count differently."""
+    return {
+        "record": record_id,
+        "caught": sum(record_id in named for named in catches),
+        "fired": None
+        if misses is None
+        else sum(record_id in named for named in misses),
+        "answers": {"catches": catches, "misses": misses},
+    }
+
+
+def run_record(
+    results: list[dict], runs: int, reviewer: list[str], prompt: str, document: str
+) -> dict:
+    """What a drive saw, in enough detail to score it again with no model.
+
+    The reviewer command as run, the hashes of the prompt and the document it
+    was handed, and each run's raw answer per control. The plants themselves
+    are not copied: they are `[[review.control]]` in the declaration, and a
+    second copy here would be free to drift from them.
+    """
+    return {
+        "format": RECORD_FORMAT,
+        "reviewer": reviewer,
+        "prompt_sha256": sha256(prompt),
+        "document_sha256": sha256(document),
+        "runs": runs,
+        "controls": [
+            {
+                "record": result["record"],
+                "catches": result["answers"]["catches"],
+                "misses": result["answers"]["misses"],
+            }
+            for result in results
+        ],
+    }
+
+
+class RecordRefused(Exception):
+    """A run record that is not one `run_record` could have written."""
+
+
+def _answers(value: object, runs: int, where: str) -> list[list[str]]:
+    if not (
+        isinstance(value, list)
+        and len(value) == runs
+        and all(
+            isinstance(named, list) and all(isinstance(name, str) for name in named)
+            for named in value
+        )
+    ):
+        raise RecordRefused(f"{where} is not {runs} list(s) of record ids")
+    return value
+
+
+def replayed(record: object) -> tuple[list[dict], int, list[str], str]:
+    """Score a run record again: the results, the runs, the reviewer, the
+    prompt hash. Nothing is asked of a model, and nothing is read from the
+    catalog -- the record alone is what is checked."""
+    if not isinstance(record, dict) or record.get("format") != RECORD_FORMAT:
+        raise RecordRefused(f"not a run record: `format` is not {RECORD_FORMAT!r}")
+    runs = record.get("runs")
+    reviewer = record.get("reviewer")
+    prompt_hash = record.get("prompt_sha256")
+    controls = record.get("controls")
+    if not (isinstance(runs, int) and not isinstance(runs, bool) and runs >= 1):
+        raise RecordRefused("`runs` is not a positive integer")
+    if not (
+        isinstance(reviewer, list)
+        and reviewer
+        and all(isinstance(word, str) for word in reviewer)
+    ):
+        raise RecordRefused("`reviewer` is not the command as a list of words")
+    if not isinstance(prompt_hash, str):
+        raise RecordRefused("`prompt_sha256` is missing")
+    if not isinstance(controls, list):
+        raise RecordRefused("`controls` is not a list")
+    results = []
+    for index, control in enumerate(controls):
+        where = f"controls[{index}]"
+        if not isinstance(control, dict) or not isinstance(control.get("record"), str):
+            raise RecordRefused(f"{where} names no record")
+        catches = _answers(control.get("catches"), runs, f"{where}.catches")
+        misses = control.get("misses")
+        if misses is not None:
+            misses = _answers(misses, runs, f"{where}.misses")
+        results.append(scored(control["record"], catches, misses))
+    return results, runs, reviewer, prompt_hash
 
 
 def holds(result: dict, runs: int) -> bool:
@@ -454,7 +569,13 @@ def holds(result: dict, runs: int) -> bool:
     return result["caught"] == runs and not result["fired"]
 
 
-def render_drive(results: list[dict], runs: int, reviewer: list[str]) -> str:
+def render_drive(
+    results: list[dict],
+    runs: int,
+    reviewer: list[str],
+    prompt_hash: str | None = None,
+    replay: str | None = None,
+) -> str:
     """The reviewer, one line per control, then pass@1 and pass^k over all.
 
     The reviewer command comes first, as run: a score pasted on its own is a
@@ -468,6 +589,10 @@ def render_drive(results: list[dict], runs: int, reviewer: list[str]) -> str:
     still be a coin toss on the second.
     """
     lines = [f"reviewer: {shlex.join(reviewer)}"]
+    if prompt_hash is not None:
+        lines.append(f"prompt: sha256:{prompt_hash}")
+    if replay is not None:
+        lines.append(f"replayed from: {replay}")
     for result in results:
         fired = result["fired"]
         quiet = (
