@@ -705,6 +705,9 @@ pub(crate) fn suppliers(policy: &Policy, installed: &Installed) -> Supply {
                 "text" => unestablished.push(format!("{} (--text over a commit message)", rule.id)),
                 "hook" if installed.hook => by.push(String::from("uphold hook")),
                 "hook" => unestablished.push(format!("{} (harness hook)", rule.id)),
+                // `guard-text` among them: `Installed::text` is one answer for
+                // both `--text` commands, so crediting it would say `guard
+                // --text` runs where only `scan --text` does.
                 _ => {}
             }
         }

@@ -89,7 +89,8 @@ flowchart LR
   manual` runs the guards that sweep the whole repository, and `uphold
   supply-chain` runs the dependency and secret scanners.
 - **Text.** `uphold scan --text` and `uphold guard --text` judge text with no
-  path, such as a commit message.
+  path, such as a commit message. Only `guard --text` runs the text guards,
+  so each command has its own table.
 
 ";
 
@@ -103,7 +104,7 @@ struct Caller {
     seam: Option<&'static str>,
 }
 
-const CALLERS: [Caller; 9] = [
+const CALLERS: [Caller; 10] = [
     Caller {
         heading: "commit-msg",
         note: "`uphold guard --stage commit-msg`, after `git commit` writes the message.",
@@ -148,9 +149,16 @@ const CALLERS: [Caller; 9] = [
     },
     Caller {
         heading: "text",
-        note: "`uphold scan --text` and `uphold guard --text`.",
+        note: "`uphold scan --text`.",
         stage: None,
         seam: Some("text"),
+    },
+    Caller {
+        heading: "guard text",
+        note: "`uphold guard --text`: the text guards, and the prose and pattern rules \
+               `scan --text` runs.",
+        stage: None,
+        seam: Some("guard-text"),
     },
     Caller {
         heading: "scan",
