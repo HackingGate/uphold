@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uphold hook codex || { printf \"%s\\n\" \"uphold hook codex failed; install uphold on PATH and check the diagnostic above.\" >&2; exit 2; }"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uphold hook codex || { printf \"%s\\n\" \"uphold hook codex failed; install uphold on PATH and check the diagnostic above.\" >&2; exit 2; }",
+            "async": true,
+            "timeout": 900
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uphold hook codex || { printf \"%s\\n\" \"uphold hook codex failed; install uphold on PATH and check the diagnostic above.\" >&2; exit 2; }",
+            "timeout": 900
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "uphold",
+  "description": "Checks pending tool text and end-of-turn gates through the installed uphold binary.",
+  "author": {
+    "name": "HackingGate"
+  },
+  "homepage": "https://github.com/HackingGate/uphold",
+  "hooks": "./hooks/hooks.json"
+}

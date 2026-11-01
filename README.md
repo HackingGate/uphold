@@ -338,23 +338,23 @@ end is refused rather than let through. A repository enables it for every
 collaborator in `.claude/settings.json`; see
 [configuring it](docs/REFERENCE.md#configuring-it).
 
-Codex uses the same event and denial format. Add this to `.codex/hooks.json`
-in the repository, or `~/.codex/hooks.json` for all projects:
+For [Codex](https://developers.openai.com/codex/), add this repository's
+marketplace at the installed release tag:
 
-```json
-{"hooks": {"PreToolUse": [
-  {"matcher": "mcp__github__.*",
-   "hooks": [{"type": "command", "command": "uphold hook codex"}]}
-]}}
+```sh
+codex plugin marketplace add HackingGate/uphold --ref <tag>
 ```
 
-Use `/hooks` in Codex to review and trust the hook before it runs. Project
-hooks also require a trusted project. Set the matcher to the MCP tools that
-publish your text; the example covers the GitHub MCP server. See
-[Codex hooks](https://learn.chatgpt.com/docs/hooks) and the
-[configuration reference](docs/REFERENCE.md#configuring-it) for inline TOML.
+Install `uphold` from that marketplace in the desktop Plugins Directory.
+This checkout already declares the local marketplace and enables its plugin
+in [`.codex/config.toml`](.codex/config.toml). Review and trust the hooks with
+`/hooks`; project hooks also need project trust. The plugin checks all MCP
+tool calls, captures the session baseline, and checks the end-of-turn gate.
+Its shell launcher converts binary failures into blocking exit code 2.
+See [configuration and limits](docs/REFERENCE.md#configuring-it) and the
+[plugin setup documentation](https://developers.openai.com/plugins/build/plugins).
 
-The plugin also runs the command at `SessionStart` and `Stop`, which keeps an
+Both plugins also run the command at `SessionStart` and `Stop`, which keeps an
 agent from ending its turn with the gate red: `[stop] run` names the commands, and a turn
 is blocked only on one that was green when the session started. See
 [the end of a turn](docs/REFERENCE.md#the-end-of-a-turn-stop).

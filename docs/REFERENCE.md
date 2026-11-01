@@ -3256,18 +3256,38 @@ remove it. A cloud session does not add marketplaces from a repository's
 `extraKnownMarketplaces`, so the plugin does not reach one through project
 settings.
 
-For Codex, put this in `.codex/hooks.json` in the repository or
-`~/.codex/hooks.json` for all projects:
+For [Codex](https://developers.openai.com/codex/), this repository publishes
+`.agents/plugins/marketplace.json`, pointing to `plugins/codex`. Add the
+marketplace at the same release tag as the installed binary:
 
-```json
-{"hooks": {"PreToolUse": [
-  {"matcher": "mcp__github__.*",
-   "hooks": [{"type": "command", "command": "uphold hook codex"}]}
-]}}
+```sh
+codex plugin marketplace add HackingGate/uphold --ref <tag>
 ```
 
-Alternatively, use inline hooks in `.codex/config.toml` or
-`~/.codex/config.toml`:
+Install `uphold` from the marketplace in the desktop Plugins Directory.
+For this checkout, `.codex/config.toml` enables `uphold@uphold` from the local
+marketplace. Discovery and enablement do not grant hook trust: review the
+current definitions with `/hooks`, and trust the project too. See
+[plugin distribution](https://developers.openai.com/plugins/build/plugins).
+
+The plugin runs `uphold hook codex` at `PreToolUse`, `SessionStart` (asynchronous,
+900 seconds), and `Stop` (900 seconds). Its pre-tool matcher is `mcp__.*`, so
+plugin-prefixed and differently named MCP servers also reach the policy. The
+policy's hook table still distinguishes known reads and destinations; an
+unknown tool is checked with an unknown destination. Each command preserves
+stdin and stdout and converts a nonzero binary exit, including a missing
+binary, to exit 2 with a diagnostic. That blocks a pending tool or continues
+a stopped turn under the [hook protocol](https://learn.chatgpt.com/docs/hooks).
+This launcher requires a POSIX shell. A host timeout or failure to launch the
+shell is outside it; disabled or untrusted hooks do not enforce anything.
+
+Without the plugin, copy `plugins/codex/hooks/hooks.json` to
+`.codex/hooks.json` in a consuming repository or `~/.codex/hooks.json` for all
+projects. Use the plugin or copied hooks, not both, to avoid duplicate runs.
+The copied file includes the baseline and stop gate as well as tool checks.
+
+For a tool-only setup, the same launcher can be declared inline in
+`.codex/config.toml` or `~/.codex/config.toml`:
 
 ```toml
 [[hooks.PreToolUse]]
@@ -3275,7 +3295,7 @@ matcher = "mcp__github__.*"
 
 [[hooks.PreToolUse.hooks]]
 type = "command"
-command = "uphold hook codex"
+command = 'uphold hook codex || { printf "%s\n" "uphold hook codex failed; install uphold on PATH and check the diagnostic above." >&2; exit 2; }'
 ```
 
 Choose one form per configuration layer: Codex loads matching hooks from both
@@ -3287,7 +3307,7 @@ of the hook process. See the [Codex hook documentation](https://learn.chatgpt.co
 Both harnesses send `tool_name` and `tool_input` and read the same denial
 document, so the two names select one shared protocol in uphold. The hook
 checks text in the pending arguments; it does not execute the tool or resolve
-file paths in its arguments. The example matches the GitHub MCP server, whose
+file paths in its arguments. The inline example matches the GitHub MCP server, whose
 reads and destinations the compiled-in `[[hook]]` table below already
 describes. Codex hosted tools such as web search do not run these local tool
 hooks.
@@ -3483,7 +3503,7 @@ five values is derivable from a name.
 
 An agent can finish, say it is done, and leave a tree the repository's own gate
 refuses; the refusal then arrives at the next commit, often in another session.
-The plugin's `SessionStart` and `Stop` entries for `uphold hook claude-code`
+Both plugins' `SessionStart` and `Stop` entries for `uphold hook`
 (see [configuring it](#configuring-it)) hold the end of a turn to the commands
 a repository names:
 
