@@ -185,6 +185,29 @@ pub(crate) enum Runner {
     Lefthook,
 }
 
+/// Whether anything is at `path`, a symlink included.
+///
+/// `Path::exists` follows a symlink and answers for its target, so a dangling
+/// `policy/principles.toml` read as absent and the write went through it, to
+/// wherever it pointed. A symlink here is a file somebody put here.
+fn present(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
+}
+
+/// Write `text` to a file this call creates, or fail.
+///
+/// `File::create_new` is `O_CREAT | O_EXCL`, which refuses a path that exists
+/// -- a symlink, dangling or not, among them -- so nothing is written through
+/// a link or over a file that appeared after `present` was asked. A file it
+/// created and could not fill is removed, since it is this call's.
+fn write_new(path: &Path, text: &str) -> std::io::Result<()> {
+    let mut file = std::fs::File::create_new(path)?;
+    std::io::Write::write_all(&mut file, text.as_bytes()).inspect_err(|_| {
+        drop(file);
+        std::fs::remove_file(path).ok();
+    })
+}
+
 /// `uphold init --owner OWNER --visibility public|private [--lefthook]`, at the
 /// root of the repository it writes into.
 pub(crate) fn run(root: &Path, owner: &str, visibility: &str, runner: Runner) -> Result<Exit> {
@@ -203,7 +226,7 @@ pub(crate) fn run(root: &Path, owner: &str, visibility: &str, runner: Runner) ->
     let directory = root.join("policy");
     for name in ["principles.toml", "rg-policy.toml", "upheld.toml"] {
         let existing = directory.join(name);
-        if existing.exists() {
+        if present(&existing) {
             return Err(Fatal::at(
                 &existing,
                 "exists, so this repository already has a policy. `uphold init` writes a \
@@ -217,7 +240,7 @@ pub(crate) fn run(root: &Path, owner: &str, visibility: &str, runner: Runner) ->
         Runner::Lefthook => ("lefthook.yml", lefthook()),
     };
     let hook_path = root.join(hook_file);
-    let write_hooks = !hook_path.exists();
+    let write_hooks = !present(&hook_path);
 
     std::fs::create_dir_all(&directory).map_err(|error| Fatal::at(&directory, error))?;
     let policy_path = directory.join("principles.toml");
@@ -231,13 +254,13 @@ pub(crate) fn run(root: &Path, owner: &str, visibility: &str, runner: Runner) ->
     }
     // All or nothing. A write that fails part-way would leave a policy file
     // behind, and the next `uphold init` refuses a tree that has one -- so the
-    // person would be deleting by hand what this command half-wrote. The path
-    // that failed is removed too: `write` may have created it before failing,
-    // and every path here was absent when this run started (checked above).
+    // person would be deleting by hand what this command half-wrote. Only what
+    // this run created is removed: `write_new` refuses a path that appeared
+    // after the check above, and that file is somebody else's.
     let mut written = Vec::new();
     for (path, text) in planned {
-        if let Err(error) = std::fs::write(&path, text) {
-            for done in written.iter().chain(std::iter::once(&path)) {
+        if let Err(error) = write_new(&path, &text) {
+            for done in &written {
                 std::fs::remove_file(done).ok();
             }
             return Err(Fatal::at(&path, error));
