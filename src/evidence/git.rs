@@ -52,7 +52,7 @@ impl Source for Messages {
                 ),
             };
         };
-        let comment = match comment_char(context.root) {
+        let comment = match comment_string(context.root) {
             Ok(comment) => comment,
             Err(reason) => {
                 return Observation::Unavailable {
@@ -61,7 +61,7 @@ impl Source for Messages {
                 };
             }
         };
-        Observation::Found(facts(message, comment))
+        Observation::Found(facts(message, &comment))
     }
 }
 
@@ -69,31 +69,46 @@ impl Source for Messages {
 /// index is what it will be made from.
 const REVISION: &str = "index";
 
-/// The character git strips a line for opening with, as this repository's
-/// config has it.
+/// The string git strips a line for opening with, as this repository's config
+/// has it.
+///
+/// `core.commentChar` and `core.commentString` are one setting under two names
+/// (git 2.45 and later), so both are read and the one git read last wins, as
+/// in git: `--get-regexp` lists them in the order git loads its config files.
+/// `-z` keeps a value that holds a space whole. A value may be more than one
+/// character; git 2.45 accepts that under either name.
 ///
 /// `auto` tells git to pick, per message, a character the message does not
-/// start a line with, and the pick is made after this hook has run; a value
-/// longer than one character is `core.commentString`'s shape, which git reads
-/// under either name. Both fall back to `#` here, and a message under either
-/// setting is read with git's default and not with git's choice. Unset is
-/// `#`, which is git's default too.
-pub(crate) fn comment_char(root: &Path) -> Result<char, String> {
-    let configured = crate::git::try_run(root, &["config", "--get", "core.commentChar"])
-        .map_err(|error| error.to_string())?;
-    let Some(value) = configured else {
-        return Ok(DEFAULT_COMMENT);
-    };
-    let value = value.trim();
-    let mut characters = value.chars();
-    match (characters.next(), characters.next()) {
-        (Some(one), None) if value != "auto" => Ok(one),
-        _ => Ok(DEFAULT_COMMENT),
-    }
+/// start a line with, and the pick is made after this hook has run, so it
+/// falls back to `#` here: a message under it is read with git's default and
+/// not with git's choice. Unset, and empty, are `#`, which is git's default
+/// too.
+pub(crate) fn comment_string(root: &Path) -> Result<String, String> {
+    let configured = crate::git::try_run(
+        root,
+        &[
+            "config",
+            "-z",
+            "--get-regexp",
+            r"^core\.comment(char|string)$",
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    let last = configured.as_deref().and_then(|listed| {
+        listed
+            .split('\0')
+            .rfind(|entry| !entry.is_empty())
+            .and_then(|entry| entry.split_once('\n'))
+            .map(|(_, value)| value)
+    });
+    Ok(match last {
+        Some(value) if !value.is_empty() && value != "auto" => value.to_owned(),
+        _ => String::from(DEFAULT_COMMENT),
+    })
 }
 
 /// Git's own default for `core.commentChar`.
-const DEFAULT_COMMENT: char = '#';
+const DEFAULT_COMMENT: &str = "#";
 
 /// The message as git will record it: without the lines that open with the
 /// comment character, and without the scissors line and everything below it.
@@ -101,7 +116,7 @@ const DEFAULT_COMMENT: char = '#';
 /// A comment line is one whose FIRST character is the comment character,
 /// which is git's test; a line indented and then `#` is content. The scissors
 /// line is the exact line git writes, and git cuts at that line only.
-fn as_recorded(message: &str, comment: char) -> String {
+fn as_recorded(message: &str, comment: &str) -> String {
     let scissors = format!("{comment} ------------------------ >8 ------------------------");
     message
         .lines()
@@ -113,7 +128,7 @@ fn as_recorded(message: &str, comment: char) -> String {
 
 /// The facts one message carries: its intent, and exactly one of the two
 /// authorship kinds. Both are read off the message as git records it.
-fn facts(raw: &str, comment: char) -> Vec<Evidence> {
+fn facts(raw: &str, comment: &str) -> Vec<Evidence> {
     let recorded = as_recorded(raw, comment);
     let message = recorded.as_str();
     let mut lines = message.lines().filter(|line| !line.trim().is_empty());
@@ -292,8 +307,8 @@ mod tests {
                    diff --git a/old.rs b/old.rs\n\
                    -fn drop_me() {}\n\
                    Co-Authored-By: Bot <noreply@example.test>\n";
-        assert_eq!(as_recorded(raw, '#'), "Tidy the module\n");
-        let found = facts(raw, '#');
+        assert_eq!(as_recorded(raw, "#"), "Tidy the module\n");
+        let found = facts(raw, "#");
         assert_eq!(found[0].subject, "Tidy the module");
         assert_eq!(found[0].properties["body"], "");
         assert!(!found[0].properties["body"].contains("drop_me"));
@@ -310,9 +325,9 @@ mod tests {
                    ; deleted:    old.rs\n\
                    ; ------------------------ >8 ------------------------\n\
                    -fn drop_me() {}\n";
-        assert_eq!(as_recorded(raw, ';'), "Drop it\n# drop_me is gone");
+        assert_eq!(as_recorded(raw, ";"), "Drop it\n# drop_me is gone");
         // An indented `#` is content under git's test as well as here.
-        assert_eq!(as_recorded("x\n  # kept\n", '#'), "x\n  # kept");
+        assert_eq!(as_recorded("x\n  # kept\n", "#"), "x\n  # kept");
     }
 
     #[test]
@@ -320,14 +335,31 @@ mod tests {
         let root = crate::fixture::scratch("comment-char");
         std::fs::create_dir_all(&root).unwrap();
         crate::fixture::git(&root, &["init", "-q", "-b", "main"]);
-        assert_eq!(comment_char(&root).unwrap(), '#');
+        assert_eq!(comment_string(&root).unwrap(), "#");
         crate::fixture::git(&root, &["config", "core.commentChar", ";"]);
-        assert_eq!(comment_char(&root).unwrap(), ';');
-        // `auto` is a choice git makes after this hook has run, and a string
-        // is not a character: both read as the default.
+        assert_eq!(comment_string(&root).unwrap(), ";");
+        // `auto` is a choice git makes after this hook has run: the default.
         crate::fixture::git(&root, &["config", "core.commentChar", "auto"]);
-        assert_eq!(comment_char(&root).unwrap(), '#');
+        assert_eq!(comment_string(&root).unwrap(), "#");
+        // A string of more than one character is git's too, since 2.45.
         crate::fixture::git(&root, &["config", "core.commentChar", "//"]);
-        assert_eq!(comment_char(&root).unwrap(), '#');
+        assert_eq!(comment_string(&root).unwrap(), "//");
+    }
+
+    #[test]
+    fn comment_string_is_the_same_setting_and_the_one_read_last_wins() {
+        let root = crate::fixture::scratch("comment-string");
+        std::fs::create_dir_all(&root).unwrap();
+        crate::fixture::git(&root, &["init", "-q", "-b", "main"]);
+        crate::fixture::git(&root, &["config", "core.commentString", "% "]);
+        assert_eq!(comment_string(&root).unwrap(), "% ");
+        crate::fixture::git(&root, &["config", "core.commentChar", ";"]);
+        assert_eq!(comment_string(&root).unwrap(), ";");
+        crate::fixture::git(&root, &["config", "--unset", "core.commentChar"]);
+        assert_eq!(comment_string(&root).unwrap(), "% ");
+        // And it is what is stripped, scissors line included.
+        let raw = "Drop it\n% a comment\n# content\n\
+                   %  ------------------------ >8 ------------------------\n-gone\n";
+        assert_eq!(as_recorded(raw, "% "), "Drop it\n# content");
     }
 }
