@@ -1602,9 +1602,9 @@ name.
 somebody searches the log for, so at `commit-msg` and over a pushed range the
 subject gets both checks and the body the invisible check alone. The subject is
 the first line with anything on it. At `commit-msg` the file is read before
-git's cleanup, and whether a line opening with `core.commentChar` (default `#`)
-is stripped depends on the cleanup mode (`git commit -m "#42 Fix"` keeps it, the
-editor strips it), so where the first such line opens with the comment
+git's cleanup, and whether a line opening with `core.commentChar` or
+`core.commentString` (default `#`) is stripped depends on the cleanup mode
+(`git commit -m "#42 Fix"` keeps it, the editor strips it), so where the first such line opens with the comment
 character, the first line that does not is judged as well. Both rules read it
 that way, so a `commit.template` whose first non-blank line is a non-ASCII
 comment is refused under `ascii-only-commit-subject`, and one whose first

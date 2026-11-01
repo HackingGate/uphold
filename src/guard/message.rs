@@ -212,7 +212,7 @@ fn unusual_unicode_over(
 /// opens with the comment character, the first line that does not is a
 /// candidate as well, and both are judged -- a subject is never let through
 /// for looking like a comment, and never missed for sitting under one.
-fn subject_lines(text: &str, comment: Option<char>) -> Vec<usize> {
+fn subject_lines(text: &str, comment: Option<&str>) -> Vec<usize> {
     let lines: Vec<&str> = text.split('\n').collect();
     let written = |line: &&str| !line.trim().is_empty();
     let Some(first) = lines.iter().position(written) else {
@@ -238,14 +238,14 @@ fn headed_messages(request: &Request<'_>) -> Result<Vec<(String, String, Vec<usi
         None
     } else {
         Some(
-            crate::evidence::git::comment_char(request.root)
+            crate::evidence::git::comment_string(request.root)
                 .map_err(|reason| Fatal::new(format!("{}: {reason}", request.rule.id)))?,
         )
     };
     Ok(message_subjects(request)?
         .into_iter()
         .map(|(label, text)| {
-            let subjects = subject_lines(&text, comment);
+            let subjects = subject_lines(&text, comment.as_deref());
             (label, text, subjects)
         })
         .collect())
@@ -468,7 +468,7 @@ mod tests {
     /// The text as a commit message at a git hook: its subject line gets the
     /// lookalike pass as well as the invisible one.
     fn findings(text: &str) -> Vec<String> {
-        unusual_findings("m", text, &[], &subject_lines(text, Some('#')))
+        unusual_findings("m", text, &[], &subject_lines(text, Some("#")))
     }
 
     /// The text as prose at a text seam: the invisible pass alone.
@@ -477,7 +477,7 @@ mod tests {
     }
 
     fn subject_findings(text: &str, allowed: &[char]) -> Vec<String> {
-        non_ascii_in_subject("m", text, allowed, &subject_lines(text, Some('#')))
+        non_ascii_in_subject("m", text, allowed, &subject_lines(text, Some("#")))
     }
 
     /// A rule as a policy loads it, with `allow` written out.
@@ -511,7 +511,7 @@ mod tests {
     fn loaded(name: &str, allow: &str) -> Result<Option<Refusal>> {
         let rule = loaded_rule(name, "prevent-unusual-unicode", allow)?;
         let text = "Fix the c\u{0430}che\n";
-        unusual_unicode_over(&rule, "m", text, &subject_lines(text, Some('#')))
+        unusual_unicode_over(&rule, "m", text, &subject_lines(text, Some("#")))
     }
 
     #[test]
@@ -648,8 +648,8 @@ mod tests {
     fn a_stored_message_has_no_comments_and_its_first_line_is_the_subject() {
         // What a push publishes is a commit git already cleaned up.
         assert_eq!(subject_lines("\n# Fix it\nmore\n", None), vec![1]);
-        assert_eq!(subject_lines("\n# Fix it\nmore\n", Some('#')), vec![1, 2]);
-        assert_eq!(subject_lines("; Fix it\nmore\n", Some(';')), vec![0, 1]);
+        assert_eq!(subject_lines("\n# Fix it\nmore\n", Some("#")), vec![1, 2]);
+        assert_eq!(subject_lines("; Fix it\nmore\n", Some(";")), vec![0, 1]);
         assert!(
             subject_lines("\n  \n", None).is_empty(),
             "a blank message has no subject"
@@ -767,7 +767,7 @@ mod tests {
         // `git commit -m "# ..."`, which records that line. The report says
         // why, and how to write the template so it passes.
         let text = format!("# {JAPANESE}{KANA}\nFix the parser\n");
-        let subjects = subject_lines(&text, Some('#'));
+        let subjects = subject_lines(&text, Some("#"));
         assert_eq!(subjects, vec![0, 1]);
         let found = non_ascii_in_subject("m", &text, &[], &subjects);
         assert_eq!(found.len(), 6, "{found:?}");
@@ -787,7 +787,7 @@ mod tests {
 
     /// The note `ascii-only-commit-subject` would attach to this message.
     fn ascii_note(text: &str) -> &'static str {
-        let subjects = subject_lines(text, Some('#'));
+        let subjects = subject_lines(text, Some("#"));
         comment_line_note(&subjects, |commented| {
             !non_ascii_in_subject("", text, &[], &[commented]).is_empty()
         })
@@ -798,7 +798,7 @@ mod tests {
         // Leading blank lines are skipped, so the comment is not the first
         // line, and the note says which one it means.
         let text = format!("\n\n# {JAPANESE}{KANA}\nFix the parser\n");
-        assert_eq!(subject_lines(&text, Some('#')), vec![2, 3]);
+        assert_eq!(subject_lines(&text, Some("#")), vec![2, 3]);
         assert!(
             ascii_note(&text).contains("The first non-blank line opens with the comment character"),
             "{}",
@@ -810,7 +810,7 @@ mod tests {
     fn a_lookalike_on_a_comment_opened_first_line_carries_the_note() {
         let rule = loaded_rule("message-comment-note", "prevent-unusual-unicode", "[]").unwrap();
         let judged = |text: &str| {
-            unusual_unicode_in_message(&rule, "m", text, &subject_lines(text, Some('#'))).unwrap()
+            unusual_unicode_in_message(&rule, "m", text, &subject_lines(text, Some("#"))).unwrap()
         };
         let commented = judged("# the c\u{0430}che template\nFix the parser\n")
             .expect("a lookalike on the comment-opened candidate passed");
