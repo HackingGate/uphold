@@ -588,6 +588,61 @@ fn init_leaves_an_existing_hook_config_alone() {
     );
 }
 
+/// A symlink is a file somebody put there, dangling or not: `uphold init`
+/// neither writes through one nor takes one for absent.
+#[cfg(unix)]
+#[test]
+fn init_writes_through_no_symlink() {
+    let root = support::scratch("init-symlink");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("policy")).unwrap();
+    support::git(&root, &["init", "-q", "-b", "main"]);
+    let outside = root.with_extension("outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).unwrap();
+    let uphold = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+        command
+            .args(["init", "--owner", "example-owner", "--visibility", "public"])
+            .current_dir(&root);
+        support::without_git_environment(&mut command);
+        command.output().unwrap()
+    };
+
+    // A dangling policy link is a policy somebody has: refused, and nothing
+    // lands at its target.
+    std::os::unix::fs::symlink(
+        outside.join("policy.toml"),
+        root.join("policy/principles.toml"),
+    )
+    .unwrap();
+    let refused = uphold();
+    assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("already has a policy"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(!outside.join("policy.toml").exists());
+
+    // A dangling hook-config link is a config somebody has: left as it is.
+    std::fs::remove_file(root.join("policy/principles.toml")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.join("hooks.yaml"),
+        root.join(".pre-commit-config.yaml"),
+    )
+    .unwrap();
+    let written = uphold();
+    assert_eq!(written.status.code(), Some(0), "{}", stderr(&written));
+    assert!(String::from_utf8_lossy(&written.stdout).contains("was left as it is"));
+    assert_eq!(
+        std::fs::read_link(root.join(".pre-commit-config.yaml")).unwrap(),
+        outside.join("hooks.yaml"),
+    );
+    assert!(!outside.join("hooks.yaml").exists());
+    assert!(root.join("policy/principles.toml").is_file());
+}
+
 // --- `inherit.paths` stays inside the repository ------------------------------
 
 /// A superproject holding `policy/rules.toml` and a member repository whose own
