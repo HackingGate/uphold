@@ -1333,7 +1333,7 @@ dependencies = [
 
 [[package]]
 name = "uphold"
-version = "1.42.0"
+version = "1.42.1"
 dependencies = [
  "chrono",
  "encoding_rs",
