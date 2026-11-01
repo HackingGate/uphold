@@ -1580,7 +1580,7 @@ impl Policy {
 
 fn parse(path: &Path, text: &str) -> Result<PolicyFile> {
     let mut file: PolicyFile =
-        toml::from_str(text).map_err(|error| Fatal::at(path, error.message()))?;
+        toml::from_str(text).map_err(|error| Fatal::toml(path, text, &error))?;
     // The id is the section header, so it exists here and not in the
     // deserializer -- which is why reading a written rule as one check happens
     // here too: every refusal below names the rule a reader has to go and edit.
@@ -3050,7 +3050,9 @@ fn validate_shim_editor(policy_path: &Path, shims: &[crate::shim::Shim]) -> Resu
                 return Err(Fatal::at(
                     policy_path,
                     format!(
-                        "the `[[shim]]` for {:?} writes `inert_flags`{at} where no editor opens                          and no message is composed, so the list closes nothing and is read by                          nothing. Take it off, or name the `editor_env` it closes.",
+                        "the `[[shim]]` for {:?} writes `inert_flags`{at} where no editor opens \
+                         and no message is composed, so the list closes nothing and is read by \
+                         nothing. Take it off, or name the `editor_env` it closes.",
                         shim.command
                     ),
                 ));
@@ -3226,6 +3228,15 @@ mod tests {
         let path = dir.join("rg-policy.toml");
         std::fs::write(&path, text).unwrap();
         load(&dir, &path)
+    }
+
+    #[test]
+    fn a_policy_that_does_not_parse_is_refused_at_its_line_and_column() {
+        let refused = policy_from("[rule.a]\nmessage = \"m\"\nbroken = \n")
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("rg-policy.toml:3:"), "{refused}");
+        assert_eq!(refused.lines().count(), 1, "{refused}");
     }
 
     /// The keys the schema offers an `[override.<id>]` are the keys it reads.
@@ -5014,7 +5025,7 @@ mod tests {
         // somebody meant to add to `match` and added here instead, which is the
         // exact mistake this catches while it is still cheap.
         let error = policy_from(
-            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\"]\n\n             [[shim.verbs]]\nmatch = [\"issue:close\"]\ntext_flags = [\"-c\"]\n",
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\"]\n\n[[shim.verbs]]\nmatch = [\"issue:close\"]\ntext_flags = [\"-c\"]\n",
         )
         .unwrap_err();
         let text = error.to_string();
@@ -5023,7 +5034,7 @@ mod tests {
 
         // An entry naming no verb at all is the same defect with less to say.
         let empty = policy_from(
-            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\"]\n\n             [[shim.verbs]]\nmatch = []\ntext_flags = [\"-c\"]\n",
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\"]\n\n[[shim.verbs]]\nmatch = []\ntext_flags = [\"-c\"]\n",
         )
         .unwrap_err();
         assert!(empty.to_string().contains("names no verb"), "{empty}");
@@ -5034,7 +5045,7 @@ mod tests {
         // A `verb:*` in the table covers a `verb:noun` entry, because that is
         // what the table's own matcher already means by it.
         policy_from(
-            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"issue:*\"]\ntext_flags = [\"-b\"]\n\n             [[shim.verbs]]\nmatch = [\"issue:close\"]\ntext_flags = [\"-c\"]\n",
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"issue:*\"]\ntext_flags = [\"-b\"]\n\n[[shim.verbs]]\nmatch = [\"issue:close\"]\ntext_flags = [\"-c\"]\n",
         )
         .unwrap();
     }
@@ -5044,7 +5055,7 @@ mod tests {
         // `editor` with no `editor_env` describes an editor there is no
         // variable for the shim to stand in.
         let bare = policy_from(
-            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\ntext_flags = [\"-b\"]\n\n             [[shim.verbs]]\nmatch = [\"pr:merge\"]\neditor = \"interactive\"\n",
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\ntext_flags = [\"-b\"]\n\n[[shim.verbs]]\nmatch = [\"pr:merge\"]\neditor = \"interactive\"\n",
         )
         .unwrap_err();
         assert!(bare.to_string().contains("no `editor_env`"), "{bare}");
@@ -5052,7 +5063,7 @@ mod tests {
         // `editor_unless` takes an OFFERED editor away; beside an editor that
         // is never offered it is a list read by nothing.
         let unless = policy_from(
-            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\ntext_flags = [\"-b\"]\neditor_env = \"GH_EDITOR\"\n\n             [[shim.verbs]]\nmatch = [\"pr:merge\"]\neditor_unless = [\"--squash\"]\n",
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\ntext_flags = [\"-b\"]\neditor_env = \"GH_EDITOR\"\n\n[[shim.verbs]]\nmatch = [\"pr:merge\"]\neditor_unless = [\"--squash\"]\n",
         )
         .unwrap_err();
         assert!(unless.to_string().contains("`editor_unless`"), "{unless}");
@@ -5060,13 +5071,17 @@ mod tests {
         // `inert_flags` closes an editor or a forge message; beside an editor
         // that never opens there is neither.
         let inert = policy_from(
-            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:close\"]\ntext_flags = [\"-c\"]\neditor_env = \"GH_EDITOR\"\n\n             [[shim.verbs]]\nmatch = [\"pr:close\"]\neditor = \"never\"\ninert_flags = [\"--help\"]\n",
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:close\"]\ntext_flags = [\"-c\"]\neditor_env = \"GH_EDITOR\"\n\n[[shim.verbs]]\nmatch = [\"pr:close\"]\neditor = \"never\"\ninert_flags = [\"--help\"]\n",
         )
         .unwrap_err();
         assert!(inert.to_string().contains("`inert_flags`"), "{inert}");
+        assert!(
+            !inert.to_string().contains("  "),
+            "a run of spaces: {inert}"
+        );
 
         policy_from(
-            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\ntext_flags = [\"-b\"]\neditor_env = \"GH_EDITOR\"\n\n             [[shim.verbs]]\nmatch = [\"pr:merge\"]\neditor = \"interactive\"\neditor_unless = [\"--squash\"]\ninert_flags = [\"--help\"]\n",
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:merge\"]\ntext_flags = [\"-b\"]\neditor_env = \"GH_EDITOR\"\n\n[[shim.verbs]]\nmatch = [\"pr:merge\"]\neditor = \"interactive\"\neditor_unless = [\"--squash\"]\ninert_flags = [\"--help\"]\n",
         )
         .unwrap();
     }
@@ -5079,7 +5094,7 @@ mod tests {
         // `issue:close` with `--comment` -- loaded clean, refused the comment,
         // and exec'd `gh pr create --body ...` unexamined.
         let error = policy_from(
-            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"issue:close\"]\ntext_flags = [\"-c\"]\n",
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"issue:close\"]\ntext_flags = [\"-c\"]\n",
         )
         .unwrap_err();
         let text = error.to_string();
@@ -5094,13 +5109,13 @@ mod tests {
     fn one_shim_table_may_name_every_verb_for_its_command() {
         // The cure the refusal names, and the shape every policy already uses.
         policy_from(
-            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\", \"issue:close\"]\ntext_flags = [\"-b\"]\n",
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\", \"issue:close\"]\ntext_flags = [\"-b\"]\n",
         )
         .unwrap();
 
         // And two tables for two DIFFERENT commands are not the same thing.
         policy_from(
-            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\", \"glab\"]\n\n             [[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\"]\n\n             [[shim]]\ncommand = \"glab\"\nmatch = [\"mr:create\"]\ntext_flags = [\"-d\"]\n",
+            "[rule.judge]\nmessage = \"m\"\nexec = \"/bin/false\"\ncommand.before = [\"gh\", \"glab\"]\n\n[[shim]]\ncommand = \"gh\"\nmatch = [\"pr:create\"]\ntext_flags = [\"-b\"]\n\n[[shim]]\ncommand = \"glab\"\nmatch = [\"mr:create\"]\ntext_flags = [\"-d\"]\n",
         )
         .unwrap();
     }
