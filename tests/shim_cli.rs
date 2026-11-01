@@ -9245,7 +9245,7 @@ fn the_rule_is_listed_as_in_force_at_every_seam() {
         .unwrap();
     assert_eq!(
         rule["seams"],
-        serde_json::json!(["shim", "hook", "text"]),
+        serde_json::json!(["shim", "hook", "text", "guard-text"]),
         "{rule}"
     );
 }
@@ -9858,4 +9858,45 @@ fn the_refusal_names_the_citation_and_the_link_it_wants() {
         text.contains("https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3 or"),
         "{text}"
     );
+}
+
+#[test]
+/// `rules --effective --json` tells the two `--text` commands apart: a text
+/// guard runs at `guard --text` and not at `scan --text`, and the report says
+/// so rather than listing both under `text`. The commands agree with it.
+fn a_text_guard_is_listed_at_guard_text_and_not_at_scan_text() {
+    let root = workspace(CITATIONS_POLICY);
+    let listed = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["rules", "--effective", "--json"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_eq!(code(&listed), 0, "{}", stderr(&listed));
+    let rules: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    let rule = rules
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rule| rule["id"] == "citations-linked")
+        .unwrap();
+    assert_eq!(
+        rule["seams"],
+        serde_json::json!(["shim", "hook", "guard-text"]),
+        "{rule}"
+    );
+
+    let body = "Retry-After is in RFC 9110 §10.2.3.";
+    for (args, expected) in [(["scan", "--text", "-"], 0), (["guard", "--text", "-"], 1)] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
+            .args(args)
+            .current_dir(&root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(&mut child.stdin.take().unwrap(), body.as_bytes()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(code(&output), expected, "{args:?}: {}", stderr(&output));
+    }
 }

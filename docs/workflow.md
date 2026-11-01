@@ -49,7 +49,8 @@ flowchart LR
   manual` runs the guards that sweep the whole repository, and `uphold
   supply-chain` runs the dependency and secret scanners.
 - **Text.** `uphold scan --text` and `uphold guard --text` judge text with no
-  path, such as a commit message.
+  path, such as a commit message. Only `guard --text` runs the text guards,
+  so each command has its own table.
 
 ## commit-msg
 
@@ -145,11 +146,29 @@ flowchart LR
 
 ## text
 
-`uphold scan --text` and `uphold guard --text`.
+`uphold scan --text`.
 
 | Rule | Set | Message |
 |---|---|---|
 | `no-empty-merge-subject` | `published-text` | Give the merge commit a subject, or leave the subject off so the forge writes the pull request's title. |
+| `no-announcing-sentence` | `prose-shapes` | This sentence says what the next one will say. |
+| `no-empty-hedge` | `prose-shapes` | This hedge admits no uncertainty -- it softens the claim without qualifying it. |
+| `no-restating-clause` | `prose-shapes` | This clause restates the one in front of it. |
+| `no-unproposed-alternative` | `prose-shapes` | This answers an objection nobody made. |
+
+## guard text
+
+`uphold guard --text`: the text guards, and the prose and pattern rules `scan --text` runs.
+
+| Rule | Set | Message |
+|---|---|---|
+| `prevent-ai-author` | `commit-message-residue` | The `prevent-ai-author` guard writes its own report. |
+| `prevent-unusual-unicode` | `commit-message-residue` | The `prevent-unusual-unicode` guard writes its own report. |
+| `no-private-repo-names` | `private-names` | The `no-private-repo-names` guard writes its own report. |
+| `citations-linked` | `published-text` | The `citations-linked` guard writes its own report. |
+| `no-empty-merge-subject` | `published-text` | Give the merge commit a subject, or leave the subject off so the forge writes the pull request's title. |
+| `no-published-private-repo-names` | `published-text` | The `no-private-repo-names` guard writes its own report. |
+| `ruling-citations-resolve` | `published-text` | The `ruling-citations-resolve` guard writes its own report. |
 | `no-announcing-sentence` | `prose-shapes` | This sentence says what the next one will say. |
 | `no-empty-hedge` | `prose-shapes` | This hedge admits no uncertainty -- it softens the claim without qualifying it. |
 | `no-restating-clause` | `prose-shapes` | This clause restates the one in front of it. |

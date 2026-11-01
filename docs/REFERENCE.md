@@ -993,10 +993,16 @@ The JSON is one array of `{"id": ..., "git_hooks": [...], "seams": [...]}`, in
 the order the engine resolved them, so no other tool has to re-implement the
 loader to find out what runs.
 
-`seams` is `scan`, `guard`, `shim`, or more than one, and it is the half
-`git_hooks` cannot express: an empty hook list is true of a content rule and of
-a checker standing in front of a command alike. An empty `seams` means nothing
-runs the rule at all, which the loader refuses.
+`seams` is one or more of `scan`, `guard`, `shim`, `hook`, `text` and
+`guard-text`, and it is the half `git_hooks` cannot express: an empty hook list
+is true of a content rule and of a checker standing in front of a command
+alike. An empty `seams` means nothing runs the rule at all, which the loader
+refuses.
+
+`text` is `uphold scan --text` and `guard-text` is `uphold guard --text`. They
+are two entries because they run different rules: only `guard --text` runs the
+text guards, such as `citations-linked`. A rule's own `seams` field still names
+both commands as `text`.
 
 The two requests this shape exists to make writable:
 
@@ -2770,7 +2776,7 @@ command.scope = "always"
 
 **The id is a contract.** A caller that relies on this verdict names the rule
 and checks that it is in force: `uphold rules --effective --json` lists it with
-`"seams": ["shim", "hook", "text"]`, and a policy that does not inherit `published-text`
+`"seams": ["shim", "hook", "text", "guard-text"]`, and a policy that does not inherit `published-text`
 does not have it.
 
 **Blank** is empty or whitespace (Unicode `\s`) once one trailing ` (#N)` is

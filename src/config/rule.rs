@@ -1386,7 +1386,8 @@ impl Rule {
         self.hooks().iter().any(|name| name == hook)
     }
 
-    /// Which seams run this rule: `scan`, `guard`, `shim`, in that order.
+    /// Which seams run this rule: `scan`, `guard`, `shim`, `hook`, `text`
+    /// (`scan --text`) and `guard-text` (`guard --text`), in that order.
     ///
     /// The question `git.hooks` alone cannot answer. A rule with no hooks is
     /// either a content rule the scan owns or a checker standing in front of a
@@ -1431,6 +1432,21 @@ impl Rule {
         // commit-msg and what `uphold check` can find installed.
         if self.command.is_some() && self.judged_at(Seam::Scan) {
             seams.push("text");
+        }
+        // `guard --text`, which consults the text guards as well -- every one
+        // of them, since `guard::over_text` asks no `seams` and a guard cannot
+        // declare one -- and so is a seam of its own here, though `seams`
+        // spells the two `--text` commands as one name. A report that folded
+        // them together listed `scan --text` as running `citations-linked`.
+        let guard_text = self.builtin().map_or_else(
+            || self.command.is_some() && self.judged_at(Seam::Guard),
+            |builtin| {
+                crate::guard::TEXT_GUARDS.contains(&builtin)
+                    && !crate::guard::META_TEXT_GUARDS.contains(&builtin)
+            },
+        );
+        if guard_text {
+            seams.push("guard-text");
         }
         seams
     }

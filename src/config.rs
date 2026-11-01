@@ -3692,8 +3692,15 @@ mod tests {
                 "{builtin}: the rule did not survive the load"
             );
             // And at the hook, which runs every text-capable guard over what a
-            // tool call is about to publish.
-            assert_eq!(rule.unwrap().seams(), vec!["shim", "hook"], "{builtin}");
+            // tool call is about to publish, and at `guard --text`, which runs
+            // every one but the consultations -- they are the loop
+            // `guard::over_text` already is.
+            let expected: &[&str] = if crate::guard::META_TEXT_GUARDS.contains(builtin) {
+                &["shim", "hook"]
+            } else {
+                &["shim", "hook", "guard-text"]
+            };
+            assert_eq!(rule.unwrap().seams(), expected, "{builtin}");
         }
     }
 
@@ -4002,7 +4009,7 @@ mod tests {
             .find(|rule| rule.id == "no-empty-merge-subject")
             .expect("published-text carries the merge-subject rule");
         assert_eq!(rule.kind(), CheckKind::RequireRegexp);
-        assert_eq!(rule.seams(), ["shim", "hook", "text"]);
+        assert_eq!(rule.seams(), ["shim", "hook", "text", "guard-text"]);
         assert!(rule.judged_at(crate::text::Seam::Guard));
         assert!(rule.judged_at(crate::text::Seam::Hook));
     }
@@ -4336,7 +4343,7 @@ mod tests {
         )
         .unwrap();
         let rule = policy.rules.first().unwrap();
-        assert_eq!(rule.seams(), ["scan", "shim", "hook", "text"]);
+        assert_eq!(rule.seams(), ["scan", "shim", "hook", "text", "guard-text"]);
         assert!(rule.stands_in_front_of_a_command());
     }
 
@@ -4359,7 +4366,10 @@ mod tests {
              seams = [\"text\"]\ncommand.before = [\"gh\"]\n",
         )
         .unwrap();
-        assert_eq!(text_only.rules.first().unwrap().seams(), ["text"]);
+        assert_eq!(
+            text_only.rules.first().unwrap().seams(),
+            ["text", "guard-text"]
+        );
         assert!(rule.judged_at(crate::text::Seam::Hook));
         assert!(!rule.judged_at(crate::text::Seam::Scan));
         assert!(!rule.judged_at(crate::text::Seam::Command));
