@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import random
+import shlex
 import shutil
 import subprocess
 import sys
@@ -372,9 +373,39 @@ class Drive(unittest.TestCase):
         )
         self.assertEqual(results, [{"record": "a", "caught": 1, "fired": 0}])
         self.assertFalse(review_mod.holds(results[0], 3))
-        report = review_mod.render_drive(results, 3)
+        report = review_mod.render_drive(results, 3, ["rev"])
         self.assertIn("a: caught 1/3, misses fired 0/3 -- DOES NOT HOLD", report)
         self.assertIn("pass@1 0.33; pass^3 0/1", report)
+
+    def test_the_report_names_the_reviewer_command_as_run(self):
+        results = [{"record": "a", "caught": 1, "fired": None}]
+        report = review_mod.render_drive(
+            results, 1, ["./my-reviewer", "--model", "x y"]
+        )
+        self.assertEqual(
+            report.splitlines()[0], "reviewer: ./my-reviewer --model 'x y'"
+        )
+
+    def test_a_ruling_report_names_the_ruler_and_the_auditor(self):
+        result = {
+            "question": "Q?",
+            "ruled": "(a)",
+            "held": 1,
+            "given": ["(a)"],
+            "broken": [],
+            "audited": 1,
+            "unsupported": 0,
+        }
+        lines = review_mod.render_rulings(
+            [result], 1, 1, 7, ["./ruler"], ["./auditor", "-v"]
+        ).splitlines()
+        self.assertEqual(
+            lines[:3], ["ruler: ./ruler", "auditor: ./auditor -v", lines[2]]
+        )
+        self.assertTrue(lines[2].startswith("seed 7"))
+        unaudited = review_mod.render_rulings([result], 1, 1, 7, ["./ruler"], None)
+        self.assertNotIn("auditor:", unaudited)
+        self.assertIn("unaudited", unaudited)
 
     def test_firing_on_the_miss_breaks_a_control_that_caught_every_plant(self):
         results = review_mod.drive(
@@ -386,7 +417,9 @@ class Drive(unittest.TestCase):
         )
         self.assertEqual(results[0]["fired"], 2)
         self.assertFalse(review_mod.holds(results[0], 2))
-        self.assertIn("false positives 1.00", review_mod.render_drive(results, 2))
+        self.assertIn(
+            "false positives 1.00", review_mod.render_drive(results, 2, ["rev"])
+        )
 
     def test_an_unwritten_misses_is_unmeasured_and_not_a_rate_of_zero(self):
         calls = []
@@ -401,7 +434,7 @@ class Drive(unittest.TestCase):
         self.assertEqual(calls, ["plant", "plant"])
         self.assertIsNone(results[0]["fired"])
         self.assertTrue(review_mod.holds(results[0], 2))
-        report = review_mod.render_drive(results, 2)
+        report = review_mod.render_drive(results, 2, ["rev"])
         self.assertIn("misses not written", report)
         self.assertNotIn("false positives", report)
 
@@ -1058,6 +1091,10 @@ class SelfApplication(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("caught 0/3", result.stdout)
         self.assertIn("DOES NOT HOLD", result.stdout)
+        self.assertEqual(
+            result.stdout.splitlines()[0],
+            f"reviewer: {shlex.join([sys.executable, '-c', 'import sys; sys.stdin.read()'])}",
+        )
 
     def test_drive_without_a_reviewer_is_a_usage_error(self):
         for argv in [
