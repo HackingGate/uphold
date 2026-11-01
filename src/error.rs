@@ -42,6 +42,34 @@ impl Fatal {
     pub(crate) fn yaml(path: &Path, error: &serde_saphyr::Error) -> Self {
         Self::at(path, error.without_snippet())
     }
+
+    /// A TOML file that would not parse, on one line, at the line and column
+    /// of the fault.
+    ///
+    /// `message()` alone dropped the place: a policy file refused with
+    /// "invalid type: string, expected a sequence" said nothing about which of
+    /// its hundreds of lines to open. The parser's `Display` has the place but
+    /// spends five lines on an excerpt, for the reason `yaml` gives. The span is
+    /// a byte range into `text`; the column counts characters, from 1, as an
+    /// editor's does.
+    pub(crate) fn toml(path: &Path, text: &str, error: &toml::de::Error) -> Self {
+        let Some(start) = error.span().map(|span| span.start) else {
+            return Self::at(path, error.message());
+        };
+        let before = text.get(..start).unwrap_or(text);
+        let line = before.matches('\n').count() + 1;
+        let column = before
+            .rsplit_once('\n')
+            .map_or(before, |(_, tail)| tail)
+            .chars()
+            .count()
+            + 1;
+        Self::new(format!(
+            "{}:{line}:{column}: {}",
+            path.display(),
+            error.message().trim_end()
+        ))
+    }
 }
 
 impl fmt::Display for Fatal {
