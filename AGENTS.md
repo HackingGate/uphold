@@ -145,6 +145,19 @@ A constraint becomes machine enforcement only when it is expressed as a decidabl
 - If this rule can never fire, what in the system would reveal that?
 - For the part that cannot be mechanized, where does it live so that whoever builds the check reads it?
 
+## Fact Once Per Screen
+A screen shows each fact once; a second view of an item exists only to add facts its first view lacks, and repeats nothing of the first view but the item's name and state as its heading.
+
+**Applies when**
+- An item is shown in a list or summary and again in a view of its own.
+- One screen renders the same field from two components, such as a header and a panel.
+- A detail view is proposed or reviewed, and the question is what it shows that the summary does not.
+
+**Ask**
+- Which facts on this screen appear more than once, and which component owns each?
+- What does this detail view show that its list row does not, beyond the item's name and state?
+- Is every fact the person needs to act on shown where they act on it?
+
 ## Fail Fast and Explicitly
 When continuing cannot satisfy the contract safely, detect the condition at the earliest reliable boundary and return an explicit failure with evidence.
 
