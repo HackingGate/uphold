@@ -267,6 +267,7 @@ class BumpVersion(unittest.TestCase):
                 )
                 self.assertEqual(box.state(), before)
 
+    @unittest.skipUnless(shutil.which("cargo"), "cargo writes the lock first")
     def test_an_unexpected_line_count_restores_the_files_and_fails(self) -> None:
         box = _sandbox(self)
         readme = box.work / "README.md"
@@ -282,6 +283,29 @@ class BumpVersion(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("README.md: expected 3 line(s) changed, got '4 4'", result.stderr)
+        self.assertEqual(box.state(), before)
+
+    def test_cargo_writes_the_lock_for_the_workspace_alone_and_offline(self) -> None:
+        # No fixture dependency could move under an unscoped update, so the
+        # flags are read off a stub rather than inferred from the lock. The stub
+        # writes nothing, so the Cargo.lock count then fails and restores.
+        box = _sandbox(self)
+        log = box.root / "cargo-argv"
+        stub = box.root / "bin" / "cargo"
+        stub.parent.mkdir()
+        stub.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > "{log}"\n', encoding="utf-8")
+        stub.chmod(0o755)
+        box.env["PATH"] = f"{stub.parent}{os.pathsep}{box.env['PATH']}"
+        before = box.state()
+
+        result = box.run("bump-version.sh", "1.3.0")
+
+        self.assertEqual(
+            log.read_text(encoding="utf-8").split(),
+            ["update", "--workspace", "--offline", "--quiet"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Cargo.lock: expected 1 line(s) changed", result.stderr)
         self.assertEqual(box.state(), before)
 
     def test_refuses_a_dirty_tree(self) -> None:
