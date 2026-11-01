@@ -1243,6 +1243,41 @@ fn a_bumped_submodule_pointer_expands_into_the_members_own_manifests() {
     assert!(ran.contains("sub"), "{ran}");
 }
 
+/// A bumped submodule under a vendored tree is not read, as `--all` does not.
+///
+/// `upstream/` holds somebody else's repository. Its workflows run in its own
+/// CI, and expanding the pointer handed them to zizmor: every bump of a
+/// vendored member refused the push for findings nobody in this tree can fix,
+/// while the whole-tree scan of the same commit passed.
+#[test]
+fn a_bumped_submodule_under_a_vendored_tree_is_not_expanded() {
+    let root = tracked();
+    support::submodule(
+        &root,
+        "upstream/member",
+        &[(".github/workflows/ci.yml", "on: push\n")],
+    );
+    commit(&root, "vendor the member");
+    let before = head(&root);
+    let member = root.join("upstream/member");
+    write(
+        &member,
+        ".github/workflows/ci.yml",
+        "on: [push, pull_request]\n",
+    );
+    commit(&member, "the member's own CI moves");
+    let after = commit(&root, "bump the vendored pointer");
+    let tools = stubs(&[("zizmor", &recording("exit 1"))]);
+    let output = pushed(&root, &tools, &before, &after);
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains("upstream/member moved, and it sits under a vendored tree"),
+        "{}",
+        text(&output)
+    );
+    assert!(!journal(&root).contains("zizmor"), "{}", journal(&root));
+}
+
 /// A pointer to a commit the member's store lacks widens to every manifest.
 ///
 /// A shallow clone, or a fetch nobody ran, and the member's range cannot be

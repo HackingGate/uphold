@@ -541,6 +541,13 @@ fn find_named(root: &Path, name: &str) -> Result<Vec<PathBuf>> {
 /// over the one file class whose being unread is worth saying out loud.
 /// Nothing downstream is handed it: every section selects its own inputs by
 /// name or by `is_workflow`.
+/// A path with a pruned directory anywhere in it: vendored, generated or
+/// upstream content, which the whole-tree walks leave out at every level.
+fn pruned(path: &Path) -> bool {
+    path.iter()
+        .any(|part| part.to_str().is_some_and(|name| PRUNE.contains(&name)))
+}
+
 fn interesting(path: &Path) -> bool {
     let named = path
         .file_name()
@@ -729,7 +736,7 @@ fn collect_range(
     // regular file is new content at that path, and a scanner reads files.
     for line in ask(&["diff", "--name-only", "--diff-filter=ACMRT", &range])?.lines() {
         let path = prefix.join(line);
-        if interesting(&path) {
+        if interesting(&path) && !pruned(&path) {
             out.insert(path);
         }
     }
@@ -757,6 +764,17 @@ fn collect_range(
             continue;
         }
         let submodule = prefix.join(path);
+        // A vendored member is somebody else's repository: its workflows run in
+        // its own CI and its manifests are its own backlog. `--all` prunes the
+        // same tree, so a range must not read what the whole scan leaves out.
+        if pruned(&submodule) {
+            println!(
+                "   {} moved, and it sits under a vendored tree this scan prunes, so it is \
+                 not read -- the same gap `--all` declares",
+                submodule.display()
+            );
+            continue;
+        }
         expand_gitlink(root, &submodule, old, new, out)?;
     }
     Ok(())
