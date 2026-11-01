@@ -1,0 +1,43 @@
+id = "fact-once-per-screen"
+title = "Fact Once Per Screen"
+aliases = ["Reduce redundancy", "No repeated fields", "A detail view adds detail"]
+kind = "heuristic"
+status = "seed"
+domains = ["interfaces", "socio-technical"]
+summary = "A screen shows each fact once, and a second view of an item exists only to add facts its first view lacks."
+claim = "A screen shows each fact once; a second view of an item exists only to add facts its first view lacks, and repeats nothing of the first view but the item's name and state as its heading."
+problem = "A list row and the item's own page both show the same fields, so the person reads every fact twice, cannot tell whether the repeat is new, and the page that was meant to say more says almost nothing more. Layout space goes to restating, and the facts that have no home stay unshown."
+rationale = "Every extra unit of information competes with the relevant ones for the person's attention. A repeated fact costs a reading and a comparison and buys nothing; a second view earns its navigation only by what it adds. Giving each fact one place also gives every unshown fact an obvious place to go."
+applies_when = ["An item is shown in a list or summary and again in a view of its own.", "One screen renders the same field from two components, such as a header and a panel.", "A detail view is proposed or reviewed, and the question is what it shows that the summary does not."]
+does_not_mean = ["Never show a fact in two places across the product; a different screen, read at a different time, may show it again.", "Strip the heading of a detail view; the item's name and state identify what the view is about.", "Remove a few cross-reference links that reach one destination by different routes.", "Hide a fact the person needs in order to act, to avoid showing it twice."]
+benefits = ["Each screen reads faster, with nothing to compare against an earlier copy.", "A detail view is forced to carry the facts that justify it.", "Space freed from repeats goes to content that had no place."]
+costs = ["A person who jumps straight to a detail view sees less of the summary's context.", "Deciding which view owns a fact is a design decision someone must make and record."]
+failure_when_overapplied = ["A detail view drops the item's name and state, and the person loses track of which item it is.", "A fact needed to act is moved off the screen where the action is, so the person must navigate to read it.", "Two different facts that share a label are merged as if they were one."]
+conflicts_with = []
+related = ["single-authoritative-source", "least-astonishment", "unobstructed-work-area"]
+review_questions = ["Which facts on this screen appear more than once, and which component owns each?", "What does this detail view show that its list row does not, beyond the item's name and state?", "Is every fact the person needs to act on shown where they act on it?"]
+
+[enforcement]
+level = "test"
+automatable = "partially"
+observable = ["The labelled fields a list row renders and the labelled fields the item's own view renders, in a component or story test.", "Two elements on one rendered screen with the same label and value."]
+checks = ["Render the list row and the item's view for the same item and fail when a field other than the name and state appears in both.", "Fail a story when one label and value pair renders twice on the screen."]
+limits = ["Whether two differently labelled fields carry the same fact is a judgment.", "Whether a repeated fact is needed where the person acts is a judgment about the task."]
+
+[[sources]]
+title = "Nielsen Norman Group, Reduce Redundancy: Decrease Duplicated Design Decisions"
+url = "https://www.nngroup.com/articles/reduce-redundancydecrease-duplicated-design-decisions/"
+type = "essay"
+notes = "Showing the same link or information twice adds scanning cost and leaves people unsure whether the repeat is new; make the one copy prominent instead. A few cross-reference links are the exception."
+
+[[sources]]
+title = "Nielsen Norman Group, 10 Usability Heuristics for User Interface Design"
+url = "https://www.nngroup.com/articles/ten-usability-heuristics/"
+type = "essay"
+notes = "Heuristic 8, aesthetic and minimalist design: interfaces should not contain information that is irrelevant or rarely needed."
+
+[[sources]]
+title = "SAP Fiori Design Guidelines, Master-Detail"
+url = "https://www.sap.com/design-system/hcm/patterns/structure-and-layout/master-detail/usage"
+type = "documentation"
+notes = "A master-detail layout is for items each connected to further information than the master list shows."

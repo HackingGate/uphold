@@ -32,6 +32,21 @@
       "path": "principles/psychological-acceptability.toml"
     },
     {
+      "name": "A detail view adds detail",
+      "key": "a detail view adds detail",
+      "tokens": [
+        "a",
+        "detail",
+        "view",
+        "adds",
+        "detail"
+      ],
+      "field": "alias",
+      "id": "fact-once-per-screen",
+      "title": "Fact Once Per Screen",
+      "path": "principles/fact-once-per-screen.toml"
+    },
+    {
       "name": "Abstraction barrier",
       "key": "abstraction barrier",
       "tokens": [
@@ -882,6 +897,20 @@
       "path": "principles/explicit-unknown.toml"
     },
     {
+      "name": "Fact Once Per Screen",
+      "key": "fact once per screen",
+      "tokens": [
+        "fact",
+        "once",
+        "per",
+        "screen"
+      ],
+      "field": "title",
+      "id": "fact-once-per-screen",
+      "title": "Fact Once Per Screen",
+      "path": "principles/fact-once-per-screen.toml"
+    },
+    {
       "name": "Fail closed",
       "key": "fail closed",
       "tokens": [
@@ -1577,6 +1606,19 @@
       "path": "principles/least-astonishment.toml"
     },
     {
+      "name": "No repeated fields",
+      "key": "no repeated fields",
+      "tokens": [
+        "no",
+        "repeated",
+        "fields"
+      ],
+      "field": "alias",
+      "id": "fact-once-per-screen",
+      "title": "Fact Once Per Screen",
+      "path": "principles/fact-once-per-screen.toml"
+    },
+    {
       "name": "No rule without a firing condition",
       "key": "no rule without a firing condition",
       "tokens": [
@@ -2042,6 +2084,18 @@
       "id": "minimize-attack-surface",
       "title": "Minimize Attack Surface",
       "path": "principles/minimize-attack-surface.toml"
+    },
+    {
+      "name": "Reduce redundancy",
+      "key": "reduce redundancy",
+      "tokens": [
+        "reduce",
+        "redundancy"
+      ],
+      "field": "alias",
+      "id": "fact-once-per-screen",
+      "title": "Fact Once Per Screen",
+      "path": "principles/fact-once-per-screen.toml"
     },
     {
       "name": "Replace Before Release",

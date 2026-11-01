@@ -291,6 +291,11 @@ catches = "Add a rule to policy/upheld.toml whose only payload is a paragraph of
 misses = "Make the message over_budget in scripts/review.py returns also say how many lines the document is over the ceiling, still returning it when the document is too long."
 
 [[review.control]]
+record = "fact-once-per-screen"
+catches = "Make `uphold check` print each adopted record's title in the summary line above the list and again on that record's line in the list, so every title appears twice on one screen."
+misses = "Make `uphold check` print each adopted record's title once, on its own line in the list, with only the count of adopted records in the summary line above it."
+
+[[review.control]]
 record = "fail-fast"
 catches = "Change uphold_check.py's read_toml() so a policy/upheld.toml that tomllib cannot parse is treated as an empty declaration, and `--review --check` goes on to print \"compiled review is current\" and exit 0 instead of exiting 2 with the parse error."
 misses = "Change the message uphold_check.py prints when policy/upheld.toml cannot be parsed so it carries the line and column tomllib reported, still exiting 2."

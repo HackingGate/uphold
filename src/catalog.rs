@@ -89,6 +89,10 @@ const RECORDS: &[(&str, &str)] = &[
         "explicit-unknown",
         include_str!("../principles/explicit-unknown.toml"),
     ),
+    (
+        "fact-once-per-screen",
+        include_str!("../principles/fact-once-per-screen.toml"),
+    ),
     ("fail-fast", include_str!("../principles/fail-fast.toml")),
     (
         "fail-safe-defaults",
