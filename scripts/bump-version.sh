@@ -16,12 +16,12 @@ set -euo pipefail
 #   README.md           the `--tag`, `rev:` and `ref:` pins
 #   hooks/lefthook.yml  the header comment's `ref:`
 #
-# Each file must change exactly the lines `expect` names below, and the old
-# version must be gone from it; otherwise the files are restored and the script
-# fails. Cargo.lock is then read back by
-# `cargo metadata --locked --offline`, which refuses a lock that disagrees with
-# the manifest, so the hand edit is proven by the tool that would otherwise
-# rewrite it.
+# Cargo.lock is written by cargo, not edited: `cargo update --workspace
+# --offline` re-resolves only the workspace's own packages and can fetch
+# nothing, so the uphold entry moves and no dependency does. Each file must
+# change exactly the lines `expect` names below, and the old version must be
+# gone from it; otherwise the files are restored and the script fails. The
+# one-line count on Cargo.lock is what shows no dependency moved.
 #
 # The bump is made from main as origin has it: the script fetches, and refuses
 # unless the checkout is on `main` at origin/main, so the prep pull request
@@ -158,14 +158,11 @@ rewrite Cargo.toml '
     in_package && $0 == "version = \"" old "\"" { $0 = "version = \"" new "\"" }
     { print }
 '
-# The line after `name = "uphold"`; a dependency may share the version number.
-# shellcheck disable=SC2016
-rewrite Cargo.lock '
-    prev == "name = \"uphold\"" && $0 == "version = \"" old "\"" {
-        $0 = "version = \"" new "\""
-    }
-    { prev = $0; print }
-'
+# From the manifest just written. Offline, so a dependency cargo would have to
+# fetch fails the run rather than moving.
+command -v cargo >/dev/null 2>&1 || fail "cargo is needed to write Cargo.lock"
+cargo update --workspace --offline --quiet ||
+    fail "cargo update --workspace --offline could not write Cargo.lock"
 # A pin is a line that ends in one of these, followed by the version.
 # shellcheck disable=SC2016
 rewrite README.md '
@@ -202,7 +199,8 @@ for i in "${!files[@]}"; do
 done
 
 # The old version must be gone from each file, read the way each file spells
-# it. Cargo.lock is read only at the uphold entry, for the reason above.
+# it. Cargo.lock is read only at the uphold entry: a dependency may share the
+# version number.
 leftover="$(grep -nF "\"$old\"" Cargo.toml || true)"
 [ -z "$leftover" ] || fail "Cargo.toml still carries $old: $leftover"
 leftover="$(grep -nF "v$old" README.md hooks/lefthook.yml || true)"
@@ -211,9 +209,6 @@ lock_version="$(awk 'prev == "name = \"uphold\"" { print; exit } { prev = $0 }' 
 [ "$lock_version" = "version = \"$new\"" ] ||
     fail "Cargo.lock's uphold entry reads '$lock_version', not version \"$new\""
 
-command -v cargo >/dev/null 2>&1 || fail "cargo is needed to check Cargo.lock"
-cargo metadata --locked --offline --format-version 1 >/dev/null ||
-    fail "cargo metadata --locked --offline refused the edited Cargo.lock"
 
 # undo_commit STEP -> leave the prep branch, delete it, restore the four files,
 # then die naming the step that failed. Each undo step is allowed to fail on its
