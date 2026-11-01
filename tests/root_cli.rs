@@ -635,6 +635,10 @@ fn init_writes_through_no_symlink() {
     let written = uphold();
     assert_eq!(written.status.code(), Some(0), "{}", stderr(&written));
     assert!(String::from_utf8_lossy(&written.stdout).contains("was left as it is"));
+    assert_eq!(
+        std::fs::read_link(root.join(".pre-commit-config.yaml")).unwrap(),
+        outside.join("hooks.yaml"),
+    );
     assert!(!outside.join("hooks.yaml").exists());
     assert!(root.join("policy/principles.toml").is_file());
 }

@@ -199,7 +199,8 @@ fn present(path: &Path) -> bool {
 /// `File::create_new` is `O_CREAT | O_EXCL`, which refuses a path that exists
 /// -- a symlink, dangling or not, among them -- so nothing is written through
 /// a link or over a file that appeared after `present` was asked. A file it
-/// created and could not fill is removed, since it is this call's.
+/// created and could not fill is removed by name, with the window `run`
+/// describes.
 fn write_new(path: &Path, text: &str) -> std::io::Result<()> {
     let mut file = std::fs::File::create_new(path)?;
     std::io::Write::write_all(&mut file, text.as_bytes()).inspect_err(|_| {
@@ -254,9 +255,13 @@ pub(crate) fn run(root: &Path, owner: &str, visibility: &str, runner: Runner) ->
     }
     // All or nothing. A write that fails part-way would leave a policy file
     // behind, and the next `uphold init` refuses a tree that has one -- so the
-    // person would be deleting by hand what this command half-wrote. Only what
-    // this run created is removed: `write_new` refuses a path that appeared
-    // after the check above, and that file is somebody else's.
+    // person would be deleting by hand what this command half-wrote. Only paths
+    // this run created are removed: `write_new` refuses a path that appeared
+    // after the check above, and that file is somebody else's. The removal is
+    // by name, so a writer that replaced one of those paths in the moment
+    // between this run creating it and removing it loses its file; closing
+    // that would leave a half-written policy instead, which every later run
+    // refuses, and the all-or-nothing promise is the one kept.
     let mut written = Vec::new();
     for (path, text) in planned {
         if let Err(error) = write_new(&path, &text) {
