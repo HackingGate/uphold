@@ -267,6 +267,7 @@ class BumpVersion(unittest.TestCase):
                 )
                 self.assertEqual(box.state(), before)
 
+    @unittest.skipUnless(shutil.which("cargo"), "cargo writes the lock first")
     def test_an_unexpected_line_count_restores_the_files_and_fails(self) -> None:
         box = _sandbox(self)
         readme = box.work / "README.md"
