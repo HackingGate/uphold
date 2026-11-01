@@ -810,7 +810,9 @@ def emit_target(root: Path, name: str) -> Path:
 
 REVIEW_USAGE = (
     "usage: uphold_check.py --review "
-    "[--emit | --check | --print | --drive [--runs N] [--timeout SECONDS] -- REVIEWER...\n"
+    "[--emit | --check | --print\n"
+    "       | --drive [--runs N] [--timeout SECONDS] [--record FILE] -- REVIEWER...\n"
+    "       | --drive --replay FILE\n"
     "       | --drive --rule [--runs N] [--timeout SECONDS] [--agree M] "
     "[--audit-every N --auditor 'COMMAND'] [--seed N] -- RULER...]"
 )
@@ -826,6 +828,10 @@ def drive_arguments(argv: list[str]) -> dict | None:
     `--seed` belong to `--rule` alone.
     """
     rest = argv[1:]
+    if rest[:1] == ["--replay"]:
+        if len(rest) != 2:
+            return None
+        return {"rule": False, "replay": rest[1]}
     rule = rest[:1] == ["--rule"]
     if rule:
         rest = rest[1:]
@@ -842,10 +848,17 @@ def drive_arguments(argv: list[str]) -> dict | None:
             }
         )
     auditor: list[str] | None = None
-    while rest[:1] and (rest[0] in counts or (rule and rest[0] == "--auditor")):
+    record: str | None = None
+    while rest[:1] and (
+        rest[0] in counts
+        or (rule and rest[0] == "--auditor")
+        or (not rule and rest[0] == "--record")
+    ):
         if len(rest) < 2:
             return None
-        if rest[0] == "--auditor":
+        if rest[0] == "--record":
+            record = rest[1]
+        elif rest[0] == "--auditor":
             try:
                 auditor = shlex.split(rest[1])
             except ValueError:
@@ -869,6 +882,8 @@ def drive_arguments(argv: list[str]) -> dict | None:
         "audit_every": counts.get("--audit-every"),
         "auditor": auditor,
         "seed": counts.get("--seed"),
+        "record": record,
+        "replay": None,
         "command": rest[1:],
     }
 
@@ -886,6 +901,12 @@ def run_review(argv: list[str]) -> int:
     elif argv and not (emit or check or printing):
         print(REVIEW_USAGE, file=sys.stderr)
         return 2
+
+    # Ahead of everything that reads a tree: a replay is checked from the
+    # record alone, so a reader with no key, no reviewer and no checkout of the
+    # repository it came from can still check the numbers.
+    if driving is not None and driving["replay"] is not None:
+        return replay_drive(driving["replay"])
 
     root = discover_root()
     try:
@@ -963,19 +984,40 @@ def run_review(argv: list[str]) -> int:
         )
         carried = {record["id"]: record["title"] for record in for_review}
         try:
+            prompt = review_mod.reference_prompt()
+        except OSError as error:
+            print(f"uphold review could not look: {error}", file=sys.stderr)
+            return 2
+        try:
             results = review_mod.drive(
                 settings["controls"],
                 document,
                 carried,
                 runs,
                 lambda doc, change, shown: review_mod.ask(
-                    reviewer, doc, change, shown, timeout
+                    reviewer, doc, change, shown, timeout, prompt
                 ),
             )
         except review_mod.ReviewerFailed as error:
             print(f"uphold review could not look: {error}", file=sys.stderr)
             return 2
-        print(review_mod.render_drive(results, runs, reviewer), end="")
+        if driving["record"] is not None:
+            written = review_mod.run_record(results, runs, reviewer, prompt, document)
+            try:
+                Path(driving["record"]).write_text(
+                    json.dumps(written, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError as error:
+                print(
+                    f"uphold review could not write {driving['record']}: {error}",
+                    file=sys.stderr,
+                )
+                return 2
+        print(
+            review_mod.render_drive(results, runs, reviewer, review_mod.sha256(prompt)),
+            end="",
+        )
         return 0 if all(review_mod.holds(result, runs) for result in results) else 1
 
     if printing:
@@ -1030,6 +1072,25 @@ def run_review(argv: list[str]) -> int:
         f"{len(document.splitlines())} lines against a ceiling of {settings['max_lines']}"
     )
     return 0
+
+
+def replay_drive(path: str) -> int:
+    """`--drive --replay FILE`: score a run record again, with no model.
+
+    The exit is the drive's: 0 when every control holds, 1 when one does not,
+    and 2 for a record that cannot be read as one.
+    """
+    try:
+        record = json.loads(Path(path).read_text(encoding="utf-8"))
+        results, runs, reviewer, prompt_hash = review_mod.replayed(record)
+    except (OSError, ValueError, review_mod.RecordRefused) as error:
+        print(f"uphold review could not look: {path}: {error}", file=sys.stderr)
+        return 2
+    print(
+        review_mod.render_drive(results, runs, reviewer, prompt_hash, replay=path),
+        end="",
+    )
+    return 0 if all(review_mod.holds(result, runs) for result in results) else 1
 
 
 def drive_rulings(driving: dict, settings: dict, report: dict, records: dict) -> int:
