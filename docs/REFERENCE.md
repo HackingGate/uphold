@@ -16,6 +16,7 @@ namespace — that is what lets a claim in
 - [`uphold hooks --identity` — across repositories](#uphold-hooks---identity--across-repositories)
 - [`uphold hooks --install` — the hooks git actually runs](#uphold-hooks---install--the-hooks-git-actually-runs)
 - [`uphold probe` — can each hook refuse?](#uphold-probe--can-each-hook-refuse)
+- [`uphold check --base` — a change may move a claim, not drop it](#uphold-check---base--a-change-may-move-a-claim-not-drop-it)
 - [`uphold check --coverage` and `--oscal`](#uphold-check---coverage-and---oscal)
 - [`uphold schema` — the policy file's JSON Schema](#uphold-schema--the-policy-files-json-schema)
 - [The review tier](#the-review-tier)
@@ -4313,6 +4314,42 @@ Exit `0` when every probed hook behaved, `1` when one could not fail or refuses
 everything, `2` when there is no runner to drive them with — a hook that could
 not be run has not been shown to refuse anything. `probe` runs the repository's
 own hooks, which means the programs it already trusts on every commit.
+
+## `uphold check --base` — a change may move a claim, not drop it
+
+```sh
+uphold check --base ../base   # this tree's claims, and none the base enforced dropped
+```
+
+`--base` names a checkout of the commit a change is compared against, with its
+own policy and hook configuration. uphold reconciles the base's
+`policy/upheld.toml` against the base, then this tree's against this tree, and
+compares the two by principle and seam:
+
+- every principle that reconciled at the base must reconcile here;
+- at every seam it was enforced at there.
+
+A principle no claim here keeps is exit `1`, and so is one moved off a seam,
+for example from the pre-push guard to a hook of the repository's own. A
+claim's rule id is not compared. It is the part a renamed hook changes, and
+the reconcile has already verified the new one against this tree. So a rename
+lands in one change: the hook and the claim that names it move together.
+
+A guard's stages are compared one at a time. A hook of the repository's own is
+recorded as "a hook installed here" without its stage, so a local hook moved
+from `pre-commit` to `manual` is not seen as a weaker claim; the reconcile does
+not read a local hook's stage at all.
+
+A claim the base could not reconcile enforced nothing there and is not required
+here. A base that declares no claims keeps nothing, and says so. A base with no
+policy, an unreadable declaration, or a reconcile that could not look is exit
+`2`: what the base enforced is then unknown, and unknown is never read as
+nothing.
+
+A review gate that judges a change by its base keeps doing so for the rules,
+`policy/principles.toml`: a change cannot loosen what it is judged against.
+The claims are statements about the tree, and they come from the change,
+checked against the base with `--base`.
 
 ## `uphold check --coverage` and `--oscal`
 

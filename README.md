@@ -252,6 +252,7 @@ uphold scan                     # content rules over the tree
 uphold scan --text -            # a commit message, release note, PR body
 uphold check                    # the claims in policy/upheld.toml still hold
 uphold check --probe            # add fresh behavior evidence without changing acceptance
+uphold check --base ../base     # ... and no claim the base enforced is dropped
 uphold check --coverage         # which rules here carry a principle
 uphold rules --effective        # every rule inheritance resolved to, and where each runs
 uphold schema                   # the JSON Schema of principles.toml, for editors

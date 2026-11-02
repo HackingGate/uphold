@@ -682,7 +682,7 @@ pub(crate) fn suppliers(policy: &Policy, installed: &Installed) -> Supply {
                     if live.is_empty() {
                         unestablished.push(format!("{} ({})", rule.id, rule.hooks().join(", ")));
                     } else {
-                        by.push(format!("uphold guard at {}", live.join(", ")));
+                        by.push(format!("{GUARD_SEAM}{}", live.join(", ")));
                     }
                 }
                 "shim" => {
@@ -799,6 +799,7 @@ pub(crate) fn run(
     coverage: bool,
     json: bool,
     probe_revision: Option<Result<String>>,
+    base: Option<(&Path, &Policy)>,
 ) -> Result<Exit> {
     let path = root.join(DECLARATION);
     if !path.is_file() {
@@ -817,6 +818,9 @@ pub(crate) fn run(
         return report_coverage(policy, &declaration, &installed, &supply);
     }
     let mut report = evaluate(&path, &declaration, &installed, &supply)?;
+    if let Some((base_root, base_policy)) = base {
+        kept_from_base(&mut report, base_root, base_policy);
+    }
     decided(&mut report, &policy.decide)?;
     let measured = probe_revision
         .map(|revision| revision.and_then(|revision| crate::probe::measure(root, &revision)));
@@ -1007,8 +1011,142 @@ fn evaluate(
             },
         });
     }
-    // Preserve the reconcile's precedence: an indeterminate claim stops the run;
-    // otherwise a found violation outranks an unread runner configuration.
+    settle(&mut report);
+    Ok(report)
+}
+
+const GUARD_SEAM: &str = "uphold guard at ";
+
+/// One seam per stage. A guard's seam names every stage its rule fires at,
+/// `uphold guard at pre-commit, pre-push`, and two claims may split those
+/// stages between them; compared whole, the split would read as a seam lost.
+fn single_seams(seam: &str) -> Vec<String> {
+    seam.strip_prefix(GUARD_SEAM).map_or_else(
+        || vec![seam.to_owned()],
+        |stages| {
+            stages
+                .split(", ")
+                .map(|stage| format!("{GUARD_SEAM}{stage}"))
+                .collect()
+        },
+    )
+}
+
+/// What each principle is enforced by, over the claims that reconciled.
+fn enforced_by(report: &Report) -> BTreeMap<&str, BTreeSet<String>> {
+    let mut by: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    for claim in &report.claims {
+        if claim.status == ClaimStatus::Reconciled {
+            by.entry(claim.principle.as_str()).or_default().extend(
+                claim
+                    .suppliers
+                    .iter()
+                    .flat_map(|supplier| single_seams(&supplier.seam)),
+            );
+        }
+    }
+    by
+}
+
+/// `--base`: refuse a claim the base enforced and this tree no longer does.
+///
+/// The rules a change is judged by come from its base, so a change cannot
+/// loosen them. The claims are different: each is a statement about the tree,
+/// and the reconcile above already verified this tree's against this tree. So
+/// a change may say a principle is now enforced by another rule -- a renamed
+/// hook, a moved check -- and be believed exactly as far as the reconcile
+/// believes it. What it may not do is stop enforcing one. Every principle that
+/// reconciled at the base must reconcile here, at every seam it was enforced
+/// at there; a principle moved from a pre-push guard to the manual stage is a
+/// weaker claim and is refused like a dropped one.
+///
+/// Compared by principle and seam and never by rule id: the rule id is the
+/// part a rename changes. A base that cannot be evaluated is "could not look",
+/// never "nothing to keep".
+fn kept_from_base(report: &mut Report, base_root: &Path, base_policy: &Policy) {
+    let base = match base_report(base_root, base_policy) {
+        Ok(Some(base)) => base,
+        Ok(None) => {
+            report.notes.push(format!(
+                "the base at {} declares no claims, so there is nothing to keep",
+                base_root.display()
+            ));
+            return;
+        }
+        Err(error) => {
+            // Fatal, not one more unavailable line: a refusal found here would
+            // otherwise outrank it and exit 1, and a caller reading 1 takes the
+            // comparison as done.
+            let unknown = format!(
+                "the base at {} could not be evaluated, so what it enforced is unknown: {error}",
+                base_root.display()
+            );
+            report.unavailable.push(unknown.clone());
+            if report.fatal.is_none() {
+                report.fatal = Some(unknown);
+            }
+            settle(report);
+            return;
+        }
+    };
+    let here = enforced_by(report);
+    let mut refused = Vec::new();
+    for (principle, seams) in enforced_by(&base) {
+        let Some(kept) = here.get(principle) else {
+            refused.push(format!(
+                "{principle:?} was enforced at the base by {}; no claim here keeps it. \
+                 A change may move a claim to another rule, not drop it",
+                seams
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            continue;
+        };
+        for seam in seams.difference(kept) {
+            refused.push(format!(
+                "{principle:?} was enforced at the base by {seam}, and nothing here enforces it there"
+            ));
+        }
+    }
+    if refused.is_empty() {
+        report.notes.push(format!(
+            "every principle the base at {} enforced is still enforced here, at the same seams",
+            base_root.display()
+        ));
+    }
+    report.violations.extend(refused);
+    settle(report);
+}
+
+/// The base's own reconcile, or `None` when it declares nothing.
+fn base_report(root: &Path, policy: &Policy) -> Result<Option<Report>> {
+    let path = root.join(DECLARATION);
+    // Absent is "declares nothing". Anything else at that path -- a directory,
+    // a dangling link -- is read and fails as unreadable, never as absent.
+    if path.symlink_metadata().is_err() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&path).map_err(|error| Fatal::at(&path, error))?;
+    let declaration: Declaration =
+        toml::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
+    let installed = installed(root)?;
+    let supply = suppliers(policy, &installed);
+    let report = evaluate(&path, &declaration, &installed, &supply)?;
+    // A base whose own reconcile could not look cannot say what it enforced.
+    if let Some(fatal) = report.fatal {
+        return Err(Fatal::new(fatal));
+    }
+    if !report.unavailable.is_empty() {
+        return Err(Fatal::new(report.unavailable.join("; ")));
+    }
+    Ok(Some(report))
+}
+
+/// The verdict from what was found. An indeterminate claim stops the run;
+/// otherwise a found violation outranks an unread runner configuration.
+const fn settle(report: &mut Report) {
     let exit = if report.fatal.is_some() {
         Exit::Broken
     } else {
@@ -1019,7 +1157,6 @@ fn evaluate(
         Exit::Violations => Verdict::Violations,
         Exit::Broken => Verdict::CouldNotLook,
     };
-    Ok(report)
 }
 
 fn report_human(report: &Report) -> Result<Exit> {
@@ -1347,6 +1484,18 @@ fn report_coverage(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_guard_seam_is_compared_one_stage_at_a_time() {
+        assert_eq!(
+            single_seams("uphold guard at pre-commit, pre-push"),
+            ["uphold guard at pre-commit", "uphold guard at pre-push"]
+        );
+        assert_eq!(
+            single_seams("a hook installed here"),
+            ["a hook installed here"]
+        );
+    }
 
     #[test]
     fn a_url_naming_no_owner_or_no_repository_resolves_to_neither() {
