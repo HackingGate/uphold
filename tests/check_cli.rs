@@ -1724,3 +1724,196 @@ fn a_decide_table_in_an_inherited_file_is_two() {
         stderr(&output)
     );
 }
+
+// ── against a base: `--base <dir>` ───────────────────────────────────
+
+/// The checkout a change is compared against. Its own policy and hook
+/// configuration, because what it enforced is established there.
+fn base_with(pre_commit: &str, policy: &str, upheld: Option<&str>) -> PathBuf {
+    let root = workspace();
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    write(&root, "policy/principles.toml", policy);
+    write(&root, ".pre-commit-config.yaml", pre_commit);
+    if let Some(upheld) = upheld {
+        write(&root, "policy/upheld.toml", upheld);
+    }
+    root
+}
+
+const LOCAL_CLAIM: &str = "\
+[[enforce]]
+principle = \"explicit-unknown\"
+rule = \"my-own-check\"
+";
+
+const GUARD_CLAIM: &str = "\
+[[enforce]]
+principle = \"fail-safe-defaults\"
+rule = \"prevent-public-push\"
+";
+
+fn against(head: &Path, base: &Path) -> Output {
+    check(head, &["--base", base.to_str().unwrap()])
+}
+
+#[test]
+fn a_renamed_hook_keeps_its_claim_in_one_change() {
+    // The case `--base` exists for. Judged with the base's claims, the rename
+    // needs two changes: one adding the new id and moving the claim, one
+    // deleting the old hook. The claim is about the principle, and the
+    // principle is still enforced, at the same seam.
+    let base = base_with(PRE_COMMIT, GUARD_POLICY, Some(LOCAL_CLAIM));
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(
+        &head,
+        ".pre-commit-config.yaml",
+        &PRE_COMMIT.replace("my-own-check", "my-renamed-check"),
+    );
+    write(
+        &head,
+        "policy/upheld.toml",
+        &LOCAL_CLAIM.replace("my-own-check", "my-renamed-check"),
+    );
+    let output = against(&head, &base);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("still enforced here, at the same seams"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_claim_dropped_since_the_base_is_refused() {
+    let base = base_with(PRE_COMMIT, GUARD_POLICY, Some(LOCAL_CLAIM));
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(&head, ".pre-commit-config.yaml", PRE_COMMIT);
+    write(&head, "policy/upheld.toml", "");
+    // Without the base the empty declaration is clean, so the refusal below
+    // is the comparison and nothing else.
+    assert_eq!(code(&check(&head, &[])), 0);
+    let output = against(&head, &base);
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("\"explicit-unknown\" was enforced at the base")
+            && stderr(&output).contains("no claim here keeps it"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_claim_moved_to_another_seam_is_refused() {
+    // Still claimed, by a hook that exists -- but no longer by the pre-push
+    // guard. A claim may change which rule enforces a principle; it may not
+    // move the principle off a seam the base enforced it at.
+    let base = base_with(PRE_COMMIT, GUARD_POLICY, Some(GUARD_CLAIM));
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(&head, ".pre-commit-config.yaml", PRE_COMMIT);
+    write(
+        &head,
+        "policy/upheld.toml",
+        &GUARD_CLAIM.replace("prevent-public-push", "my-own-check"),
+    );
+    assert_eq!(code(&check(&head, &[])), 0);
+    let output = against(&head, &base);
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("and nothing here enforces it there"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_claim_the_base_could_not_reconcile_is_not_required_here() {
+    // Only what the base actually enforced is kept. A claim already false at
+    // the base enforced nothing there.
+    let base = base_with(
+        PRE_COMMIT,
+        GUARD_POLICY,
+        Some(&LOCAL_CLAIM.replace("my-own-check", "a-hook-nobody-installed")),
+    );
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(&head, ".pre-commit-config.yaml", PRE_COMMIT);
+    write(&head, "policy/upheld.toml", "");
+    let output = against(&head, &base);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn a_base_that_declares_nothing_keeps_nothing() {
+    let base = base_with(PRE_COMMIT, GUARD_POLICY, None);
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(&head, ".pre-commit-config.yaml", PRE_COMMIT);
+    write(&head, "policy/upheld.toml", "");
+    let output = against(&head, &base);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("declares no claims, so there is nothing to keep"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_base_that_cannot_be_evaluated_is_two_not_zero() {
+    // "Could not read what the base enforced" must never become "the base
+    // enforced nothing", which would pass every dropped claim.
+    let base = base_with(PRE_COMMIT, GUARD_POLICY, Some("[[enforce]\n"));
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(&head, ".pre-commit-config.yaml", PRE_COMMIT);
+    write(&head, "policy/upheld.toml", "");
+    assert_eq!(code(&against(&head, &base)), 2);
+}
+
+#[test]
+fn a_base_with_no_policy_is_two_not_zero() {
+    let base = workspace();
+    std::fs::create_dir_all(base.join(".git")).unwrap();
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(&head, ".pre-commit-config.yaml", PRE_COMMIT);
+    write(&head, "policy/upheld.toml", "");
+    let output = against(&head, &base);
+    assert_eq!(code(&output), 2, "{}", stdout(&output));
+    assert!(stderr(&output).contains("--base"), "{}", stderr(&output));
+}
+
+#[test]
+fn base_takes_a_directory_and_not_coverage() {
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(&head, "policy/upheld.toml", "");
+    assert_eq!(code(&check(&head, &["--base"])), 2);
+    assert_eq!(code(&check(&head, &["--coverage", "--base", "x"])), 2);
+    assert_eq!(code(&check(&head, &["--json", "--json"])), 2);
+}
+
+#[test]
+fn base_and_json_together_report_the_refusal_in_the_document() {
+    let base = base_with(PRE_COMMIT, GUARD_POLICY, Some(LOCAL_CLAIM));
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(&head, ".pre-commit-config.yaml", PRE_COMMIT);
+    write(&head, "policy/upheld.toml", "");
+    let output = check(&head, &["--json", "--base", base.to_str().unwrap()]);
+    assert_eq!(code(&output), 1);
+    let document: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(
+        document.get("verdict").and_then(serde_json::Value::as_str),
+        Some("violations")
+    );
+    let first = document
+        .get("violations")
+        .and_then(|violations| violations.get(0))
+        .and_then(serde_json::Value::as_str)
+        .unwrap();
+    assert!(first.contains("no claim here keeps it"), "{document}");
+}

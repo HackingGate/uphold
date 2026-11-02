@@ -123,6 +123,7 @@ usage:
                [--junit FILE|DIR]
   uphold schema                      print the JSON Schema of principles.toml
   uphold check [--json] [--probe]    reconcile claims; optionally measure hook behavior
+  uphold check --base <dir>          also refuse a claim the base checkout <dir> enforced and this tree no longer does
   uphold check --coverage            which rules run here and carry no principle
   uphold audit --for-publication     what a private->public flip would republish
   uphold init --owner OWNER          write a first policy, claims and hook config
@@ -381,21 +382,7 @@ fn run() -> Result<Exit> {
             }
             _ => Err(Fatal::new(format!("usage: uphold schema\n\n{USAGE}"))),
         },
-        "check" => match rest {
-            [] => check_command(false, false, false),
-            [flag] if flag == "--coverage" => check_command(true, false, false),
-            [flag] if flag == "--json" => check_command(false, true, false),
-            [flag] if flag == "--probe" => check_command(false, false, true),
-            [check_flag, other_flag]
-                if (check_flag == "--probe" && other_flag == "--json")
-                    || (check_flag == "--json" && other_flag == "--probe") =>
-            {
-                check_command(false, true, true)
-            }
-            _ => Err(Fatal::new(format!(
-                "usage: uphold check [--json] [--probe] | --coverage\n\n{USAGE}"
-            ))),
-        },
+        "check" => check_arguments(rest),
         "hooks" => match rest {
             [flag, tail @ ..] if flag == "--install" => {
                 let mut runner: Option<&OsString> = None;
@@ -614,12 +601,72 @@ fn run() -> Result<Exit> {
 /// The loader runs first and its answer is what the reconcile reads, which is
 /// the whole point of moving this in: `uphold_check.py` re-implemented
 /// `config::load` to answer the same question and was free to disagree with it.
-fn check_command(coverage: bool, json: bool, probe: bool) -> Result<Exit> {
+/// `uphold check [--json] [--probe] [--base <dir>] | --coverage`.
+///
+/// Each flag at most once, in any order. `--coverage` is a different report and
+/// takes nothing else.
+fn check_arguments(rest: &[OsString]) -> Result<Exit> {
+    let usage = || {
+        Fatal::new(format!(
+            "usage: uphold check [--json] [--probe] [--base <dir>] | --coverage\n\n{USAGE}"
+        ))
+    };
+    if let [flag] = rest
+        && flag == "--coverage"
+    {
+        return check_command(true, false, false, None);
+    }
+    let (mut json, mut probe) = (false, false);
+    let mut base: Option<PathBuf> = None;
+    let mut index = 0;
+    while let Some(argument) = rest.get(index) {
+        match text_of(argument)? {
+            "--json" if !json => json = true,
+            "--probe" if !probe => probe = true,
+            "--base" if base.is_none() => {
+                index += 1;
+                // A path keeps its bytes, as `scan --policy` does.
+                base = Some(PathBuf::from(rest.get(index).ok_or_else(usage)?));
+            }
+            _ => return Err(usage()),
+        }
+        index += 1;
+    }
+    check_command(false, json, probe, base.as_deref())
+}
+
+fn check_command(coverage: bool, json: bool, probe: bool, base: Option<&Path>) -> Result<Exit> {
     let working = std::env::current_dir()?;
     let (root, policy_path) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
     let probe_revision = probe.then(|| probe::snapshot(&root));
     let policy = config::load(&root, &policy_path)?;
-    check::run(&root, &policy, coverage, json, probe_revision)
+    // The base is read the way the tree is: its own policy, its own hook
+    // configuration. What it enforced is a fact about that checkout, so it is
+    // established there and not inferred from this one.
+    let base = match base {
+        None => None,
+        Some(dir) => {
+            let (base_root, base_policy_path) = discover(dir).ok_or_else(|| {
+                Fatal::new(format!(
+                    "--base {}: no policy there (looked for policy/{}). The base is a \
+                     checkout of the commit this tree is compared against",
+                    dir.display(),
+                    POLICY_NAMES.join(" or policy/")
+                ))
+            })?;
+            let base_policy = config::load(&base_root, &base_policy_path)?;
+            Some((base_root, base_policy))
+        }
+    };
+    check::run(
+        &root,
+        &policy,
+        coverage,
+        json,
+        probe_revision,
+        base.as_ref()
+            .map(|(base_root, base_policy)| (base_root.as_path(), base_policy)),
+    )
 }
 
 fn scan_command(arguments: &[OsString]) -> Result<Exit> {
