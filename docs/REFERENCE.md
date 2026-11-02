@@ -4335,6 +4335,11 @@ claim's rule id is not compared. It is the part a renamed hook changes, and
 the reconcile has already verified the new one against this tree. So a rename
 lands in one change: the hook and the claim that names it move together.
 
+A guard's stages are compared one at a time. A hook of the repository's own is
+recorded as "a hook installed here" without its stage, so a local hook moved
+from `pre-commit` to `manual` is not seen as a weaker claim; the reconcile does
+not read a local hook's stage at all.
+
 A claim the base could not reconcile enforced nothing there and is not required
 here. A base that declares no claims keeps nothing, and says so. A base with no
 policy, an unreadable declaration, or a reconcile that could not look is exit
