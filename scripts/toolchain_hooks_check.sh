@@ -205,6 +205,17 @@ for id in $RUST_IDS; do
     passes "$R" "$id" "an unmodified crate"
 done
 
+# A crate with a binary and no library. A default that names one target kind
+# (`--lib`) is refused by cargo here, so every default has to cover this too.
+consumer "$R" "$RUST_IDS"
+mkdir -p "$R/src"
+printf '[package]\nname = "fixture"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\n' > "$R/Cargo.toml"
+printf 'fn main() {}\n' > "$R/src/main.rs"
+stage "$R"
+for id in $RUST_IDS; do
+    passes "$R" "$id" "a crate with only a binary"
+done
+
 rust_fixture
 printf 'pub fn badly( )->u32{2}\n' >> "$R/src/lib.rs"
 stage "$R"

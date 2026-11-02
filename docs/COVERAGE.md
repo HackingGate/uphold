@@ -5,14 +5,20 @@ Which rung of checking exists for which language, and who runs it. A claim in
 at; this page is the same claim one level up: for a language, at a rung, what
 enforces it and where.
 
-Every cell holds exactly one of three states:
+Every cell holds exactly one of four states:
 
 - `native`: this binary evaluates it.
+- `published toolchain id`: the consumer's own compiler or linter, run by a
+  `language: system` id in [`.pre-commit-hooks.yaml`](../.pre-commit-hooks.yaml)
+  that is named in the cell. uphold publishes only the command line. The tool,
+  its version and its configuration stay the consumer's. A fleet that pins
+  uphold would otherwise keep one copy of the command per repository, and the
+  id is the one copy. The cost is coupling: a change to an id's entry or its
+  defaults reaches every consumer at its next pin bump. So an entry carries
+  only what makes it a check, and a consumer's `args:` carries the rest.
 - `consumer-owned external gate`: the compiler, linter or verifier the consumer
   wires into its own hook config, named in the cell. uphold ships nothing that
-  runs the tool; its part is the pointer on this page. One tool per job: a
-  wrapper of the consumer's toolchain shipped from here would be a second copy
-  of the consumer's gate, coupled to an uphold release.
+  runs the tool; its part is the pointer on this page.
 - `not covered`: nothing here and no named tool. A cell whose state is planned
   but not yet true carries the issue that plans it, and nothing more.
 
@@ -174,7 +180,7 @@ are how a gate observes it.
 | --- | --- | --- | --- | --- | --- |
 | text | `native` | `native` | `native` | `native` | `native` |
 | syntax | `consumer-owned external gate`: ast-grep | `consumer-owned external gate`: ast-grep | `consumer-owned external gate`: ast-grep | `consumer-owned external gate`: ast-grep | `consumer-owned external gate`: ast-grep |
-| semantic | `consumer-owned external gate`: clippy | `consumer-owned external gate`: go vet, staticcheck | `consumer-owned external gate`: mypy, ruff | `consumer-owned external gate`: tsc, eslint | `consumer-owned external gate`: shellcheck |
+| semantic | `published toolchain id`: clippy (`uphold-cargo-clippy`) | `consumer-owned external gate`: go vet, staticcheck | `consumer-owned external gate`: mypy, ruff | `consumer-owned external gate`: tsc, eslint | `consumer-owned external gate`: shellcheck |
 | proof | `consumer-owned external gate`: Verus | `consumer-owned external gate`: Gobra | `consumer-owned external gate`: CrossHair, Nagini | `not covered` | `not covered` |
 
 Dafny, compiled to Go or Python for a verified core, is a proof entry that

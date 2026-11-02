@@ -251,8 +251,10 @@
 # appended to them, so a consumer restates whatever defaults it still wants.
 # Example: `args: [--manifest-path, tools/x/Cargo.toml, --all]` for cargo fmt,
 # or `args: [-tags, integration, ./...]` for go test. What makes a check a
-# check stays in `entry`, so no `args:` can turn one into a rewrite: `--check`
-# for cargo fmt, `-o /dev/null` for go build, and `-D warnings` for the others.
+# check stays in `entry`, so leaving it out of `args:` cannot drop it:
+# `--check` for cargo fmt, `-o /dev/null` for go build, and `-D warnings` for
+# the others. An `args:` can still contradict it. go takes the last `-o`, so
+# `-o <path>` in args writes a binary again; do not pass `-o` to go build.
 #
 # gofmt and go vet are not here. golangci-lint publishes maintained hooks
 # that run both: gofmt as a formatter, govet as a linter.
@@ -316,7 +318,8 @@
   name: cargo check
   description: type-check the Rust crate with every compiler warning an error
   entry: env "RUSTFLAGS=-D warnings" cargo check
-  args: ["--lib", "--tests", "--all-features"]
+  # Not `--lib`: cargo refuses that on a crate with no library target.
+  args: ["--all-targets", "--all-features"]
   language: system
   stages: [pre-commit, pre-merge-commit, pre-push, manual]
   pass_filenames: false
