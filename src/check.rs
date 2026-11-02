@@ -682,7 +682,7 @@ pub(crate) fn suppliers(policy: &Policy, installed: &Installed) -> Supply {
                     if live.is_empty() {
                         unestablished.push(format!("{} ({})", rule.id, rule.hooks().join(", ")));
                     } else {
-                        by.push(format!("uphold guard at {}", live.join(", ")));
+                        by.push(format!("{GUARD_SEAM}{}", live.join(", ")));
                     }
                 }
                 "shim" => {
@@ -1015,16 +1015,33 @@ fn evaluate(
     Ok(report)
 }
 
+const GUARD_SEAM: &str = "uphold guard at ";
+
+/// One seam per stage. A guard's seam names every stage its rule fires at,
+/// `uphold guard at pre-commit, pre-push`, and two claims may split those
+/// stages between them; compared whole, the split would read as a seam lost.
+fn single_seams(seam: &str) -> Vec<String> {
+    seam.strip_prefix(GUARD_SEAM).map_or_else(
+        || vec![seam.to_owned()],
+        |stages| {
+            stages
+                .split(", ")
+                .map(|stage| format!("{GUARD_SEAM}{stage}"))
+                .collect()
+        },
+    )
+}
+
 /// What each principle is enforced by, over the claims that reconciled.
-fn enforced_by(report: &Report) -> BTreeMap<&str, BTreeSet<&str>> {
-    let mut by: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+fn enforced_by(report: &Report) -> BTreeMap<&str, BTreeSet<String>> {
+    let mut by: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
     for claim in &report.claims {
         if claim.status == ClaimStatus::Reconciled {
             by.entry(claim.principle.as_str()).or_default().extend(
                 claim
                     .suppliers
                     .iter()
-                    .map(|supplier| supplier.seam.as_str()),
+                    .flat_map(|supplier| single_seams(&supplier.seam)),
             );
         }
     }
@@ -1057,10 +1074,17 @@ fn kept_from_base(report: &mut Report, base_root: &Path, base_policy: &Policy) {
             return;
         }
         Err(error) => {
-            report.unavailable.push(format!(
+            // Fatal, not one more unavailable line: a refusal found here would
+            // otherwise outrank it and exit 1, and a caller reading 1 takes the
+            // comparison as done.
+            let unknown = format!(
                 "the base at {} could not be evaluated, so what it enforced is unknown: {error}",
                 base_root.display()
-            ));
+            );
+            report.unavailable.push(unknown.clone());
+            if report.fatal.is_none() {
+                report.fatal = Some(unknown);
+            }
             settle(report);
             return;
         }
@@ -1072,7 +1096,11 @@ fn kept_from_base(report: &mut Report, base_root: &Path, base_policy: &Policy) {
             refused.push(format!(
                 "{principle:?} was enforced at the base by {}; no claim here keeps it. \
                  A change may move a claim to another rule, not drop it",
-                seams.iter().copied().collect::<Vec<_>>().join(", ")
+                seams
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
             continue;
         };
@@ -1095,7 +1123,9 @@ fn kept_from_base(report: &mut Report, base_root: &Path, base_policy: &Policy) {
 /// The base's own reconcile, or `None` when it declares nothing.
 fn base_report(root: &Path, policy: &Policy) -> Result<Option<Report>> {
     let path = root.join(DECLARATION);
-    if !path.is_file() {
+    // Absent is "declares nothing". Anything else at that path -- a directory,
+    // a dangling link -- is read and fails as unreadable, never as absent.
+    if path.symlink_metadata().is_err() {
         return Ok(None);
     }
     let text = std::fs::read_to_string(&path).map_err(|error| Fatal::at(&path, error))?;
@@ -1454,6 +1484,18 @@ fn report_coverage(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_guard_seam_is_compared_one_stage_at_a_time() {
+        assert_eq!(
+            single_seams("uphold guard at pre-commit, pre-push"),
+            ["uphold guard at pre-commit", "uphold guard at pre-push"]
+        );
+        assert_eq!(
+            single_seams("a hook installed here"),
+            ["a hook installed here"]
+        );
+    }
 
     #[test]
     fn a_url_naming_no_owner_or_no_repository_resolves_to_neither() {

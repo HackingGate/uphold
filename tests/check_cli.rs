@@ -1917,3 +1917,44 @@ fn base_and_json_together_report_the_refusal_in_the_document() {
         .unwrap();
     assert!(first.contains("no claim here keeps it"), "{document}");
 }
+
+#[test]
+fn a_base_path_without_a_policy_is_never_this_trees_own() {
+    // A path under this tree that holds no policy must not be resolved upward
+    // to this tree's policy: that compares the head with itself and passes.
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(&head, ".pre-commit-config.yaml", PRE_COMMIT);
+    write(&head, "policy/upheld.toml", "");
+    std::fs::create_dir_all(head.join("nested")).unwrap();
+    assert_eq!(code(&against(&head, &head.join("nested"))), 2);
+    assert_eq!(code(&against(&head, &head.join("not-there"))), 2);
+}
+
+#[test]
+fn a_base_declaration_that_is_a_directory_is_unreadable_not_absent() {
+    let base = base_with(PRE_COMMIT, GUARD_POLICY, None);
+    std::fs::create_dir_all(base.join("policy/upheld.toml")).unwrap();
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(&head, ".pre-commit-config.yaml", PRE_COMMIT);
+    write(&head, "policy/upheld.toml", "");
+    assert_eq!(code(&against(&head, &base)), 2);
+}
+
+#[test]
+fn an_unknown_base_is_two_even_beside_a_refused_claim() {
+    // A refusal here must not outrank "the comparison could not be made":
+    // read as 1, it says the comparison ran.
+    let base = base_with(PRE_COMMIT, GUARD_POLICY, Some("[[enforce]\n"));
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(&head, ".pre-commit-config.yaml", PRE_COMMIT);
+    write(
+        &head,
+        "policy/upheld.toml",
+        &LOCAL_CLAIM.replace("my-own-check", "a-hook-nobody-installed"),
+    );
+    assert_eq!(code(&check(&head, &[])), 1);
+    assert_eq!(code(&against(&head, &base)), 2);
+}

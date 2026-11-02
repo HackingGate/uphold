@@ -270,6 +270,15 @@ fn discover(start: &Path) -> Option<(PathBuf, PathBuf)> {
     }
 }
 
+/// The policy of exactly this directory, without walking up.
+fn policy_in(directory: &Path) -> Option<(PathBuf, PathBuf)> {
+    POLICY_NAMES
+        .iter()
+        .map(|name| directory.join("policy").join(name))
+        .find(|policy| policy.is_file())
+        .map(|policy| (directory.to_path_buf(), policy))
+}
+
 /// The refusal every entry point shares when no policy is within reach.
 ///
 /// It says "in this repository" because that is now the whole of what was
@@ -646,7 +655,10 @@ fn check_command(coverage: bool, json: bool, probe: bool, base: Option<&Path>) -
     let base = match base {
         None => None,
         Some(dir) => {
-            let (base_root, base_policy_path) = discover(dir).ok_or_else(|| {
+            // In that directory and nowhere above it. `discover` walks up, and
+            // a base path that does not hold a policy would then find this
+            // tree's own: the head compared with itself, which always passes.
+            let (base_root, base_policy_path) = policy_in(dir).ok_or_else(|| {
                 Fatal::new(format!(
                     "--base {}: no policy there (looked for policy/{}). The base is a \
                      checkout of the commit this tree is compared against",
