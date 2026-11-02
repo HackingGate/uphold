@@ -400,6 +400,25 @@ jobs:
           git config --global user.name CI
           ./scripts/consumer_check.sh "${{ matrix.tool }}" "$GITHUB_WORKSPACE" "$(git rev-parse HEAD)"
 
+      # The toolchain ids run the consumer's go and cargo, so their check needs
+      # both. They are installed only AFTER the consumer check above, so that
+      # check still runs with no compiler on PATH, which is what makes the
+      # bootstrap claim testable. lefthook does not read the manifest, so it
+      # has no leg here.
+      - if: matrix.tool == 'pre-commit' || matrix.tool == 'prek'
+        uses: actions/setup-go@v7
+        with:
+          go-version: '>=1.26'
+
+      - if: matrix.tool == 'pre-commit' || matrix.tool == 'prek'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - if: matrix.tool == 'pre-commit' || matrix.tool == 'prek'
+        name: The toolchain ids, driven by ${{ matrix.tool }}
+        run: ./scripts/toolchain_hooks_check.sh "${{ matrix.tool }}" "$GITHUB_WORKSPACE" "$(git rev-parse HEAD)"
+
   consumer:
     name: consumer integration
     runs-on: ubuntu-slim

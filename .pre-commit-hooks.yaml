@@ -7,12 +7,13 @@
 # the claim true. lefthook has no equivalent format; it consumes `lefthook.yml`
 # from a remote repository instead, which is what `hooks/lefthook.yml` is for.
 #
-# `language: rust` for every id, because every id runs the binary, and it is
-# not a toolchain requirement being pushed onto the consumer: both runners
-# bootstrap Rust themselves when it is absent. The ids build ONE environment,
-# because pre-commit and prek key an environment on (repo, language, version)
-# rather than on the hook, so the compile is paid once for the whole file
-# however many ids a repository pins.
+# `language: rust` for every id that runs the binary, and it is not a
+# toolchain requirement being pushed onto the consumer: both runners bootstrap
+# Rust themselves when it is absent. Those ids build ONE environment, because
+# pre-commit and prek key an environment on (repo, language, version) rather
+# than on the hook, so the compile is paid once for the whole file however many
+# ids a repository pins. The toolchain ids at the end run the consumer's own
+# go or cargo and are `language: system`; pinning only those builds nothing.
 
 # The declaration check. This fires when the declaration changes or when any
 # configuration it reads changes -- the files that can turn a true enforcement
@@ -234,3 +235,91 @@
   stages: [manual]
   pass_filenames: false
   always_run: true
+
+# ── toolchain checks ─────────────────────────────────────────────────
+#
+# These run the consumer's own go or cargo, not the uphold binary. They are
+# here so that a fleet pinning uphold keeps one copy of each check instead of
+# a `repo: local` copy per repository. Copies drift, and keeping them identical
+# took a gate of its own.
+#
+# `language: system`: a runner installs nothing for these and runs the command
+# from PATH. When go or cargo is missing, the runner reports that it cannot
+# find the executable and the hook fails. It never skips.
+#
+# `args:` holds the defaults. A consumer's `args:` REPLACES them and is not
+# appended to them, so a consumer restates whatever defaults it still wants.
+# Example: `args: [--manifest-path, tools/x/Cargo.toml, --all]` for cargo fmt,
+# or `args: [-tags, integration, ./...]` for go test. What makes a check a
+# check stays in `entry`, so leaving it out of `args:` cannot drop it:
+# `--check` for cargo fmt, `-o /dev/null` for go build, and `-D warnings` for
+# the others. An `args:` can still contradict it. go takes the last `-o`, so
+# `-o <path>` in args writes a binary again; do not pass `-o` to go build.
+#
+# gofmt and go vet are not here. golangci-lint publishes maintained hooks
+# that run both: gofmt as a formatter, govet as a linter.
+#
+# `RUSTFLAGS=-D warnings` makes a warning fail the hook. An environment
+# RUSTFLAGS replaces `build.rustflags` from `.cargo/config.toml`. A repository
+# that sets rustflags there should keep its own entry and pass `-D warnings`
+# after `--` instead.
+
+# Every package, main ones included. `-o /dev/null` makes go discard the output
+# so the check writes no binary into the tree. The go command treats that
+# argument specially; it is not a file being written.
+- id: uphold-go-build
+  name: go build
+  description: compile every Go package in the module and write nothing
+  entry: go build -o /dev/null
+  args: ["./..."]
+  language: system
+  stages: [pre-commit, pre-merge-commit, pre-push, manual]
+  pass_filenames: false
+  files: '(\.go|go\.mod|go\.sum)$'
+
+- id: uphold-go-test
+  name: go test
+  description: run the Go tests of every package in the module
+  entry: go test
+  args: ["./..."]
+  language: system
+  stages: [pre-commit, pre-merge-commit, pre-push, manual]
+  pass_filenames: false
+  files: '(\.go|go\.mod|go\.sum)$'
+
+- id: uphold-cargo-fmt
+  name: cargo fmt --check
+  description: refuse Rust sources rustfmt would change, without changing them
+  entry: cargo fmt --check
+  args: ["--all"]
+  language: system
+  stages: [pre-commit, pre-merge-commit, pre-push, manual]
+  pass_filenames: false
+
+- id: uphold-cargo-clippy
+  name: cargo clippy
+  description: run clippy with every warning an error
+  entry: env "RUSTFLAGS=-D warnings" cargo clippy
+  args: ["--all-targets", "--all-features", "--no-deps"]
+  language: system
+  stages: [pre-commit, pre-merge-commit, pre-push, manual]
+  pass_filenames: false
+
+- id: uphold-cargo-test
+  name: cargo test
+  description: run the Rust tests with every compiler warning an error
+  entry: env "RUSTFLAGS=-D warnings" cargo test
+  args: ["--all-targets", "--all-features"]
+  language: system
+  stages: [pre-commit, pre-merge-commit, pre-push, manual]
+  pass_filenames: false
+
+- id: uphold-cargo-check
+  name: cargo check
+  description: type-check the Rust crate with every compiler warning an error
+  entry: env "RUSTFLAGS=-D warnings" cargo check
+  # Not `--lib`: cargo refuses that on a crate with no library target.
+  args: ["--all-targets", "--all-features"]
+  language: system
+  stages: [pre-commit, pre-merge-commit, pre-push, manual]
+  pass_filenames: false

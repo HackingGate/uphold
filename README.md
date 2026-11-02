@@ -99,6 +99,19 @@ Three scanner ids are left out above because they need tools on the host:
 - `uphold-supply-chain-staged` at `pre-commit`, gitleaks alone over the staged
   diff.
 
+Six toolchain ids run your own go or cargo instead of uphold. They let a fleet
+that already pins uphold drop its per-repository `repo: local` copies:
+`uphold-go-build`, `uphold-go-test`, `uphold-cargo-fmt`, `uphold-cargo-clippy`,
+`uphold-cargo-test` and `uphold-cargo-check`. They are `language: system`, so
+the toolchain must be on PATH, and a missing one fails the hook. A consumer's
+`args:` replaces the defaults (for example `./...` or `--all`), so restate any
+default you still want. The part that makes each a check (`--check`,
+`-o /dev/null`, `-D warnings`) is in the entry, so leaving it out of `args:`
+cannot drop it. An `args:` can still contradict it: go takes the last `-o`, so
+never pass `-o` to `uphold-go-build`.
+For gofmt and go vet, use the hooks [golangci-lint](https://github.com/golangci/golangci-lint)
+publishes.
+
 Each scanner must be at least the release its output reader was measured
 against ([floors](docs/REFERENCE.md#uphold-supply-chain--four-scanners-one-check-of-its-own-one-verdict));
 an older one is exit 2 for its section, so an uphold upgrade that raises a floor
@@ -166,12 +179,11 @@ reach; its output distinguishes them (`would update rev` or `update failed`).
 Review proposed tag changes rather than assuming that "newest" means the
 highest semantic version.
 
-**Go repositories** — uphold ships no Go toolchain hooks. Declare a Go gate in
-your own config as `repo: local` hooks with `language: system`, so they use the
-`go` on PATH and the choice of vet, linters, `-race` or build tags stays in your
-config rather than behind a `rev:`. Note that `gofmt -l` prints the files it
-would reformat and exits `0` regardless, so a gate on it must test that the
-output is empty:
+**Go repositories** — `uphold-go-build` and `uphold-go-test` run the `go` on
+PATH; `-race` or build tags go in their `args:`. For gofmt and vet, use the
+hooks golangci-lint publishes, or declare your own as `repo: local` hooks with
+`language: system`. Note that `gofmt -l` prints the files it would reformat
+and exits `0` regardless, so a gate on it must test that the output is empty:
 
 ```yaml
   - repo: local
