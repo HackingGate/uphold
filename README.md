@@ -99,6 +99,17 @@ Three scanner ids are left out above because they need tools on the host:
 - `uphold-supply-chain-staged` at `pre-commit`, gitleaks alone over the staged
   diff.
 
+Six toolchain ids run your own go or cargo instead of uphold. They let a fleet
+that already pins uphold drop its per-repository `repo: local` copies:
+`uphold-go-build`, `uphold-go-test`, `uphold-cargo-fmt`, `uphold-cargo-clippy`,
+`uphold-cargo-test` and `uphold-cargo-check`. They are `language: system`, so
+the toolchain must be on PATH, and a missing one fails the hook. A consumer's
+`args:` replaces the defaults (for example `./...` or `--all`), so restate any
+default you still want. The part that makes each a check (`--check`,
+`-o /dev/null`, `-D warnings`) is in the entry, where `args:` cannot remove it.
+For gofmt and go vet, use the hooks [golangci-lint](https://github.com/golangci/golangci-lint)
+publishes.
+
 Each scanner must be at least the release its output reader was measured
 against ([floors](docs/REFERENCE.md#uphold-supply-chain--four-scanners-one-check-of-its-own-one-verdict));
 an older one is exit 2 for its section, so an uphold upgrade that raises a floor
