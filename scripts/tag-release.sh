@@ -22,6 +22,9 @@ set -euo pipefail
 #   - the subject alone is a title anyone can type, so the commit's content
 #     must also be the bump: its parent's Cargo.toml version must be lower than
 #     X.Y.Z, and it may change only the files bump-version.sh edits;
+#   - a successful run of the Test workflow must have tested that commit's
+#     tree, asked of GitHub with gh for the repository Cargo.toml names. A
+#     question GitHub does not answer refuses the tag;
 #   - vX.Y.Z must exist neither here nor on origin. A moved release tag is a
 #     different binary under a name consumers already pinned.
 #
@@ -139,6 +142,23 @@ while IFS= read -r changed; do
         die "origin/main ($sha) changes $changed, which a version bump does not touch (only ${version_files[*]})"
 done <<<"$changed_files"
 
+# CI's verdict on what is tagged. The tag publishes this commit's tree, so it
+# needs a successful run of the Test workflow on that same tree: the prep pull
+# request's, or main's own. Asked of GitHub by tree, the same question the
+# workflow's dedupe job asks, so a main run skipped as a duplicate still points
+# at the run that tested it. Asking is not optional: a failed question is a
+# refusal, never "no run, tag anyway".
+tree="$(git rev-parse -q --verify "$sha^{tree}")" || die "origin/main ($sha) has no tree"
+repository="$(git show "$sha:Cargo.toml" | awk -F'"' '/^repository = "https:\/\/github.com\// { sub("https://github.com/", "", $2); print $2; exit }')"
+[ -n "$repository" ] || die "origin/main's Cargo.toml names no https://github.com/ repository to ask for CI runs"
+command -v gh >/dev/null || die "gh is not on PATH, so whether CI passed on $sha cannot be asked"
+green="$(gh api "repos/$repository/actions/workflows/test.yml/runs?status=success&per_page=100" \
+    --jq ".workflow_runs[] | select(.head_commit.tree_id == \"$tree\") | .html_url")" ||
+    die "could not ask GitHub for $repository's successful Test runs"
+green="${green%%$'\n'*}"
+[ -n "$green" ] ||
+    die "no successful Test run in $repository has origin/main's tree $tree; wait for CI on the prep pull request or on main, then run this again"
+
 if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
     die "$tag already exists locally"
 fi
@@ -155,6 +175,7 @@ esac
 if [ "$push" -eq 0 ]; then
     cat <<DRY
 Dry run; nothing changed. origin/main is $sha, "$subject" ($previous -> $version).
+CI passed on its tree: $green
 Would run:
   git tag -a $tag -m "uphold $version" $sha
   git push origin refs/tags/$tag

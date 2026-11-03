@@ -277,8 +277,10 @@ Two scripts cut a release, and the steps between them are commands to copy.
 5. Run `scripts/tag-release.sh`. It fetches, requires origin/main's subject to
    be `Prepare uphold X.Y.Z (#N)` for the version origin/main's `Cargo.toml`
    carries, requires that commit's parent to carry a lower version and the
-   commit to change only the four version files, refuses a `vX.Y.Z` that exists
-   here or on origin, and prints the tag and push it would run. It creates and
+   commit to change only the four version files, requires a successful Test
+   run on that commit's tree (the prep pull request's counts, so there is no
+   wait for main's), refuses a `vX.Y.Z` that exists here or on origin, and
+   prints the tag and push it would run. It creates and
    pushes nothing. When the output is right, run
    `scripts/tag-release.sh --push`: the same checks, then the annotated tag
    `vX.Y.Z` with the message `uphold X.Y.Z` on that commit, and a push of that
