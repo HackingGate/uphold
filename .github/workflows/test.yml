@@ -27,6 +27,12 @@ env:
   LEFTHOOK_VERSION: 2.1.9
 
 jobs:
+  # ubuntu-slim stops a job at a short execution limit and marks it cancelled
+  # (https://github.blog/changelog/2026-01-22-1-vcpu-linux-runner-now-generally-available-in-github-actions/).
+  # The jobs that build the crate or measure coverage ran past it on its one
+  # CPU, and the cancellations were read as runner flakes and rerun. They run on
+  # ubuntu-latest. runner-parity stays on slim: ubuntu-latest carries a Rust
+  # toolchain, and that job tests the runners' bootstrap with none on PATH.
   # A push to main whose tree already passed this workflow runs nothing again.
   # A squash merge of an up-to-date pull request lands the tree its last run
   # tested, so the merge run repeated every job on identical content and added
@@ -96,7 +102,7 @@ jobs:
     needs: dedupe
     if: needs.dedupe.outputs.passed != 'true'
     name: scan engine
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
@@ -157,7 +163,7 @@ jobs:
   # be compared against.
   coverage:
     name: coverage
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     # Lifted to the job so the upload step can ask whether it is set: the
     # `secrets` context is not readable from a step's `if`, and a step that
     # cannot ask is one that runs and fails on a repository with no token.
@@ -209,7 +215,7 @@ jobs:
     needs: dedupe
     if: needs.dedupe.outputs.passed != 'true'
     name: kani proofs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v7
         with:
@@ -224,7 +230,7 @@ jobs:
     needs: dedupe
     if: needs.dedupe.outputs.passed != 'true'
     name: ${{ matrix.tool }}
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     # Coverage has its own job, with the toolchain it needs and a cache that
     # survives; running it once per runner here would build the tree
     # instrumented three more times to answer the same question. The Kani
@@ -452,30 +458,46 @@ jobs:
           git config --global user.name CI
           ./scripts/consumer_check.sh "${{ matrix.tool }}" "$GITHUB_WORKSPACE" "$(git rev-parse HEAD)"
 
-      # The toolchain ids run the consumer's go and cargo, so their check needs
-      # both. They are installed only AFTER the consumer check above, so that
-      # check still runs with no compiler on PATH, which is what makes the
-      # bootstrap claim testable. lefthook does not read the manifest, so it
-      # has no leg here.
-      - if: matrix.tool == 'pre-commit' || matrix.tool == 'prek'
-        uses: actions/setup-go@v7
+  # The published toolchain ids run the consumer's go and cargo, so this job
+  # needs both, which is why it is not a step of runner-parity: that job must
+  # run with no compiler on PATH, and ubuntu-slim's execution limit did not
+  # hold both. ubuntu-latest carries go and cargo; the steps pin what is used.
+  # lefthook does not read the manifest, so it has no leg here.
+  toolchain-ids:
+    name: toolchain ids under ${{ matrix.tool }}
+    needs: dedupe
+    if: needs.dedupe.outputs.passed != 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: [pre-commit, prek]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
         with:
           go-version: '>=1.26'
 
-      - if: matrix.tool == 'pre-commit' || matrix.tool == 'prek'
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
 
-      - if: matrix.tool == 'pre-commit' || matrix.tool == 'prek'
-        name: The toolchain ids, driven by ${{ matrix.tool }}
-        run: ./scripts/toolchain_hooks_check.sh "${{ matrix.tool }}" "$GITHUB_WORKSPACE" "$(git rev-parse HEAD)"
+      - run: pipx install "${{ matrix.tool }}"
+
+      - name: The toolchain ids, driven by ${{ matrix.tool }}
+        run: |
+          git config --global user.email ci@example.test
+          git config --global user.name CI
+          ./scripts/toolchain_hooks_check.sh "${{ matrix.tool }}" "$GITHUB_WORKSPACE" "$(git rev-parse HEAD)"
 
   consumer:
     needs: dedupe
     if: needs.dedupe.outputs.passed != 'true'
     name: consumer integration
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
