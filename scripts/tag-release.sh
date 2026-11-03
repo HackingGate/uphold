@@ -149,10 +149,15 @@ done <<<"$changed_files"
 # at the run that tested it. Asking is not optional: a failed question is a
 # refusal, never "no run, tag anyway".
 tree="$(git rev-parse -q --verify "$sha^{tree}")" || die "origin/main ($sha) has no tree"
-repository="$(git show "$sha:Cargo.toml" | awk -F'"' '/^repository = "https:\/\/github.com\// { sub("https://github.com/", "", $2); print $2; exit }')"
+repository="$(git show "$sha:Cargo.toml" | awk -F'"' '/^repository[[:space:]]*=[[:space:]]*"https:\/\/github.com\// { sub("https://github.com/", "", $2); print $2; exit }')"
 [ -n "$repository" ] || die "origin/main's Cargo.toml names no https://github.com/ repository to ask for CI runs"
 command -v gh >/dev/null || die "gh is not on PATH, so whether CI passed on $sha cannot be asked"
-green="$(gh api "repos/$repository/actions/workflows/test.yml/runs?status=success&per_page=100" \
+# Every page, but only runs created since the prep commit's parent: the
+# prep pull request branched from it, so no run that tested this tree is
+# older. Unbounded, --paginate would read every successful run there is.
+since="$(git log -1 --format=%cI "$parent")"
+green="$(gh api --method GET --paginate "repos/$repository/actions/workflows/test.yml/runs" \
+    -f status=success -f per_page=100 -f "created=>=$since" \
     --jq ".workflow_runs[] | select(.head_commit.tree_id == \"$tree\") | .html_url")" ||
     die "could not ask GitHub for $repository's successful Test runs"
 green="${green%%$'\n'*}"

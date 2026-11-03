@@ -51,8 +51,13 @@ jobs:
           RUN: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          passed=$(gh api "repos/$REPOSITORY/actions/workflows/test.yml/runs?status=success&per_page=100" \
-            --jq ".workflow_runs[] | select(.head_commit.tree_id == \"$TREE\" and .id != $RUN) | .html_url" | head -n 1)
+          # The whole answer, then its first line: piped into `head`, gh can
+          # die of SIGPIPE, and under pipefail this job would fail and skip
+          # every job below. One page is enough: the run it looks for is the
+          # pull request's, minutes old. A miss runs everything, never less.
+          matches=$(gh api "repos/$REPOSITORY/actions/workflows/test.yml/runs?status=success&per_page=100" \
+            --jq ".workflow_runs[] | select(.head_commit.tree_id == \"$TREE\" and .id != $RUN) | .html_url")
+          passed=${matches%%$'\n'*}
           if [ -n "$passed" ]; then
             echo "tree $TREE already passed: $passed"
             echo "passed=true" >> "$GITHUB_OUTPUT"
@@ -146,9 +151,11 @@ jobs:
   # Coverage is collected here and nowhere else, but the floor it is held to
   # lives in scripts/coverage.sh, which the manual hook runs too -- so the number
   # that fails a push is the number a contributor can reproduce before pushing.
+  # Not skipped as a duplicate. Codecov keys a report to the commit it was
+  # uploaded for, and a squash merge is a commit the pull request's upload
+  # does not name, so main would have no report for the next pull request to
+  # be compared against.
   coverage:
-    needs: dedupe
-    if: needs.dedupe.outputs.passed != 'true'
     name: coverage
     runs-on: ubuntu-slim
     # Lifted to the job so the upload step can ask whether it is set: the

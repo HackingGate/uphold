@@ -24,20 +24,36 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = ("bump-version.sh", "tag-release.sh")
 
-# `gh api <path> --jq <filter>`, for the one question tag-release asks: the
-# runs in $GH_STUB_RUNS whose head commit has the tree the filter names. Each
-# call's path is appended to $GH_STUB_LOG. $GH_STUB_EXIT, when set, is the exit
-# status instead, as when GitHub cannot be asked.
+# `gh api --method GET --paginate <path> -f k=v ... --jq <filter>`, for the one
+# question tag-release asks: the runs in $GH_STUB_RUNS whose head commit has
+# the tree the filter names. Each call's path and fields are appended to
+# $GH_STUB_LOG as one JSON line. $GH_STUB_EXIT, when set, is the exit status
+# instead, as when GitHub cannot be asked.
 GH_STUB = """\
 #!/usr/bin/env python3
 import json, os, re, sys
+args = sys.argv[1:]
+assert args.pop(0) == "api", sys.argv
+path, fields, jq = None, {}, None
+while args:
+    arg = args.pop(0)
+    if arg in ("--method", "-X"):
+        args.pop(0)
+    elif arg == "--paginate":
+        pass
+    elif arg in ("-f", "--raw-field"):
+        key, _, value = args.pop(0).partition("=")
+        fields[key] = value
+    elif arg == "--jq":
+        jq = args.pop(0)
+    else:
+        path = arg
 with open(os.environ["GH_STUB_LOG"], "a", encoding="utf-8") as log:
-    log.write(sys.argv[2] + "\\n")
+    log.write(json.dumps({"path": path, "fields": fields}) + "\\n")
 if os.environ.get("GH_STUB_EXIT"):
     print("gh: HTTP 502", file=sys.stderr)
     sys.exit(int(os.environ["GH_STUB_EXIT"]))
-assert sys.argv[1] == "api" and sys.argv[3] == "--jq", sys.argv
-tree = re.search(r'tree_id == "([0-9a-f]+)"', sys.argv[4]).group(1)
+tree = re.search(r'tree_id == "([0-9a-f]+)"', jq).group(1)
 with open(os.environ["GH_STUB_RUNS"], encoding="utf-8") as f:
     runs = json.load(f)
 for run in runs:
@@ -573,10 +589,24 @@ class TagRelease(unittest.TestCase):
         self.assertIn(
             "CI passed on its tree: https://example.invalid/run/1", result.stdout
         )
+        calls = [
+            json.loads(line)
+            for line in box.gh_log.read_text(encoding="utf-8").splitlines()
+        ]
+        # Bounded by the prep commit's parent, so --paginate reads only runs
+        # that could have tested this tree.
+        since = box.git("log", "-1", "--format=%cI", "HEAD~1")
         self.assertEqual(
-            box.gh_log.read_text(encoding="utf-8").splitlines(),
+            calls,
             [
-                "repos/example/uphold/actions/workflows/test.yml/runs?status=success&per_page=100"
+                {
+                    "path": "repos/example/uphold/actions/workflows/test.yml/runs",
+                    "fields": {
+                        "status": "success",
+                        "per_page": "100",
+                        "created": f">={since}",
+                    },
+                }
             ],
         )
 
