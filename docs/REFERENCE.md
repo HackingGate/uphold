@@ -932,6 +932,11 @@ later reaches the adjusted rule on the next pin bump, which is what a full copy
 under the same `id` cannot promise: it pins the pattern at whatever the set
 shipped the day it was pasted.
 
+`--json` also names each rule's `files.baseline` as `"baseline"`, where one is
+set, so a caller deciding which copy of a baseline to trust -- a review gate
+that reads the rules from a base and the tree from a head -- asks the loader
+rather than reading the policy files a second time.
+
 Four shapes are refused at load, each naming the table:
 
 - an override carrying any other key, such as `regexp`, `builtin`,
