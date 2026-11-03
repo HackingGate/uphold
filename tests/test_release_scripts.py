@@ -5,11 +5,14 @@ one reading the diff closely, so what they refuse matters as much as what they
 do. Each test builds a repository shaped like this one where it matters -- the
 four files that carry the version, a commit on main, and an `origin` -- with a
 local bare repository standing in for GitHub, so nothing reaches the network and
-the push can be inspected afterwards.
+the push can be inspected afterwards. GitHub's answer to "which Test runs
+passed" comes from a stand-in `gh` that serves runs written here, filtered by
+tree the way the script's `--jq` asks.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -21,11 +24,49 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = ("bump-version.sh", "tag-release.sh")
 
+# `gh api --method GET --paginate <path> -f k=v ... --jq <filter>`, for the one
+# question tag-release asks: the runs in $GH_STUB_RUNS whose head commit has
+# the tree the filter names. Each call's path and fields are appended to
+# $GH_STUB_LOG as one JSON line. $GH_STUB_EXIT, when set, is the exit status
+# instead, as when GitHub cannot be asked.
+GH_STUB = """\
+#!/usr/bin/env python3
+import json, os, re, sys
+args = sys.argv[1:]
+assert args.pop(0) == "api", sys.argv
+path, fields, jq = None, {}, None
+while args:
+    arg = args.pop(0)
+    if arg in ("--method", "-X"):
+        args.pop(0)
+    elif arg == "--paginate":
+        pass
+    elif arg in ("-f", "--raw-field"):
+        key, _, value = args.pop(0).partition("=")
+        fields[key] = value
+    elif arg == "--jq":
+        jq = args.pop(0)
+    else:
+        path = arg
+with open(os.environ["GH_STUB_LOG"], "a", encoding="utf-8") as log:
+    log.write(json.dumps({"path": path, "fields": fields}) + "\\n")
+if os.environ.get("GH_STUB_EXIT"):
+    print("gh: HTTP 502", file=sys.stderr)
+    sys.exit(int(os.environ["GH_STUB_EXIT"]))
+tree = re.search(r'tree_id == "([0-9a-f]+)"', jq).group(1)
+with open(os.environ["GH_STUB_RUNS"], encoding="utf-8") as f:
+    runs = json.load(f)
+for run in runs:
+    if run["head_commit"]["tree_id"] == tree:
+        print(run["html_url"])
+"""
+
 CARGO_TOML = """\
 [package]
 name = "uphold"
 version = "1.2.3"
 edition = "2021"
+repository = "https://github.com/example/uphold"
 
 [dependencies]
 """
@@ -108,6 +149,34 @@ class Sandbox:
         # every git call below at the repository under test.
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         self.env.update(GIT_CONFIG_GLOBAL=str(config), GIT_CONFIG_NOSYSTEM="1")
+        bin_dir = root / "gh-bin"
+        bin_dir.mkdir()
+        gh = bin_dir / "gh"
+        gh.write_text(GH_STUB, encoding="utf-8")
+        gh.chmod(0o755)
+        self.runs_file = root / "runs.json"
+        self.gh_log = root / "gh.log"
+        self.env.update(
+            PATH=f"{bin_dir}{os.pathsep}{self.env.get('PATH', '')}",
+            GH_STUB_RUNS=str(self.runs_file),
+            GH_STUB_LOG=str(self.gh_log),
+        )
+        self.runs([])
+
+    def runs(self, trees: list[str]) -> None:
+        """The successful Test runs GitHub reports, one per tree."""
+        self.runs_file.write_text(
+            json.dumps(
+                [
+                    {
+                        "html_url": f"https://example.invalid/run/{n}",
+                        "head_commit": {"tree_id": t},
+                    }
+                    for n, t in enumerate(trees, 1)
+                ]
+            ),
+            encoding="utf-8",
+        )
 
     def git(self, *args: str, cwd: Path | None = None) -> str:
         return subprocess.run(
@@ -164,6 +233,8 @@ class Sandbox:
         # The fetch the scripts make; done here first so the remote-tracking
         # refs it creates are part of the state a refused run must preserve.
         self.git("fetch", "-q", "origin", "--tags")
+        # CI passed on what is about to be tagged, unless a test says otherwise.
+        self.runs([self.git("rev-parse", "HEAD^{tree}")])
 
     def _write(self, files: dict[str, str]) -> None:
         for name, body in files.items():
@@ -484,6 +555,60 @@ class TagRelease(unittest.TestCase):
                 self.assertEqual(box.state(), before)
                 self.assertEqual(box.git("tag", "--list"), "")
                 self.assertNotIn("refs/tags/", box.git("for-each-ref", cwd=box.origin))
+
+    def test_refuses_a_tree_no_successful_run_tested(self) -> None:
+        box = _sandbox(self)
+        box.runs([box.git("rev-parse", "HEAD~1^{tree}")])
+        before = box.state()
+
+        result = box.run("tag-release.sh", "--push")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no successful Test run", result.stderr)
+        self.assertIn(box.git("rev-parse", "HEAD^{tree}"), result.stderr)
+        self.assertEqual(box.state(), before)
+
+    def test_refuses_when_github_cannot_be_asked(self) -> None:
+        # An unanswered question is a refusal, never "no run, tag anyway".
+        box = _sandbox(self)
+        box.env["GH_STUB_EXIT"] = "1"
+        before = box.state()
+
+        result = box.run("tag-release.sh", "--push")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not ask GitHub", result.stderr)
+        self.assertEqual(box.state(), before)
+
+    def test_asks_the_repository_the_package_names_and_shows_the_run(self) -> None:
+        box = _sandbox(self)
+
+        result = box.run("tag-release.sh")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "CI passed on its tree: https://example.invalid/run/1", result.stdout
+        )
+        calls = [
+            json.loads(line)
+            for line in box.gh_log.read_text(encoding="utf-8").splitlines()
+        ]
+        # Bounded by the prep commit's parent, so --paginate reads only runs
+        # that could have tested this tree.
+        since = box.git("log", "-1", "--format=%cI", "HEAD~1")
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "path": "repos/example/uphold/actions/workflows/test.yml/runs",
+                    "fields": {
+                        "status": "success",
+                        "per_page": "100",
+                        "created": f">={since}",
+                    },
+                }
+            ],
+        )
 
     def test_refuses_push_with_dry_run(self) -> None:
         box = _sandbox(self)
