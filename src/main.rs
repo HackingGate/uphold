@@ -1147,6 +1147,13 @@ struct EffectiveRule<'rule> {
     /// before the field existed.
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     overridden: &'rule [&'static str],
+    /// The rule's `files.baseline`, as written: a path from the repository
+    /// root. Only where one is set. A caller that has to decide which copy of
+    /// a baseline to trust -- a review gate that reads the rules from a base
+    /// and the tree from a head -- asks here rather than reading the policy
+    /// files a second time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    baseline: Option<&'rule str>,
 }
 
 /// Every rule this repository actually resolves to, after inheritance.
@@ -1218,6 +1225,7 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
             seams: rule.seams(),
             reach: (rule.reach() == config::Reach::Pinned).then_some(config::Reach::Pinned),
             overridden: &rule.overridden,
+            baseline: rule.files().baseline.as_deref(),
         })
         .collect();
     let text = serde_json::to_string_pretty(&document)

@@ -256,3 +256,45 @@ fn a_checker_and_the_shim_that_invokes_it_load_and_run() {
     assert_eq!(code(&ran), 0, "{}", stderr(&ran));
     assert!(stdout(&ran).contains("faux ran:"), "{}", stdout(&ran));
 }
+
+#[test]
+fn the_effective_json_names_a_rules_baseline_and_only_where_one_is_set() {
+    // A review gate decides which copy of a baseline to trust from this list,
+    // so the path is the one `files.baseline` wrote, and a rule without one
+    // carries no key at all.
+    let root = workspace(
+        "[rule.with-baseline]\n\
+         message = \"m\"\n\
+         regexp = 'x'\n\
+         files.include = [\"src\"]\n\
+         files.baseline = \"policy/x-baseline.txt\"\n\
+         \n\
+         [rule.without-baseline]\n\
+         message = \"m\"\n\
+         regexp = 'y'\n\
+         files.include = [\"src\"]\n",
+    );
+    let output = uphold(&root, &["rules", "--effective", "--json"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rules: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let find = |id: &str| {
+        rules
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|rule| rule.get("id").and_then(serde_json::Value::as_str) == Some(id))
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(
+        find("with-baseline")
+            .get("baseline")
+            .and_then(serde_json::Value::as_str),
+        Some("policy/x-baseline.txt")
+    );
+    assert!(find("without-baseline").get("baseline").is_none());
+}
