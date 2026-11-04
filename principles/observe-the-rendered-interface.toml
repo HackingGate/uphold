@@ -1,0 +1,44 @@
+id = "observe-the-rendered-interface"
+title = "Observe the Rendered Interface"
+aliases = ["Render it, do not read it", "Look at the page", "Unrendered is not inspected"]
+kind = "practice"
+status = "seed"
+domains = ["testing", "interfaces"]
+summary = "A claim about what a person sees or does is verified by rendering the interface, and a source-only review reports rendered properties as not inspected."
+claim = "A claim about what a person sees or does is verified by rendering the interface and observing it, at the sizes, themes and states the person uses, and comparing pages with their siblings. A review that only reads source reports the rendered properties as not inspected."
+problem = "A review that reads the routing and layout source passes over defects a person sees at once on the running page: a header at the wrong width, legal links on one page only, a placeholder home page. The source says what was written; what renders depends on styles, breakpoints, data and state the reader does not execute in their head."
+rationale = "What a person experiences is the rendered result, so only an observation of that result is evidence about it. A review that did not render has not observed the property, and reporting it as passed collapses not inspected into success."
+applies_when = ["A change or review touches pages, layout, navigation or copy.", "The product renders at more than one size or theme.", "A review is summarised as covering an interface."]
+does_not_mean = ["Screenshots replace unit tests.", "Every change needs a manual pass when a screenshot or accessibility-tree comparison already holds the property."]
+benefits = ["Layout, width and missing-chrome defects are caught before a person sees them.", "A review summary says which widths, themes and states it actually looked at.", "Sibling pages are compared, so drift between them is visible."]
+costs = ["Rendering needs a running build, a browser and representative data.", "Screenshot baselines must be kept current and reviewed when they change."]
+failure_when_overapplied = ["A trivial copy or logic change waits on a full visual pass nobody needed.", "Screenshot diffs fire on every antialiasing change until reviewers approve them without looking."]
+conflicts_with = []
+related = ["explicit-unknown", "enforcement-needs-a-trigger", "consistent-frame", "end-to-end-principle"]
+review_questions = ["Was the interface rendered, and at which widths, themes and states?", "Were sibling pages compared side by side?", "Which rendered properties does this review report as not inspected?"]
+
+[enforcement]
+level = "test"
+automatable = "partially"
+rung = ["semantic"]
+observable = ["Screenshots of each template at each declared width and theme.", "An accessibility-tree snapshot of each page.", "The widths, themes and states a review summary says it rendered."]
+checks = ["Compare a screenshot per template and width against its stored baseline.", "Compare an accessibility-tree snapshot per page against its stored baseline.", "Require a review summary of an interface change to list the widths and themes it rendered, or to name the rendered properties as not inspected."]
+limits = ["Whether a rendered difference is a defect or an intended change is a judgment.", "Which states a person actually reaches cannot be enumerated from the code alone."]
+
+[[sources]]
+title = "Testing Library, Guiding Principles"
+url = "https://testing-library.com/docs/guiding-principles/"
+type = "documentation"
+notes = "The more your tests resemble the way your software is used, the more confidence they can give you."
+
+[[sources]]
+title = "Playwright, Visual comparisons"
+url = "https://playwright.dev/docs/test-snapshots"
+type = "documentation"
+notes = "Screenshot assertions compare a rendered page or element against a stored baseline."
+
+[[sources]]
+title = "WCAG 2.2, Success Criterion 1.4.10 Reflow"
+url = "https://www.w3.org/WAI/WCAG22/Understanding/reflow.html"
+type = "standard"
+notes = "Content can be presented at 320 CSS pixels wide without loss of information or two-dimensional scrolling, a property observable only by rendering at that width."

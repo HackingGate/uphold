@@ -480,6 +480,30 @@
       "path": "principles/confused-deputy.toml"
     },
     {
+      "name": "Consistent Frame",
+      "key": "consistent frame",
+      "tokens": [
+        "consistent",
+        "frame"
+      ],
+      "field": "title",
+      "id": "consistent-frame",
+      "title": "Consistent Frame",
+      "path": "principles/consistent-frame.toml"
+    },
+    {
+      "name": "Consistent navigation",
+      "key": "consistent navigation",
+      "tokens": [
+        "consistent",
+        "navigation"
+      ],
+      "field": "alias",
+      "id": "consistent-frame",
+      "title": "Consistent Frame",
+      "path": "principles/consistent-frame.toml"
+    },
+    {
       "name": "Conway's Law",
       "key": "conway s law",
       "tokens": [
@@ -1380,6 +1404,20 @@
       "path": "principles/host-owned-logs.toml"
     },
     {
+      "name": "Look at the page",
+      "key": "look at the page",
+      "tokens": [
+        "look",
+        "at",
+        "the",
+        "page"
+      ],
+      "field": "alias",
+      "id": "observe-the-rendered-interface",
+      "title": "Observe the Rendered Interface",
+      "path": "principles/observe-the-rendered-interface.toml"
+    },
+    {
       "name": "Make Illegal States Unrepresentable",
       "key": "make illegal states unrepresentable",
       "tokens": [
@@ -1606,6 +1644,19 @@
       "path": "principles/least-astonishment.toml"
     },
     {
+      "name": "No placeholder pages",
+      "key": "no placeholder pages",
+      "tokens": [
+        "no",
+        "placeholder",
+        "pages"
+      ],
+      "field": "alias",
+      "id": "consistent-frame",
+      "title": "Consistent Frame",
+      "path": "principles/consistent-frame.toml"
+    },
+    {
       "name": "No repeated fields",
       "key": "no repeated fields",
       "tokens": [
@@ -1685,6 +1736,20 @@
       "path": "principles/observability.toml"
     },
     {
+      "name": "Observe the Rendered Interface",
+      "key": "observe the rendered interface",
+      "tokens": [
+        "observe",
+        "the",
+        "rendered",
+        "interface"
+      ],
+      "field": "title",
+      "id": "observe-the-rendered-interface",
+      "title": "Observe the Rendered Interface",
+      "path": "principles/observe-the-rendered-interface.toml"
+    },
+    {
       "name": "One entity per value",
       "key": "one entity per value",
       "tokens": [
@@ -1697,6 +1762,19 @@
       "id": "parameterize-do-not-enumerate",
       "title": "Parameterize, Do Not Enumerate",
       "path": "principles/parameterize-do-not-enumerate.toml"
+    },
+    {
+      "name": "One shared layout",
+      "key": "one shared layout",
+      "tokens": [
+        "one",
+        "shared",
+        "layout"
+      ],
+      "field": "alias",
+      "id": "consistent-frame",
+      "title": "Consistent Frame",
+      "path": "principles/consistent-frame.toml"
     },
     {
       "name": "One-way door",
@@ -2096,6 +2174,22 @@
       "id": "fact-once-per-screen",
       "title": "Fact Once Per Screen",
       "path": "principles/fact-once-per-screen.toml"
+    },
+    {
+      "name": "Render it, do not read it",
+      "key": "render it do not read it",
+      "tokens": [
+        "render",
+        "it",
+        "do",
+        "not",
+        "read",
+        "it"
+      ],
+      "field": "alias",
+      "id": "observe-the-rendered-interface",
+      "title": "Observe the Rendered Interface",
+      "path": "principles/observe-the-rendered-interface.toml"
     },
     {
       "name": "Replace Before Release",
@@ -2661,6 +2755,20 @@
       "id": "unobstructed-work-area",
       "title": "Unobstructed Work Area",
       "path": "principles/unobstructed-work-area.toml"
+    },
+    {
+      "name": "Unrendered is not inspected",
+      "key": "unrendered is not inspected",
+      "tokens": [
+        "unrendered",
+        "is",
+        "not",
+        "inspected"
+      ],
+      "field": "alias",
+      "id": "observe-the-rendered-interface",
+      "title": "Observe the Rendered Interface",
+      "path": "principles/observe-the-rendered-interface.toml"
     },
     {
       "name": "Usable security",
