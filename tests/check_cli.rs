@@ -1958,3 +1958,97 @@ fn an_unknown_base_is_two_even_beside_a_refused_claim() {
     assert_eq!(code(&check(&head, &[])), 1);
     assert_eq!(code(&against(&head, &base)), 2);
 }
+
+// ── a local hook's stage ─────────────────────────────────────────────
+
+/// `PRE_COMMIT` with the repository's own hook pinned at `stages`.
+fn local_at(stages: &str) -> String {
+    PRE_COMMIT.replace(
+        "        name: my own check\n",
+        &format!("        name: my own check\n        stages: {stages}\n"),
+    )
+}
+
+#[test]
+fn a_local_hook_moved_to_manual_since_the_base_is_refused() {
+    // The hook still exists, so the claim still names a rule that is here.
+    // It now fires only when someone runs it, which is a weaker claim than the
+    // base made, and is refused like a dropped one.
+    let base = base_with(&local_at("[pre-commit]"), GUARD_POLICY, Some(LOCAL_CLAIM));
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(&head, ".pre-commit-config.yaml", &local_at("[manual]"));
+    write(&head, "policy/upheld.toml", LOCAL_CLAIM);
+    assert_eq!(code(&check(&head, &[])), 0);
+    let output = against(&head, &base);
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("a hook installed here at pre-commit")
+            && stderr(&output).contains("and nothing here enforces it there"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_local_hook_given_another_stage_beside_its_own_is_kept() {
+    let base = base_with(&local_at("[pre-commit]"), GUARD_POLICY, Some(LOCAL_CLAIM));
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(
+        &head,
+        ".pre-commit-config.yaml",
+        &local_at("[pre-commit, pre-push]"),
+    );
+    write(&head, "policy/upheld.toml", LOCAL_CLAIM);
+    let output = against(&head, &base);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn a_legacy_stage_name_is_the_git_hook_it_names() {
+    // pre-commit still accepts `commit` for `pre-commit`; renaming one to the
+    // other moves nothing.
+    let base = base_with(&local_at("[commit]"), GUARD_POLICY, Some(LOCAL_CLAIM));
+    let head = workspace();
+    write(&head, "policy/principles.toml", GUARD_POLICY);
+    write(&head, ".pre-commit-config.yaml", &local_at("[pre-commit]"));
+    write(&head, "policy/upheld.toml", LOCAL_CLAIM);
+    let output = against(&head, &base);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn a_claim_on_a_local_hook_at_manual_says_where_it_runs() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", GUARD_POLICY);
+    write(&root, ".pre-commit-config.yaml", &local_at("[manual]"));
+    write(&root, "policy/upheld.toml", LOCAL_CLAIM);
+    let output = check(&root, &[]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("a hook installed here at manual"), "{out}");
+    assert!(
+        out.contains("my-own-check runs only at manual, which no git hook runs"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_local_hook_without_a_stage_takes_the_default_stages() {
+    let root = workspace();
+    write(&root, "policy/principles.toml", GUARD_POLICY);
+    write(
+        &root,
+        ".pre-commit-config.yaml",
+        &format!("default_stages: [pre-push]\n{PRE_COMMIT}"),
+    );
+    write(&root, "policy/upheld.toml", LOCAL_CLAIM);
+    let output = check(&root, &[]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("a hook installed here at pre-push"),
+        "{}",
+        stdout(&output)
+    );
+}

@@ -4340,10 +4340,21 @@ claim's rule id is not compared. It is the part a renamed hook changes, and
 the reconcile has already verified the new one against this tree. So a rename
 lands in one change: the hook and the claim that names it move together.
 
-A guard's stages are compared one at a time. A hook of the repository's own is
-recorded as "a hook installed here" without its stage, so a local hook moved
-from `pre-commit` to `manual` is not seen as a weaker claim; the reconcile does
-not read a local hook's stage at all.
+A guard's stages are compared one at a time, and so are a local hook's. A hook
+of the repository's own is recorded with the stages it runs at, "a hook
+installed here at pre-commit, pre-push", read from its `stages:`, else the
+config's `default_stages:`, else from the lefthook stage it is a command under.
+So a local hook moved from `pre-commit` to `manual` is a weaker claim and is
+refused like a dropped one, and adding a stage beside the old one is not.
+pre-commit's legacy names `commit`, `push` and `merge-commit` read as the git
+hook each names. A pre-commit hook that names no stage, under no
+`default_stages:`, is recorded as "a hook installed here": it runs at the
+runner's default, which no file here states, so moving it to any named stage
+reads as a seam lost.
+
+Without `--base`, a claim whose only supplier is a local hook that runs at
+`manual` alone still reconciles, and the report notes that it runs at no git
+stage: the hook fires only when someone runs it.
 
 A claim the base could not reconcile enforced nothing there and is not required
 here. A base that declares no claims keeps nothing, and says so. A base with no
@@ -4389,7 +4400,7 @@ when the result is refused or unavailable:
       "principle": "explicit-unknown",
       "rule": "catalog-tests",
       "status": "reconciled",
-      "suppliers": [{"component": "local", "seam": "a hook installed here"}],
+      "suppliers": [{"component": "local", "seam": "a hook installed here at pre-commit"}],
       "behavior": [{
         "rule": "catalog-tests", "subject": "rule",
         "manager": null, "stage": null, "source": null,
