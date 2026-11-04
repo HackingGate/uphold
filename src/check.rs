@@ -161,9 +161,13 @@ pub(crate) struct Installed {
     /// exit 1. See the `explicit-unknown` record.
     pub unreadable: Vec<String>,
     /// The `local` tier: every hook id installed here from any repository, plus
-    /// every lefthook command name. A claim may name a formatter, a linter, or
-    /// a hook this repository wrote, and those are rules that fire here.
-    pub local: BTreeSet<String>,
+    /// every lefthook command name, each with the stages it runs at. A claim
+    /// may name a formatter, a linter, or a hook this repository wrote, and
+    /// those are rules that fire here. The stages are kept for the reason
+    /// `stages` is: a hook moved from `pre-commit` to `manual` still exists,
+    /// and fires only when someone runs it. [`UNDECLARED`] stands for a
+    /// declaration that names no stage, which runs at the runner's default.
+    pub local: LocalHooks,
     /// Whether a harness configuration tracked here runs `uphold hook`.
     pub hook: bool,
     /// Whether a hook here runs the rules over a commit message (`scan --text`
@@ -244,6 +248,57 @@ fn published_text() -> Result<BTreeSet<String>> {
 struct PreCommitConfig {
     #[serde(default)]
     repos: Option<Vec<PreCommitRepo>>,
+    /// The stages a hook without its own `stages:` runs at.
+    #[serde(default)]
+    default_stages: Option<Vec<String>>,
+}
+
+/// A local hook declared with no stage: it runs at the runner's default, which
+/// no file here states. Kept apart from every named stage so a hook moved from
+/// the default to `manual` reads as a seam lost, not as one renamed.
+const UNDECLARED: &str = "";
+
+/// Each local hook id or lefthook command, and the stages it runs at.
+type LocalHooks = BTreeMap<String, BTreeSet<String>>;
+
+/// The local seam, and its prefix where it names stages.
+const LOCAL_SEAM: &str = "a hook installed here";
+const LOCAL_AT: &str = "a hook installed here at ";
+
+/// pre-commit's legacy stage names, read as the git hook each one is.
+fn stage_name(stage: &str) -> String {
+    match stage {
+        "commit" => "pre-commit",
+        "push" => "pre-push",
+        "merge-commit" => "pre-merge-commit",
+        other => other,
+    }
+    .to_owned()
+}
+
+/// Union one runner's local hooks into another's, stage by stage.
+fn merge_local(into: &mut LocalHooks, from: LocalHooks) {
+    for (name, stages) in from {
+        into.entry(name).or_default().extend(stages);
+    }
+}
+
+/// The seams a local hook supplies: one naming its stages, and the bare one
+/// where some declaration names none.
+fn local_seams(stages: &BTreeSet<String>) -> Vec<String> {
+    let named: Vec<&str> = stages
+        .iter()
+        .map(String::as_str)
+        .filter(|stage| *stage != UNDECLARED)
+        .collect();
+    let mut seams = Vec::new();
+    if !named.is_empty() {
+        seams.push(format!("{LOCAL_AT}{}", named.join(", ")));
+    }
+    if stages.is_empty() || stages.contains(UNDECLARED) {
+        seams.push(String::from(LOCAL_SEAM));
+    }
+    seams
 }
 
 #[derive(Debug, Deserialize)]
@@ -320,7 +375,7 @@ fn misplaced_range_ids(repos: &[PreCommitRepo]) -> Vec<String> {
 ///
 /// The same set answers the `local` tier: a claim may name a formatter, a
 /// linter, or a hook this repository wrote, and those are rules that fire here.
-fn pinned_ids(root: &Path) -> Result<Option<(BTreeSet<String>, Vec<String>)>> {
+fn pinned_ids(root: &Path) -> Result<Option<(LocalHooks, Vec<String>)>> {
     let path = root.join(".pre-commit-config.yaml");
     if !path.is_file() {
         return Ok(None);
@@ -337,7 +392,8 @@ fn pinned_ids(root: &Path) -> Result<Option<(BTreeSet<String>, Vec<String>)>> {
         ));
     };
     let misplaced = misplaced_range_ids(&repos);
-    let mut every = BTreeSet::new();
+    let default_stages = config.default_stages;
+    let mut every = LocalHooks::new();
     for entry in repos {
         for hook in entry.hooks {
             // A range-only hook at no push stage cannot supply a claim. Filter
@@ -352,7 +408,15 @@ fn pinned_ids(root: &Path) -> Result<Option<(BTreeSet<String>, Vec<String>)>> {
             {
                 continue;
             }
-            every.insert(hook.id);
+            let stages: BTreeSet<String> = hook
+                .stages
+                .as_ref()
+                .or(default_stages.as_ref())
+                .map_or_else(
+                    || BTreeSet::from([String::from(UNDECLARED)]),
+                    |stages| stages.iter().map(|stage| stage_name(stage)).collect(),
+                );
+            every.entry(hook.id).or_default().extend(stages);
         }
     }
     Ok(Some((every, misplaced)))
@@ -489,11 +553,8 @@ fn lefthook_seams(root: &Path, guards: &BTreeMap<String, String>) -> Result<Inst
 /// verbatim -- as a command named `configs`, so a claim naming that rule
 /// reconciled green against a file that defines no such thing. Reading the
 /// mapping cannot make that mistake, because `configs` is not under a stage.
-fn lefthook_commands(
-    config: &LefthookConfig,
-    guards: &BTreeMap<String, String>,
-) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
+fn lefthook_commands(config: &LefthookConfig, guards: &BTreeMap<String, String>) -> LocalHooks {
+    let mut names = LocalHooks::new();
     for (stage, body) in &config.stages {
         if !guards.contains_key(stage.as_str()) {
             continue;
@@ -502,7 +563,7 @@ fn lefthook_commands(
             continue;
         };
         for key in commands.keys() {
-            names.insert(key.clone());
+            names.entry(key.clone()).or_default().insert(stage.clone());
         }
     }
     names
@@ -541,20 +602,20 @@ pub(crate) fn installed(root: &Path) -> Result<Installed> {
     match pinned_ids(root) {
         Ok(Some((ids, misplaced))) => {
             found.misplaced = misplaced;
-            found.scan = ids.iter().any(|id| scans.contains(id));
-            found.text = ids.iter().any(|id| texts.contains(id));
+            found.scan = ids.keys().any(|id| scans.contains(id));
+            found.text = ids.keys().any(|id| texts.contains(id));
             for (stage, hook) in &guards {
-                if ids.contains(hook) {
+                if ids.contains_key(hook) {
                     found.stages.insert(stage.clone());
                 }
             }
             let mut named: Vec<String> = ids
-                .iter()
+                .keys()
                 .filter(|id| scans.contains(*id) || guards.values().any(|hook| hook == *id))
                 .cloned()
                 .collect();
             named.sort_unstable();
-            found.local.extend(ids);
+            merge_local(&mut found.local, ids);
             if !named.is_empty() {
                 found
                     .how
@@ -573,7 +634,7 @@ pub(crate) fn installed(root: &Path) -> Result<Installed> {
             found.text = found.text || lefthook.text;
             found.stages.extend(lefthook.stages);
             found.how.extend(lefthook.how);
-            found.local.extend(lefthook.local);
+            merge_local(&mut found.local, lefthook.local);
         }
         Err(error) => found.unreadable.push(error.to_string()),
     }
@@ -659,11 +720,11 @@ pub(crate) fn suppliers(policy: &Policy, installed: &Installed) -> Supply {
     let mut supplied: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut unestablished: Vec<String> = Vec::new();
 
-    for name in &installed.local {
+    for (name, stages) in &installed.local {
         supplied
             .entry(name.clone())
             .or_default()
-            .push(String::from("a hook installed here"));
+            .extend(local_seams(stages));
     }
 
     for rule in &policy.rules {
@@ -979,6 +1040,20 @@ fn evaluate(
         let by = supply.supplied.get(rule);
         let (status, diagnostic) =
             assess_claim(index, principle, rule, by.is_some(), &installed.unreadable)?;
+        // Reconciled, and said where: a hook that runs at no git stage fires
+        // only when someone runs it, which the claim's reader should not have
+        // to infer from a stage name.
+        if status == ClaimStatus::Reconciled
+            && by.is_some_and(|seams| seams.iter().all(|seam| seam.starts_with(LOCAL_SEAM)))
+            && installed.local.get(rule).is_some_and(|stages| {
+                !stages.is_empty() && stages.iter().all(|stage| stage == "manual")
+            })
+        {
+            report.notes.push(format!(
+                "{rule} runs only at manual, which no git hook runs: {principle:?} is \
+                 enforced when someone runs it"
+            ));
+        }
         if let Some(diagnostic) = diagnostic {
             if status == ClaimStatus::Unavailable {
                 if report.fatal.is_none() {
@@ -998,7 +1073,7 @@ fn evaluate(
                 by.into_iter()
                     .flatten()
                     .map(|seam| Supplier {
-                        component: if seam == "a hook installed here" {
+                        component: if seam.starts_with(LOCAL_SEAM) {
                             "local"
                         } else {
                             "uphold"
@@ -1020,16 +1095,18 @@ const GUARD_SEAM: &str = "uphold guard at ";
 /// One seam per stage. A guard's seam names every stage its rule fires at,
 /// `uphold guard at pre-commit, pre-push`, and two claims may split those
 /// stages between them; compared whole, the split would read as a seam lost.
+/// A local hook's seam, `a hook installed here at pre-commit, pre-push`, is
+/// split the same way.
 fn single_seams(seam: &str) -> Vec<String> {
-    seam.strip_prefix(GUARD_SEAM).map_or_else(
-        || vec![seam.to_owned()],
-        |stages| {
-            stages
+    for prefix in [GUARD_SEAM, LOCAL_AT] {
+        if let Some(stages) = seam.strip_prefix(prefix) {
+            return stages
                 .split(", ")
-                .map(|stage| format!("{GUARD_SEAM}{stage}"))
-                .collect()
-        },
-    )
+                .map(|stage| format!("{prefix}{stage}"))
+                .collect();
+        }
+    }
+    vec![seam.to_owned()]
 }
 
 /// What each principle is enforced by, over the claims that reconciled.
@@ -1411,14 +1488,14 @@ fn report_coverage(
     if installed.unreadable.is_empty() {
         let claimed_local = installed
             .local
-            .iter()
+            .keys()
             .filter(|name| claims.contains_key(name.as_str()))
             .count();
         println!(
             "local: {claimed_local} of {} rules carry a principle",
             installed.local.len()
         );
-        for name in &installed.local {
+        for name in installed.local.keys() {
             if !claims.contains_key(name.as_str()) {
                 println!("  unclaimed  {name}");
             }
@@ -1494,6 +1571,13 @@ mod tests {
         assert_eq!(
             single_seams("a hook installed here"),
             ["a hook installed here"]
+        );
+        assert_eq!(
+            single_seams("a hook installed here at pre-commit, pre-push"),
+            [
+                "a hook installed here at pre-commit",
+                "a hook installed here at pre-push"
+            ]
         );
     }
 
@@ -1622,7 +1706,7 @@ mod tests {
         assert!(found.scan, "the scan hook is pinned here");
         // `local` is the other half and it IS everything pinned: a claim may
         // name a formatter or a linter, and those are rules that fire here.
-        assert!(found.local.contains("trailing-whitespace"));
+        assert!(found.local.contains_key("trailing-whitespace"));
         // A tree that pins hooks -- any hooks -- has a runner configuration,
         // so it must not also be told there is none. Both halves decide that:
         // nothing of ours is installed AND nothing was found to say how.
