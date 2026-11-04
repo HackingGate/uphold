@@ -262,8 +262,8 @@ misses = "Make the refusal src/guard/push.rs prints after a failed forge lookup 
 
 [[review.control]]
 record = "consistent-frame"
-catches = "Make `uphold check --help` print its options before its usage line, while every other subcommand's help prints usage first."
-misses = "Add a `--json` option to `uphold check --help`, listed in the options section in the same place and order as on every other subcommand's help."
+catches = "Make scripts/review.py write the `consistent-frame` section of REVIEW.md from a string of its own, with **Ask** above **Applies when**, while render() writes every other record's section with **Applies when** first."
+misses = "Change render() in scripts/review.py so every record's section of REVIEW.md prints **Ask** above **Applies when**."
 
 [[review.control]]
 record = "conways-law"
