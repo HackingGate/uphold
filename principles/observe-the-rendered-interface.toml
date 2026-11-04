@@ -22,7 +22,7 @@ level = "test"
 automatable = "partially"
 rung = ["semantic"]
 observable = ["Screenshots of each template at each declared width and theme.", "An accessibility-tree snapshot of each page.", "The widths, themes and states a review summary says it rendered."]
-checks = ["Compare a screenshot per template and width against its stored baseline.", "Compare an accessibility-tree snapshot per page against its stored baseline.", "Require a review summary of an interface change to list the widths and themes it rendered, or to name the rendered properties as not inspected."]
+checks = ["Compare a screenshot per template and width against its stored baseline.", "Compare an accessibility-tree snapshot per page against its stored baseline.", "Require a review summary of an interface change to list the widths, themes and states it rendered, or to name the rendered properties as not inspected."]
 limits = ["Whether a rendered difference is a defect or an intended change is a judgment.", "Which states a person actually reaches cannot be enumerated from the code alone."]
 
 [[sources]]
