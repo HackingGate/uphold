@@ -11,6 +11,11 @@
       "misses": "Make the refusal src/guard/push.rs prints after a failed forge lookup name the forge client it asked, still refusing the same destinations."
     },
     {
+      "record": "consistent-frame",
+      "catches": "Make `uphold check --help` print its options before its usage line, while every other subcommand's help prints usage first.",
+      "misses": "Add a `--json` option to `uphold check --help`, listed in the options section in the same place and order as on every other subcommand's help."
+    },
+    {
       "record": "conways-law",
       "catches": "Move principles/ and scripts/validate.py into a separate repository run by the people who write records, and have the Rust crate fetch it at a pinned revision, on the ground that record authors and engine maintainers rarely talk, although nearly every record-field change also edits src/catalog.rs and the schema in the same pull request.",
       "misses": "Add a CODEOWNERS entry that names the people who write records as reviewers for principles/, leaving the directory and the build in this repository."
@@ -129,6 +134,11 @@
       "record": "observability",
       "catches": "Change the refusal path in src/main.rs so a refused guard prints only \"guard refused\" and exits non-zero, no longer printing the rule that refused (guard::refused_by), the input it judged, or the report body that says why, so an operator cannot tell one refusal from another without reproducing it.",
       "misses": "Change the refusal path in src/main.rs so the rule id is printed on a line of its own before the report body, which it still prints in full."
+    },
+    {
+      "record": "observe-the-rendered-interface",
+      "catches": "Add a table to docs/REFERENCE.md whose rows carry one more cell than its header row, so the forge renders it as plain pipe text, and describe the change as a formatted table of exit codes.",
+      "misses": "Add a row to an existing table in docs/REFERENCE.md with the same number of cells as its header row."
     },
     {
       "record": "parameterize-do-not-enumerate",

@@ -54,6 +54,10 @@ const RECORDS: &[(&str, &str)] = &[
         include_str!("../principles/confused-deputy.toml"),
     ),
     (
+        "consistent-frame",
+        include_str!("../principles/consistent-frame.toml"),
+    ),
+    (
         "conways-law",
         include_str!("../principles/conways-law.toml"),
     ),
@@ -170,6 +174,10 @@ const RECORDS: &[(&str, &str)] = &[
     (
         "observability",
         include_str!("../principles/observability.toml"),
+    ),
+    (
+        "observe-the-rendered-interface",
+        include_str!("../principles/observe-the-rendered-interface.toml"),
     ),
     (
         "parameterize-do-not-enumerate",

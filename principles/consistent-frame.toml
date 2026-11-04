@@ -1,0 +1,50 @@
+id = "consistent-frame"
+title = "Consistent Frame"
+aliases = ["Consistent navigation", "One shared layout", "No placeholder pages"]
+kind = "heuristic"
+status = "seed"
+domains = ["interfaces", "socio-technical"]
+summary = "Pages of one product share one frame, written once in a shared layout, and every reachable address is a finished page or a redirect."
+claim = "Pages of one product share one frame. Navigation, header, footer and content width are written once in a shared layout and appear in the same place and order on every page. A page whose frame differs states why, and every reachable address is a finished page or a redirect, never a placeholder."
+problem = "Pages added by different changes over time each write their own header, footer and width, and drift apart: legal links appear on one page only, one header spans the full window while its siblings' header is page-width, and an address the navigation reaches renders a placeholder. A person moving between pages has to find the same control again on each one."
+rationale = "A frame repeated in the same place is learned once and then ignored, so attention goes to the page's content. Writing the frame in one shared layout makes that layout its one writer: a page cannot omit or restyle a piece of chrome by accident, and a change to the frame reaches every page at once."
+applies_when = ["A product has more than one page or screen.", "Navigation, legal links, help or account controls recur across its pages.", "Pages are added by different changes over time."]
+does_not_mean = ["Every page looks identical; a terminal page may drop chrome a list page keeps, when that difference is the declared template.", "Visual design is frozen; the shared layout changes, and every page changes with it."]
+benefits = ["A person finds navigation, help and legal links in one place on every page.", "A change to the frame is made once and reaches every page.", "A new page inherits the frame instead of copying it."]
+costs = ["A shared layout is a dependency every page carries, and a defect in it shows on every page.", "Pages that need a different frame must declare a template for it rather than deviate locally."]
+failure_when_overapplied = ["A page that needs room, such as a full-screen editor or a checkout step, is forced to carry chrome that gets in the way.", "Templates multiply until each page has its own, and the shared frame is shared by name only."]
+conflicts_with = []
+related = ["single-authoritative-source", "least-astonishment", "fact-once-per-screen", "unobstructed-work-area"]
+review_questions = ["Is each piece of shared chrome written in one layout, or repeated or omitted per page?", "Do pages of the same kind render the same frame at the same width?", "Is the difference between kinds declared in a template, or set by a runtime flag?", "Does any address render a placeholder instead of a page or a redirect?"]
+
+[enforcement]
+level = "test"
+automatable = "partially"
+rung = ["syntax", "semantic"]
+observable = ["Imports of frame elements, such as a header, footer or navigation component, from page files rather than from a layout.", "The rendered frame of each template at a given width, in a screenshot or accessibility-tree snapshot.", "The route inventory and what each route renders."]
+checks = ["Lint that a page file imports no frame element directly; only a layout does.", "Compare a screenshot of each template's frame, per width, against its stored baseline.", "Fail a route inventory test when a route renders neither a declared template nor a redirect."]
+limits = ["Whether two pages are of the same kind, and so owe the same frame, is a judgment.", "Whether a page's content is finished or a placeholder cannot be told from structure alone."]
+
+[[sources]]
+title = "WCAG 2.2, Success Criterion 3.2.3 Consistent Navigation"
+url = "https://www.w3.org/WAI/WCAG22/Understanding/consistent-navigation.html"
+type = "standard"
+notes = "Navigational mechanisms repeated on multiple pages occur in the same relative order each time they are repeated."
+
+[[sources]]
+title = "WCAG 2.2, Success Criterion 3.2.6 Consistent Help"
+url = "https://www.w3.org/WAI/WCAG22/Understanding/consistent-help.html"
+type = "standard"
+notes = "Help mechanisms repeated on multiple pages occur in the same order relative to other page content."
+
+[[sources]]
+title = "Nielsen Norman Group, 10 Usability Heuristics for User Interface Design"
+url = "https://www.nngroup.com/articles/ten-usability-heuristics/"
+type = "essay"
+notes = "Heuristic 4, consistency and standards: users should not have to wonder whether different words, situations or actions mean the same thing."
+
+[[sources]]
+title = "ISO 9241-110:2020, Ergonomics of human-system interaction, Part 110: Interaction principles"
+url = "https://www.iso.org/standard/75258.html"
+type = "standard"
+notes = "Conformity with user expectations: an interactive system is consistent within itself and with the conventions its users know."

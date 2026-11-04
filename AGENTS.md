@@ -56,6 +56,20 @@ A program that holds authority of its own and acts on a resource a less privileg
 - Could a caller, or text a caller controls, direct this deputy at something the caller cannot reach itself?
 - When an agent or shim acts for a user, is the target checked against the user's authority or only against its own?
 
+## Consistent Frame
+Pages of one product share one frame. Navigation, header, footer and content width are written once in a shared layout and appear in the same place and order on every page. A page whose frame differs states why, and every reachable address is a finished page or a redirect, never a placeholder.
+
+**Applies when**
+- A product has more than one page or screen.
+- Navigation, legal links, help or account controls recur across its pages.
+- Pages are added by different changes over time.
+
+**Ask**
+- Is each piece of shared chrome written in one layout, or repeated or omitted per page?
+- Do pages of the same kind render the same frame at the same width?
+- Is the difference between kinds declared in a template, or set by a runtime flag?
+- Does any address render a placeholder instead of a page or a redirect?
+
 ## Conway's Law
 Any organization that designs a system will produce a design whose structure is a copy of the organization's communication structure.
 
@@ -405,6 +419,19 @@ A system should emit structured, correlated evidence sufficient to explain relev
 - Can one user-level operation be followed across model and tool calls?
 - What sensitive information must be redacted or omitted?
 
+## Observe the Rendered Interface
+A claim about what a person sees or does is verified by rendering the interface and observing it, at the sizes, themes and states the person uses, and comparing pages with their siblings. A review that only reads source reports the rendered properties as not inspected.
+
+**Applies when**
+- A change or review touches pages, layout, navigation or copy.
+- The product renders at more than one size or theme.
+- A review is summarised as covering an interface.
+
+**Ask**
+- Was the interface rendered, and at which widths, themes and states?
+- Were sibling pages compared side by side?
+- Which rendered properties does this review report as not inspected?
+
 ## Parameterize, Do Not Enumerate
 If two units of code differ only in a constant, they are one unit with an unextracted parameter. Naming the constant in the identifier moves it out of the type system and into the namespace, where the count grows as the product of the value sets rather than their sum, nothing forces the copies to stay consistent, and the next value needs an author instead of a caller.
 
@@ -545,6 +572,7 @@ Each authoritative fact should have one explicitly designated ownership and upda
 - A responsible owner can be assigned at an appropriate domain boundary.
 - One fact arrives in several spellings, such as case, encoding, or path form, and is normalized to one canonical form at the boundary so that two copies can be compared for equality.
 - Text shown to readers, such as documentation, help text, a message, or a footnote, restates facts another party owns, such as a vendor's documented behavior.
+- An interface's current view (page, item, mode) is written both by its address (URL, route) and by state set at runtime.
 
 **Ask**
 - Which component owns the canonical meaning and writes?
@@ -552,6 +580,7 @@ Each authoritative fact should have one explicitly designated ownership and upda
 - What happens when the authority is unavailable?
 - Is there exactly one writer for this fact, and what stops a second component from writing it?
 - Where text shown to readers restates another party's facts, does it name the source, and does it say anything as that source's fact which the source does not say?
+- Is the view derived from the address alone, or does code also set it? Does code re-parse the address the router has already matched?
 
 ## Unix Composability
 Prefer small, focused mechanisms connected through stable, inspectable interfaces so that complex behavior can be assembled rather than embedded in one indivisible program.
