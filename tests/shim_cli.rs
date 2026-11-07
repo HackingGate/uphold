@@ -6684,6 +6684,20 @@ fn a_relative_dash_c_is_read_from_where_git_was_typed() {
         assert!(!said.contains("example-token"), "{said}");
     }
 
+    // git names a `--config-env` key back when its variable is unset. An
+    // earlier key that is a prefix of it must not cut it before it is matched.
+    let prefixed = run(&[
+        "git",
+        "-c",
+        "http.https=x",
+        "--config-env=http.https://user:example-token@example.test/.extraHeader=UPHOLD_UNSET_FOR_TEST",
+        "status",
+    ]);
+    assert_eq!(code(&prefixed), 2, "{}", stderr(&prefixed));
+    let said = stderr(&prefixed);
+    assert!(said.contains("missing environment variable"), "{said}");
+    assert!(!said.contains("example-token"), "{said}");
+
     // A malformed key git names back in its own stderr, which the refusal
     // carries: the key is taken out of that too.
     let malformed = run(&["git", "-c", "no section example-token=x", "status"]);

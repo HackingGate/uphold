@@ -2319,6 +2319,10 @@ impl Shim {
                         || "was ended by a signal".to_owned(),
                         |code| format!("exited {code}"),
                     );
+                    // Longest first: a key that is a prefix of a later one
+                    // (`http.https` before `http.https://user:token@...`)
+                    // would otherwise cut the later one before it is matched.
+                    hidden.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
                     let mut said = String::from_utf8_lossy(&output.stderr).into_owned();
                     for secret in hidden.iter().filter(|secret| !secret.is_empty()) {
                         said = said.replace(secret, "<redacted>");
