@@ -6609,6 +6609,52 @@ fn an_alias_for_a_push_is_expanded_before_the_match_list_is_read() {
 }
 
 #[test]
+fn a_relative_dash_c_is_read_from_where_git_was_typed() {
+    // The alias probe ran at the policy root, so `git -C ../sibling status`
+    // typed in a subdirectory asked git about a `../sibling` beside the root,
+    // which does not exist -- and a command git runs was refused (#509).
+    let root = workspace(GIT_REFS_POLICY);
+    plumbing_git(&root);
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::create_dir_all(root.join("sibling")).unwrap();
+    let path = format!(
+        "{}:{}",
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_uphold"))
+            .arg("shim")
+            .args(args)
+            .current_dir(root.join("sub"))
+            .env("PATH", &path)
+            .env_remove("UPHOLD_ALLOW")
+            .env_remove("UPHOLD_SHIM_INNER")
+            .output()
+            .unwrap()
+    };
+
+    let output = run(&["git", "-C", "../sibling", "status"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("git ran: -C ../sibling status"),
+        "{}",
+        stdout(&output)
+    );
+
+    // A `-C` that names nothing is the operator's to fix, so git's own words
+    // and exit code are what the refusal carries.
+    let missing = run(&["git", "-C", "no-such-dir", "status"]);
+    assert_eq!(code(&missing), 2, "{}", stderr(&missing));
+    let said = stderr(&missing);
+    assert!(
+        said.contains("`git -C no-such-dir config --get alias.status` exited 128"),
+        "{said}"
+    );
+    assert!(said.contains("cannot change to 'no-such-dir'"), "{said}");
+}
+
+#[test]
 fn a_git_alias_chain_is_read_with_its_globals_and_overrides() {
     let root = workspace(GIT_REFS_POLICY);
     plumbing_git(&root);

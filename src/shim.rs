@@ -2254,12 +2254,20 @@ impl Shim {
         // question, and the twenty-nine thousand `gh alias list` processes
         // `HANDED` describes were this line.
         let mut command = inner_tool(&real);
+        let globals = argv.get(..index).unwrap_or_default();
         if self.command == "git" {
             // Resolve every link in the same repository and configuration as
             // the invocation, including globals retained by earlier links.
-            command.args(argv.get(..index).unwrap_or_default());
+            // Run where the invocation was typed, not at the policy root: a
+            // relative `-C`, `--git-dir` or `--work-tree` among those globals
+            // names a path from the caller's directory, and git resolves it
+            // from its own. At the root, `git -C ../sibling status` typed in a
+            // subdirectory asked about a directory that does not exist.
+            command.args(globals);
+        } else {
+            command.current_dir(root);
         }
-        command.args(query).current_dir(root);
+        command.args(query);
         if self.command == "git" {
             command.arg(format!("alias.{word}"));
         }
@@ -2276,12 +2284,28 @@ impl Shim {
             return match output.status.code() {
                 Some(0) => Ok(Some(one(text.trim().to_owned()))),
                 Some(1) => Ok(None),
-                _ => Err(Fatal::new(format!(
-                    "{}: `git config --get alias.{word}` failed, so whether {word:?} is an alias \
-                     for a subcommand this shim checks could not be established. Nothing was \
-                     published",
-                    self.command
-                ))),
+                status => {
+                    let mut asked = vec!["git".to_owned()];
+                    asked.extend(globals.iter().cloned());
+                    asked.extend(["config".into(), "--get".into(), format!("alias.{word}")]);
+                    let exited = status.map_or_else(
+                        || "was ended by a signal".to_owned(),
+                        |code| format!("exited {code}"),
+                    );
+                    let said = String::from_utf8_lossy(&output.stderr);
+                    let said = said.trim();
+                    let said = if said.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {said}")
+                    };
+                    Err(Fatal::new(format!(
+                        "git: `{}` {exited}{said}\n\nSo whether {word:?} is an alias for a \
+                         subcommand this shim checks could not be established. Nothing was \
+                         published",
+                        shell_words::join(&asked)
+                    )))
+                }
             };
         }
         if !output.status.success() {
