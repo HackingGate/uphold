@@ -6652,6 +6652,51 @@ fn a_relative_dash_c_is_read_from_where_git_was_typed() {
         "{said}"
     );
     assert!(said.contains("cannot change to 'no-such-dir'"), "{said}");
+
+    // A `-c` value can be a credential, and the refusal lands in CI logs: the
+    // key is named, the value is not.
+    let secret = run(&[
+        "git",
+        "-c",
+        "http.extraHeader=Authorization: Bearer example-token",
+        "-C",
+        "no-such-dir",
+        "status",
+    ]);
+    assert_eq!(code(&secret), 2, "{}", stderr(&secret));
+    let said = stderr(&secret);
+    assert!(said.contains("http.extraHeader=<redacted>"), "{said}");
+    assert!(!said.contains("example-token"), "{said}");
+}
+
+#[test]
+fn a_push_through_a_relative_dash_c_checks_the_repository_it_publishes_from() {
+    // With no refspec git pushes the current branch of the repository `-C`
+    // selects. Read at the policy root, the root's `main` was checked while
+    // the sibling's `fix/acme-outage` went out.
+    let root = workspace(GIT_REFS_POLICY);
+    forwarding_git(&root);
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::create_dir_all(root.join("other")).unwrap();
+    support::git(
+        &root.join("other"),
+        &["init", "-q", "-b", "fix/acme-outage"],
+    );
+    let path = format!(
+        "{}:{}",
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["shim", "git", "-C", "../other", "push", "origin"])
+        .current_dir(root.join("sub"))
+        .env("PATH", &path)
+        .env_remove("UPHOLD_ALLOW")
+        .env_remove("UPHOLD_SHIM_INNER")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("git ran:"), "{}", stdout(&output));
 }
 
 #[test]

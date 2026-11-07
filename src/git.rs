@@ -46,6 +46,15 @@ pub(crate) fn try_run(root: &Path, args: &[&str]) -> Result<Option<String>> {
     answer(&mut command, args)
 }
 
+/// The same, in the repository a shimmed invocation selects: from the caller's
+/// directory, with the invocation's leading globals (`-C`, `--git-dir`, `-c`)
+/// in front, so a relative path in them means what it means to git.
+pub(crate) fn try_run_as_typed(globals: &[String], args: &[&str]) -> Result<Option<String>> {
+    let mut command = crate::shim::inner_tool("git");
+    command.args(globals);
+    answer(&mut command, args)
+}
+
 /// The same, in a repository OTHER than the one the hook fired in.
 ///
 /// Found by a push from a linked worktree. git exports `GIT_DIR` to a hook

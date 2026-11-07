@@ -2285,8 +2285,18 @@ impl Shim {
                 Some(0) => Ok(Some(one(text.trim().to_owned()))),
                 Some(1) => Ok(None),
                 status => {
+                    // A `-c` value can be a credential (`http.extraHeader`),
+                    // and this line lands in CI logs. The key says which
+                    // setting it was; git's own stderr names keys, not values.
                     let mut asked = vec!["git".to_owned()];
-                    asked.extend(globals.iter().cloned());
+                    let mut after_c = false;
+                    for global in globals {
+                        asked.push(match global.split_once('=') {
+                            Some((key, _)) if after_c => format!("{key}=<redacted>"),
+                            _ => global.clone(),
+                        });
+                        after_c = global == "-c";
+                    }
                     asked.extend(["config".into(), "--get".into(), format!("alias.{word}")]);
                     let exited = status.map_or_else(
                         || "was ended by a signal".to_owned(),
@@ -2895,7 +2905,16 @@ impl Shim {
     /// --attr-source HEAD push origin` reads `origin` as the refspec under one
     /// and the current branch under the other, and this collector used to
     /// publish the first without knowing there was a second.
-    fn collect_git_refs(&self, root: &Path, argv: &[String]) -> Result<Vec<Subject>> {
+    fn collect_git_refs(&self, argv: &[String]) -> Result<Vec<Subject>> {
+        // The refs are read from the repository the push will publish from:
+        // the one git selects from the caller's directory and the globals in
+        // front of the verb. Read at the policy root, `git -C ../other push`
+        // checked the root's HEAD while git pushed `../other`'s.
+        let globals = self
+            .scan(argv, false, 1)
+            .first
+            .and_then(|index| argv.get(..index))
+            .unwrap_or_default();
         let bare = self.scan(argv, false, usize::MAX);
         let valued = self.scan(argv, true, usize::MAX);
         let mut names = refspec_names(&bare.positional);
@@ -2931,21 +2950,24 @@ impl Shim {
             if !argv.iter().any(|argument| argument == flag) {
                 continue;
             }
-            let listed = git::try_run(root, &["for-each-ref", "--format=%(refname)", pattern])?
-                .ok_or_else(|| {
-                    Fatal::new(format!(
-                        "{}: {flag} publishes every ref under {pattern} and they could not be \
+            let listed =
+                git::try_run_as_typed(globals, &["for-each-ref", "--format=%(refname)", pattern])?
+                    .ok_or_else(|| {
+                        Fatal::new(format!(
+                            "{}: {flag} publishes every ref under {pattern} and they could not be \
                          listed, so nothing here could read the names going out. Nothing was \
                          published",
-                        self.command
-                    ))
-                })?;
+                            self.command
+                        ))
+                    })?;
             names.extend(listed.lines().filter_map(shortened).map(str::to_owned));
         }
         if names.is_empty() {
             // With no refspec, git pushes the current branch, so that is the
             // name going out even though it appears nowhere in argv.
-            if let Some(branch) = git::try_run(root, &["symbolic-ref", "--short", "HEAD"])? {
+            if let Some(branch) =
+                git::try_run_as_typed(globals, &["symbolic-ref", "--short", "HEAD"])?
+            {
                 let branch = branch.trim().to_owned();
                 if !branch.is_empty() {
                     names.push(branch);
@@ -3477,7 +3499,7 @@ impl Shim {
         match self.collect {
             Collect::Flags => {}
             Collect::GitRefs => {
-                collected.subjects = self.collect_git_refs(root, argv)?;
+                collected.subjects = self.collect_git_refs(argv)?;
                 // Never hand git an editor: a message written in one passes
                 // through commit-msg already.
                 collected.body_given = true;
