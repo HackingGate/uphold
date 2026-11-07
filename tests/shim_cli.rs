@@ -6669,6 +6669,21 @@ fn a_relative_dash_c_is_read_from_where_git_was_typed() {
         assert!(!said.contains("example-token"), "{said}");
     }
 
+    // `--config-env` names a key too, in both of git's spellings.
+    let key = "http.https://user:example-token@example.test/.extraHeader=HOME";
+    let attached = format!("--config-env={key}");
+    for form in [
+        vec!["git", attached.as_str(), "-C", "no-such-dir", "status"],
+        vec!["git", "--config-env", key, "-C", "no-such-dir", "status"],
+    ] {
+        let secret = run(&form);
+        assert_eq!(code(&secret), 2, "{form:?}: {}", stderr(&secret));
+        let said = stderr(&secret);
+        assert!(said.contains("redacted"), "{said}");
+        assert!(said.contains("exited 128"), "{said}");
+        assert!(!said.contains("example-token"), "{said}");
+    }
+
     // A malformed key git names back in its own stderr, which the refusal
     // carries: the key is taken out of that too.
     let malformed = run(&["git", "-c", "no section example-token=x", "status"]);

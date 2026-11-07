@@ -2292,18 +2292,27 @@ impl Shim {
                     // git's stderr echoes a malformed key (`key does not
                     // contain a section: <key>`), so each setting, and its key
                     // alone, is taken out of that too.
+                    // `--config-env <key>=<variable>` names a key the same
+                    // way, in either spelling.
                     let mut asked = vec!["git".to_owned()];
                     let mut hidden: Vec<&str> = Vec::new();
-                    let mut after_c = false;
+                    let mut after_setting = false;
                     for global in globals {
-                        if after_c {
-                            asked.push("<redacted>".to_owned());
-                            hidden.push(global);
-                            hidden.extend(global.split_once('=').map(|(key, _)| key));
+                        let attached = global.strip_prefix("--config-env=");
+                        if let Some(setting) =
+                            attached.or_else(|| after_setting.then_some(global.as_str()))
+                        {
+                            asked.push(if attached.is_some() {
+                                "--config-env=<redacted>".to_owned()
+                            } else {
+                                "<redacted>".to_owned()
+                            });
+                            hidden.push(setting);
+                            hidden.extend(setting.split_once('=').map(|(key, _)| key));
                         } else {
                             asked.push(global.clone());
                         }
-                        after_c = global == "-c";
+                        after_setting = global == "-c" || global == "--config-env";
                     }
                     asked.extend(["config".into(), "--get".into(), format!("alias.{word}")]);
                     let exited = status.map_or_else(
