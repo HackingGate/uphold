@@ -2289,14 +2289,20 @@ impl Shim {
                     // (`http.extraHeader`) or in its key
                     // (`http.https://user:token@host/.extraHeader`), and this
                     // line lands in CI logs, so neither half is printed.
+                    // git's stderr echoes a malformed key (`key does not
+                    // contain a section: <key>`), so each setting, and its key
+                    // alone, is taken out of that too.
                     let mut asked = vec!["git".to_owned()];
+                    let mut hidden: Vec<&str> = Vec::new();
                     let mut after_c = false;
                     for global in globals {
-                        asked.push(if after_c {
-                            "<redacted>".to_owned()
+                        if after_c {
+                            asked.push("<redacted>".to_owned());
+                            hidden.push(global);
+                            hidden.extend(global.split_once('=').map(|(key, _)| key));
                         } else {
-                            global.clone()
-                        });
+                            asked.push(global.clone());
+                        }
                         after_c = global == "-c";
                     }
                     asked.extend(["config".into(), "--get".into(), format!("alias.{word}")]);
@@ -2304,7 +2310,10 @@ impl Shim {
                         || "was ended by a signal".to_owned(),
                         |code| format!("exited {code}"),
                     );
-                    let said = String::from_utf8_lossy(&output.stderr);
+                    let mut said = String::from_utf8_lossy(&output.stderr).into_owned();
+                    for secret in hidden.iter().filter(|secret| !secret.is_empty()) {
+                        said = said.replace(secret, "<redacted>");
+                    }
                     let said = said.trim();
                     let said = if said.is_empty() {
                         String::new()

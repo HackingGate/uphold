@@ -6668,6 +6668,14 @@ fn a_relative_dash_c_is_read_from_where_git_was_typed() {
         );
         assert!(!said.contains("example-token"), "{said}");
     }
+
+    // A malformed key git names back in its own stderr, which the refusal
+    // carries: the key is taken out of that too.
+    let malformed = run(&["git", "-c", "no section example-token=x", "status"]);
+    assert_eq!(code(&malformed), 2, "{}", stderr(&malformed));
+    let said = stderr(&malformed);
+    assert!(said.contains("does not contain a section"), "{said}");
+    assert!(!said.contains("example-token"), "{said}");
 }
 
 #[test]
