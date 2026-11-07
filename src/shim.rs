@@ -2285,15 +2285,17 @@ impl Shim {
                 Some(0) => Ok(Some(one(text.trim().to_owned()))),
                 Some(1) => Ok(None),
                 status => {
-                    // A `-c` value can be a credential (`http.extraHeader`),
-                    // and this line lands in CI logs. The key says which
-                    // setting it was; git's own stderr names keys, not values.
+                    // A `-c` setting can carry a credential in its value
+                    // (`http.extraHeader`) or in its key
+                    // (`http.https://user:token@host/.extraHeader`), and this
+                    // line lands in CI logs, so neither half is printed.
                     let mut asked = vec!["git".to_owned()];
                     let mut after_c = false;
                     for global in globals {
-                        asked.push(match global.split_once('=') {
-                            Some((key, _)) if after_c => format!("{key}=<redacted>"),
-                            _ => global.clone(),
+                        asked.push(if after_c {
+                            "<redacted>".to_owned()
+                        } else {
+                            global.clone()
                         });
                         after_c = global == "-c";
                     }

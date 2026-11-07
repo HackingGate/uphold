@@ -6653,20 +6653,21 @@ fn a_relative_dash_c_is_read_from_where_git_was_typed() {
     );
     assert!(said.contains("cannot change to 'no-such-dir'"), "{said}");
 
-    // A `-c` value can be a credential, and the refusal lands in CI logs: the
-    // key is named, the value is not.
-    let secret = run(&[
-        "git",
-        "-c",
+    // A `-c` setting can carry a credential in its value or in its key, and
+    // the refusal lands in CI logs: neither half is printed.
+    for setting in [
         "http.extraHeader=Authorization: Bearer example-token",
-        "-C",
-        "no-such-dir",
-        "status",
-    ]);
-    assert_eq!(code(&secret), 2, "{}", stderr(&secret));
-    let said = stderr(&secret);
-    assert!(said.contains("http.extraHeader=<redacted>"), "{said}");
-    assert!(!said.contains("example-token"), "{said}");
+        "http.https://user:example-token@example.test/.extraHeader=x",
+    ] {
+        let secret = run(&["git", "-c", setting, "-C", "no-such-dir", "status"]);
+        assert_eq!(code(&secret), 2, "{setting}: {}", stderr(&secret));
+        let said = stderr(&secret);
+        assert!(
+            said.contains("`git -c '<redacted>' -C no-such-dir"),
+            "{said}"
+        );
+        assert!(!said.contains("example-token"), "{said}");
+    }
 }
 
 #[test]
