@@ -6609,6 +6609,143 @@ fn an_alias_for_a_push_is_expanded_before_the_match_list_is_read() {
 }
 
 #[test]
+fn a_relative_dash_c_is_read_from_where_git_was_typed() {
+    // The alias probe ran at the policy root, so `git -C ../sibling status`
+    // typed in a subdirectory asked git about a `../sibling` beside the root,
+    // which does not exist -- and a command git runs was refused (#509).
+    let root = workspace(GIT_REFS_POLICY);
+    plumbing_git(&root);
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::create_dir_all(root.join("sibling")).unwrap();
+    let path = format!(
+        "{}:{}",
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_uphold"))
+            .arg("shim")
+            .args(args)
+            .current_dir(root.join("sub"))
+            .env("PATH", &path)
+            .env_remove("UPHOLD_ALLOW")
+            .env_remove("UPHOLD_SHIM_INNER")
+            .output()
+            .unwrap()
+    };
+
+    let output = run(&["git", "-C", "../sibling", "status"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("git ran: -C ../sibling status"),
+        "{}",
+        stdout(&output)
+    );
+
+    // A `-C` that names nothing is the operator's to fix, so git's own words
+    // and exit code are what the refusal carries.
+    let missing = run(&["git", "-C", "no-such-dir", "status"]);
+    assert_eq!(code(&missing), 2, "{}", stderr(&missing));
+    let said = stderr(&missing);
+    assert!(
+        said.contains("`git -C no-such-dir config --get alias.status` exited 128"),
+        "{said}"
+    );
+    assert!(said.contains("cannot change to 'no-such-dir'"), "{said}");
+
+    // A `-c` setting can carry a credential in its value or in its key, and
+    // the refusal lands in CI logs: neither half is printed.
+    for setting in [
+        "http.extraHeader=Authorization: Bearer example-token",
+        "http.https://user:example-token@example.test/.extraHeader=x",
+    ] {
+        let secret = run(&["git", "-c", setting, "-C", "no-such-dir", "status"]);
+        assert_eq!(code(&secret), 2, "{setting}: {}", stderr(&secret));
+        let said = stderr(&secret);
+        assert!(
+            said.contains("`git -c '<redacted>' -C no-such-dir"),
+            "{said}"
+        );
+        assert!(!said.contains("example-token"), "{said}");
+    }
+
+    // `--config-env` names a key too, in both of git's spellings.
+    let key = "http.https://user:example-token@example.test/.extraHeader=HOME";
+    let attached = format!("--config-env={key}");
+    for form in [
+        vec!["git", attached.as_str(), "-C", "no-such-dir", "status"],
+        vec!["git", "--config-env", key, "-C", "no-such-dir", "status"],
+    ] {
+        let secret = run(&form);
+        assert_eq!(code(&secret), 2, "{form:?}: {}", stderr(&secret));
+        let said = stderr(&secret);
+        assert!(said.contains("redacted"), "{said}");
+        assert!(said.contains("exited 128"), "{said}");
+        assert!(!said.contains("example-token"), "{said}");
+    }
+
+    // git names a `--config-env` key back when its variable is unset. An
+    // earlier key that is a prefix of it must not cut it before it is matched.
+    let setting = "http.https://user:example-token@example.test/.extraHeader=UPHOLD_UNSET_FOR_TEST";
+    let attached = format!("--config-env={setting}");
+    for form in [
+        vec!["git", "-c", "http.https=x", attached.as_str(), "status"],
+        vec![
+            "git",
+            "-c",
+            "http.https=x",
+            "--config-env",
+            setting,
+            "status",
+        ],
+    ] {
+        let prefixed = run(&form);
+        assert_eq!(code(&prefixed), 2, "{form:?}: {}", stderr(&prefixed));
+        let said = stderr(&prefixed);
+        assert!(said.contains("missing environment variable"), "{said}");
+        assert!(!said.contains("example-token"), "{said}");
+    }
+
+    // A malformed key git names back in its own stderr, which the refusal
+    // carries: the key is taken out of that too.
+    let malformed = run(&["git", "-c", "no section example-token=x", "status"]);
+    assert_eq!(code(&malformed), 2, "{}", stderr(&malformed));
+    let said = stderr(&malformed);
+    assert!(said.contains("does not contain a section"), "{said}");
+    assert!(!said.contains("example-token"), "{said}");
+}
+
+#[test]
+fn a_push_through_a_relative_dash_c_checks_the_repository_it_publishes_from() {
+    // With no refspec git pushes the current branch of the repository `-C`
+    // selects. Read at the policy root, the root's `main` was checked while
+    // the sibling's `fix/acme-outage` went out.
+    let root = workspace(GIT_REFS_POLICY);
+    forwarding_git(&root);
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::create_dir_all(root.join("other")).unwrap();
+    support::git(
+        &root.join("other"),
+        &["init", "-q", "-b", "fix/acme-outage"],
+    );
+    let path = format!(
+        "{}:{}",
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .args(["shim", "git", "-C", "../other", "push", "origin"])
+        .current_dir(root.join("sub"))
+        .env("PATH", &path)
+        .env_remove("UPHOLD_ALLOW")
+        .env_remove("UPHOLD_SHIM_INNER")
+        .output()
+        .unwrap();
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(!stdout(&output).contains("git ran:"), "{}", stdout(&output));
+}
+
+#[test]
 fn a_git_alias_chain_is_read_with_its_globals_and_overrides() {
     let root = workspace(GIT_REFS_POLICY);
     plumbing_git(&root);

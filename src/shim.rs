@@ -2254,12 +2254,20 @@ impl Shim {
         // question, and the twenty-nine thousand `gh alias list` processes
         // `HANDED` describes were this line.
         let mut command = inner_tool(&real);
+        let globals = argv.get(..index).unwrap_or_default();
         if self.command == "git" {
             // Resolve every link in the same repository and configuration as
             // the invocation, including globals retained by earlier links.
-            command.args(argv.get(..index).unwrap_or_default());
+            // Run where the invocation was typed, not at the policy root: a
+            // relative `-C`, `--git-dir` or `--work-tree` among those globals
+            // names a path from the caller's directory, and git resolves it
+            // from its own. At the root, `git -C ../sibling status` typed in a
+            // subdirectory asked about a directory that does not exist.
+            command.args(globals);
+        } else {
+            command.current_dir(root);
         }
-        command.args(query).current_dir(root);
+        command.args(query);
         if self.command == "git" {
             command.arg(format!("alias.{word}"));
         }
@@ -2276,12 +2284,62 @@ impl Shim {
             return match output.status.code() {
                 Some(0) => Ok(Some(one(text.trim().to_owned()))),
                 Some(1) => Ok(None),
-                _ => Err(Fatal::new(format!(
-                    "{}: `git config --get alias.{word}` failed, so whether {word:?} is an alias \
-                     for a subcommand this shim checks could not be established. Nothing was \
-                     published",
-                    self.command
-                ))),
+                status => {
+                    // A `-c` setting can carry a credential in its value
+                    // (`http.extraHeader`) or in its key
+                    // (`http.https://user:token@host/.extraHeader`), and this
+                    // line lands in CI logs, so neither half is printed.
+                    // git's stderr echoes a malformed key (`key does not
+                    // contain a section: <key>`), so each setting, and its key
+                    // alone, is taken out of that too.
+                    // `--config-env <key>=<variable>` names a key the same
+                    // way, in either spelling.
+                    let mut asked = vec!["git".to_owned()];
+                    let mut hidden: Vec<&str> = Vec::new();
+                    let mut after_setting = false;
+                    for global in globals {
+                        let attached = global.strip_prefix("--config-env=");
+                        if let Some(setting) =
+                            attached.or_else(|| after_setting.then_some(global.as_str()))
+                        {
+                            asked.push(if attached.is_some() {
+                                "--config-env=<redacted>".to_owned()
+                            } else {
+                                "<redacted>".to_owned()
+                            });
+                            hidden.push(setting);
+                            hidden.extend(setting.split_once('=').map(|(key, _)| key));
+                        } else {
+                            asked.push(global.clone());
+                        }
+                        after_setting = global == "-c" || global == "--config-env";
+                    }
+                    asked.extend(["config".into(), "--get".into(), format!("alias.{word}")]);
+                    let exited = status.map_or_else(
+                        || "was ended by a signal".to_owned(),
+                        |code| format!("exited {code}"),
+                    );
+                    // Longest first: a key that is a prefix of a later one
+                    // (`http.https` before `http.https://user:token@...`)
+                    // would otherwise cut the later one before it is matched.
+                    hidden.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+                    let mut said = String::from_utf8_lossy(&output.stderr).into_owned();
+                    for secret in hidden.iter().filter(|secret| !secret.is_empty()) {
+                        said = said.replace(secret, "<redacted>");
+                    }
+                    let said = said.trim();
+                    let said = if said.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {said}")
+                    };
+                    Err(Fatal::new(format!(
+                        "git: `{}` {exited}{said}\n\nSo whether {word:?} is an alias for a \
+                         subcommand this shim checks could not be established. Nothing was \
+                         published",
+                        shell_words::join(&asked)
+                    )))
+                }
             };
         }
         if !output.status.success() {
@@ -2871,7 +2929,16 @@ impl Shim {
     /// --attr-source HEAD push origin` reads `origin` as the refspec under one
     /// and the current branch under the other, and this collector used to
     /// publish the first without knowing there was a second.
-    fn collect_git_refs(&self, root: &Path, argv: &[String]) -> Result<Vec<Subject>> {
+    fn collect_git_refs(&self, argv: &[String]) -> Result<Vec<Subject>> {
+        // The refs are read from the repository the push will publish from:
+        // the one git selects from the caller's directory and the globals in
+        // front of the verb. Read at the policy root, `git -C ../other push`
+        // checked the root's HEAD while git pushed `../other`'s.
+        let globals = self
+            .scan(argv, false, 1)
+            .first
+            .and_then(|index| argv.get(..index))
+            .unwrap_or_default();
         let bare = self.scan(argv, false, usize::MAX);
         let valued = self.scan(argv, true, usize::MAX);
         let mut names = refspec_names(&bare.positional);
@@ -2907,21 +2974,24 @@ impl Shim {
             if !argv.iter().any(|argument| argument == flag) {
                 continue;
             }
-            let listed = git::try_run(root, &["for-each-ref", "--format=%(refname)", pattern])?
-                .ok_or_else(|| {
-                    Fatal::new(format!(
-                        "{}: {flag} publishes every ref under {pattern} and they could not be \
+            let listed =
+                git::try_run_as_typed(globals, &["for-each-ref", "--format=%(refname)", pattern])?
+                    .ok_or_else(|| {
+                        Fatal::new(format!(
+                            "{}: {flag} publishes every ref under {pattern} and they could not be \
                          listed, so nothing here could read the names going out. Nothing was \
                          published",
-                        self.command
-                    ))
-                })?;
+                            self.command
+                        ))
+                    })?;
             names.extend(listed.lines().filter_map(shortened).map(str::to_owned));
         }
         if names.is_empty() {
             // With no refspec, git pushes the current branch, so that is the
             // name going out even though it appears nowhere in argv.
-            if let Some(branch) = git::try_run(root, &["symbolic-ref", "--short", "HEAD"])? {
+            if let Some(branch) =
+                git::try_run_as_typed(globals, &["symbolic-ref", "--short", "HEAD"])?
+            {
                 let branch = branch.trim().to_owned();
                 if !branch.is_empty() {
                     names.push(branch);
@@ -3453,7 +3523,7 @@ impl Shim {
         match self.collect {
             Collect::Flags => {}
             Collect::GitRefs => {
-                collected.subjects = self.collect_git_refs(root, argv)?;
+                collected.subjects = self.collect_git_refs(argv)?;
                 // Never hand git an editor: a message written in one passes
                 // through commit-msg already.
                 collected.body_given = true;
