@@ -37,8 +37,8 @@
     },
     {
       "record": "end-to-end-principle",
-      "catches": "Change scripts/install_lefthook.sh to drop its sha256sum comparison of the archive against the release's checksum file and rely on curl's TLS and its exit status instead, so the archive is checked only on the network hop and never against the digest computed where it was built.",
-      "misses": "Make scripts/install_lefthook.sh print the asset name and the checksum line it matched before running `sha256sum --check --strict`, which still fails the install on a mismatch."
+      "catches": "Set `github-attestations = false` in dist-workspace.toml, on the ground that every release archive already has a `.sha256` file beside it, so a download is checked only against a digest served from the same release page it came from and never against a signature made where it was built.",
+      "misses": "Reword the comment above `github-attestations-phase` in dist-workspace.toml, leaving both attestation settings as they are."
     },
     {
       "record": "enforcement-needs-a-trigger",
