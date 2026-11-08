@@ -37,6 +37,10 @@ const STAGES: &str = "commit-msg|pre-commit|pre-merge-commit|pre-push|manual";
 /// decides; a test holds this spelling to `hook::known`.
 const HARNESSES: &str = "claude-code|codex";
 
+/// The runners `uphold probe --runner` drives, as help shows them. The probe's
+/// own runner parser decides; a test there holds this spelling to it.
+pub(crate) const PROBE_RUNNERS: &str = "prek|pre-commit|lefthook";
+
 /// What every page of help ends with: the parts of the contract no single
 /// flag owns.
 const AFTER_HELP: &str = "\
@@ -49,7 +53,7 @@ one PATH entry to add, inspect or drop. What the shim then DOES is per
 repository already: no policy where the command was typed and it execs the real
 one and says nothing.
 
-STAGE is one of commit-msg, pre-commit, pre-merge-commit, pre-push, manual.
+STAGE is the git hook a guard run stands in for; `uphold guard --help` lists them.
 `--message FILE` forwards the commit message. At pre-push the ref lines come
 from git on stdin, or from what pre-commit and prek export in their place --
 neither forwards git's stdin, so both channels are read and a push that reached
@@ -213,7 +217,8 @@ pub(crate) struct Hooks {
     /// Write the hooks git runs, as tracked files.
     #[arg(long)]
     pub(crate) install: bool,
-    /// The hook runner to write hooks for: prek or pre-commit.
+    /// The hook runner the written hooks call, in place of the one found on
+    /// PATH.
     #[arg(long, value_name = "NAME", requires = "install")]
     pub(crate) runner: Option<String>,
     /// The directory the hooks are written to.
@@ -249,8 +254,8 @@ pub(crate) struct SupplyChain {
 /// `uphold probe`.
 #[derive(Args, Debug)]
 pub(crate) struct Probe {
-    /// The hook runner to drive: prek, pre-commit or lefthook.
-    #[arg(long, value_name = "NAME")]
+    /// The hook runner to drive.
+    #[arg(long, value_name = PROBE_RUNNERS)]
     pub(crate) runner: Option<String>,
     /// One run's patience in whole seconds, overriding the file's.
     #[arg(long, value_name = "SECONDS", value_parser = timeout)]
@@ -301,8 +306,8 @@ pub(crate) struct Hook {
     after_help = "The modes that manage the links, and their options, are listed by `uphold shim --help`."
 )]
 pub(crate) struct Shim {
-    /// A mode (--install, --uninstall, --status, --path, --hook) and its
-    /// options, or the command to stand in front of and its arguments.
+    /// A mode and its options, as `uphold shim --help` lists them, or the
+    /// command to stand in front of and its arguments.
     #[arg(
         value_name = "COMMAND [ARGS...] | --MODE",
         trailing_var_arg = true,

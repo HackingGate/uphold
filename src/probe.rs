@@ -1225,6 +1225,15 @@ fn is_destination(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Every runner `uphold probe --help` names is one this parser takes, so
+    /// the help cannot offer a runner the probe refuses.
+    #[test]
+    fn the_runners_help_names_are_the_ones_the_probe_drives() {
+        for name in crate::cli::PROBE_RUNNERS.split('|') {
+            assert_eq!(Runner::named(name).unwrap().command(), name);
+        }
+    }
+
     use super::*;
 
     #[test]
