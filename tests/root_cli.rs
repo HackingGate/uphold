@@ -345,22 +345,22 @@ fn an_argument_that_is_not_text_is_exit_two_and_never_a_panic() {
 /// argv[0] decides which shim this binary is, and it is read before anything
 /// else -- so it was the first thing `std::env::args()` panicked on, in the one
 /// invocation shape this binary is installed as.
+///
+/// argv[0] is set directly rather than through a link of that name. A link is
+/// how such a name arrives in practice, but macOS's APFS refuses to create a
+/// file whose name is not UTF-8, and argv is bytes there as everywhere: the
+/// exec, not the file, is what this binary reads.
 #[test]
 fn a_link_whose_name_is_not_text_is_refused_rather_than_a_panic() {
     use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::process::CommandExt;
 
     let root = workspace();
     write_policy(&root);
-    let mut name = OsString::from_vec(b"caf\xe9".to_vec());
-    let link = {
-        let mut path = root.clone().into_os_string();
-        path.push("/");
-        path.push(&mut name);
-        PathBuf::from(path)
-    };
-    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_uphold"), &link).unwrap();
+    let name = OsString::from_vec(b"caf\xe9".to_vec());
 
-    let output = Command::new(&link)
+    let output = Command::new(env!("CARGO_BIN_EXE_uphold"))
+        .arg0(&name)
         .arg("--version")
         .current_dir(&root)
         .env_remove("UPHOLD_ALLOW")
@@ -384,6 +384,10 @@ fn a_link_whose_name_is_not_text_is_refused_rather_than_a_panic() {
 /// file opens because it kept the bytes it was given, and the proof is that the
 /// scan it drives finds the violation.
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "APFS refuses a file name that is not UTF-8, so no such policy path can exist there"
+)]
 fn a_policy_path_that_is_not_text_still_opens_the_file_it_names() {
     use std::os::unix::ffi::OsStringExt;
 
