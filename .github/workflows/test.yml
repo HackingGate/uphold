@@ -180,8 +180,11 @@ jobs:
           shared-key: stable-debug-macos
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # Every test binary, not up to the first that fails: a platform's
+      # differences surface as several unrelated failures, and a run that
+      # reports one at a time costs a run per finding.
       - name: Build and test
-        run: cargo test --locked
+        run: cargo test --locked --no-fail-fast
 
   # Coverage is collected here and nowhere else, but the floor it is held to
   # lives in scripts/coverage.sh, which the manual hook runs too -- so the number
