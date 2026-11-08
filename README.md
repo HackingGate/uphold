@@ -17,7 +17,18 @@ of them maintained by one person and the coding agents working in them.
 cargo install --git https://github.com/HackingGate/uphold --tag v1.48.0
 ```
 
-Or pin the pre-commit or lefthook manifest under [Install](#install).
+Or take a prebuilt binary, checksummed and attested, from the
+[latest release](https://github.com/HackingGate/uphold/releases/latest): Linux
+on x86_64 and aarch64 (glibc and musl), and macOS on Apple silicon and Intel
+from the first release after 1.48.0. The release's installer script picks the
+right one:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/HackingGate/uphold/releases/latest/download/uphold-installer.sh | sh
+```
+
+Windows is not supported, because the shim is a symlink on PATH. Or pin the
+pre-commit or lefthook manifest under [Install](#install).
 
 `policy/principles.toml`, inheriting one bundled set and declaring one rule:
 

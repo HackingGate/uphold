@@ -154,6 +154,38 @@ jobs:
       - name: The policy over its own tree
         run: cargo run --locked --quiet -- scan
 
+  # The release builds macOS binaries, so the tests run on macOS before a tag
+  # does: otherwise the first time this code compiled on Darwin would be the
+  # release job, after the version was already spent. One runner, arm64, the
+  # architecture most Macs now run; the Intel build shares every line of code
+  # and differs only in the target the release job names.
+  #
+  # Its own cache key: a Darwin target directory restored onto Linux, or the
+  # reverse, is a cache miss that still costs the download.
+  engine-macos:
+    needs: dedupe
+    if: needs.dedupe.outputs.passed != 'true'
+    name: scan engine (macOS)
+    # The release's arm64 runner, so the tests run where that build does.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: stable-debug-macos
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # Every test binary, not up to the first that fails: a platform's
+      # differences surface as several unrelated failures, and a run that
+      # reports one at a time costs a run per finding.
+      - name: Build and test
+        run: cargo test --locked --no-fail-fast
+
   # Coverage is collected here and nowhere else, but the floor it is held to
   # lives in scripts/coverage.sh, which the manual hook runs too -- so the number
   # that fails a push is the number a contributor can reproduce before pushing.

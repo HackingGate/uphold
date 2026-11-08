@@ -25,7 +25,11 @@ pub(crate) fn run_root() -> PathBuf {
     SWEPT.call_once(|| sweep(&all));
     let mine = all.join(std::process::id().to_string());
     drop(std::fs::create_dir_all(&mine));
-    mine
+    // Canonical, because what the binary reports is: on macOS the temporary
+    // directory sits under `/var`, a symlink to `/private/var`, and a path
+    // the tool resolved never equals the one a test built from the unresolved
+    // name. On Linux, where `/tmp` is no link, this changes nothing.
+    mine.canonicalize().unwrap_or(mine)
 }
 
 /// A fresh fixture directory, named for what it is for.

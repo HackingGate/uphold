@@ -11,16 +11,17 @@ ci = "github"
 installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
 #
-# Linux only. The two Apple triples (aarch64-apple-darwin, x86_64-apple-darwin)
-# are not here because dist refuses to cross-compile to macOS from any host
-# that is not itself macOS (`build_wrapper_for_cross` in cargo-dist's
-# src/tasks.rs returns UnsupportedCrossCompile for a Darwin target on a Linux
-# host), so a macOS artifact costs a macos-* runner job, the most expensive
-# runner class, while Actions minutes are the constraint. To add them back:
-# append the two triples to this list and run `dist generate`; dist then
-# schedules its default macos-14 and macos-15-intel jobs for them with no
-# further configuration.
-targets = ["aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
+# Linux and macOS. The macOS builds run on macOS runners, because dist refuses
+# to cross-compile to a Darwin target from a host that is not itself macOS
+# (`build_wrapper_for_cross` in cargo-dist's src/tasks.rs returns
+# UnsupportedCrossCompile). They were left out while Actions minutes were the
+# constraint. Judged again on 2026-11-08: GitHub's billing documentation says
+# standard GitHub-hosted runners, macOS included, are free and unlimited in
+# public repositories, which this is, so a macOS job costs latency and one of
+# five concurrent macOS slots, not minutes. Windows is not a target: the shim is
+# a PATH symlink to this binary under each command's name (`std::os::unix`),
+# and the binary does not build there.
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Where to host releases
@@ -74,6 +75,20 @@ merge-tasks = true
 # `unpinned-images` finding on release.yml's `container:` line because of that.
 # An entry that adds a container has to name the image by digest
 # (`image@sha256:...`) here, since that ignore would hide an unpinned one.
+# The macOS runners, named rather than left to dist's defaults: dist 0.33.0
+# picks macos-14 for Apple silicon, which GitHub's list of standard runners for
+# public repositories no longer carries. The newest image of each architecture
+# on that list, checked 2026-11-08, is macos-26 (arm64, also `macos-latest`) and
+# macos-26-intel. A newer runner costs no compatibility: which macOS versions
+# the binary runs on is set by rustc's deployment target (macOS 11 on arm64,
+# 10.12 on Intel), not by the OS it was built on. Named rather than `-latest` so
+# a move to the next image is a reviewed change here, not a silent one.
+[dist.github-custom-runners.aarch64-apple-darwin]
+runner = "macos-26"
+
+[dist.github-custom-runners.x86_64-apple-darwin]
+runner = "macos-26-intel"
+
 [dist.github-custom-runners.aarch64-unknown-linux-gnu]
 runner = "ubuntu-latest"
 host = "x86_64-unknown-linux-gnu"
