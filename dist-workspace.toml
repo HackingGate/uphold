@@ -77,14 +77,17 @@ merge-tasks = true
 # (`image@sha256:...`) here, since that ignore would hide an unpinned one.
 # The macOS runners, named rather than left to dist's defaults: dist 0.33.0
 # picks macos-14 for Apple silicon, which GitHub's list of standard runners for
-# public repositories no longer carries (checked 2026-11-08), while macos-15
-# (arm64) and macos-15-intel are both on it. Each builds natively for its own
-# architecture.
+# public repositories no longer carries. The newest image of each architecture
+# on that list, checked 2026-11-08, is macos-26 (arm64, also `macos-latest`) and
+# macos-26-intel. A newer runner costs no compatibility: which macOS versions
+# the binary runs on is set by rustc's deployment target (macOS 11 on arm64,
+# 10.12 on Intel), not by the OS it was built on. Named rather than `-latest` so
+# a move to the next image is a reviewed change here, not a silent one.
 [dist.github-custom-runners.aarch64-apple-darwin]
-runner = "macos-15"
+runner = "macos-26"
 
 [dist.github-custom-runners.x86_64-apple-darwin]
-runner = "macos-15-intel"
+runner = "macos-26-intel"
 
 [dist.github-custom-runners.aarch64-unknown-linux-gnu]
 runner = "ubuntu-latest"

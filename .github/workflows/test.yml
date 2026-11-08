@@ -166,7 +166,8 @@ jobs:
     needs: dedupe
     if: needs.dedupe.outputs.passed != 'true'
     name: scan engine (macOS)
-    runs-on: macos-15
+    # The release's arm64 runner, so the tests run where that build does.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
         with:
