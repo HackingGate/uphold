@@ -29,6 +29,14 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::error::{Fatal, Result};
 
+/// The stages `guard --stage` accepts, as help shows them. `guard::Stage::parse`
+/// decides; a test holds this spelling to it.
+const STAGES: &str = "commit-msg|pre-commit|pre-merge-commit|pre-push|manual";
+
+/// The harnesses `uphold hook` accepts, as help shows them. `hook::run`
+/// decides; a test holds this spelling to `hook::known`.
+const HARNESSES: &str = "claude-code|codex";
+
 /// What every page of help ends with: the parts of the contract no single
 /// flag owns.
 const AFTER_HELP: &str = "\
@@ -55,7 +63,7 @@ Exit codes:
      or a command line this binary could not read)
 
 UPHOLD_ALLOW=<id>,<id> bypasses named guards for one invocation.
-`--junit FILE` writes what a `guard --stage` run decided as `JUnit` XML.
+`--junit FILE` writes what a `guard --stage` run decided as JUnit XML.
 UPHOLD_JUNIT=/abs/FILE is the same request from outside a hook's argv; the flag wins.
 An existing directory instead gets one file per invocation. `guard --text` writes
 the same document; the shim and `uphold hook` take only a directory.";
@@ -126,7 +134,7 @@ pub(crate) struct Scan {
 #[derive(Args, Debug)]
 pub(crate) struct Guard {
     /// The git hook stage whose guards run. Required unless `--text` is given.
-    #[arg(long, value_name = "STAGE")]
+    #[arg(long, value_name = STAGES)]
     pub(crate) stage: Option<String>,
     /// The commit message file git hands the commit-msg hook.
     #[arg(long, value_name = "FILE")]
@@ -264,7 +272,7 @@ pub(crate) struct Rules {
 pub(crate) struct Hook {
     /// The agent harness whose event arrives on stdin, such as claude-code or
     /// codex.
-    #[arg(value_name = "HARNESS")]
+    #[arg(value_name = HARNESSES)]
     pub(crate) harness: String,
     /// Write what this run decided as `JUnit` XML, one file per invocation, into
     /// this existing directory.
@@ -382,7 +390,7 @@ pub(crate) fn help() -> String {
 mod tests {
     use clap::CommandFactory;
 
-    use super::{Cli, ShimModes};
+    use super::{Cli, HARNESSES, STAGES, ShimModes};
 
     /// clap's own consistency check over every declaration: a conflict or a
     /// requirement naming an argument that does not exist, two arguments with
@@ -392,5 +400,21 @@ mod tests {
     fn the_declarations_are_consistent() {
         Cli::command().debug_assert();
         ShimModes::command().debug_assert();
+    }
+
+    /// Help names the stages; each one it names is one `guard --stage` takes,
+    /// so the list in help cannot drift from the parser that decides.
+    #[test]
+    fn the_stages_help_names_are_the_stages_guard_takes() {
+        for name in STAGES.split('|') {
+            assert_eq!(crate::guard::Stage::parse(name).unwrap().as_str(), name);
+        }
+        assert_eq!(STAGES.split('|').count(), 5);
+    }
+
+    /// The same for the harnesses `uphold hook` takes.
+    #[test]
+    fn the_harnesses_help_names_are_the_ones_hook_takes() {
+        assert_eq!(HARNESSES, crate::hook::known());
     }
 }
