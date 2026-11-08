@@ -51,9 +51,12 @@ base="https://github.com/evilmartians/lefthook/releases/download/v${version}"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
-curl --fail --silent --show-error --location \
+# Retried: GitHub's release downloads answer 504 often enough on hosted
+# runners to fail a job three attempts in a row, and a 504 is curl's own
+# example of a transient error. The checksum below still decides what is kept.
+curl --fail --silent --show-error --location --retry 5 --retry-delay 5 \
     --output "$workdir/$asset" "$base/$asset"
-curl --fail --silent --show-error --location \
+curl --fail --silent --show-error --location --retry 5 --retry-delay 5 \
     --output "$workdir/lefthook_checksums.txt" "$base/lefthook_checksums.txt"
 
 # The checksum file covers every platform's asset; only the line for the one
