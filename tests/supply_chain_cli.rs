@@ -2598,5 +2598,8 @@ fn an_npm_git_dependency_under_another_owner_is_refused_by_name() {
         said.contains("example-kit is a git source under github.com/someone-else"),
         "{said}"
     );
-    assert!(!said.contains("404"), "{said}");
+    // The tree's path is taken out first: it carries this process's id, and
+    // an id such as 24040 holds "404" while no remote was asked anything.
+    let without_root = said.replace(&root.display().to_string(), "<root>");
+    assert!(!without_root.contains("404"), "{said}");
 }
