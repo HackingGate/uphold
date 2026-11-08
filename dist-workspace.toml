@@ -29,6 +29,18 @@ hosting = "github"
 install-updater = false
 # Attach a GitHub build provenance attestation to every artifact
 github-attestations = true
+# In the host job, over `artifacts/*`, and not in the build job. The build-job
+# step dist 0.33.0 generates is `subject-path: "target/distrib/*${{
+# join(matrix.targets, ', ') }}*"`, and with `merge-tasks = true` that one job
+# holds all four targets: actions/attest splits the joined string on commas into
+# patterns of which none names a tarball. Every release from 2026-09-19, when
+# merge-tasks was turned on, through v1.48.0 shipped with no attestation on any
+# archive, while the release notes told users to run `gh attestation verify`.
+# The host job sees every file
+# the release publishes -- archives, installer, schema -- in one directory, so
+# the subject is one glob with no join. Checked against cargo-dist main on
+# 2026-11-08: the build-job template still joins with ", ".
+github-attestations-phase = "host"
 # No run on pull requests: a `dist plan` on every pull request is Actions
 # minutes spent on a question the tag push answers. The tag push is the whole
 # trigger list; `dispatch-releases` is not set because dist takes it as a
