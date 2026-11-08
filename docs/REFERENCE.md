@@ -4,6 +4,7 @@ Everything below lives in one file, `policy/principles.toml`, in one flat id
 namespace — that is what lets a claim in
 [`policy/upheld.toml`](../policy/upheld.toml) name a rule by id alone.
 
+- [The command line: what a caller may rely on](#the-command-line-what-a-caller-may-rely-on)
 - [Rule shape](#rule-shape)
 - [`uphold scan` — the content policy](#uphold-scan--the-content-policy)
 - [`uphold guard` — the guards](#uphold-guard--the-guards)
@@ -23,6 +24,27 @@ namespace — that is what lets a claim in
   - [Controls: can a record produce a finding at all?](#controls-can-a-record-produce-a-finding-at-all)
   - [Ruling controls](#ruling-controls)
 - [Design rulings: `[decide]`](#design-rulings-decide)
+
+## The command line: what a caller may rely on
+
+Hooks, CI jobs and scripts drive `uphold`, and some of what it prints is meant
+for them and some is not.
+
+**A contract**, changed only in a release whose notes say so:
+
+- the exit codes: `0` passed, `1` one or more policy violations, `2` the check
+  could not be made, a command line this binary could not read included;
+- the `policy check error: ` lead on every exit-2 message on stderr;
+- what `--json` prints on stdout, and the `--junit` documents;
+- the subcommand and flag names, and the argv a shimmed command receives.
+
+**Not a contract**: the wording of help and of usage errors. These are written
+for a person, and clap generates them. Since the release after 1.48.0, usage
+errors read `Usage: uphold <command> ...` rather than `usage:`, a flag missing
+its value is named by clap, `uphold <command> --help` and `uphold help
+<command>` print that command's help with exit `0`, and a mistyped subcommand
+is answered with the nearest one. Match on the exit code and the lead, not on
+the sentence.
 
 ## Rule shape
 

@@ -651,7 +651,7 @@ fn a_missing_stage_is_an_error_and_not_a_default() {
     let output = guard(&root, &[]);
     assert_eq!(code(&output), 2);
     assert!(
-        stderr(&output).contains("needs --stage"),
+        stderr(&output).contains("required arguments were not provided:\n  --stage"),
         "{}",
         stderr(&output)
     );

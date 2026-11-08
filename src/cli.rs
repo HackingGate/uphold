@@ -133,9 +133,11 @@ pub(crate) struct Scan {
 /// `uphold guard`.
 #[derive(Args, Debug)]
 pub(crate) struct Guard {
-    /// The git hook stage whose guards run. Required unless `--text` is given.
-    #[arg(long, value_name = STAGES)]
-    pub(crate) stage: Option<String>,
+    /// The git hook stage whose guards run. Required unless `--text` is
+    /// given: a guard reads a different artifact at every stage, so a default
+    /// would answer a question nobody asked.
+    #[arg(long, value_name = STAGES, value_parser = stage, required_unless_present = "text")]
+    pub(crate) stage: Option<crate::guard::Stage>,
     /// The commit message file git hands the commit-msg hook.
     #[arg(long, value_name = "FILE")]
     pub(crate) message: Option<PathBuf>,
@@ -243,7 +245,7 @@ pub(crate) struct Probe {
     #[arg(long, value_name = "NAME")]
     pub(crate) runner: Option<String>,
     /// One run's patience in whole seconds, overriding the file's.
-    #[arg(long, value_name = "SECONDS")]
+    #[arg(long, value_name = "SECONDS", value_parser = timeout)]
     pub(crate) timeout: Option<u64>,
 }
 
@@ -339,6 +341,41 @@ pub(crate) struct ShimModes {
     pub(crate) names: Vec<String>,
 }
 
+/// `--stage`, read by the one parser that decides what a stage is.
+fn stage(value: &str) -> std::result::Result<crate::guard::Stage, String> {
+    crate::guard::Stage::parse(value).map_err(|error| error.to_string())
+}
+
+/// `--timeout`: whole seconds, and not zero, which is the file's rule too.
+fn timeout(value: &str) -> std::result::Result<u64, String> {
+    match value.parse::<u64>() {
+        Ok(0) => Err(String::from(
+            "0 is a run under which no hook can ever be measured",
+        )),
+        Ok(seconds) => Ok(seconds),
+        Err(_) => Err(format!("{value:?} is not a whole number of seconds")),
+    }
+}
+
+/// The mode words `uphold shim` takes as its first word, read off
+/// [`ShimModes`]'s `mode` group, so the dispatch and the parser cannot name
+/// different modes.
+pub(crate) fn shim_modes() -> Vec<String> {
+    use clap::CommandFactory;
+    let command = ShimModes::command();
+    let members: Vec<&clap::Id> = command
+        .get_groups()
+        .filter(|group| group.get_id() == "mode")
+        .flat_map(clap::ArgGroup::get_args)
+        .collect();
+    command
+        .get_arguments()
+        .filter(|argument| members.contains(&argument.get_id()))
+        .filter_map(clap::Arg::get_long)
+        .map(|long| format!("--{long}"))
+        .collect()
+}
+
 /// clap's answer, once it is this binary's: arguments to run with, or a
 /// request (help, version) that has already been answered.
 pub(crate) enum Parsed<T> {
@@ -390,7 +427,7 @@ pub(crate) fn help() -> String {
 mod tests {
     use clap::CommandFactory;
 
-    use super::{Cli, HARNESSES, STAGES, ShimModes};
+    use super::{Cli, HARNESSES, STAGES, ShimModes, shim_modes};
 
     /// clap's own consistency check over every declaration: a conflict or a
     /// requirement naming an argument that does not exist, two arguments with
@@ -410,6 +447,15 @@ mod tests {
             assert_eq!(crate::guard::Stage::parse(name).unwrap().as_str(), name);
         }
         assert_eq!(STAGES.split('|').count(), 5);
+    }
+
+    /// The modes are read off the declaration, in its order.
+    #[test]
+    fn the_shim_modes_are_the_declared_group() {
+        assert_eq!(
+            shim_modes(),
+            ["--install", "--uninstall", "--status", "--path", "--hook"]
+        );
     }
 
     /// The same for the harnesses `uphold hook` takes.

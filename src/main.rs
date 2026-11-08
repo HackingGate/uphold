@@ -401,14 +401,8 @@ fn supply_chain_command(arguments: cli::SupplyChain) -> Result<Exit> {
 /// `uphold probe`.
 fn probe_command(arguments: &cli::Probe) -> Result<Exit> {
     // One run's answer, overriding whatever the file declares -- which is how
-    // a suite proves a timeout is a FAILURE rather than a silent pass. Zero is
-    // refused for the reason the file refuses it: no hook can be measured
-    // under it.
-    if arguments.timeout == Some(0) {
-        return Err(Fatal::new(
-            "--timeout 0 is a run under which no hook can ever be measured",
-        ));
-    }
+    // a suite proves a timeout is a FAILURE rather than a silent pass. The
+    // parser refuses zero, for the reason the file refuses it.
     let working = std::env::current_dir()?;
     let (root, _) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
     probe::run(&root, arguments.runner.as_deref(), arguments.timeout)
@@ -564,7 +558,6 @@ fn guard_command(arguments: cli::Guard) -> Result<Exit> {
         text: text_source,
         junit: junit_flag,
     } = arguments;
-    let stage = stage.as_deref().map(guard::Stage::parse).transpose()?;
 
     // Judged before a policy is read, so a value that names no usable file is
     // exit 2 whatever else is wrong with the run.
@@ -643,13 +636,9 @@ fn guard_command(arguments: cli::Guard) -> Result<Exit> {
         return Ok(exit);
     }
 
-    // No default. A guard reads a different artifact at every stage, so guessing
-    // one would make it answer a question nobody asked -- and answer it green.
-    let stage = stage.ok_or_else(|| {
-        Fatal::new(
-            "guard needs --stage, or --text\n\nFor more information, try 'uphold guard --help'.",
-        )
-    })?;
+    // The parser requires `--stage` wherever `--text` is absent; this is the
+    // same rule read back, not a second one.
+    let stage = stage.ok_or_else(|| Fatal::new("guard needs --stage, or --text"))?;
 
     // git feeds a pre-push hook its ref lines on stdin. pre-commit and prek
     // consume that stdin themselves and re-publish it as environment, so this
@@ -952,10 +941,10 @@ fn shim_or_links(rest: &[OsString]) -> Result<Exit> {
         return shim_command(text_of(name)?, shimmed, shim::Invoked::AsEditor);
     }
     let word = text_of(first)?;
+    let modes = cli::shim_modes();
     match word {
-        "--install" | "--uninstall" | "--status" | "--path" | "--hook" | "--help" | "-h" => {
-            links_command(rest)
-        }
+        "--help" | "-h" => links_command(rest),
+        mode if modes.iter().any(|known| known == mode) => links_command(rest),
         // No command is spelt with a leading dash, so an option here is a
         // mistyped mode rather than a command to stand in front of. Read as a
         // command it becomes `no shim declares the command "--dir"`, which names
@@ -963,8 +952,9 @@ fn shim_or_links(rest: &[OsString]) -> Result<Exit> {
         // what they got wrong.
         other if other.starts_with('-') => Err(Fatal::new(format!(
             "{other:?} is not one of the shim modes, and no command is called that. The mode \
-             comes first:\n\n  uphold shim --install|--status|--uninstall|--hook|--path \
-             [--dir PATH]\n\nFor more information, try 'uphold shim --help'."
+             comes first:\n\n  uphold shim {} [--dir PATH]\n\nFor more information, try \
+             'uphold shim --help'.",
+            modes.join("|")
         ))),
         _ => shim_command(word, after, shim::Invoked::ByName),
     }
@@ -989,19 +979,9 @@ fn links_command(rest: &[OsString]) -> Result<Exit> {
     // The rest read the directory and take no names: what is linked there is
     // what is there, and a repository standing somewhere else has no say in it.
     if !arguments.names.is_empty() {
-        let mode = if arguments.uninstall {
-            "--uninstall"
-        } else if arguments.status {
-            "--status"
-        } else if arguments.path {
-            "--path"
-        } else {
-            "--hook"
-        };
-        return Err(Fatal::new(format!(
-            "uphold shim {mode} takes no command names -- it reads the directory. Names are \
-             for --install"
-        )));
+        return Err(Fatal::new(
+            "only --install takes command names; the other modes read the links directory",
+        ));
     }
     if let Some(shell) = &arguments.hook {
         return install::hook(shell, &directory);
