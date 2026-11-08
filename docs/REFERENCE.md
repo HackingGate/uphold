@@ -3290,19 +3290,25 @@ which reads `running-user-email`. The second refuses the running user's own
 address. It does not refuse every email-shaped string: an SSH remote, a package
 pin and an image digest look like addresses and identify nobody. A refusal and
 its `--junit` record name the rule and where the address was configured, never
-the address or the line it was on. Each string the call carries is also read
-through up to four layers of percent-encoding (RFC 3986 section 2.1), so
-`owner%40example.test` and `owner%2540example.test` are found.
+the address or the line it was on. Each string the call carries, except a
+title or commit subject, is also read through up to four layers of
+percent-encoding (RFC 3986 section 2.1), so `owner%40example.test` and
+`owner%2540example.test` are found.
 
-A repository changes either end in policy:
+A repository changes either end in policy. Declaring a rule that reads
+`running-user-email` replaces the fallback, and like every `forbidden_literals`
+rule it needs `files.*` and is then a content rule `uphold scan` runs over
+those files too: scope it to where the address must never appear, since a
+maintainer field or a `SECURITY.md` contact carries it on purpose.
 
 ```toml
-# A published security contact is the user's address on purpose.
+# The address in tool calls, in the docs tree, and nowhere else in the tree;
+# a shared role address the user also sends as is exempt.
 [rule.no-running-user-email]
 message = "Leave the address out."
 forbidden_literals = "running-user-email"
 ignore_literals = ["security@example.test"]
-files.include = ["."]
+files.include = ["docs"]
 
 # Every address, whoever's, in a tool call.
 [rule.no-address-in-tool-calls]
