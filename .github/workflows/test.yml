@@ -330,18 +330,15 @@ jobs:
         with:
           go-version: '>=1.26'
 
-      # The published binary rather than `go install`, which spent about a
-      # minute and a half compiling lefthook from source on every run to
-      # produce the same program. The download is checked against the
-      # checksum file the release ships, so what lands on PATH is still
-      # established rather than assumed.
-      #
-      # Into a temporary directory, not the workspace: the hooks this job then
-      # runs walk the tree, and a downloaded archive sitting in it is a file
-      # the content policy would be asked about.
+      # The package lefthook's maintainers publish to PyPI, installed by the uv
+      # set up above: a prebuilt binary, with no compile (`go install` spent
+      # about a minute and a half on one) and no installer of our own. uv checks
+      # each file against the sha256 PyPI lists for it. It also leaves this job
+      # independent of GitHub's release downloads, which answered 504 for the
+      # whole of a morning on 2026-11-08.
       - if: matrix.tool == 'lefthook'
         name: lefthook ${{ env.LEFTHOOK_VERSION }}
-        run: ./scripts/install_lefthook.sh
+        run: uv tool install "lefthook==${LEFTHOOK_VERSION}"
 
       # actionlint stays a `go install`, and unpinned. Nothing watches a version
       # written in a workflow file -- Dependabot reads no such pin and
@@ -441,8 +438,9 @@ jobs:
       - if: matrix.tool == 'pre-commit' || matrix.tool == 'prek'
         run: pipx install "${{ matrix.tool }}"
 
+      # lefthook from PyPI too, so all three managers arrive the same way.
       - if: matrix.tool == 'lefthook'
-        run: ./scripts/install_lefthook.sh
+        run: pipx install "lefthook==${LEFTHOOK_VERSION}"
 
       - if: matrix.tool == 'lefthook'
         run: |

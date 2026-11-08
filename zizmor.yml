@@ -63,13 +63,13 @@ rules:
   template-injection:
     ignore:
       - release.yml:79:91
-      - release.yml:134:18
-      - release.yml:144:15
-      - release.yml:148:26
-      - release.yml:148:98
-      - release.yml:205:26
-      - release.yml:255:25
-      - release.yml:286:34
+      - release.yml:130:18
+      - release.yml:140:15
+      - release.yml:144:26
+      - release.yml:144:98
+      - release.yml:197:26
+      - release.yml:251:25
+      - release.yml:287:34
 
   # `container: ${{ matrix.container && matrix.container.image || null }}`.
   # zizmor cannot see the matrix, which dist builds at run time from
