@@ -2170,7 +2170,7 @@ fn staged_with_a_range_flag_is_a_usage_error() {
         let output = staged(&root, &tools, extra);
         let said = text(&output);
         assert_eq!(code(&output), 2, "{extra:?}: {said}");
-        assert!(said.contains("--staged]"), "{said}");
+        assert!(said.contains("'--staged' cannot be used with"), "{said}");
         assert!(journal(&root).is_empty(), "{}", journal(&root));
     }
 }
