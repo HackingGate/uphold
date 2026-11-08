@@ -107,6 +107,9 @@ fn hook_as(
         .env("XDG_CONFIG_HOME", "/home/example-user/.config")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        // And no repository above the fixture: a scratch directory under a
+        // checkout would hand its `user.email` to every call here.
+        .env("GIT_CEILING_DIRECTORIES", root.parent().unwrap())
         .envs(environment.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -232,6 +235,29 @@ fn email_shaped_text_and_publication_guards_do_not_stop_a_shell_call() {
         assert!(!record.contains("<failure"), "{record}");
         assert!(record.contains("prevent-ai-author"), "{record}");
         assert!(record.contains("no-running-user-email"), "{record}");
+    }
+}
+
+/// Where git cannot run, the variables still name the address, and a call
+/// without it passes rather than exiting 2: a container with no git is
+/// ordinary, and a hook that blocked every shell call there would be removed.
+#[test]
+fn without_git_the_variables_are_still_searched() {
+    let root = workspace("hook-user-email-no-git", None);
+    let empty = root.join("bin");
+    std::fs::create_dir(&empty).unwrap();
+    let path = empty.to_str().unwrap();
+    for (query, refused) in [(ADDRESS, true), ("ordinary request", false)] {
+        let output = hook_as(
+            &root,
+            "claude-code",
+            &call("WebSearch", &serde_json::json!({"query": query})),
+            &[],
+            &[("PATH", path), ("GIT_AUTHOR_EMAIL", ADDRESS)],
+        );
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert_eq!(denied(&output), refused, "{query}: {}", stdout(&output));
+        assert!(stderr(&output).contains("running-user-email source read only"));
     }
 }
 

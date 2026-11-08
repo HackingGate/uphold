@@ -361,9 +361,21 @@ fn running_default_route() -> Vec<Needle> {
 /// no needles, which is an answer -- nothing here is known to be anyone's --
 /// and git failing to run at all is the could-not-look it is.
 fn running_user_email(root: &Path) -> Answer {
-    let configured = crate::git::try_run(root, &["config", "--get-all", "user.email"])
-        .map_err(|error| error.to_string())?
-        .unwrap_or_default();
+    // A machine with no git is an ordinary container, and a source that made
+    // every shell call there exit 2 would get the matcher deleted. The
+    // variables are still read, and stderr says what was not, as the
+    // default-route source does when `ip` cannot run.
+    let configured = match crate::git::try_run(root, &["config", "--get-all", "user.email"]) {
+        Ok(answer) => answer.unwrap_or_default(),
+        Err(error) => {
+            eprintln!(
+                "uphold: {error}, so the running-user-email source read only \
+                 GIT_AUTHOR_EMAIL, GIT_COMMITTER_EMAIL and EMAIL, and no address git is \
+                 configured with was searched for."
+            );
+            String::new()
+        }
+    };
     let mut needles: Vec<Needle> = Vec::new();
     let mut seen = BTreeSet::new();
     let found = configured
@@ -376,7 +388,7 @@ fn running_user_email(root: &Path) -> Answer {
         );
     for (from, value) in found {
         let value = value.trim();
-        if !value.contains('@') {
+        if !is_address(value) {
             continue;
         }
         for spelling in [value.to_owned(), value.to_lowercase()] {
@@ -391,6 +403,23 @@ fn running_user_email(root: &Path) -> Answer {
         }
     }
     Ok(needles)
+}
+
+/// Whether a configured value is an address worth searching for: one `@`
+/// with a local part before it and a dotted domain after it (RFC 5321 section
+/// 4.1.2's `Mailbox`, loosely), and no space. `EMAIL=@` or a bare name is a
+/// misconfiguration, and as a needle it would refuse `react@18` under a
+/// report that withholds what matched.
+fn is_address(value: &str) -> bool {
+    let Some((local, domain)) = value.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !domain.contains('@')
+        && !value.contains(char::is_whitespace)
+        && domain.split('.').filter(|label| !label.is_empty()).count() >= 2
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
 }
 
 /// Run a command and read one needle per line of its stdout.
@@ -552,6 +581,26 @@ pub(crate) fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_value_shaped_like_an_address_is_searched_for() {
+        for value in ["owner@example.test", "o.w+n@sub.example.test"] {
+            assert!(is_address(value), "{value}");
+        }
+        for value in [
+            "@",
+            "owner",
+            "owner@",
+            "@example.test",
+            "react@18",
+            "a@b@c.d",
+            "o w@x.y",
+            "o@.x",
+            "o@x.",
+        ] {
+            assert!(!is_address(value), "{value}");
+        }
+    }
 
     #[test]
     fn an_address_says_which_machine_unless_it_is_loopback_link_local_or_multicast() {

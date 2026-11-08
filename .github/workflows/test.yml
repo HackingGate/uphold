@@ -215,7 +215,7 @@ jobs:
     needs: dedupe
     if: needs.dedupe.outputs.passed != 'true'
     name: kani proofs
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
