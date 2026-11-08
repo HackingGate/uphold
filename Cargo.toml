@@ -56,6 +56,12 @@ linkify = "0.11"
 # agrees with a forge's rendering only on the cases its author met. No default
 # features: the command-line tool and SIMD are not needed.
 pulldown-cmark = { version = "0.13", default-features = false }
+# The command line. Help per subcommand, `uphold help`, a missing value named
+# with its flag, and a usage error that ends with where help is: every one of
+# those was a case the hand-written argv loops this replaced got wrong. No
+# default features, so no colour (hook logs read stderr as plain text) and no
+# terminal-width probe; `derive` declares the subcommands as types.
+clap = { version = "4.6", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
 # The policy file is read into typed structs, so an unknown or misspelled field
 # is refused by the deserializer rather than ignored.
 serde = { version = "1", features = ["derive"] }

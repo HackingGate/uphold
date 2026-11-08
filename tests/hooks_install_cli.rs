@@ -688,5 +688,9 @@ fn adopt_and_check_together_are_a_usage_error() {
     let stub = stub_runner("prek");
     let output = install(&root, &["--adopt", "--check"], &stub);
     assert_eq!(code(&output), 2, "{}", text(&output));
-    assert!(text(&output).contains("usage:"), "{}", text(&output));
+    assert!(
+        text(&output).contains("Usage: uphold hooks"),
+        "{}",
+        text(&output)
+    );
 }

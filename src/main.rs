@@ -75,6 +75,7 @@ mod anchors;
 mod audit;
 mod catalog;
 mod check;
+mod cli;
 mod commands;
 mod comments;
 mod config;
@@ -113,75 +114,6 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Exit, Fatal, Result, verdict};
 
-const USAGE: &str = "\
-usage:
-  uphold scan [--policy PATH]        run the content policy over this repository
-  uphold scan --text [FILE|-]        run the host-identity rules over text
-  uphold guard --stage STAGE [--junit FILE]
-                                     run the guards that fire at STAGE
-  uphold guard --text [FILE|-]       run the text-capable guards over text
-               [--junit FILE|DIR]
-  uphold schema                      print the JSON Schema of principles.toml
-  uphold check [--json] [--probe]    reconcile claims; optionally measure hook behavior
-  uphold check --base <dir>          also refuse a claim the base checkout <dir> enforced and this tree no longer does
-  uphold check --coverage            which rules run here and carry no principle
-  uphold audit --for-publication     what a private->public flip would republish
-  uphold init --owner OWNER          write a first policy, claims and hook config
-              --visibility public|private|internal [--lefthook]
-  uphold hooks --identity DIR...     do these repositories declare the same hooks
-  uphold hooks --install             write the hooks git runs, as tracked files
-               [--adopt | --check]   take over a hand-written copy; or only report
-  uphold supply-chain                origin, advisories, workflow security,
-                                     git pins and committed secrets over the
-                                     pushed range -- five scanners and a
-                                     git-pin check, one verdict
-  uphold supply-chain --all          the same, over every manifest and commit
-  uphold supply-chain --base REV     the same, over what REV..HEAD changed
-  uphold supply-chain --staged       gitleaks alone, over the staged diff
-  uphold probe [--runner NAME]       can each declared hook actually refuse
-               [--timeout SECONDS]   one run's patience, over the file's
-  uphold rules --set NAME [--json]   what a bundled rule set refuses, rule by rule
-  uphold rules --sets --json         every bundled set, field for field, so two
-                                     versions of this binary can be diffed
-  uphold rules --effective [--json]  every rule this repository resolves to, and
-                                     the git hooks each one fires at
-  uphold hook claude-code|codex      judge a pending tool call or a turn's end, read on stdin
-              [--junit DIR]
-  uphold shim <command> [args...]     check what a command would publish, then run it
-  uphold shim --install [COMMAND...]  link this binary under each command's name
-  uphold shim --status                what is linked, and whether PATH reaches it
-  uphold shim --uninstall             take back the links this tool made
-  uphold shim --hook bash|zsh|fish    those links on PATH only inside a policy tree
-  uphold shim --path                  the PATH a shell should have, standing here
-  uphold --version
-
-Invoked under a command's own name -- a link called `gh` on PATH ahead of the
-real one -- the binary runs that command's shim directly. That is what a
-multicall binary is for: argv[0] decides, and there is nothing to install but a
-link. `--install` makes those links in one directory (`~/.local/uphold/shims` by
-default, `--dir` names another) so the whole seam is one PATH entry to add,
-inspect or drop. What the shim then DOES is per repository already: no policy
-where the command was typed and it execs the real one and says nothing.
-
-STAGE is one of commit-msg, pre-commit, pre-merge-commit, pre-push, manual.
-`--message FILE` forwards the commit message. At pre-push the ref lines come
-from git on stdin, or from what pre-commit and prek export in their place --
-neither forwards git's stdin, so both channels are read and a push that reached
-neither is refused rather than guessed at. Under lefthook the pre-push job needs
-`use_stdin: true`.
-
-exit codes:
-  0  every check passed
-  1  one or more policy violations
-  2  the check could not be made (bad policy, missing source, unreadable file)
-
-UPHOLD_ALLOW=<id>,<id> bypasses named guards for one invocation.
-`--junit FILE` writes what a `guard --stage` run decided as JUnit XML.
-UPHOLD_JUNIT=/abs/FILE is the same request from outside a hook's argv; the flag wins.
-An existing directory instead gets one file per invocation. `guard --text` writes
-the same document; the shim and `uphold hook` take only a directory.
-";
-
 /// The policy file, newest name first.
 ///
 /// `rg-policy.toml` is still read because a repository's policy file is not
@@ -207,29 +139,11 @@ fn is_repository_root(directory: &Path) -> bool {
 /// The root and not somewhere under it: a policy written into a subdirectory
 /// is found only from there, and one written above the repository belongs to
 /// whatever encloses it.
-fn init_command(rest: &[OsString]) -> Result<Exit> {
-    let usage = || {
-        Fatal::new(format!(
-            "usage: uphold init --owner OWNER --visibility public|private|internal \
-             [--lefthook]\n\n{USAGE}"
-        ))
-    };
-    let mut owner: Option<String> = None;
-    let mut visibility: Option<String> = None;
-    let mut runner = init::Runner::PreCommit;
-    let mut words = rest.iter();
-    while let Some(word) = words.next() {
-        match text_of(word)? {
-            "--owner" => owner = Some(text_of(words.next().ok_or_else(usage)?)?.to_owned()),
-            "--visibility" => {
-                visibility = Some(text_of(words.next().ok_or_else(usage)?)?.to_owned());
-            }
-            "--lefthook" => runner = init::Runner::Lefthook,
-            _ => return Err(usage()),
-        }
-    }
-    let (Some(owner), Some(visibility)) = (owner, visibility) else {
-        return Err(usage());
+fn init_command(arguments: &cli::Init) -> Result<Exit> {
+    let runner = if arguments.lefthook {
+        init::Runner::Lefthook
+    } else {
+        init::Runner::PreCommit
     };
     let root = std::env::current_dir()?;
     if !is_repository_root(&root) {
@@ -239,7 +153,7 @@ fn init_command(rest: &[OsString]) -> Result<Exit> {
             root.display()
         )));
     }
-    init::run(&root, &owner, &visibility, runner)
+    init::run(&root, &arguments.owner, &arguments.visibility, runner)
 }
 
 /// Walk up from the working directory until a policy file appears, stopping at
@@ -358,251 +272,159 @@ fn run() -> Result<Exit> {
         return shim_command(text_of(name)?, &arguments, shim::Invoked::AsTheCommand);
     }
 
-    let Some((first, rest)) = arguments.split_first() else {
-        print!("{USAGE}");
+    let parsed =
+        cli::parse::<cli::Cli>(std::iter::once(OsString::from("uphold")).chain(arguments))?;
+    let cli::Parsed::Run(parsed) = parsed else {
         return Ok(Exit::Clean);
     };
-
-    match text_of(first)? {
-        // The url `package.repository` holds, for the OSCAL export's property
-        // namespace. Asked of the binary because the binary is where that value
-        // is compiled in; a second copy read off `Cargo.toml` is a copy that
-        // drifts, and it can only be read in a checkout of this repository.
-        "--upstream" => {
-            println!("{}", env!("CARGO_PKG_REPOSITORY"));
-            Ok(Exit::Clean)
-        }
-        "--version" | "-V" => {
-            println!("uphold {}", env!("CARGO_PKG_VERSION"));
-            Ok(Exit::Clean)
-        }
-        "--help" | "-h" => {
-            print!("{USAGE}");
-            Ok(Exit::Clean)
-        }
-        "init" => init_command(rest),
-        "scan" => scan_command(rest),
-        "guard" => guard_command(rest),
-        "audit" => audit_command(rest),
-        "schema" => match rest {
-            [] => {
-                print!("{}", schema::document()?);
-                Ok(Exit::Clean)
-            }
-            _ => Err(Fatal::new(format!("usage: uphold schema\n\n{USAGE}"))),
-        },
-        "check" => check_arguments(rest),
-        "hooks" => match rest {
-            [flag, tail @ ..] if flag == "--install" => {
-                let mut runner: Option<&OsString> = None;
-                let mut directory = hooks::DEFAULT_DIRECTORY;
-                let mut mode = hooks::Mode::Write;
-                let mut index = 0;
-                let usage = || {
-                    Fatal::new(format!(
-                        "usage: uphold hooks --install [--runner prek|pre-commit] \
-                         [--dir DIR] [--adopt | --check]\n\n{USAGE}"
-                    ))
-                };
-                while let Some(word) = tail.get(index) {
-                    match text_of(word)? {
-                        "--runner" => {
-                            index += 1;
-                            runner = Some(tail.get(index).ok_or_else(usage)?);
-                        }
-                        "--dir" => {
-                            index += 1;
-                            directory = text_of(tail.get(index).ok_or_else(usage)?)?;
-                        }
-                        // One or the other: a run that both adopts and
-                        // promises to write nothing cannot keep both.
-                        "--adopt" if mode == hooks::Mode::Write => mode = hooks::Mode::Adopt,
-                        "--check" if mode == hooks::Mode::Write => mode = hooks::Mode::Check,
-                        _ => return Err(usage()),
-                    }
-                    index += 1;
-                }
-                let runner = runner.map(|name| text_of(name)).transpose()?;
-                let working = std::env::current_dir()?;
-                let (root, _) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
-                hooks::install(&root, runner, directory, mode)
-            }
-            [flag, paths @ ..] if flag == "--identity" && !paths.is_empty() => {
-                let mut directories = Vec::new();
-                for path in paths {
-                    directories.push(PathBuf::from(path));
-                }
-                let working = std::env::current_dir()?;
-                // The waivers belong to the repository the operator is standing
-                // in, not to any repository being compared: a fleet-wide
-                // exemption written inside one of the repositories it exempts
-                // is a repository excusing itself.
-                let root = discover(&working).map_or(working, |(root, _)| root);
-                hooks::identity(&root, &directories)
-            }
-            _ => Err(Fatal::new(format!(
-                "usage: uphold hooks --identity DIR [DIR...]\n\n{USAGE}"
-            ))),
-        },
-        "supply-chain" => {
-            let usage = || {
-                Fatal::new(format!(
-                    "usage: uphold supply-chain [--all | --base REV | --staged]\n\n{USAGE}"
-                ))
-            };
-            let mut whole = false;
-            let mut staged = false;
-            let mut base: Option<String> = None;
-            let mut index = 0;
-            while let Some(flag) = rest.get(index) {
-                match text_of(flag)? {
-                    "--all" => whole = true,
-                    "--staged" => staged = true,
-                    "--base" => {
-                        index += 1;
-                        base = Some(text_of(rest.get(index).ok_or_else(usage)?)?.to_owned());
-                    }
-                    _ => return Err(usage()),
-                }
-                index += 1;
-            }
-            // The staged diff is a different subject, not a narrower range:
-            // combined with a range it would have to mean one of them, and a
-            // flag silently ignored is a scan of something nobody named.
-            if staged && (whole || base.is_some()) {
-                return Err(usage());
-            }
-            let working = std::env::current_dir()?;
-            // The root, not the policy: the scanners read manifests and
-            // workflows, and a superproject that only tracks submodules is
-            // still where its own workflows live.
-            let (root, policy) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
-            // Loaded for two facts: whether it inherits the set that asks for
-            // gitleaks, and who owns this repository, which decides the
-            // first-party git dependencies. A
-            // policy that will not load is exit 2 here as it is
-            // everywhere else: which sections apply cannot be known without it.
-            let loaded = config::load(&root, &policy)?;
-            let secrets = loaded
-                .inherited_sets
-                .iter()
-                .any(|set| set == supply::SECRETS_SET);
-            if staged {
-                return supply::run_staged(&root, secrets);
-            }
-            let scope = if whole {
-                supply::Scope::Whole
-            } else if let Some(base) = base {
-                supply::scope_for_ranges(&root, &[(base, String::from("HEAD"))])?
-            } else {
-                // The same reader the pre-push guard uses, and the same third
-                // answer: a run that cannot see what is being pushed has not
-                // established anything about it, and scanning the working tree
-                // instead would report on a range nobody asked about.
-                let push = runner::push(&root, None, None)?;
-                if push.source == runner::Source::Absent {
-                    // The two ways this is reached by mistake, named: the
-                    // range id pinned at a stage with no push, and a CI step
-                    // that meant the sweep.
-                    return Err(Fatal::new(
-                        "no push to scan: this was not run from a pre-push hook, and no range \
-                         was named. Pass --base REV to scan what one range changed, or --all \
-                         to scan every manifest in the tree. As a hook, `uphold-supply-chain` \
-                         belongs at pre-push; at manual, in CI or on a schedule the sweep is \
-                         `uphold-supply-chain-all`",
-                    ));
-                }
-                supply::scope_for_push(&root, &push.refs)?
-            };
-            supply::run(&root, &scope, secrets, &loaded)
-        }
-        "probe" => {
-            let usage = || {
-                Fatal::new(format!(
-                    "usage: uphold probe [--runner prek|pre-commit|lefthook] \
-                     [--timeout SECONDS]\n\n{USAGE}"
-                ))
-            };
-            let mut runner: Option<&str> = None;
-            let mut timeout: Option<u64> = None;
-            let mut index = 0;
-            while let Some(flag) = rest.get(index) {
-                match text_of(flag)? {
-                    "--runner" => {
-                        index += 1;
-                        runner = Some(text_of(rest.get(index).ok_or_else(usage)?)?);
-                    }
-                    // One run's answer, overriding whatever the file declares
-                    // -- which is how a suite proves a timeout is a FAILURE
-                    // rather than a silent pass. Zero is refused for the
-                    // reason the file refuses it: no hook can be measured
-                    // under it.
-                    "--timeout" => {
-                        index += 1;
-                        let value = text_of(rest.get(index).ok_or_else(usage)?)?;
-                        let seconds: u64 = value.parse().map_err(|_| {
-                            Fatal::new(format!("--timeout takes whole seconds, not {value:?}"))
-                        })?;
-                        if seconds == 0 {
-                            return Err(Fatal::new(
-                                "--timeout 0 is a run under which no hook can ever be measured",
-                            ));
-                        }
-                        timeout = Some(seconds);
-                    }
-                    _ => return Err(usage()),
-                }
-                index += 1;
-            }
-            let working = std::env::current_dir()?;
-            let (root, _) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
-            probe::run(&root, runner, timeout)
-        }
-        "rules" => match rest {
-            [flag, name] if flag == "--set" => rules_command(text_of(name)?),
-            [flag, name, format] if flag == "--set" && format == "--json" => {
-                set_json_command(Some(text_of(name)?))
-            }
-            [flag, format] if flag == "--sets" && format == "--json" => set_json_command(None),
-            [flag] if flag == "--effective" => effective_rules_command(false),
-            [flag, format] if flag == "--effective" && format == "--json" => {
-                effective_rules_command(true)
-            }
-            _ => Err(Fatal::new(format!(
-                "usage: uphold rules --set NAME [--json] | uphold rules --sets --json | \
-                 uphold rules --effective [--json]\n\n{USAGE}"
-            ))),
-        },
-        "hook" => match hook_arguments(rest)? {
-            (Some(harness), junit_flag) => {
-                // Before the harness is looked up or the event read, as every
-                // seam judges it: a value that cannot be honoured is exit 2 while
-                // nothing has been decided. A directory only, since a harness
-                // calls this once per publishing call and one file would keep
-                // only the last.
-                let evidence = junit::directory_requested(junit_flag, "uphold hook")?;
-                let working = std::env::current_dir()?;
-                // Not `ok_or_else(no_policy_here)`, which is what every other
-                // seam here does. A tool call is made from wherever the session
-                // was started, and that is frequently a workspace superproject,
-                // a scratch directory, or a checkout with no policy of its own
-                // -- so could-not-look is the ORDINARY case at this seam rather
-                // than the edge, and refusing on it would block routine work
-                // everywhere and get the hook switched off within a day. What
-                // still runs without a policy, and what does not, is
-                // `hook::run`'s to do and to report.
-                hook::run(text_of(harness)?, discover(&working).as_ref(), evidence)
-            }
-            (None, _) => Err(Fatal::new(format!(
-                "usage: uphold hook {} [--junit DIR]\n\n{USAGE}",
-                hook::known()
-            ))),
-        },
-        "shim" => shim_or_links(rest),
-        other => Err(Fatal::new(format!(
-            "unknown subcommand {other:?}\n\n{USAGE}"
-        ))),
+    // The url `package.repository` holds, for the OSCAL export's property
+    // namespace. Asked of the binary because the binary is where that value
+    // is compiled in; a second copy read off `Cargo.toml` is a copy that
+    // drifts, and it can only be read in a checkout of this repository.
+    if parsed.upstream {
+        println!("{}", env!("CARGO_PKG_REPOSITORY"));
+        return Ok(Exit::Clean);
     }
+    let Some(command) = parsed.command else {
+        print!("{}", cli::help());
+        return Ok(Exit::Clean);
+    };
+    match command {
+        cli::Command::Init(given) => init_command(&given),
+        cli::Command::Scan(given) => scan_command(given),
+        cli::Command::Guard(given) => guard_command(given),
+        cli::Command::Audit(_) => audit_command(),
+        cli::Command::Schema => {
+            print!("{}", schema::document()?);
+            Ok(Exit::Clean)
+        }
+        cli::Command::Check(given) => check_command(
+            given.coverage,
+            given.json,
+            given.probe,
+            given.base.as_deref(),
+        ),
+        cli::Command::Hooks(given) => hooks_command(&given),
+        cli::Command::SupplyChain(given) => supply_chain_command(given),
+        cli::Command::Probe(given) => probe_command(&given),
+        cli::Command::Rules(given) => match given {
+            cli::Rules {
+                set: Some(name),
+                json,
+                ..
+            } => {
+                if json {
+                    set_json_command(Some(&name))
+                } else {
+                    rules_command(&name)
+                }
+            }
+            cli::Rules { sets: true, .. } => set_json_command(None),
+            cli::Rules { json, .. } => effective_rules_command(json),
+        },
+        cli::Command::Hook(given) => hook_command(&given),
+        cli::Command::Shim(given) => shim_or_links(&given.argv),
+    }
+}
+
+/// `uphold hooks --install` or `uphold hooks --identity DIR...`.
+fn hooks_command(arguments: &cli::Hooks) -> Result<Exit> {
+    let working = std::env::current_dir()?;
+    if arguments.install {
+        // One or the other: a run that both adopts and promises to write
+        // nothing cannot keep both, which the parser already refused.
+        let mode = if arguments.adopt {
+            hooks::Mode::Adopt
+        } else if arguments.check {
+            hooks::Mode::Check
+        } else {
+            hooks::Mode::Write
+        };
+        let directory = arguments.dir.as_deref().unwrap_or(hooks::DEFAULT_DIRECTORY);
+        let (root, _) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
+        return hooks::install(&root, arguments.runner.as_deref(), directory, mode);
+    }
+    // The waivers belong to the repository the operator is standing in, not
+    // to any repository being compared: a fleet-wide exemption written inside
+    // one of the repositories it exempts is a repository excusing itself.
+    let root = discover(&working).map_or(working, |(root, _)| root);
+    hooks::identity(&root, &arguments.identity)
+}
+
+/// `uphold supply-chain`, over the pushed range, a named range, the whole
+/// tree, or the staged diff.
+fn supply_chain_command(arguments: cli::SupplyChain) -> Result<Exit> {
+    let working = std::env::current_dir()?;
+    // The root, not the policy: the scanners read manifests and workflows, and
+    // a superproject that only tracks submodules is still where its own
+    // workflows live.
+    let (root, policy) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
+    // Loaded for two facts: whether it inherits the set that asks for
+    // gitleaks, and who owns this repository, which decides the first-party
+    // git dependencies. A policy that will not load is exit 2 here as it is
+    // everywhere else: which sections apply cannot be known without it.
+    let loaded = config::load(&root, &policy)?;
+    let secrets = loaded
+        .inherited_sets
+        .iter()
+        .any(|set| set == supply::SECRETS_SET);
+    if arguments.staged {
+        return supply::run_staged(&root, secrets);
+    }
+    let scope = if arguments.all {
+        supply::Scope::Whole
+    } else if let Some(base) = arguments.base {
+        supply::scope_for_ranges(&root, &[(base, String::from("HEAD"))])?
+    } else {
+        // The same reader the pre-push guard uses, and the same third answer:
+        // a run that cannot see what is being pushed has not established
+        // anything about it, and scanning the working tree instead would
+        // report on a range nobody asked about.
+        let push = runner::push(&root, None, None)?;
+        if push.source == runner::Source::Absent {
+            // The two ways this is reached by mistake, named: the range id
+            // pinned at a stage with no push, and a CI step that meant the
+            // sweep.
+            return Err(Fatal::new(
+                "no push to scan: this was not run from a pre-push hook, and no range \
+                 was named. Pass --base REV to scan what one range changed, or --all \
+                 to scan every manifest in the tree. As a hook, `uphold-supply-chain` \
+                 belongs at pre-push; at manual, in CI or on a schedule the sweep is \
+                 `uphold-supply-chain-all`",
+            ));
+        }
+        supply::scope_for_push(&root, &push.refs)?
+    };
+    supply::run(&root, &scope, secrets, &loaded)
+}
+
+/// `uphold probe`.
+fn probe_command(arguments: &cli::Probe) -> Result<Exit> {
+    // One run's answer, overriding whatever the file declares -- which is how
+    // a suite proves a timeout is a FAILURE rather than a silent pass. The
+    // parser refuses zero, for the reason the file refuses it.
+    let working = std::env::current_dir()?;
+    let (root, _) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
+    probe::run(&root, arguments.runner.as_deref(), arguments.timeout)
+}
+
+/// `uphold hook <harness>`.
+fn hook_command(arguments: &cli::Hook) -> Result<Exit> {
+    // Before the harness is looked up or the event read, as every seam judges
+    // it: a value that cannot be honoured is exit 2 while nothing has been
+    // decided. A directory only, since a harness calls this once per
+    // publishing call and one file would keep only the last.
+    let evidence = junit::directory_requested(arguments.junit.as_deref(), "uphold hook")?;
+    let working = std::env::current_dir()?;
+    // Not `ok_or_else(no_policy_here)`, which is what every other seam here
+    // does. A tool call is made from wherever the session was started, and
+    // that is frequently a workspace superproject, a scratch directory, or a
+    // checkout with no policy of its own -- so could-not-look is the ORDINARY
+    // case at this seam rather than the edge, and refusing on it would block
+    // routine work everywhere and get the hook switched off within a day.
+    // What still runs without a policy, and what does not, is `hook::run`'s to
+    // do and to report.
+    hook::run(&arguments.harness, discover(&working).as_ref(), evidence)
 }
 
 /// Reconcile the declaration against the rules this repository resolves to.
@@ -610,40 +432,7 @@ fn run() -> Result<Exit> {
 /// The loader runs first and its answer is what the reconcile reads, which is
 /// the whole point of moving this in: `uphold_check.py` re-implemented
 /// `config::load` to answer the same question and was free to disagree with it.
-/// `uphold check [--json] [--probe] [--base <dir>] | --coverage`.
-///
-/// Each flag at most once, in any order. `--coverage` is a different report and
-/// takes nothing else.
-fn check_arguments(rest: &[OsString]) -> Result<Exit> {
-    let usage = || {
-        Fatal::new(format!(
-            "usage: uphold check [--json] [--probe] [--base <dir>] | --coverage\n\n{USAGE}"
-        ))
-    };
-    if let [flag] = rest
-        && flag == "--coverage"
-    {
-        return check_command(true, false, false, None);
-    }
-    let (mut json, mut probe) = (false, false);
-    let mut base: Option<PathBuf> = None;
-    let mut index = 0;
-    while let Some(argument) = rest.get(index) {
-        match text_of(argument)? {
-            "--json" if !json => json = true,
-            "--probe" if !probe => probe = true,
-            "--base" if base.is_none() => {
-                index += 1;
-                // A path keeps its bytes, as `scan --policy` does.
-                base = Some(PathBuf::from(rest.get(index).ok_or_else(usage)?));
-            }
-            _ => return Err(usage()),
-        }
-        index += 1;
-    }
-    check_command(false, json, probe, base.as_deref())
-}
-
+/// `--coverage` is a different report and takes nothing else.
 fn check_command(coverage: bool, json: bool, probe: bool, base: Option<&Path>) -> Result<Exit> {
     let working = std::env::current_dir()?;
     let (root, policy_path) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
@@ -681,35 +470,11 @@ fn check_command(coverage: bool, json: bool, probe: bool, base: Option<&Path>) -
     )
 }
 
-fn scan_command(arguments: &[OsString]) -> Result<Exit> {
-    let mut explicit_policy: Option<PathBuf> = None;
-    let mut text_source: Option<String> = None;
-    let mut index = 0;
-    while let Some(argument) = arguments.get(index) {
-        match text_of(argument)? {
-            "--policy" => {
-                index += 1;
-                let value = arguments
-                    .get(index)
-                    .ok_or_else(|| Fatal::new("--policy needs a path"))?;
-                // A path keeps its bytes. Only the flag NAME above had to be
-                // text, and a policy file whose name is not UTF-8 opens exactly
-                // as well as one whose name is.
-                explicit_policy = Some(PathBuf::from(value));
-            }
-            "--text" => {
-                index += 1;
-                // This one is a path or `-`, and what reads it takes text, so
-                // it converts here -- as a sentence and exit 2, never a panic.
-                text_source = Some(match arguments.get(index) {
-                    Some(value) => text_of(value)?.to_owned(),
-                    None => String::from("-"),
-                });
-            }
-            other => return Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}"))),
-        }
-        index += 1;
-    }
+fn scan_command(arguments: cli::Scan) -> Result<Exit> {
+    // A path keeps its bytes: a policy file whose name is not UTF-8 opens
+    // exactly as well as one whose name is.
+    let explicit_policy = arguments.policy;
+    let text_source = arguments.text;
 
     let working = std::env::current_dir()?;
     let found = match &explicit_policy {
@@ -784,90 +549,15 @@ fn scan_command(arguments: &[OsString]) -> Result<Exit> {
     Ok(exit)
 }
 
-/// The harness `uphold hook` was named, and the `--junit` value beside it.
-///
-/// The flag is accepted here and not at the shim because this command line is
-/// the harness's settings file, which the operator writes. `None` for the
-/// harness where there is not exactly one, which the caller answers with usage.
-fn hook_arguments(rest: &[OsString]) -> Result<(Option<&OsString>, Option<&OsStr>)> {
-    let mut harness = None;
-    let mut junit_flag = None;
-    let mut extra = false;
-    let mut words = rest.iter();
-    while let Some(word) = words.next() {
-        if word == junit::FLAG {
-            let value = words
-                .next()
-                .ok_or_else(|| Fatal::new(format!("{} needs a value", junit::FLAG)))?;
-            junit_flag = Some(value.as_os_str());
-        } else if harness.is_none() {
-            harness = Some(word);
-        } else {
-            extra = true;
-        }
-    }
-    Ok((harness.filter(|_| !extra), junit_flag))
-}
-
-fn guard_command(arguments: &[OsString]) -> Result<Exit> {
-    let mut stage: Option<guard::Stage> = None;
-    let mut message: Option<PathBuf> = None;
-    let mut remote_name: Option<String> = None;
-    let mut remote_url: Option<String> = None;
-    let mut text_source: Option<String> = None;
-    let mut junit_flag: Option<OsString> = None;
-    let mut index = 0;
-    while let Some(argument) = arguments.get(index) {
-        // A stage name, a remote name, a remote URL and a text source are all
-        // read as text by what they are handed to, so those values convert
-        // here. `--message` does not: it is a path, and a path does not have to
-        // be text to be opened.
-        let value = |at: usize, flag: &str| -> Result<String> {
-            let given = arguments
-                .get(at)
-                .ok_or_else(|| Fatal::new(format!("{flag} needs a value")))?;
-            Ok(text_of(given)?.to_owned())
-        };
-        match text_of(argument)? {
-            "--stage" => {
-                index += 1;
-                stage = Some(guard::Stage::parse(&value(index, "--stage")?)?);
-            }
-            "--message" => {
-                index += 1;
-                let path = arguments
-                    .get(index)
-                    .ok_or_else(|| Fatal::new("--message needs a value"))?;
-                message = Some(PathBuf::from(path));
-            }
-            "--remote" => {
-                index += 1;
-                remote_name = Some(value(index, "--remote")?);
-            }
-            "--remote-url" => {
-                index += 1;
-                remote_url = Some(value(index, "--remote-url")?);
-            }
-            "--text" => {
-                index += 1;
-                text_source = Some(match arguments.get(index) {
-                    Some(given) => text_of(given)?.to_owned(),
-                    None => String::from("-"),
-                });
-            }
-            // A path, like `--message`: it does not have to be text to be
-            // created.
-            "--junit" => {
-                index += 1;
-                let path = arguments
-                    .get(index)
-                    .ok_or_else(|| Fatal::new(format!("{} needs a value", junit::FLAG)))?;
-                junit_flag = Some(path.clone());
-            }
-            other => return Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}"))),
-        }
-        index += 1;
-    }
+fn guard_command(arguments: cli::Guard) -> Result<Exit> {
+    let cli::Guard {
+        stage,
+        message,
+        remote: remote_name,
+        remote_url,
+        text: text_source,
+        junit: junit_flag,
+    } = arguments;
 
     // Judged before a policy is read, so a value that names no usable file is
     // exit 2 whatever else is wrong with the run.
@@ -946,9 +636,9 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
         return Ok(exit);
     }
 
-    // No default. A guard reads a different artifact at every stage, so guessing
-    // one would make it answer a question nobody asked -- and answer it green.
-    let stage = stage.ok_or_else(|| Fatal::new(format!("guard needs --stage\n\n{USAGE}")))?;
+    // The parser requires `--stage` wherever `--text` is absent; this is the
+    // same rule read back, not a second one.
+    let stage = stage.ok_or_else(|| Fatal::new("guard needs --stage, or --text"))?;
 
     // git feeds a pre-push hook its ref lines on stdin. pre-commit and prek
     // consume that stdin themselves and re-publish it as environment, so this
@@ -989,17 +679,10 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
     )
 }
 
-fn audit_command(arguments: &[OsString]) -> Result<Exit> {
-    // No default mode. `audit` on its own would have to pick a question, and
-    // the one it would pick is the one this tool exists because nothing asks.
-    match arguments {
-        [only] if only == "--for-publication" => {}
-        _ => {
-            return Err(Fatal::new(format!(
-                "audit needs --for-publication\n\n{USAGE}"
-            )));
-        }
-    }
+fn audit_command() -> Result<Exit> {
+    // No default mode, so the parser requires `--for-publication`: `audit` on
+    // its own would have to pick a question, and the one it would pick is the
+    // one this tool exists because nothing asks.
     let working = std::env::current_dir()?;
     let (root, policy_path) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
     let policy = config::load(&root, &policy_path)?;
@@ -1242,25 +925,28 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
 /// through a name that is not its own -- is the whole of the shim, and a reader
 /// looking for where the seam comes from looks where the seam is documented.
 fn shim_or_links(rest: &[OsString]) -> Result<Exit> {
-    let (first, after) = rest
-        .split_first()
-        .ok_or_else(|| Fatal::new(format!("shim needs a command\n\n{USAGE}")))?;
+    let needs_command = || {
+        Fatal::new(
+            "shim needs a command, or a mode\n\nFor more information, try 'uphold shim --help'.",
+        )
+    };
+    let (first, after) = rest.split_first().ok_or_else(needs_command)?;
     // `--as-editor` is the shim re-entering itself as the command's own editor,
     // and it is a word here rather than a variable in the environment for the
     // reason `shim::Invoked::AsEditor` gives: an environment reaches every
     // descendant, and the descendants of this pass include the `git` that IS
     // this binary under a link.
     if first == shim::EDITOR_FLAG {
-        let (name, shimmed) = after
-            .split_first()
-            .ok_or_else(|| Fatal::new(format!("shim needs a command\n\n{USAGE}")))?;
+        let (name, shimmed) = after.split_first().ok_or_else(needs_command)?;
         return shim_command(text_of(name)?, shimmed, shim::Invoked::AsEditor);
     }
     let word = text_of(first)?;
+    let modes = cli::shim_modes();
+    // `--hook=bash` names the mode as surely as `--hook bash` does.
+    let mode = word.split_once('=').map_or(word, |(name, _)| name);
     match word {
-        "--install" | "--uninstall" | "--status" | "--path" | "--hook" => {
-            links_command(word, after)
-        }
+        "--help" | "-h" => links_command(rest),
+        _ if modes.iter().any(|known| known == mode) => links_command(rest),
         // No command is spelt with a leading dash, so an option here is a
         // mistyped mode rather than a command to stand in front of. Read as a
         // command it becomes `no shim declares the command "--dir"`, which names
@@ -1268,59 +954,46 @@ fn shim_or_links(rest: &[OsString]) -> Result<Exit> {
         // what they got wrong.
         other if other.starts_with('-') => Err(Fatal::new(format!(
             "{other:?} is not one of the shim modes, and no command is called that. The mode \
-             comes first:\n\n  uphold shim --install|--status|--uninstall|--hook|--path \
-             [--dir PATH]\n\n{USAGE}"
+             comes first:\n\n  uphold shim {} [--dir PATH]\n\nFor more information, try \
+             'uphold shim --help'.",
+            modes.join("|")
         ))),
         _ => shim_command(word, after, shim::Invoked::ByName),
     }
 }
 
 /// The links on PATH: made, taken back, reported on, or handed to a shell.
-fn links_command(mode: &str, rest: &[OsString]) -> Result<Exit> {
-    let mut explicit_dir: Option<PathBuf> = None;
-    let mut words: Vec<String> = Vec::new();
-    let mut index = 0;
-    while let Some(argument) = rest.get(index) {
-        match text_of(argument)? {
-            "--dir" => {
-                index += 1;
-                let value = rest
-                    .get(index)
-                    .ok_or_else(|| Fatal::new("--dir needs a path"))?;
-                // A path keeps its bytes; only the option NAME had to be text.
-                explicit_dir = Some(PathBuf::from(value));
-            }
-            other if other.starts_with('-') => {
-                return Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}")));
-            }
-            other => words.push(other.to_owned()),
-        }
-        index += 1;
-    }
+fn links_command(rest: &[OsString]) -> Result<Exit> {
+    let arguments = cli::parse::<cli::ShimModes>(
+        std::iter::once(OsString::from("uphold shim")).chain(rest.iter().cloned()),
+    )?;
+    let cli::Parsed::Run(arguments) = arguments else {
+        return Ok(Exit::Clean);
+    };
     let directory = install::directory(
-        explicit_dir.as_deref(),
+        arguments.dir.as_deref(),
         std::env::var_os("HOME"),
         &std::env::current_dir()?,
     )?;
-    match mode {
-        "--install" => install::install(&directory, &link_names(words)?),
-        "--hook" => match words.as_slice() {
-            [shell] => install::hook(shell, &directory),
-            _ => Err(Fatal::new(format!(
-                "usage: uphold shim --hook bash|zsh|fish [--dir PATH]\n\n{USAGE}"
-            ))),
-        },
-        // The rest read the directory and take no names: what is linked there is
-        // what is there, and a repository standing somewhere else has no say in
-        // it.
-        _ if !words.is_empty() => Err(Fatal::new(format!(
-            "uphold shim {mode} takes no command names -- it reads the directory. \
-             Names are for --install\n\n{USAGE}"
-        ))),
-        "--uninstall" => install::uninstall(&directory),
-        "--status" => install::status(&directory),
-        "--path" => install::shell_path(&directory),
-        other => Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}"))),
+    if arguments.install {
+        return install::install(&directory, &link_names(arguments.names)?);
+    }
+    // The rest read the directory and take no names: what is linked there is
+    // what is there, and a repository standing somewhere else has no say in it.
+    if !arguments.names.is_empty() {
+        return Err(Fatal::new(
+            "only --install takes command names; the other modes read the links directory",
+        ));
+    }
+    if let Some(shell) = &arguments.hook {
+        return install::hook(shell, &directory);
+    }
+    if arguments.uninstall {
+        install::uninstall(&directory)
+    } else if arguments.status {
+        install::status(&directory)
+    } else {
+        install::shell_path(&directory)
     }
 }
 

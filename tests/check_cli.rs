@@ -1370,7 +1370,7 @@ fn json_is_a_reconciliation_format_and_not_a_coverage_format() {
     let output = check(&root, &["--coverage", "--json"]);
     assert_eq!(code(&output), 2);
     assert_eq!(output.stdout, Vec::<u8>::new());
-    assert!(stderr(&output).contains("usage: uphold check"));
+    assert!(stderr(&output).contains("Usage: uphold check"));
 }
 
 #[test]

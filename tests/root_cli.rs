@@ -711,3 +711,85 @@ fn an_inherit_path_inside_the_repository_still_loads() {
     assert_eq!(code(&output), Some(1), "{}", stderr(&output));
     assert!(stderr(&output).contains("found.txt"), "{}", stderr(&output));
 }
+
+/// Help is asked for the ways a newcomer types it, and each one answers with
+/// that command's help and exit 0 -- not with an error about the command it
+/// named.
+#[test]
+fn help_is_answered_however_it_is_asked_for() {
+    let root = workspace();
+    for (arguments, usage) in [
+        (vec!["help"], "Usage: uphold [COMMAND]"),
+        (vec!["help", "init"], "Usage: uphold init "),
+        (vec!["init", "--help"], "Usage: uphold init "),
+        (vec!["scan", "-h"], "Usage: uphold scan "),
+        (vec!["shim", "--help"], "Usage: uphold shim "),
+        (vec!["shim", "--install", "--help"], "Usage: uphold shim "),
+    ] {
+        let output = uphold(&root, &arguments);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(output.status.code(), Some(0), "{arguments:?}: {output:?}");
+        assert!(stdout.contains(usage), "{arguments:?}: {stdout}");
+    }
+}
+
+/// A usage error names what went wrong and ends with one pointer to help, so
+/// the mistake stays on screen rather than sixty lines up. `bogus --help` is in
+/// the list because help for a command that does not exist would hide the typo.
+#[test]
+fn a_usage_error_names_the_mistake_and_points_at_help() {
+    let root = workspace();
+    for arguments in [
+        vec!["bogus"],
+        vec!["bogus", "--help"],
+        vec!["init"],
+        vec!["scan", "--policy"],
+        vec!["guard", "--stage"],
+        vec!["shim", "--install", "--dir"],
+        vec!["guard", "--stage", "pre-commit", "--text", "-"],
+        vec!["supply-chain", "--all", "--base", "HEAD"],
+    ] {
+        let output = uphold(&root, &arguments);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(
+            stderr.trim_end().ends_with("--help'."),
+            "{arguments:?} does not end by pointing at help: {stderr}"
+        );
+        assert!(
+            stderr.lines().count() < 10,
+            "{arguments:?} dumped the whole usage: {stderr}"
+        );
+    }
+}
+
+/// A mistyped subcommand is answered with the one it was probably meant to be.
+#[test]
+fn a_mistyped_subcommand_names_the_nearest_one() {
+    let root = workspace();
+    let output = uphold(&root, &["scn"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("'scan'"), "{stderr}");
+    assert!(stderr.starts_with("policy check error: "), "{stderr}");
+}
+
+/// After `shim <command>` the words are that command's: `--help` there is the
+/// wrapped command's to answer, never this binary's.
+#[test]
+fn help_after_a_shimmed_command_is_not_uphold_help() {
+    let root = workspace();
+    let output = uphold(&root, &["shim", "git", "--help"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("uphold"), "{stdout}");
+}
+
+/// A mode written with `=` is the same mode: `--hook=bash` prints the hook.
+#[test]
+fn a_shim_mode_with_an_equals_sign_is_still_the_mode() {
+    let root = workspace();
+    let output = uphold(&root, &["shim", "--hook=bash"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(!output.stdout.is_empty(), "{stderr}");
+}
