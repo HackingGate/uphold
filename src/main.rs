@@ -369,15 +369,25 @@ fn run() -> Result<Exit> {
         return Ok(Exit::Clean);
     };
 
-    // `uphold init --help` asks for help, not for an init. `shim` is left out:
-    // after it come another command's arguments, and `--help` there is that
-    // command's to answer.
-    if matches!(rest, [flag] if flag == "--help" || flag == "-h") && first != "shim" {
+    // `uphold init --help` asks for help, not for an init. Only for a command
+    // USAGE names: `uphold bogus --help` is still a mistyped command, and exit
+    // 0 would hide it. After `shim <command>` the arguments are that command's,
+    // so `uphold shim gh --help` is gh's to answer; `uphold shim --help` and
+    // `uphold shim --install --help` name no command and are uphold's.
+    let first_text = text_of(first)?;
+    let asks_help = rest
+        .iter()
+        .any(|argument| argument == "--help" || argument == "-h");
+    let shim_command_follows = first_text == "shim"
+        && rest
+            .first()
+            .is_some_and(|word| !word.to_string_lossy().starts_with('-'));
+    if asks_help && !shim_command_follows && USAGE.contains(&format!("  uphold {first_text} ")) {
         print!("{USAGE}");
         return Ok(Exit::Clean);
     }
 
-    match text_of(first)? {
+    match first_text {
         // The url `package.repository` holds, for the OSCAL export's property
         // namespace. Asked of the binary because the binary is where that value
         // is compiled in; a second copy read off `Cargo.toml` is a copy that
@@ -555,7 +565,9 @@ fn run() -> Result<Exit> {
                         index += 1;
                         let value = text_of(rest.get(index).ok_or_else(usage)?)?;
                         let seconds: u64 = value.parse().map_err(|_| {
-                            Fatal::new(format!("--timeout takes whole seconds, not {value:?}"))
+                            Fatal::new(format!(
+                                "--timeout takes whole seconds, not {value:?}\n\n{MORE}"
+                            ))
                         })?;
                         if seconds == 0 {
                             return Err(Fatal::new(
@@ -705,7 +717,7 @@ fn scan_command(arguments: &[OsString]) -> Result<Exit> {
                 index += 1;
                 let value = arguments
                     .get(index)
-                    .ok_or_else(|| Fatal::new("--policy needs a path"))?;
+                    .ok_or_else(|| Fatal::new(format!("--policy needs a path\n\n{MORE}")))?;
                 // A path keeps its bytes. Only the flag NAME above had to be
                 // text, and a policy file whose name is not UTF-8 opens exactly
                 // as well as one whose name is.
@@ -812,7 +824,7 @@ fn hook_arguments(rest: &[OsString]) -> Result<(Option<&OsString>, Option<&OsStr
         if word == junit::FLAG {
             let value = words
                 .next()
-                .ok_or_else(|| Fatal::new(format!("{} needs a value", junit::FLAG)))?;
+                .ok_or_else(|| Fatal::new(format!("{} needs a value\n\n{MORE}", junit::FLAG)))?;
             junit_flag = Some(value.as_os_str());
         } else if harness.is_none() {
             harness = Some(word);
@@ -839,7 +851,7 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
         let value = |at: usize, flag: &str| -> Result<String> {
             let given = arguments
                 .get(at)
-                .ok_or_else(|| Fatal::new(format!("{flag} needs a value")))?;
+                .ok_or_else(|| Fatal::new(format!("{flag} needs a value\n\n{MORE}")))?;
             Ok(text_of(given)?.to_owned())
         };
         match text_of(argument)? {
@@ -851,7 +863,7 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
                 index += 1;
                 let path = arguments
                     .get(index)
-                    .ok_or_else(|| Fatal::new("--message needs a value"))?;
+                    .ok_or_else(|| Fatal::new(format!("--message needs a value\n\n{MORE}")))?;
                 message = Some(PathBuf::from(path));
             }
             "--remote" => {
@@ -873,9 +885,9 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
             // created.
             "--junit" => {
                 index += 1;
-                let path = arguments
-                    .get(index)
-                    .ok_or_else(|| Fatal::new(format!("{} needs a value", junit::FLAG)))?;
+                let path = arguments.get(index).ok_or_else(|| {
+                    Fatal::new(format!("{} needs a value\n\n{MORE}", junit::FLAG))
+                })?;
                 junit_flag = Some(path.clone());
             }
             other => return Err(Fatal::new(format!("unknown option {other:?}\n\n{MORE}"))),
@@ -1300,7 +1312,7 @@ fn links_command(mode: &str, rest: &[OsString]) -> Result<Exit> {
                 index += 1;
                 let value = rest
                     .get(index)
-                    .ok_or_else(|| Fatal::new("--dir needs a path"))?;
+                    .ok_or_else(|| Fatal::new(format!("--dir needs a path\n\n{MORE}")))?;
                 // A path keeps its bytes; only the option NAME had to be text.
                 explicit_dir = Some(PathBuf::from(value));
             }

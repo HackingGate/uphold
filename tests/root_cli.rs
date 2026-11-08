@@ -717,7 +717,13 @@ fn an_inherit_path_inside_the_repository_still_loads() {
 #[test]
 fn help_is_answered_however_it_is_asked_for() {
     let root = workspace();
-    for arguments in [vec!["help"], vec!["init", "--help"], vec!["scan", "-h"]] {
+    for arguments in [
+        vec!["help"],
+        vec!["init", "--help"],
+        vec!["scan", "-h"],
+        vec!["shim", "--help"],
+        vec!["shim", "--install", "--help"],
+    ] {
         let output = uphold(&root, &arguments);
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert_eq!(output.status.code(), Some(0), "{arguments:?}: {output:?}");
@@ -734,7 +740,14 @@ fn help_is_answered_however_it_is_asked_for() {
 #[test]
 fn a_usage_error_names_the_mistake_and_points_at_help() {
     let root = workspace();
-    for arguments in [vec!["bogus"], vec!["init"]] {
+    for arguments in [
+        vec!["bogus"],
+        vec!["bogus", "--help"],
+        vec!["init"],
+        vec!["scan", "--policy"],
+        vec!["guard", "--stage"],
+        vec!["shim", "--install", "--dir"],
+    ] {
         let output = uphold(&root, &arguments);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
