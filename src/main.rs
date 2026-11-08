@@ -942,9 +942,11 @@ fn shim_or_links(rest: &[OsString]) -> Result<Exit> {
     }
     let word = text_of(first)?;
     let modes = cli::shim_modes();
+    // `--hook=bash` names the mode as surely as `--hook bash` does.
+    let mode = word.split_once('=').map_or(word, |(name, _)| name);
     match word {
         "--help" | "-h" => links_command(rest),
-        mode if modes.iter().any(|known| known == mode) => links_command(rest),
+        _ if modes.iter().any(|known| known == mode) => links_command(rest),
         // No command is spelt with a leading dash, so an option here is a
         // mistyped mode rather than a command to stand in front of. Read as a
         // command it becomes `no shim declares the command "--dir"`, which names

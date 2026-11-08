@@ -34,7 +34,12 @@ for them and some is not.
 
 - the exit codes: `0` passed, `1` one or more policy violations, `2` the check
   could not be made, a command line this binary could not read included;
-- the `policy check error: ` lead on every exit-2 message on stderr;
+- the `policy check error: ` lead on stderr when a command stopped before it
+  could check anything: a command line it could not read, a policy that will
+  not load, a source it could not reach. A check that ran and could not finish
+  reports in its own words instead. `uphold scan` lists the paths it could not
+  read, then exits `2` with no lead. Read exit `2` as the signal and the lead as
+  which kind;
 - what `--json` prints on stdout, and the `--junit` documents;
 - the subcommand and flag names, and the argv a shimmed command receives.
 

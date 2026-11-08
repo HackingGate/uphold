@@ -136,7 +136,13 @@ pub(crate) struct Guard {
     /// The git hook stage whose guards run. Required unless `--text` is
     /// given: a guard reads a different artifact at every stage, so a default
     /// would answer a question nobody asked.
-    #[arg(long, value_name = STAGES, value_parser = stage, required_unless_present = "text")]
+    #[arg(
+        long,
+        value_name = STAGES,
+        value_parser = stage,
+        required_unless_present = "text",
+        conflicts_with = "text"
+    )]
     pub(crate) stage: Option<crate::guard::Stage>,
     /// The commit message file git hands the commit-msg hook.
     #[arg(long, value_name = "FILE")]
@@ -149,6 +155,7 @@ pub(crate) struct Guard {
     pub(crate) remote_url: Option<String>,
     /// Run the text-capable guards over this file's text, or over stdin for
     /// `-` or no value: a pull-request body, a release note, a branch name.
+    /// Not with `--stage`: a text-only pass is not a stage's verdict.
     #[arg(long, value_name = "FILE|-", num_args = 0..=1, default_missing_value = "-")]
     pub(crate) text: Option<String>,
     /// Write what this run decided as `JUnit` XML, to this file or, if it is an
@@ -226,8 +233,9 @@ pub(crate) struct Hooks {
 /// `uphold supply-chain`.
 #[derive(Args, Debug)]
 pub(crate) struct SupplyChain {
-    /// Every manifest and commit, not the pushed range.
-    #[arg(long)]
+    /// Every manifest and commit, not the pushed range. Not with `--base`,
+    /// which names a range this would widen past.
+    #[arg(long, conflicts_with = "base")]
     pub(crate) all: bool,
     /// What REV..HEAD changed, not the pushed range.
     #[arg(long, value_name = "REV")]
@@ -288,7 +296,10 @@ pub(crate) struct Hook {
 /// --help` is gh's help, so neither help nor any other flag is clap's here.
 /// The mode form is parsed by [`ShimModes`] once the first word says it is one.
 #[derive(Args, Debug)]
-#[command(disable_help_flag = true)]
+#[command(
+    disable_help_flag = true,
+    after_help = "The modes that manage the links, and their options, are listed by `uphold shim --help`."
+)]
 pub(crate) struct Shim {
     /// A mode (--install, --uninstall, --status, --path, --hook) and its
     /// options, or the command to stand in front of and its arguments.

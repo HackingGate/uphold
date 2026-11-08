@@ -746,6 +746,8 @@ fn a_usage_error_names_the_mistake_and_points_at_help() {
         vec!["scan", "--policy"],
         vec!["guard", "--stage"],
         vec!["shim", "--install", "--dir"],
+        vec!["guard", "--stage", "pre-commit", "--text", "-"],
+        vec!["supply-chain", "--all", "--base", "HEAD"],
     ] {
         let output = uphold(&root, &arguments);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -780,4 +782,14 @@ fn help_after_a_shimmed_command_is_not_uphold_help() {
     let output = uphold(&root, &["shim", "git", "--help"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("uphold"), "{stdout}");
+}
+
+/// A mode written with `=` is the same mode: `--hook=bash` prints the hook.
+#[test]
+fn a_shim_mode_with_an_equals_sign_is_still_the_mode() {
+    let root = workspace();
+    let output = uphold(&root, &["shim", "--hook=bash"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(!output.stdout.is_empty(), "{stderr}");
 }
