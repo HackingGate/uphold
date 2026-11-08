@@ -665,7 +665,14 @@ pub(crate) fn text_refusal(
         // not a policy rule at all. Gating them on the table's scope would only
         // stand the identity check down for private destinations, which is the
         // arrangement `command.scope = "always"` on this rule exists to undo.
-        "text-literals" => crate::text::failures_in(root, policy, text, Some(kind), ledger),
+        "text-literals" => crate::text::failures_in(
+            crate::text::Seam::Guard,
+            root,
+            policy,
+            text,
+            Some(kind),
+            ledger,
+        ),
         _ => Ok(()),
     }
 }

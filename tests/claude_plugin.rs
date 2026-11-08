@@ -57,6 +57,26 @@ fn refusals(hooks: &Value) -> Vec<String> {
     found
 }
 
+/// The shell and web tools reach the hook, which the compiled-in `[[hook]]`
+/// table for them judges by the rules about this machine and its user.
+#[test]
+fn the_shell_and_web_tools_reach_the_hook() {
+    let hooks = shipped();
+    let groups = hooks["hooks"]["PreToolUse"]
+        .as_array()
+        .expect("pre-tool groups");
+    for tool in ["Bash", "WebFetch", "WebSearch"] {
+        assert!(
+            groups.iter().any(|group| {
+                regex::Regex::new(group["matcher"].as_str().expect("a matcher"))
+                    .expect("a valid matcher")
+                    .is_match(tool)
+            }),
+            "{tool} does not reach the hook"
+        );
+    }
+}
+
 fn shipped() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/claude-code/hooks/hooks.json");
     serde_json::from_str(&std::fs::read_to_string(&path).expect("hooks.json is readable"))

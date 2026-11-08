@@ -169,6 +169,41 @@ fn drop_unsent(collected: &mut Walked) {
         .retain(|(key, text)| !(key == "commit_title" && text.is_empty()));
 }
 
+/// How many percent-decoding layers a string is read through.
+///
+/// A URL carries an address as `person%40example.test`, and a query string
+/// built from one can carry it as `%2540`. Each layer that changes the text is
+/// judged beside the text as written, so a literal or a pattern finds the
+/// value however many times it was encoded, up to this bound. Bounded because
+/// each layer is another copy of the string: past four, an encoding is not a
+/// URL any client built, and the text as written is still judged.
+const DECODED_LAYERS: usize = 4;
+
+/// Add, after the strings a call carries, each percent-decoded layer of them
+/// that differs from the one before (RFC 3986 section 2.1).
+///
+/// Here and not in `walk_strings`, which also reads the document a shim's
+/// `gh api --input` sends: that document is published as written, and what a
+/// forge stores is the undecoded text. A tool call's URL or query is decoded
+/// by whoever receives it, so what it discloses is what it decodes to.
+fn decoded_layers(prose: &mut Vec<String>) {
+    let mut layers = Vec::new();
+    for text in prose.iter() {
+        let mut current = text.clone();
+        for _ in 0..DECODED_LAYERS {
+            let next = percent_encoding::percent_decode_str(&current)
+                .decode_utf8_lossy()
+                .into_owned();
+            if next == current {
+                break;
+            }
+            layers.push(next.clone());
+            current = next;
+        }
+    }
+    prose.extend(layers);
+}
+
 /// Judge one pending tool call, read from stdin in the harness's own shape.
 ///
 /// `found` is the policy where the call was made, and it is an `Option` here
@@ -297,6 +332,10 @@ pub(crate) fn run(
     // down as set aside rather than asked.
     let named = policy.hooks.iter().find(|table| table.names(label));
     let read = named.is_some_and(|table| table.skips(label));
+    // A shell command, a fetched URL, a search query: text that leaves the
+    // session and reaches no forge. The rules about this machine and its user
+    // read it; the rules about a publication stand down, recorded as such.
+    let unpublished = named.is_some_and(|table| !table.publishes());
     let mut scoping = table::Scoping::new(named, &policy.shims, label, subject, &root);
     let destination = if read {
         None
@@ -309,6 +348,7 @@ pub(crate) fn run(
         walk_strings(subject, None, &mut collected);
     }
     drop_unsent(&mut collected);
+    decoded_layers(&mut collected.prose);
     let has_text = !collected.prose.is_empty() || !collected.headlines.is_empty();
     let text = collected.prose.join("\n");
     let headlines: Vec<text::Headline> = collected
@@ -350,9 +390,16 @@ pub(crate) fn run(
         // On a read, only a pattern rule about the tool name is in scope: the
         // text rules were set aside above, and a pattern rule about text has
         // none to read, so it is recorded as set aside rather than as a pass.
+        //
+        // On a call that publishes nothing, only the pattern rules a policy
+        // wrote for this seam are asked beside the literal rules, which are
+        // never asked for their scope: a guard or a prose rule is about a
+        // publication, and there is none.
         &mut |rule| {
             if read {
                 Ok(rule.selects_subject("tool"))
+            } else if unpublished && text::Judged::of(rule) != Some(text::Judged::Patterns) {
+                Ok(false)
             } else {
                 scoping.holds(rule)
             }
@@ -388,8 +435,10 @@ pub(crate) fn run(
     // enclosing superproject's is not borrowed. Where there is no policy the
     // guards and the prose rules have nothing to run, and saying so on stderr
     // is the difference between a check that passed and a check that did not
-    // happen.
-    if found.is_none() {
+    // happen. Not for a call that publishes nothing, where the guards and the
+    // prose rules are out of scope with a policy or without one: saying so on
+    // every shell command would be the narration that gets a matcher deleted.
+    if found.is_none() && !unpublished {
         eprintln!(
             "uphold hook: no policy where this call was made, so the guards did not run \
              and only the host-identity rules did. That is partial coverage, not a pass."

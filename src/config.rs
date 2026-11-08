@@ -2946,6 +2946,18 @@ fn hook_defaults() -> Result<Vec<crate::hook::Written>> {
         .map_err(|error| Fatal::new(format!("the compiled-in `[[hook]]` tables: {error}")))
 }
 
+/// The compiled-in `[[hook]]` tables alone, for a hook call made where no
+/// policy is: which calls publish is a fact about the tools, and holds whether
+/// or not anybody wrote a policy where the session started.
+pub(crate) fn compiled_hooks() -> Result<Vec<crate::hook::Table>> {
+    load_hooks(
+        Path::new("policy/hook.default.toml"),
+        &[],
+        None,
+        hook_defaults()?,
+    )
+}
+
 /// Each `[[hook]]` table parsed into the shape that carries its checks, and
 /// `unresolved` held to the reading [`validate_shim_unresolved`] gives it on
 /// `[[shim]]`: written only where some scope this table's calls reach can fail

@@ -338,6 +338,16 @@ second matcher in this binary. An unknown harness name is refused rather than
 guessed at, because where to find the text in its event cannot be derived from
 its name.
 
+The Claude Code plugin also sends `Bash`, `WebFetch` and `WebSearch` through
+the same hook. Those calls publish nothing to a forge, so a compiled-in
+`[[hook]]` table judges them only by the rules about this machine and its user:
+host identity, and the running user's own email address as git and the
+environment configure it, read through URL encoding and withheld from the
+refusal and the evidence. `git@github.com` and `react@18` are nobody's address
+and pass. This checks the arguments the harness hands over, not the request a
+client eventually sends. See
+[the shell and web tools](docs/REFERENCE.md#shell-and-web-tools).
+
 For Claude Code, enable the `uphold` plugin this repository ships, at the tag
 of the release you installed:
 

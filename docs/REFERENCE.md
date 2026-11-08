@@ -1152,7 +1152,9 @@ files.word = true
 The name says what fails: a literal describing **this machine** — username,
 home path, hostname and its identifying segments, default-route addresses —
 found in content. Sources: `running-os-identity`, `running-os-metadata`
-(identity plus route), `running-default-route`. `forbidden_literals_from`
+(identity plus route), `running-default-route`, and `running-user-email` (every
+`user.email` git resolves, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_EMAIL` and
+`EMAIL`, whose matches are always reported as `[REDACTED_MATCH]`). `forbidden_literals_from`
 names any command producing one literal per line (`label<TAB>value`, or a bare
 line as its own label):
 
@@ -3244,12 +3246,13 @@ the folder needs no install of their own:
 }
 ```
 
-The plugin's `hooks/hooks.json` holds three entries, each running
+The plugin's `hooks/hooks.json` holds four entries, each running
 `uphold hook claude-code`:
 
 | event | matcher | options |
 |---|---|---|
 | `PreToolUse` | `mcp__github__.*` | `onFailure: "block"` |
+| `PreToolUse` | `^(Bash\|WebFetch\|WebSearch)$` | `onFailure: "block"` |
 | `SessionStart` | | `async: true` |
 | `Stop` | | `timeout: 900`, `onFailure: "block"` |
 
@@ -3261,6 +3264,74 @@ file, so a hook block pasted beside the enabled plugin runs every hook twice:
 remove it. A cloud session does not add marketplaces from a repository's
 `extraKnownMarketplaces`, so the plugin does not reach one through project
 settings.
+
+### Shell and web tools
+
+The `Bash`, `WebFetch` and `WebSearch` entry reaches the same judgment as every
+other call, through a compiled-in `[[hook]]` table that says these calls
+publish nothing to a forge:
+
+```toml
+[[hook]]
+tools = '^(Bash|WebFetch|WebSearch)$'
+publishes = false
+```
+
+So they are judged by the rules that mean the same against any text: the
+literal rules, and the pattern rules a policy writes for `seams = ["hook"]`.
+The guards and the prose rules are about a publication and are recorded as out
+of scope, so a private repository's name in a `cd` and an authorship marker in
+a drafted commit message are not refused here. They are refused when the text
+is published, at the shim or the forge's hook.
+
+Two literal rules run wherever the call is made, policy or none:
+`no-running-os-identity-metadata`, and at this seam only `no-running-user-email`,
+which reads `running-user-email`. The second refuses the running user's own
+address. It does not refuse every email-shaped string: an SSH remote, a package
+pin and an image digest look like addresses and identify nobody. A refusal and
+its `--junit` record name the rule and where the address was configured, never
+the address or the line it was on. Each string the call carries, except a
+title or commit subject, is also read through up to four layers of
+percent-encoding (RFC 3986 section 2.1), so `owner%40example.test` and
+`owner%2540example.test` are found.
+
+A repository changes either end in policy. Declaring a rule that reads
+`running-user-email` replaces the fallback, and like every `forbidden_literals`
+rule it needs `files.*` and is then a content rule `uphold scan` runs over
+those files too: scope it to where the address must never appear, since a
+maintainer field or a `SECURITY.md` contact carries it on purpose.
+
+```toml
+# The address in tool calls, in the docs tree, and nowhere else in the tree;
+# a shared role address the user also sends as is exempt.
+[rule.no-running-user-email]
+message = "Leave the address out."
+forbidden_literals = "running-user-email"
+ignore_literals = ["security@example.test"]
+files.include = ["docs"]
+
+# Every address, whoever's, in a tool call.
+[rule.no-address-in-tool-calls]
+message = "Leave addresses out."
+regexp = '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
+seams = ["hook"]
+command.before = ["gh"]
+command.scope = "always"
+```
+
+Both rules, and the user-email fallback, also judge the GitHub MCP server's
+calls, which are the hook seam too. The shim and `--text` seams do not get the
+fallback: a `Signed-off-by` trailer at `commit-msg` is the author's decision. A
+repository that wants it there declares the rule.
+
+The check reads the arguments the harness supplies. It cannot see headers an
+HTTP client adds after the hook, shell concatenation, the contents of a script
+or an uploaded file, environment variables, or tools that never call a local
+hook. A pass is not an attestation about the request that is eventually sent.
+The Codex plugin's matcher is `mcp__.*`, so it does not send its shell tool
+here.
+
+### Installing the Codex plugin
 
 For [Codex](https://developers.openai.com/codex/), this repository publishes
 `.agents/plugins/marketplace.json`, pointing to `plugins/codex`. Add the
@@ -3362,6 +3433,8 @@ shim = "gh"                # take scope and unresolved from this [[shim]] table
 # or, instead of shim:
 # scope = "public-target"  # as on [[shim]]; "always" where neither is written
 # unresolved = "refuse"    # as on [[shim]]; "run" is the opt-out
+# or, for a call that publishes to no forge, with none of the above:
+# publishes = false        # judged by literal rules and seams = ["hook"] patterns only
 ```
 
 That table is compiled in, from
@@ -3424,6 +3497,9 @@ configured for. A table in an
 the scope is right at the shim, but that scope reads an npm command line, which
 no tool call has: at the hook it is unresolved, and the refusal names the rule.
 A pattern or prose rule takes `seams = ["shim"]` to stay off the hook.
+`publishes = false` beside `skip`, `target`, `forge`, `owner`, `repo`, `shim`,
+`scope` or `unresolved` is refused: those say where a publication goes, and
+the table says there is none. See [Shell and web tools](#shell-and-web-tools).
 
 ### What runs where there is no policy
 

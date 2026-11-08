@@ -101,3 +101,15 @@ forge = "github"
 owner = "/owner"
 repo = "/repo"
 shim = "gh"
+
+# A harness's own shell and web tools: Claude Code's `Bash`, `WebFetch` and
+# `WebSearch`. They publish nothing to a forge, and what they carry still
+# leaves the session -- to a process, a fetched host, a search provider. So
+# `publishes = false`: the literal rules judge them, which read this machine's
+# identity and the running user's own addresses and mean the same against any
+# text, as do the pattern rules a policy writes with `seams = ["hook"]`. The
+# guards and prose rules are about a publication and are recorded as out of
+# scope. A private repository's name in a `cd` is not that name published.
+[[hook]]
+tools = '^(Bash|WebFetch|WebSearch)$'
+publishes = false

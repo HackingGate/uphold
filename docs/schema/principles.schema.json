@@ -184,6 +184,11 @@
           "description": "JSON pointer (RFC 6901) into the call's input, to the owner. Not the\nempty pointer, which names the whole input: an object is never an\nowner's name.",
           "type": "string"
         },
+        "publishes": {
+          "default": true,
+          "description": "`false` where these calls publish nothing to a forge, but what they\ncarry still leaves the session: a shell command, a fetched URL, a\nsearch query. Only the rules that mean the same against any text judge\nthem -- the literal rules, which read the running host and user, and\nthe pattern rules whose `seams` names `hook`. The guards and the prose\nrules are about a forge publication and are recorded as out of scope:\na private repository's name in a `cd` is not that name published.\n`true` (the default) is every other table. Not written beside `skip`,\n`target`, `shim`, `scope` or `unresolved`, which say where a\npublication goes and which of its rules stand there.",
+          "type": "boolean"
+        },
         "repo": {
           "description": "JSON pointer (RFC 6901) into the call's input, to the repository. Not\nthe empty pointer, as for `owner`.",
           "type": "string"

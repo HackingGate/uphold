@@ -18,6 +18,12 @@ pub(crate) struct Needle {
     pub label: String,
     pub value: String,
     pub word: bool,
+    /// The value is never reported, not even as the line it was found on. Set
+    /// by a source whose value is a person's contact address: a refusal and
+    /// its evidence are read, kept and published further than the text the
+    /// rule stopped, and a report quoting the address would be the disclosure.
+    /// The needle's label says which value matched; the value stays here.
+    pub withheld: bool,
 }
 
 /// Names that are never a personal identity leak.
@@ -148,6 +154,7 @@ fn push(needles: &mut Vec<Needle>, label: &str, value: Option<String>, word: boo
         label: label.to_owned(),
         value,
         word,
+        withheld: false,
     });
 }
 
@@ -333,6 +340,88 @@ fn running_default_route() -> Vec<Needle> {
     needles
 }
 
+/// The addresses the running user sends mail and commits as.
+///
+/// Read where the running user's tools read them: every `user.email` git
+/// resolves at `root` (system, global, repository and included files, through
+/// `git config --get-all`), and the variables git and mail clients take an
+/// address from -- `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_EMAIL` and `EMAIL`
+/// (git-commit-tree(1), "COMMIT INFORMATION"). The value lives only in this
+/// process: no policy file names it, and every needle is [`Needle::withheld`],
+/// so no report does either.
+///
+/// Not every email-shaped string. An address is personal by whose it is, not
+/// by its shape: `git@github.com`, `react@18` and `image@sha256:...` are
+/// email-shaped and identify nobody, and a check that refused them on every
+/// shell call would be switched off within the day. A repository that does
+/// want any address refused writes a `regexp` rule with `seams = ["hook"]`.
+///
+/// Searched as written and lowercased: a domain is case-insensitive (RFC 5321
+/// section 2.4), and the local part is in practice. No address configured is
+/// no needles, which is an answer -- nothing here is known to be anyone's --
+/// and git failing to run at all is the could-not-look it is.
+fn running_user_email(root: &Path) -> Answer {
+    // A machine with no git is an ordinary container, and a source that made
+    // every shell call there exit 2 would get the matcher deleted. The
+    // variables are still read, and stderr says what was not, as the
+    // default-route source does when `ip` cannot run.
+    let configured = match crate::git::try_run(root, &["config", "--get-all", "user.email"]) {
+        Ok(answer) => answer.unwrap_or_default(),
+        Err(error) => {
+            eprintln!(
+                "uphold: {error}, so the running-user-email source read only \
+                 GIT_AUTHOR_EMAIL, GIT_COMMITTER_EMAIL and EMAIL, and no address git is \
+                 configured with was searched for."
+            );
+            String::new()
+        }
+    };
+    let mut needles: Vec<Needle> = Vec::new();
+    let mut seen = BTreeSet::new();
+    let found = configured
+        .lines()
+        .map(|line| ("git config user.email", line.to_owned()))
+        .chain(
+            ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL", "EMAIL"]
+                .into_iter()
+                .filter_map(|name| env(name).map(|value| (name, value))),
+        );
+    for (from, value) in found {
+        let value = value.trim();
+        if !is_address(value) {
+            continue;
+        }
+        for spelling in [value.to_owned(), value.to_lowercase()] {
+            if seen.insert(spelling.clone()) {
+                needles.push(Needle {
+                    label: from.to_owned(),
+                    value: spelling,
+                    word: false,
+                    withheld: true,
+                });
+            }
+        }
+    }
+    Ok(needles)
+}
+
+/// Whether a configured value is an address worth searching for: one `@`
+/// with a local part before it and a dotted domain after it (RFC 5321 section
+/// 4.1.2's `Mailbox`, loosely), and no space. `EMAIL=@` or a bare name is a
+/// misconfiguration, and as a needle it would refuse `react@18` under a
+/// report that withholds what matched.
+fn is_address(value: &str) -> bool {
+    let Some((local, domain)) = value.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !domain.contains('@')
+        && !value.contains(char::is_whitespace)
+        && domain.split('.').filter(|label| !label.is_empty()).count() >= 2
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+}
+
 /// Run a command and read one needle per line of its stdout.
 ///
 /// This is what replaced `policy/sources.py`. A repository that needed a custom
@@ -386,6 +475,7 @@ fn command_source(run: &str, root: &Path) -> Answer {
 enum Question {
     OsIdentity,
     DefaultRoute,
+    UserEmail,
     Command(String),
 }
 
@@ -424,6 +514,7 @@ fn ask(question: &Question, root: &Path) -> Answer {
         .or_insert_with(|| match question {
             Question::OsIdentity => Ok(running_os_identity()),
             Question::DefaultRoute => Ok(running_default_route()),
+            Question::UserEmail => running_user_email(root),
             Question::Command(run) => command_source(run, root),
         })
         .clone()
@@ -447,6 +538,7 @@ pub(crate) fn resolve(
     let answered = match source {
         "running-os-identity" => ask(&Question::OsIdentity, root),
         "running-default-route" => ask(&Question::DefaultRoute, root),
+        "running-user-email" => ask(&Question::UserEmail, root),
         "running-os-metadata" => ask(&Question::OsIdentity, root).and_then(|mut all| {
             all.extend(ask(&Question::DefaultRoute, root)?);
             Ok(all)
@@ -468,7 +560,8 @@ pub(crate) fn resolve(
         unknown => {
             return Err(Fatal::new(format!(
                 "{label}: unknown literal source {unknown:?}; known sources are \
-                 running-os-identity, running-os-metadata, running-default-route, command"
+                 running-os-identity, running-os-metadata, running-default-route, \
+                 running-user-email, command"
             )));
         }
     };
@@ -488,6 +581,26 @@ pub(crate) fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_value_shaped_like_an_address_is_searched_for() {
+        for value in ["owner@example.test", "o.w+n@sub.example.test"] {
+            assert!(is_address(value), "{value}");
+        }
+        for value in [
+            "@",
+            "owner",
+            "owner@",
+            "@example.test",
+            "react@18",
+            "a@b@c.d",
+            "o w@x.y",
+            "o@.x",
+            "o@x.",
+        ] {
+            assert!(!is_address(value), "{value}");
+        }
+    }
 
     #[test]
     fn an_address_says_which_machine_unless_it_is_loopback_link_local_or_multicast() {

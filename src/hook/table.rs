@@ -75,6 +75,22 @@ pub(crate) struct Written {
     /// default) or `run`. As on `[[shim]]`.
     #[serde(default)]
     unresolved: Option<Unresolved>,
+    /// `false` where these calls publish nothing to a forge, but what they
+    /// carry still leaves the session: a shell command, a fetched URL, a
+    /// search query. Only the rules that mean the same against any text judge
+    /// them -- the literal rules, which read the running host and user, and
+    /// the pattern rules whose `seams` names `hook`. The guards and the prose
+    /// rules are about a forge publication and are recorded as out of scope:
+    /// a private repository's name in a `cd` is not that name published.
+    /// `true` (the default) is every other table. Not written beside `skip`,
+    /// `target`, `shim`, `scope` or `unresolved`, which say where a
+    /// publication goes and which of its rules stand there.
+    #[serde(default = "publishes_by_default")]
+    publishes: bool,
+}
+
+const fn publishes_by_default() -> bool {
+    true
 }
 
 /// Where a `[[hook]]` table's calls are going: the `[[shim]]` targets a tool
@@ -132,6 +148,7 @@ pub(crate) struct Table {
     skip: std::collections::BTreeSet<String>,
     destination: Option<Pointers>,
     pub(crate) answers: Answers,
+    publishes: bool,
 }
 
 impl Written {
@@ -148,6 +165,23 @@ impl Written {
             })
         };
         let tools = compile(&self.tools)?;
+        if !self.publishes
+            && (!self.skip.is_empty()
+                || self.target != HookTarget::None
+                || self.forge.is_some()
+                || self.owner.is_some()
+                || self.repo.is_some()
+                || self.shim.is_some()
+                || self.scope.is_some()
+                || self.unresolved.is_some())
+        {
+            return Err(format!(
+                "the `[[hook]]` for {tools_text:?} says `publishes = false` beside `skip`, \
+                 `target`, `forge`, `owner`, `repo`, `shim`, `scope` or `unresolved`. Those say \
+                 where a publication goes and which rules stand there, and a call that \
+                 publishes nothing has neither; take them off, or take `publishes` off"
+            ));
+        }
         if let Some(name) = self.skip.iter().find(|name| {
             name.contains("__")
                 || name.is_empty()
@@ -233,6 +267,7 @@ impl Written {
             skip,
             destination,
             answers,
+            publishes: self.publishes,
         })
     }
 }
@@ -259,6 +294,11 @@ impl Table {
                 unresolved.unwrap_or_default(),
             ),
         }
+    }
+
+    /// Whether these calls publish to a forge. See [`Written::publishes`].
+    pub(crate) const fn publishes(&self) -> bool {
+        self.publishes
     }
 
     /// Whether this table speaks for `tool`.
@@ -461,6 +501,29 @@ mod tests {
 
     fn github() -> Table {
         written().load().unwrap()
+    }
+
+    /// A call that publishes nothing has no destination and no reads, so a
+    /// table saying both is one whose second half nothing reads.
+    #[test]
+    fn a_table_that_publishes_nothing_names_no_destination() {
+        let quiet: Written =
+            toml::from_str("tools = '^(Bash|WebFetch)$'\npublishes = false\n").unwrap();
+        let table = quiet.load().unwrap();
+        assert!(!table.publishes());
+        assert!(github().publishes());
+        for extra in [
+            "skip = [\"read\"]",
+            "target = \"forge-repo\"\nforge = \"github\"\nowner = \"/o\"\nrepo = \"/r\"",
+            "shim = \"gh\"",
+            "scope = \"always\"",
+            "unresolved = \"run\"",
+        ] {
+            let written: Written =
+                toml::from_str(&format!("tools = '^Bash$'\npublishes = false\n{extra}\n")).unwrap();
+            let error = written.load().unwrap_err();
+            assert!(error.contains("publishes = false"), "{extra}: {error}");
+        }
     }
 
     #[test]
