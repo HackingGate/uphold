@@ -38,6 +38,10 @@ use crate::sources;
 /// for whether anything already covers it have to mean the same string.
 const RUNNING_OS_IDENTITY: &str = "running-os-identity";
 
+/// The built-in literal source that reads the running user's own addresses.
+/// Named once for the reason [`RUNNING_OS_IDENTITY`] is.
+const RUNNING_USER_EMAIL: &str = "running-user-email";
+
 /// Used when the caller's repository declares no dynamic rules of its own, or
 /// has no policy file at all.
 ///
@@ -62,6 +66,41 @@ fn fallback_rule() -> Rule {
          the identifying parts of it) at runtime, then searches the text you are about to \
          send. Use neutral placeholders such as example-user, example-host, example.test, \
          and /srv/example instead.",
+    ));
+    rule
+}
+
+/// The hook's second fallback: the running user's own addresses, in a tool
+/// call's arguments.
+///
+/// At the hook only. A tool call is where an agent hands what it was told
+/// about its user to a search engine, a fetched URL or a shell, none of which
+/// the user chose to tell. A commit message is not: a `Signed-off-by` trailer
+/// at `commit-msg` and a maintainer address a repository publishes on purpose
+/// carry the address because the author put it there, and a fallback refusing
+/// them would be refusing the author's own decision. A repository that wants
+/// the address refused at its other text seams declares a rule reading
+/// `running-user-email`, and one that exempts an address -- a published
+/// security contact -- shadows this one with `ignore_literals`.
+///
+/// Every needle this source yields is withheld, so neither the refusal nor
+/// the evidence carries the address.
+fn email_fallback_rule() -> Rule {
+    let mut rule = Rule::synthetic(
+        "no-running-user-email",
+        Check::ForbiddenLiterals {
+            literals: Literals::Named {
+                forbidden_literals: String::from(RUNNING_USER_EMAIL),
+            },
+            ignore_literals: None,
+        },
+    );
+    rule.message = Some(String::from(
+        "Do not send the running user's email address in a tool call's arguments. The \
+         policy checker reads the addresses git and the environment are configured with \
+         and searches what the call was about to send; the matched address and the line \
+         it was on are withheld here. Leave the address out, or use a placeholder such as \
+         person@example.test.",
     ));
     rule
 }
@@ -499,7 +538,7 @@ pub(crate) fn judged(
             return Ok(());
         }
         match kind {
-            Judged::Literals => failures_in(root, policy, whole, Some(&subject), ledger),
+            Judged::Literals => failures_in(seam, root, policy, whole, Some(&subject), ledger),
             // Each guard asked under the caller's scope: every one at `scan
             // --text` and `guard --text`, and at the hook the ones its table
             // stands down. The shim passes its own memo through `Judged::of`.
@@ -809,7 +848,13 @@ pub(crate) fn check(found: Option<&(PathBuf, PathBuf)>, source: &str) -> Result<
 pub(crate) fn load_for(found: Option<&(PathBuf, PathBuf)>) -> Result<(PathBuf, Policy)> {
     match found {
         Some((root, policy_path)) => Ok((root.clone(), config::load(root, policy_path)?)),
-        None => Ok((std::env::current_dir()?, Policy::default())),
+        None => Ok((
+            std::env::current_dir()?,
+            Policy {
+                hooks: config::compiled_hooks()?,
+                ..Policy::default()
+            },
+        )),
     }
 }
 
@@ -817,9 +862,10 @@ pub(crate) fn load_for(found: Option<&(PathBuf, PathBuf)>) -> Result<(PathBuf, P
 /// already-loaded policy, each answering into `ledger` once per needle found
 /// or once to pass.
 ///
-/// The literal rules a text seam runs: the policy's, and the running-host
-/// fallback where none of them reads the running host's identity.
-fn literal_rules(policy: &Policy) -> Vec<Rule> {
+/// The literal rules a text seam runs: the policy's, the running-host
+/// fallback where none of them reads the running host's identity, and at the
+/// hook the running-user fallback where none of them reads the user's address.
+fn literal_rules(policy: &Policy, seam: Seam) -> Vec<Rule> {
     // The test is for the identity rule itself, not for the CHECK KIND it
     // happens to use. Asking whether any `forbidden_literals` rule existed made
     // an unrelated one -- a repository's own list of literals, a command
@@ -838,6 +884,13 @@ fn literal_rules(policy: &Policy) -> Vec<Rule> {
         .any(|rule| rule.forbidden_literals() == Some(RUNNING_OS_IDENTITY))
     {
         owned.push(fallback_rule());
+    }
+    if seam == Seam::Hook
+        && !owned
+            .iter()
+            .any(|rule| rule.forbidden_literals() == Some(RUNNING_USER_EMAIL))
+    {
+        owned.push(email_fallback_rule());
     }
     owned
 }
@@ -860,7 +913,7 @@ pub(crate) fn set_aside(policy: &Policy, recorded: &str, ledger: &mut Vec<Judgme
         // are asked; the consultations are the shim's alone.
         Some(Judged::Literals | Judged::Patterns | Judged::Consultation) | None => false,
     });
-    for rule in literal_rules(policy).iter().chain(asked) {
+    for rule in literal_rules(policy, Seam::Hook).iter().chain(asked) {
         ledger.push(Judgment::of(rule, Some(recorded), Answer::OutOfScope));
     }
 }
@@ -869,13 +922,14 @@ pub(crate) fn set_aside(policy: &Policy, recorded: &str, ledger: &mut Vec<Judgme
 /// it already holds the policy that named the rule, and loading it again from
 /// disk would be a second reading free to disagree with the first.
 pub(crate) fn failures_in(
+    seam: Seam,
     root: &std::path::Path,
     policy: &Policy,
     text: &str,
     recorded: Option<&str>,
     ledger: &mut Vec<Judgment>,
 ) -> Result<()> {
-    let owned = literal_rules(policy);
+    let owned = literal_rules(policy, seam);
 
     for rule in &owned {
         let needles = asked(
@@ -912,7 +966,7 @@ pub(crate) fn failures_in(
                 .iter()
                 .map(|hit| {
                     let line = hit.line.unwrap_or(0);
-                    if policy.redact_matches {
+                    if policy.redact_matches || needle.withheld {
                         format!("line {line}: [REDACTED_MATCH]")
                     } else {
                         format!("line {line}: {}", hit.text)

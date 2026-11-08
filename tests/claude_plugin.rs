@@ -22,7 +22,6 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 const COMMAND: &str = "uphold hook claude-code";
-const PRIVACY_COMMAND: &str = "uphold hook claude-code --privacy";
 const BLOCKING_EVENTS: &[&str] = &["PreToolUse", "Stop"];
 
 /// Every way `hooks` departs from the two properties, one line each.
@@ -45,7 +44,7 @@ fn refusals(hooks: &Value) -> Vec<String> {
             .flatten();
         for handler in handlers {
             let command = handler.get("command").and_then(Value::as_str);
-            if command != Some(COMMAND) && command != Some(PRIVACY_COMMAND) {
+            if command != Some(COMMAND) {
                 found.push(format!("{event}: runs {command:?}, not {COMMAND:?}"));
             }
             if BLOCKING_EVENTS.contains(&event.as_str())
@@ -58,22 +57,24 @@ fn refusals(hooks: &Value) -> Vec<String> {
     found
 }
 
+/// The shell and web tools reach the hook, which the compiled-in `[[hook]]`
+/// table for them judges by the rules about this machine and its user.
 #[test]
-fn the_privacy_entry_reaches_web_and_shell_tools() {
+fn the_shell_and_web_tools_reach_the_hook() {
     let hooks = shipped();
     let groups = hooks["hooks"]["PreToolUse"]
         .as_array()
         .expect("pre-tool groups");
-    let privacy = groups
-        .iter()
-        .find(|group| group["hooks"][0]["command"].as_str() == Some(PRIVACY_COMMAND))
-        .expect("the privacy hook is installed");
-    let matcher = regex::Regex::new(privacy["matcher"].as_str().expect("a matcher"))
-        .expect("a valid matcher");
     for tool in ["Bash", "WebFetch", "WebSearch"] {
-        assert!(matcher.is_match(tool), "{tool} is not protected");
+        assert!(
+            groups.iter().any(|group| {
+                regex::Regex::new(group["matcher"].as_str().expect("a matcher"))
+                    .expect("a valid matcher")
+                    .is_match(tool)
+            }),
+            "{tool} does not reach the hook"
+        );
     }
-    assert!(!matcher.is_match("mcp__github__create_issue"));
 }
 
 fn shipped() -> Value {

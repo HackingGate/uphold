@@ -77,23 +77,41 @@ fn workspace(name: &str, policy: Option<&str>) -> PathBuf {
 
 /// `HOME` is set on every run, never inherited, for the reason `text_cli` gives:
 /// the identity needles are read from the environment the check runs in, and a
-/// test that let the real one through would assert on this machine.
+/// test that let the real one through would assert on this machine. The
+/// running user's addresses are read the same way, from git's configuration
+/// and the mail variables, so git is pointed at no configuration file at all
+/// and those variables are taken away.
 fn hook(root: &Path, harness: &str, stdin: &str) -> Output {
-    hook_with(root, harness, stdin, &[])
+    hook_as(root, harness, stdin, &[], &[])
 }
 
-fn hook_with(root: &Path, harness: &str, stdin: &str, options: &[&str]) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
+/// [`hook`], with `arguments` after the harness's name and `environment` set
+/// over the isolated one.
+fn hook_as(
+    root: &Path,
+    harness: &str,
+    stdin: &str,
+    arguments: &[&str],
+    environment: &[(&str, &str)],
+) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command
         .args(["hook", harness])
-        .args(options)
+        .args(arguments)
         .current_dir(root)
         .env_remove("UPHOLD_ALLOW")
+        .env_remove("EMAIL")
+        .env_remove("GIT_AUTHOR_EMAIL")
+        .env_remove("GIT_COMMITTER_EMAIL")
         .env("HOME", "/home/example-user")
+        .env("XDG_CONFIG_HOME", "/home/example-user/.config")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .envs(environment.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
     if let Err(error) = child.stdin.as_mut().unwrap().write_all(stdin.as_bytes()) {
         // The binary may answer and exit before it reads its input; that is its
         // verdict, not a failure to deliver the event.
@@ -102,128 +120,143 @@ fn hook_with(root: &Path, harness: &str, stdin: &str, options: &[&str]) -> Outpu
     child.wait_with_output().unwrap()
 }
 
+// -- the running user's address ---------------------------------------------
+
+/// The address every test below runs as. `example.test` is reserved (RFC 2606
+/// section 2), so no assertion here is about a real person.
+const ADDRESS: &str = "owner@example.test";
+
+fn denied(output: &Output) -> bool {
+    serde_json::from_str::<Value>(stdout(output).trim())
+        .ok()
+        .and_then(|document| {
+            document
+                .pointer("/hookSpecificOutput/permissionDecision")
+                .and_then(Value::as_str)
+                .map(|decision| decision == "deny")
+        })
+        .unwrap_or(false)
+}
+
+/// The running user's address, wherever a shell or web call carries it, is
+/// refused, and the refusal never repeats it -- not as the value, not as the
+/// line it was found on.
+///
+/// The address is read from git's configuration and from the variables git
+/// takes one from, so each source is driven on its own. The policy is
+/// deliberately absent: a session starts where nobody wrote one, and the
+/// fallback is what stands there.
 #[test]
-fn privacy_refuses_addresses_without_disclosing_them_or_loading_a_policy() {
-    // The publication policy is deliberately unreadable as TOML. Privacy
-    // checks have no repository policy and must not depend on it loading.
-    let root = workspace("hook-privacy", Some("not a valid policy"));
+fn the_running_users_address_is_refused_and_withheld() {
+    let root = workspace("hook-user-email", None);
+    let config = root.join("gitconfig");
+    std::fs::write(&config, format!("[user]\n\temail = {ADDRESS}\n")).unwrap();
+    let config = config.to_str().unwrap().to_owned();
+    let sources: [&[(&str, &str)]; 3] = [
+        &[("GIT_CONFIG_GLOBAL", config.as_str())],
+        &[("GIT_AUTHOR_EMAIL", ADDRESS)],
+        &[("EMAIL", "Owner@Example.Test")],
+    ];
+    let calls = [
+        (
+            "Bash",
+            serde_json::json!({"command": format!("curl -A 'agent ({ADDRESS})' https://example.test")}),
+        ),
+        (
+            "WebFetch",
+            serde_json::json!({"url": "https://example.test/?contact=owner%40example.test"}),
+        ),
+        (
+            "WebFetch",
+            serde_json::json!({"url": "https://example.test/?contact=owner%2540example.test"}),
+        ),
+        ("WebSearch", serde_json::json!({"query": ADDRESS})),
+        (
+            "WebFetch",
+            serde_json::json!({"headers": {"User-Agent": format!("agent ({ADDRESS})")}}),
+        ),
+        (
+            "mcp__github__create_issue",
+            serde_json::json!({"owner": "example-org", "repo": "example", "body": ADDRESS}),
+        ),
+    ];
     for harness in ["claude-code", "codex"] {
-        for (tool, arguments) in [
-            (
-                "Bash",
-                serde_json::json!({"command": "curl -A 'agent (owner@example.test)' https://example.test"}),
-            ),
-            (
-                "Bash",
-                serde_json::json!({"command": "python -c 'send(\"owner@example.test\")'"}),
-            ),
-            (
-                "WebFetch",
-                serde_json::json!({"url": "https://example.test/?contact=owner%40example.test"}),
-            ),
-            (
-                "WebFetch",
-                serde_json::json!({"url": "https://example.test/?contact=owner%2540example.test"}),
-            ),
-            (
-                "WebSearch",
-                serde_json::json!({"query": "owner@example.test"}),
-            ),
-            (
-                "WebFetch",
-                serde_json::json!({"headers": {"User-Agent": "agent (owner@example.test)"}}),
-            ),
-            (
-                "WebFetch",
-                serde_json::json!({"nested": [{"owner@example.test": true}]}),
-            ),
-            (
-                "Bash",
-                serde_json::json!({"command": "git config user.email owner@example.test"}),
-            ),
-        ] {
-            let payload = serde_json::json!({
-                "hook_event_name": "PreToolUse",
-                "tool_name": tool,
-                "tool_input": arguments,
-            })
-            .to_string();
-            let output = hook_with(&root, harness, &payload, &["--privacy"]);
-            assert_eq!(code(&output), 0, "{}", stderr(&output));
-            let document: Value = serde_json::from_str(&stdout(&output)).unwrap();
-            assert_eq!(
-                document
-                    .pointer("/hookSpecificOutput/permissionDecision")
-                    .and_then(Value::as_str),
-                Some("deny")
-            );
-            for stream in [stdout(&output), stderr(&output)] {
-                assert!(stream.contains("no-email-in-tool-arguments"), "{stream}");
-                assert!(!stream.contains("owner"), "{stream}");
-                assert!(!stream.contains("example.test"), "{stream}");
-                assert!(!stream.contains("curl"), "{stream}");
+        for source in sources {
+            for (tool, input) in &calls {
+                let output = hook_as(&root, harness, &call(tool, input), &[], source);
+                assert_eq!(code(&output), 0, "{tool}: {}", stderr(&output));
+                assert!(denied(&output), "{tool} {source:?}: {}", stdout(&output));
+                for stream in [stdout(&output), stderr(&output)] {
+                    assert!(stream.contains("no-running-user-email"), "{stream}");
+                    assert!(!stream.to_lowercase().contains("owner"), "{stream}");
+                    assert!(!stream.contains("curl"), "{stream}");
+                }
             }
         }
     }
 }
 
+/// Email-shaped text that is nobody's address passes: an SSH remote, a
+/// package pin, an image digest, and another person's address. A check that
+/// refused these before every shell command would be switched off within the
+/// day, and the address it exists for would go out with the rest.
+///
+/// And a shell call is not a publication: a guard the policy runs at a forge
+/// -- here an authorship marker -- is recorded as out of scope rather than
+/// asked, so a commit message being drafted in a heredoc is not refused as if
+/// it had been posted.
 #[test]
-fn privacy_allows_ordinary_calls_silently_and_refuses_an_unread_subject() {
-    let root = workspace("hook-privacy-clean", None);
-    for arguments in [
-        serde_json::json!({"command": "curl https://example.test"}),
-        serde_json::json!({"url": "https://example.test/a%20b", "query": "documentation"}),
-        serde_json::json!({"count": 3, "enabled": true, "empty": null}),
-    ] {
-        let payload = serde_json::json!({
-            "hook_event_name": "PreToolUse", "tool_name": "WebFetch", "tool_input": arguments,
-        })
-        .to_string();
-        let output = hook_with(&root, "claude-code", &payload, &["--privacy"]);
-        assert_eq!(code(&output), 0, "{}", stderr(&output));
-        assert_eq!(stdout(&output), "");
-        assert_eq!(stderr(&output), "");
-    }
-    for payload in [
-        "not JSON",
-        r#"{"hook_event_name":"PreToolUse","tool_name":"WebFetch"}"#,
-        r#"{"hook_event_name":"Stop","tool_input":{}}"#,
-    ] {
-        let output = hook_with(&root, "claude-code", payload, &["--privacy"]);
-        assert_eq!(code(&output), 2);
-        assert_ne!(stderr(&output), "");
-    }
-}
-
-#[test]
-fn privacy_checks_json_escaped_addresses() {
-    let root = workspace("hook-privacy-json-escapes", None);
-    let payload = event("WebSearch", "owner@example.test").replace('@', r"\u0040");
-    let output = hook_with(&root, "claude-code", &payload, &["--privacy"]);
-    assert_eq!(code(&output), 0, "{}", stderr(&output));
-    let document: Value = serde_json::from_str(&stdout(&output)).unwrap();
-    assert_eq!(
-        document
-            .pointer("/hookSpecificOutput/permissionDecision")
-            .and_then(Value::as_str),
-        Some("deny")
-    );
-    assert!(!stdout(&output).contains("owner"));
-}
-
-#[test]
-fn privacy_records_both_outcomes_without_the_address() {
-    let root = workspace("hook-privacy-evidence", None);
+fn email_shaped_text_and_publication_guards_do_not_stop_a_shell_call() {
+    let root = workspace("hook-user-email-clean", Some(POLICY));
     let directory = root.join("evidence");
     std::fs::create_dir(&directory).unwrap();
-    for body in ["ordinary request", "owner@example.test"] {
-        let output = hook_with(
+    for command in [
+        "git clone git@github.com:example-org/example.git",
+        "npm install react@18 && npx tool@latest",
+        "docker pull image@sha256:0123abcd",
+        "git commit -m 'x' -m 'Co-Authored-By: Claude <noreply@anthropic.com>'",
+        "printf '%s' someone-else@example.test",
+    ] {
+        let output = hook_as(
             &root,
             "claude-code",
-            &event("WebSearch", body),
-            &["--privacy", "--junit", directory.to_str().unwrap()],
+            &call("Bash", &serde_json::json!({"command": command})),
+            &["--junit", directory.to_str().unwrap()],
+            &[("GIT_AUTHOR_EMAIL", ADDRESS)],
+        );
+        assert_eq!(code(&output), 0, "{command}: {}", stderr(&output));
+        assert_eq!(stdout(&output), "", "{command}");
+    }
+    for entry in std::fs::read_dir(&directory).unwrap() {
+        let record = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+        assert!(!record.contains("<failure"), "{record}");
+        assert!(record.contains("prevent-ai-author"), "{record}");
+        assert!(record.contains("no-running-user-email"), "{record}");
+    }
+}
+
+/// The evidence a refused call leaves names the rule and withholds the
+/// address, as the refusal does.
+#[test]
+fn the_evidence_withholds_the_address() {
+    let root = workspace("hook-user-email-evidence", None);
+    let directory = root.join("evidence");
+    std::fs::create_dir(&directory).unwrap();
+    for query in ["ordinary request", ADDRESS] {
+        let output = hook_as(
+            &root,
+            "claude-code",
+            &call("WebSearch", &serde_json::json!({"query": query})),
+            &["--junit", directory.to_str().unwrap()],
+            &[("GIT_AUTHOR_EMAIL", ADDRESS)],
         );
         assert_eq!(code(&output), 0, "{}", stderr(&output));
+        // No policy here, and no notice that the guards did not run: a call
+        // that publishes nothing has none in scope with a policy or without.
+        if query != ADDRESS {
+            assert_eq!(stdout(&output), "");
+            assert_eq!(stderr(&output), "");
+        }
     }
     let records: Vec<String> = std::fs::read_dir(&directory)
         .unwrap()
@@ -238,10 +271,51 @@ fn privacy_records_both_outcomes_without_the_address() {
         1
     );
     for record in records {
-        assert!(record.contains("no-email-in-tool-arguments"));
-        assert!(!record.contains("owner"));
-        assert!(!record.contains("example.test"));
+        assert!(record.contains("no-running-user-email"), "{record}");
+        assert!(!record.contains("owner"), "{record}");
     }
+}
+
+/// The two ends of the policy: a repository that publishes an address on
+/// purpose shadows the fallback with `ignore_literals`, and one that wants
+/// every address refused, whoever's, writes a pattern rule for the hook.
+#[test]
+fn a_policy_exempts_an_address_or_refuses_every_one() {
+    let exempt = workspace(
+        "hook-user-email-exempt",
+        Some(
+            "[rule.no-running-user-email]\nmessage = \"x\"\n\
+             forbidden_literals = \"running-user-email\"\n\
+             ignore_literals = [\"owner@example.test\"]\nfiles.include = [\".\"]\n",
+        ),
+    );
+    let every = workspace(
+        "hook-user-email-every",
+        Some(
+            "[rule.no-address-in-tool-calls]\nmessage = \"Leave addresses out.\"\n\
+             regexp = '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}'\n\
+             seams = [\"hook\"]\ncommand.before = [\"gh\"]\ncommand.scope = \"always\"\n",
+        ),
+    );
+    let ask = |root: &Path, query: &str| {
+        hook_as(
+            root,
+            "claude-code",
+            &call("WebSearch", &serde_json::json!({"query": query})),
+            &[],
+            &[("GIT_AUTHOR_EMAIL", ADDRESS)],
+        )
+    };
+    let exempted = ask(&exempt, ADDRESS);
+    assert_eq!(code(&exempted), 0, "{}", stderr(&exempted));
+    assert!(!denied(&exempted), "{}", stdout(&exempted));
+
+    let anyone = ask(&every, "someone-else@example.test");
+    assert_eq!(code(&anyone), 0, "{}", stderr(&anyone));
+    assert!(denied(&anyone), "{}", stderr(&anyone));
+    assert!(stdout(&anyone).contains("no-address-in-tool-calls"));
+    let pin = ask(&every, "npm install react@18");
+    assert!(!denied(&pin), "{}", stdout(&pin));
 }
 
 fn stdout(output: &Output) -> String {
@@ -1168,7 +1242,7 @@ fn every_call_writes_one_document_naming_each_rule_and_never_the_body() {
     assert!(!text.contains("Generated"), "{text}");
 
     let (second, _) = support::junit::suite(files.last().unwrap());
-    assert_eq!((second.tests, second.failures), (3, 0), "{second:?}");
+    assert_eq!((second.tests, second.failures), (4, 0), "{second:?}");
 }
 
 /// The hook runs once per publishing call, so one file would keep only the
@@ -2069,12 +2143,13 @@ fn a_skipped_read_writes_a_record_of_rules_set_aside() {
         "prevent-ai-author",
         "no-empty-hedge-here",
         "no-running-os-identity-metadata",
+        "no-running-user-email",
     ] {
         let case = support::junit::case(&suite, id);
         assert_eq!(support::junit::state(case).0, "skipped", "{id}");
         assert_eq!(support::junit::properties(case, "subject"), [tool]);
     }
-    assert_eq!((suite.tests, suite.failures), (3, 0), "{suite:?}");
+    assert_eq!((suite.tests, suite.failures), (4, 0), "{suite:?}");
 }
 
 /// A tool call has no remote, so `git-remote` is not a `[[hook]]` target: the

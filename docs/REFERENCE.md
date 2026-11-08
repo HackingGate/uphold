@@ -1152,7 +1152,9 @@ files.word = true
 The name says what fails: a literal describing **this machine** — username,
 home path, hostname and its identifying segments, default-route addresses —
 found in content. Sources: `running-os-identity`, `running-os-metadata`
-(identity plus route), `running-default-route`. `forbidden_literals_from`
+(identity plus route), `running-default-route`, and `running-user-email` (every
+`user.email` git resolves, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_EMAIL` and
+`EMAIL`, whose matches are always reported as `[REDACTED_MATCH]`). `forbidden_literals_from`
 names any command producing one literal per line (`label<TAB>value`, or a bare
 line as its own label):
 
@@ -3244,12 +3246,13 @@ the folder needs no install of their own:
 }
 ```
 
-The plugin's `hooks/hooks.json` holds the publication and privacy checks:
+The plugin's `hooks/hooks.json` holds four entries, each running
+`uphold hook claude-code`:
 
 | event | matcher | options |
 |---|---|---|
 | `PreToolUse` | `mcp__github__.*` | `onFailure: "block"` |
-| `PreToolUse` | `^(Bash\|WebFetch\|WebSearch)$` | `--privacy`, `onFailure: "block"` |
+| `PreToolUse` | `^(Bash\|WebFetch\|WebSearch)$` | `onFailure: "block"` |
 | `SessionStart` | | `async: true` |
 | `Stop` | | `timeout: 900`, `onFailure: "block"` |
 
@@ -3262,58 +3265,65 @@ remove it. A cloud session does not add marketplaces from a repository's
 `extraKnownMarketplaces`, so the plugin does not reach one through project
 settings.
 
-### Privacy before web and shell tools
+### Shell and web tools
 
-`uphold hook claude-code --privacy` reads the same pre-call JSON and returns
-the same denial document as the publication hook. The shipped Claude Code
-plugin installs it for `Bash`, `WebFetch` and `WebSearch`. An inline installation
-adds this group to `hooks.PreToolUse`:
+The `Bash`, `WebFetch` and `WebSearch` entry reaches the same judgment as every
+other call, through a compiled-in `[[hook]]` table that says these calls
+publish nothing to a forge:
 
-```json
-{
-  "matcher": "^(Bash|WebFetch|WebSearch)$",
-  "hooks": [{"type": "command", "command": "uphold hook claude-code --privacy", "onFailure": "block"}]
-}
+```toml
+[[hook]]
+tools = '^(Bash|WebFetch|WebSearch)$'
+publishes = false
 ```
 
-Privacy mode checks every string value and object key in `tool_input`, including
-nested headers, URL parameters, bodies and search queries. It refuses text shaped
-like an email address: dot-atom characters from RFC 5322 section 3.2.3, quoted
-local parts, and Unicode letters and numbers as in SMTPUTF8 (RFC 6531). This is
-a conservative detector, not validation of every mailbox syntax. It requires
-no private identity list or account credential access and protects addresses
-whether they belong to the operator or someone else.
+So they are judged by the rules that mean the same against any text: the
+literal rules, and the pattern rules a policy writes for `seams = ["hook"]`.
+The guards and the prose rules are about a publication and are recorded as out
+of scope, so a private repository's name in a `cd` and an authorship marker in
+a drafted commit message are not refused here. They are refused when the text
+is published, at the shim or the forge's hook.
 
-JSON escapes are decoded by the event reader. URL percent encoding is decoded
-through a bounded number of layers; input that still changes after that bound
-is refused rather than reported as inspected. Ordinary calls return silently.
-A refusal names `no-email-in-tool-arguments` without printing the tool name,
-arguments or address. `--junit DIR` records passes and refusals with the same
-content withholding. The check runs independently of repository publication
-policy and `UPHOLD_ALLOW`; selecting privacy mode always runs it. A malformed
-event, absent `tool_input`, unsupported harness or event other than
-`PreToolUse` exits `2`. Keep the blocking failure option in the installation.
+Two literal rules run wherever the call is made, policy or none:
+`no-running-os-identity-metadata`, and at this seam only `no-running-user-email`,
+which reads `running-user-email`. The second refuses the running user's own
+address. It does not refuse every email-shaped string: an SSH remote, a package
+pin and an image digest look like addresses and identify nobody. A refusal and
+its `--junit` record name the rule and where the address was configured, never
+the address or the line it was on. Each string the call carries is also read
+through up to four layers of percent-encoding (RFC 3986 section 2.1), so
+`owner%40example.test` and `owner%2540example.test` are found.
 
-Shell commands are checked in full, including local commands: an email address
-in `git config`, an SSH login or a mail command is also refused. Make intentional
-identity configuration or email delivery outside the agent's guarded shell.
-This avoids trying to infer arbitrary shell code's network effects from its
-spelling. The publication hook remains a separate entry so privacy checks do
-not apply forge-write policy to shell commands or replace existing checks.
+A repository changes either end in policy:
 
-The guarantee is limited to the arguments the harness supplies. This hook
-cannot inspect headers injected by an HTTP client after the hook, evaluate
-shell concatenation, decode arbitrary encodings, read script or upload-file
-contents, inspect environment variables, or observe traffic from tools that
-bypass local hooks. It does not detect every kind of personal information or
-credential. Protect those paths in the sending client or an enforced outbound
-proxy. A passing hook is not an attestation that the eventual network request
-contains no personal information.
+```toml
+# A published security contact is the user's address on purpose.
+[rule.no-running-user-email]
+message = "Leave the address out."
+forbidden_literals = "running-user-email"
+ignore_literals = ["security@example.test"]
+files.include = ["."]
 
-`--privacy` also accepts the shared `codex` event protocol. Its shipped plugin
-does not install this mode; an operator must attach it to the applicable local
-tools. Hosted web tools that do not emit local hook events remain outside its
-reach.
+# Every address, whoever's, in a tool call.
+[rule.no-address-in-tool-calls]
+message = "Leave addresses out."
+regexp = '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
+seams = ["hook"]
+command.before = ["gh"]
+command.scope = "always"
+```
+
+Both rules, and the user-email fallback, also judge the GitHub MCP server's
+calls, which are the hook seam too. The shim and `--text` seams do not get the
+fallback: a `Signed-off-by` trailer at `commit-msg` is the author's decision. A
+repository that wants it there declares the rule.
+
+The check reads the arguments the harness supplies. It cannot see headers an
+HTTP client adds after the hook, shell concatenation, the contents of a script
+or an uploaded file, environment variables, or tools that never call a local
+hook. A pass is not an attestation about the request that is eventually sent.
+The Codex plugin's matcher is `mcp__.*`, so it does not send its shell tool
+here.
 
 ### Installing the Codex plugin
 
@@ -3417,6 +3427,8 @@ shim = "gh"                # take scope and unresolved from this [[shim]] table
 # or, instead of shim:
 # scope = "public-target"  # as on [[shim]]; "always" where neither is written
 # unresolved = "refuse"    # as on [[shim]]; "run" is the opt-out
+# or, for a call that publishes to no forge, with none of the above:
+# publishes = false        # judged by literal rules and seams = ["hook"] patterns only
 ```
 
 That table is compiled in, from
@@ -3479,6 +3491,9 @@ configured for. A table in an
 the scope is right at the shim, but that scope reads an npm command line, which
 no tool call has: at the hook it is unresolved, and the refusal names the rule.
 A pattern or prose rule takes `seams = ["shim"]` to stay off the hook.
+`publishes = false` beside `skip`, `target`, `forge`, `owner`, `repo`, `shim`,
+`scope` or `unresolved` is refused: those say where a publication goes, and
+the table says there is none. See [Shell and web tools](#shell-and-web-tools).
 
 ### What runs where there is no policy
 

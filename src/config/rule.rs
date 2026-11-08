@@ -224,7 +224,8 @@ pub(crate) struct Written {
 #[serde(untagged)]
 pub(crate) enum Literals {
     /// A named built-in source of literals describing the running machine --
-    /// `running-os-identity`, `running-os-metadata`, `running-default-route`.
+    /// `running-os-identity`, `running-os-metadata`, `running-default-route`,
+    /// `running-user-email`.
     /// The name says what fails: a literal describing THIS machine, found in
     /// content.
     Named { forbidden_literals: String },
