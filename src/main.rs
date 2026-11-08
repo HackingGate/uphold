@@ -113,8 +113,14 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Exit, Fatal, Result, verdict};
 
+/// What a usage error ends with, in place of the whole of `USAGE`: the one
+/// line that went wrong stays the last thing on screen, and the full list is a
+/// command away.
+const MORE: &str = "run `uphold --help` for every command";
+
 const USAGE: &str = "\
 usage:
+  uphold help                        print this text (also `--help`, or `-h` after a command)
   uphold scan [--policy PATH]        run the content policy over this repository
   uphold scan --text [FILE|-]        run the host-identity rules over text
   uphold guard --stage STAGE [--junit FILE]
@@ -211,7 +217,7 @@ fn init_command(rest: &[OsString]) -> Result<Exit> {
     let usage = || {
         Fatal::new(format!(
             "usage: uphold init --owner OWNER --visibility public|private|internal \
-             [--lefthook]\n\n{USAGE}"
+             [--lefthook]\n\n{MORE}"
         ))
     };
     let mut owner: Option<String> = None;
@@ -363,6 +369,14 @@ fn run() -> Result<Exit> {
         return Ok(Exit::Clean);
     };
 
+    // `uphold init --help` asks for help, not for an init. `shim` is left out:
+    // after it come another command's arguments, and `--help` there is that
+    // command's to answer.
+    if matches!(rest, [flag] if flag == "--help" || flag == "-h") && first != "shim" {
+        print!("{USAGE}");
+        return Ok(Exit::Clean);
+    }
+
     match text_of(first)? {
         // The url `package.repository` holds, for the OSCAL export's property
         // namespace. Asked of the binary because the binary is where that value
@@ -376,7 +390,7 @@ fn run() -> Result<Exit> {
             println!("uphold {}", env!("CARGO_PKG_VERSION"));
             Ok(Exit::Clean)
         }
-        "--help" | "-h" => {
+        "help" | "--help" | "-h" => {
             print!("{USAGE}");
             Ok(Exit::Clean)
         }
@@ -389,7 +403,7 @@ fn run() -> Result<Exit> {
                 print!("{}", schema::document()?);
                 Ok(Exit::Clean)
             }
-            _ => Err(Fatal::new(format!("usage: uphold schema\n\n{USAGE}"))),
+            _ => Err(Fatal::new(format!("usage: uphold schema\n\n{MORE}"))),
         },
         "check" => check_arguments(rest),
         "hooks" => match rest {
@@ -401,7 +415,7 @@ fn run() -> Result<Exit> {
                 let usage = || {
                     Fatal::new(format!(
                         "usage: uphold hooks --install [--runner prek|pre-commit] \
-                         [--dir DIR] [--adopt | --check]\n\n{USAGE}"
+                         [--dir DIR] [--adopt | --check]\n\n{MORE}"
                     ))
                 };
                 while let Some(word) = tail.get(index) {
@@ -441,13 +455,13 @@ fn run() -> Result<Exit> {
                 hooks::identity(&root, &directories)
             }
             _ => Err(Fatal::new(format!(
-                "usage: uphold hooks --identity DIR [DIR...]\n\n{USAGE}"
+                "usage: uphold hooks --identity DIR [DIR...]\n\n{MORE}"
             ))),
         },
         "supply-chain" => {
             let usage = || {
                 Fatal::new(format!(
-                    "usage: uphold supply-chain [--all | --base REV | --staged]\n\n{USAGE}"
+                    "usage: uphold supply-chain [--all | --base REV | --staged]\n\n{MORE}"
                 ))
             };
             let mut whole = false;
@@ -520,7 +534,7 @@ fn run() -> Result<Exit> {
             let usage = || {
                 Fatal::new(format!(
                     "usage: uphold probe [--runner prek|pre-commit|lefthook] \
-                     [--timeout SECONDS]\n\n{USAGE}"
+                     [--timeout SECONDS]\n\n{MORE}"
                 ))
             };
             let mut runner: Option<&str> = None;
@@ -570,7 +584,7 @@ fn run() -> Result<Exit> {
             }
             _ => Err(Fatal::new(format!(
                 "usage: uphold rules --set NAME [--json] | uphold rules --sets --json | \
-                 uphold rules --effective [--json]\n\n{USAGE}"
+                 uphold rules --effective [--json]\n\n{MORE}"
             ))),
         },
         "hook" => match hook_arguments(rest)? {
@@ -594,13 +608,13 @@ fn run() -> Result<Exit> {
                 hook::run(text_of(harness)?, discover(&working).as_ref(), evidence)
             }
             (None, _) => Err(Fatal::new(format!(
-                "usage: uphold hook {} [--junit DIR]\n\n{USAGE}",
+                "usage: uphold hook {} [--junit DIR]\n\n{MORE}",
                 hook::known()
             ))),
         },
         "shim" => shim_or_links(rest),
         other => Err(Fatal::new(format!(
-            "unknown subcommand {other:?}\n\n{USAGE}"
+            "unknown subcommand {other:?}\n\n{MORE}"
         ))),
     }
 }
@@ -617,7 +631,7 @@ fn run() -> Result<Exit> {
 fn check_arguments(rest: &[OsString]) -> Result<Exit> {
     let usage = || {
         Fatal::new(format!(
-            "usage: uphold check [--json] [--probe] [--base <dir>] | --coverage\n\n{USAGE}"
+            "usage: uphold check [--json] [--probe] [--base <dir>] | --coverage\n\n{MORE}"
         ))
     };
     if let [flag] = rest
@@ -706,7 +720,7 @@ fn scan_command(arguments: &[OsString]) -> Result<Exit> {
                     None => String::from("-"),
                 });
             }
-            other => return Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}"))),
+            other => return Err(Fatal::new(format!("unknown option {other:?}\n\n{MORE}"))),
         }
         index += 1;
     }
@@ -864,7 +878,7 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
                     .ok_or_else(|| Fatal::new(format!("{} needs a value", junit::FLAG)))?;
                 junit_flag = Some(path.clone());
             }
-            other => return Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}"))),
+            other => return Err(Fatal::new(format!("unknown option {other:?}\n\n{MORE}"))),
         }
         index += 1;
     }
@@ -948,7 +962,7 @@ fn guard_command(arguments: &[OsString]) -> Result<Exit> {
 
     // No default. A guard reads a different artifact at every stage, so guessing
     // one would make it answer a question nobody asked -- and answer it green.
-    let stage = stage.ok_or_else(|| Fatal::new(format!("guard needs --stage\n\n{USAGE}")))?;
+    let stage = stage.ok_or_else(|| Fatal::new(format!("guard needs --stage\n\n{MORE}")))?;
 
     // git feeds a pre-push hook its ref lines on stdin. pre-commit and prek
     // consume that stdin themselves and re-publish it as environment, so this
@@ -996,7 +1010,7 @@ fn audit_command(arguments: &[OsString]) -> Result<Exit> {
         [only] if only == "--for-publication" => {}
         _ => {
             return Err(Fatal::new(format!(
-                "audit needs --for-publication\n\n{USAGE}"
+                "audit needs --for-publication\n\n{MORE}"
             )));
         }
     }
@@ -1244,7 +1258,7 @@ fn effective_rules_command(as_json: bool) -> Result<Exit> {
 fn shim_or_links(rest: &[OsString]) -> Result<Exit> {
     let (first, after) = rest
         .split_first()
-        .ok_or_else(|| Fatal::new(format!("shim needs a command\n\n{USAGE}")))?;
+        .ok_or_else(|| Fatal::new(format!("shim needs a command\n\n{MORE}")))?;
     // `--as-editor` is the shim re-entering itself as the command's own editor,
     // and it is a word here rather than a variable in the environment for the
     // reason `shim::Invoked::AsEditor` gives: an environment reaches every
@@ -1253,7 +1267,7 @@ fn shim_or_links(rest: &[OsString]) -> Result<Exit> {
     if first == shim::EDITOR_FLAG {
         let (name, shimmed) = after
             .split_first()
-            .ok_or_else(|| Fatal::new(format!("shim needs a command\n\n{USAGE}")))?;
+            .ok_or_else(|| Fatal::new(format!("shim needs a command\n\n{MORE}")))?;
         return shim_command(text_of(name)?, shimmed, shim::Invoked::AsEditor);
     }
     let word = text_of(first)?;
@@ -1269,7 +1283,7 @@ fn shim_or_links(rest: &[OsString]) -> Result<Exit> {
         other if other.starts_with('-') => Err(Fatal::new(format!(
             "{other:?} is not one of the shim modes, and no command is called that. The mode \
              comes first:\n\n  uphold shim --install|--status|--uninstall|--hook|--path \
-             [--dir PATH]\n\n{USAGE}"
+             [--dir PATH]\n\n{MORE}"
         ))),
         _ => shim_command(word, after, shim::Invoked::ByName),
     }
@@ -1291,7 +1305,7 @@ fn links_command(mode: &str, rest: &[OsString]) -> Result<Exit> {
                 explicit_dir = Some(PathBuf::from(value));
             }
             other if other.starts_with('-') => {
-                return Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}")));
+                return Err(Fatal::new(format!("unknown option {other:?}\n\n{MORE}")));
             }
             other => words.push(other.to_owned()),
         }
@@ -1307,7 +1321,7 @@ fn links_command(mode: &str, rest: &[OsString]) -> Result<Exit> {
         "--hook" => match words.as_slice() {
             [shell] => install::hook(shell, &directory),
             _ => Err(Fatal::new(format!(
-                "usage: uphold shim --hook bash|zsh|fish [--dir PATH]\n\n{USAGE}"
+                "usage: uphold shim --hook bash|zsh|fish [--dir PATH]\n\n{MORE}"
             ))),
         },
         // The rest read the directory and take no names: what is linked there is
@@ -1315,12 +1329,12 @@ fn links_command(mode: &str, rest: &[OsString]) -> Result<Exit> {
         // it.
         _ if !words.is_empty() => Err(Fatal::new(format!(
             "uphold shim {mode} takes no command names -- it reads the directory. \
-             Names are for --install\n\n{USAGE}"
+             Names are for --install\n\n{MORE}"
         ))),
         "--uninstall" => install::uninstall(&directory),
         "--status" => install::status(&directory),
         "--path" => install::shell_path(&directory),
-        other => Err(Fatal::new(format!("unknown option {other:?}\n\n{USAGE}"))),
+        other => Err(Fatal::new(format!("unknown option {other:?}\n\n{MORE}"))),
     }
 }
 

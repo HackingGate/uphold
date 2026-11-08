@@ -711,3 +711,42 @@ fn an_inherit_path_inside_the_repository_still_loads() {
     assert_eq!(code(&output), Some(1), "{}", stderr(&output));
     assert!(stderr(&output).contains("found.txt"), "{}", stderr(&output));
 }
+
+/// Help is asked for three ways a newcomer types, and each one answers with the
+/// command list and exit 0 -- not with an error about the command it named.
+#[test]
+fn help_is_answered_however_it_is_asked_for() {
+    let root = workspace();
+    for arguments in [vec!["help"], vec!["init", "--help"], vec!["scan", "-h"]] {
+        let output = uphold(&root, &arguments);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(output.status.code(), Some(0), "{arguments:?}: {output:?}");
+        assert!(
+            stdout.contains("uphold init --owner"),
+            "{arguments:?}: {stdout}"
+        );
+    }
+}
+
+/// A usage error ends with the line that went wrong and one pointer to the
+/// full list, so the mistake is the last thing on screen rather than sixty
+/// lines up.
+#[test]
+fn a_usage_error_names_the_mistake_and_points_at_help() {
+    let root = workspace();
+    for arguments in [vec!["bogus"], vec!["init"]] {
+        let output = uphold(&root, &arguments);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(
+            stderr
+                .trim_end()
+                .ends_with("run `uphold --help` for every command"),
+            "{stderr}"
+        );
+        assert!(
+            stderr.lines().count() < 6,
+            "{arguments:?} dumped the whole usage: {stderr}"
+        );
+    }
+}
