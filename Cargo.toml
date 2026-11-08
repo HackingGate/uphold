@@ -42,6 +42,8 @@ ignore = "0.4"
 # The engine under `grep-regex`, used directly where a pattern is matched
 # against a string already in memory rather than searched through a file.
 regex = "1"
+# Decode URL-encoded tool arguments before the privacy hook examines them.
+percent-encoding = "2"
 # Where a URL written out in prose ends and the sentence's punctuation begins,
 # for `citations-linked`. A URL pattern of our own gets that boundary wrong on
 # a trailing period, a closing parenthesis and a quote; this crate's tests are

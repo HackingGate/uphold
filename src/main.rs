@@ -146,6 +146,7 @@ usage:
   uphold rules --effective [--json]  every rule this repository resolves to, and
                                      the git hooks each one fires at
   uphold hook claude-code|codex      judge a pending tool call or a turn's end, read on stdin
+    [--privacy]                    refuse email-shaped arguments without publication policy
               [--junit DIR]
   uphold shim <command> [args...]     check what a command would publish, then run it
   uphold shim --install [COMMAND...]  link this binary under each command's name
@@ -574,7 +575,7 @@ fn run() -> Result<Exit> {
             ))),
         },
         "hook" => match hook_arguments(rest)? {
-            (Some(harness), junit_flag) => {
+            (Some(harness), junit_flag, privacy) => {
                 // Before the harness is looked up or the event read, as every
                 // seam judges it: a value that cannot be honoured is exit 2 while
                 // nothing has been decided. A directory only, since a harness
@@ -591,10 +592,15 @@ fn run() -> Result<Exit> {
                 // everywhere and get the hook switched off within a day. What
                 // still runs without a policy, and what does not, is
                 // `hook::run`'s to do and to report.
-                hook::run(text_of(harness)?, discover(&working).as_ref(), evidence)
+                hook::run(
+                    text_of(harness)?,
+                    discover(&working).as_ref(),
+                    evidence,
+                    privacy,
+                )
             }
-            (None, _) => Err(Fatal::new(format!(
-                "usage: uphold hook {} [--junit DIR]\n\n{USAGE}",
+            (None, _, _) => Err(Fatal::new(format!(
+                "usage: uphold hook {} [--privacy] [--junit DIR]\n\n{USAGE}",
                 hook::known()
             ))),
         },
@@ -784,15 +790,16 @@ fn scan_command(arguments: &[OsString]) -> Result<Exit> {
     Ok(exit)
 }
 
-/// The harness `uphold hook` was named, and the `--junit` value beside it.
+/// The harness, evidence directory, and privacy mode requested for a hook.
 ///
 /// The flag is accepted here and not at the shim because this command line is
 /// the harness's settings file, which the operator writes. `None` for the
 /// harness where there is not exactly one, which the caller answers with usage.
-fn hook_arguments(rest: &[OsString]) -> Result<(Option<&OsString>, Option<&OsStr>)> {
+fn hook_arguments(rest: &[OsString]) -> Result<(Option<&OsString>, Option<&OsStr>, bool)> {
     let mut harness = None;
     let mut junit_flag = None;
     let mut extra = false;
+    let mut privacy = false;
     let mut words = rest.iter();
     while let Some(word) = words.next() {
         if word == junit::FLAG {
@@ -800,13 +807,15 @@ fn hook_arguments(rest: &[OsString]) -> Result<(Option<&OsString>, Option<&OsStr
                 .next()
                 .ok_or_else(|| Fatal::new(format!("{} needs a value", junit::FLAG)))?;
             junit_flag = Some(value.as_os_str());
+        } else if word == "--privacy" && !privacy {
+            privacy = true;
         } else if harness.is_none() {
             harness = Some(word);
         } else {
             extra = true;
         }
     }
-    Ok((harness.filter(|_| !extra), junit_flag))
+    Ok((harness.filter(|_| !extra), junit_flag, privacy))
 }
 
 fn guard_command(arguments: &[OsString]) -> Result<Exit> {

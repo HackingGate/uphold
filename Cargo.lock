@@ -1344,6 +1344,7 @@ dependencies = [
  "ignore",
  "jsonschema",
  "linkify",
+ "percent-encoding",
  "pulldown-cmark",
  "quick-junit",
  "regex",

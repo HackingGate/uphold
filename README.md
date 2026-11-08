@@ -338,6 +338,15 @@ second matcher in this binary. An unknown harness name is refused rather than
 guessed at, because where to find the text in its event cannot be derived from
 its name.
 
+The Claude Code plugin also runs `uphold hook claude-code --privacy` before
+`Bash`, `WebFetch` and `WebSearch`. It refuses email-shaped text in arguments,
+including headers and URL-encoded strings, without logging the address or
+reading account credentials. Shell checks are conservative: a local command
+containing an address is refused too. This checks visible arguments only;
+headers inserted later by the client, scripts, environment variables and
+hosted tools that do not invoke the hook need protection at their own boundary.
+See [the privacy hook contract](docs/REFERENCE.md#privacy-before-web-and-shell-tools).
+
 For Claude Code, enable the `uphold` plugin this repository ships, at the tag
 of the release you installed:
 

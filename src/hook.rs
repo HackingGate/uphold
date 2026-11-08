@@ -53,6 +53,7 @@
 //! the end-of-turn gate in [`stop`]; every other event, and an event naming
 //! none, is the pre-call judgment below, as it was before the gate existed.
 
+mod privacy;
 mod stop;
 mod table;
 
@@ -188,6 +189,7 @@ pub(crate) fn run(
     harness: &str,
     found: Option<&(PathBuf, PathBuf)>,
     evidence: Option<PathBuf>,
+    privacy: bool,
 ) -> Result<Exit> {
     let shape = SHAPES
         .iter()
@@ -213,6 +215,12 @@ pub(crate) fn run(
              \"allowed\" would mean \"unexamined\""
         ))
     })?;
+
+    if privacy && event.get("hook_event_name").and_then(Value::as_str) != Some("PreToolUse") {
+        return Err(Fatal::new(
+            "--privacy requires a PreToolUse event; no tool arguments were checked",
+        ));
+    }
 
     if let Some(name @ ("SessionStart" | "Stop")) =
         event.pointer("/hook_event_name").and_then(Value::as_str)
@@ -270,6 +278,31 @@ pub(crate) fn run(
         Observed::Present,
     );
     let subject = observation.read()?.copied();
+
+    // A separate matcher selects privacy calls. They are checked without
+    // repository publication policy: a shell command is not a forge write.
+    if privacy {
+        let mut record = Record::new(
+            evidence.map(Place::Directory),
+            Run::Hook(harness.to_owned()),
+        );
+        record.open()?;
+        let judgment = match privacy::judge(subject) {
+            Ok(judgment) => judgment,
+            Err(error) => return record.finish(Err(error)),
+        };
+        let report = judgment.refused().map(|verdict| match verdict {
+            Verdict::Guard(refusal) => refusal.report.clone(),
+            Verdict::Rule(failure) => failure.report(),
+        });
+        record.ledger.push(judgment);
+        record.write(false)?;
+        if let Some(report) = report {
+            eprintln!("{report}");
+            println!("{}", refusal_document(shape, &report)?);
+        }
+        return Ok(shape.refused);
+    }
 
     // Everything a piece of published text is judged by, from the one place
     // that knows what that is. The host-identity rules run wherever the call

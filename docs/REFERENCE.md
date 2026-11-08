@@ -3244,12 +3244,12 @@ the folder needs no install of their own:
 }
 ```
 
-The plugin's `hooks/hooks.json` holds three entries, each running
-`uphold hook claude-code`:
+The plugin's `hooks/hooks.json` holds the publication and privacy checks:
 
 | event | matcher | options |
 |---|---|---|
 | `PreToolUse` | `mcp__github__.*` | `onFailure: "block"` |
+| `PreToolUse` | `^(Bash\|WebFetch\|WebSearch)$` | `--privacy`, `onFailure: "block"` |
 | `SessionStart` | | `async: true` |
 | `Stop` | | `timeout: 900`, `onFailure: "block"` |
 
@@ -3261,6 +3261,61 @@ file, so a hook block pasted beside the enabled plugin runs every hook twice:
 remove it. A cloud session does not add marketplaces from a repository's
 `extraKnownMarketplaces`, so the plugin does not reach one through project
 settings.
+
+### Privacy before web and shell tools
+
+`uphold hook claude-code --privacy` reads the same pre-call JSON and returns
+the same denial document as the publication hook. The shipped Claude Code
+plugin installs it for `Bash`, `WebFetch` and `WebSearch`. An inline installation
+adds this group to `hooks.PreToolUse`:
+
+```json
+{
+  "matcher": "^(Bash|WebFetch|WebSearch)$",
+  "hooks": [{"type": "command", "command": "uphold hook claude-code --privacy", "onFailure": "block"}]
+}
+```
+
+Privacy mode checks every string value and object key in `tool_input`, including
+nested headers, URL parameters, bodies and search queries. It refuses text shaped
+like an email address: dot-atom characters from RFC 5322 section 3.2.3, quoted
+local parts, and Unicode letters and numbers as in SMTPUTF8 (RFC 6531). This is
+a conservative detector, not validation of every mailbox syntax. It requires
+no private identity list or account credential access and protects addresses
+whether they belong to the operator or someone else.
+
+JSON escapes are decoded by the event reader. URL percent encoding is decoded
+through a bounded number of layers; input that still changes after that bound
+is refused rather than reported as inspected. Ordinary calls return silently.
+A refusal names `no-email-in-tool-arguments` without printing the tool name,
+arguments or address. `--junit DIR` records passes and refusals with the same
+content withholding. The check runs independently of repository publication
+policy and `UPHOLD_ALLOW`; selecting privacy mode always runs it. A malformed
+event, absent `tool_input`, unsupported harness or event other than
+`PreToolUse` exits `2`. Keep the blocking failure option in the installation.
+
+Shell commands are checked in full, including local commands: an email address
+in `git config`, an SSH login or a mail command is also refused. Make intentional
+identity configuration or email delivery outside the agent's guarded shell.
+This avoids trying to infer arbitrary shell code's network effects from its
+spelling. The publication hook remains a separate entry so privacy checks do
+not apply forge-write policy to shell commands or replace existing checks.
+
+The guarantee is limited to the arguments the harness supplies. This hook
+cannot inspect headers injected by an HTTP client after the hook, evaluate
+shell concatenation, decode arbitrary encodings, read script or upload-file
+contents, inspect environment variables, or observe traffic from tools that
+bypass local hooks. It does not detect every kind of personal information or
+credential. Protect those paths in the sending client or an enforced outbound
+proxy. A passing hook is not an attestation that the eventual network request
+contains no personal information.
+
+`--privacy` also accepts the shared `codex` event protocol. Its shipped plugin
+does not install this mode; an operator must attach it to the applicable local
+tools. Hosted web tools that do not emit local hook events remain outside its
+reach.
+
+### Installing the Codex plugin
 
 For [Codex](https://developers.openai.com/codex/), this repository publishes
 `.agents/plugins/marketplace.json`, pointing to `plugins/codex`. Add the

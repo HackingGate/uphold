@@ -2,6 +2,12 @@
   "hooks": {
     "PreToolUse": [
       {
+        "matcher": "^(Bash|WebFetch|WebSearch)$",
+        "hooks": [
+          {"type": "command", "command": "uphold hook claude-code --privacy", "onFailure": "block"}
+        ]
+      },
+      {
         "matcher": "mcp__github__.*",
         "hooks": [
           {"type": "command", "command": "uphold hook claude-code", "onFailure": "block"}

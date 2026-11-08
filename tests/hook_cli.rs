@@ -79,8 +79,13 @@ fn workspace(name: &str, policy: Option<&str>) -> PathBuf {
 /// the identity needles are read from the environment the check runs in, and a
 /// test that let the real one through would assert on this machine.
 fn hook(root: &Path, harness: &str, stdin: &str) -> Output {
+    hook_with(root, harness, stdin, &[])
+}
+
+fn hook_with(root: &Path, harness: &str, stdin: &str, options: &[&str]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
         .args(["hook", harness])
+        .args(options)
         .current_dir(root)
         .env_remove("UPHOLD_ALLOW")
         .env("HOME", "/home/example-user")
@@ -95,6 +100,148 @@ fn hook(root: &Path, harness: &str, stdin: &str) -> Output {
         assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
     }
     child.wait_with_output().unwrap()
+}
+
+#[test]
+fn privacy_refuses_addresses_without_disclosing_them_or_loading_a_policy() {
+    // The publication policy is deliberately unreadable as TOML. Privacy
+    // checks have no repository policy and must not depend on it loading.
+    let root = workspace("hook-privacy", Some("not a valid policy"));
+    for harness in ["claude-code", "codex"] {
+        for (tool, arguments) in [
+            (
+                "Bash",
+                serde_json::json!({"command": "curl -A 'agent (owner@example.test)' https://example.test"}),
+            ),
+            (
+                "Bash",
+                serde_json::json!({"command": "python -c 'send(\"owner@example.test\")'"}),
+            ),
+            (
+                "WebFetch",
+                serde_json::json!({"url": "https://example.test/?contact=owner%40example.test"}),
+            ),
+            (
+                "WebFetch",
+                serde_json::json!({"url": "https://example.test/?contact=owner%2540example.test"}),
+            ),
+            (
+                "WebSearch",
+                serde_json::json!({"query": "owner@example.test"}),
+            ),
+            (
+                "WebFetch",
+                serde_json::json!({"headers": {"User-Agent": "agent (owner@example.test)"}}),
+            ),
+            (
+                "WebFetch",
+                serde_json::json!({"nested": [{"owner@example.test": true}]}),
+            ),
+            (
+                "Bash",
+                serde_json::json!({"command": "git config user.email owner@example.test"}),
+            ),
+        ] {
+            let payload = serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": tool,
+                "tool_input": arguments,
+            })
+            .to_string();
+            let output = hook_with(&root, harness, &payload, &["--privacy"]);
+            assert_eq!(code(&output), 0, "{}", stderr(&output));
+            let document: Value = serde_json::from_str(&stdout(&output)).unwrap();
+            assert_eq!(
+                document
+                    .pointer("/hookSpecificOutput/permissionDecision")
+                    .and_then(Value::as_str),
+                Some("deny")
+            );
+            for stream in [stdout(&output), stderr(&output)] {
+                assert!(stream.contains("no-email-in-tool-arguments"), "{stream}");
+                assert!(!stream.contains("owner"), "{stream}");
+                assert!(!stream.contains("example.test"), "{stream}");
+                assert!(!stream.contains("curl"), "{stream}");
+            }
+        }
+    }
+}
+
+#[test]
+fn privacy_allows_ordinary_calls_silently_and_refuses_an_unread_subject() {
+    let root = workspace("hook-privacy-clean", None);
+    for arguments in [
+        serde_json::json!({"command": "curl https://example.test"}),
+        serde_json::json!({"url": "https://example.test/a%20b", "query": "documentation"}),
+        serde_json::json!({"count": 3, "enabled": true, "empty": null}),
+    ] {
+        let payload = serde_json::json!({
+            "hook_event_name": "PreToolUse", "tool_name": "WebFetch", "tool_input": arguments,
+        })
+        .to_string();
+        let output = hook_with(&root, "claude-code", &payload, &["--privacy"]);
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        assert_eq!(stdout(&output), "");
+        assert_eq!(stderr(&output), "");
+    }
+    for payload in [
+        "not JSON",
+        r#"{"hook_event_name":"PreToolUse","tool_name":"WebFetch"}"#,
+        r#"{"hook_event_name":"Stop","tool_input":{}}"#,
+    ] {
+        let output = hook_with(&root, "claude-code", payload, &["--privacy"]);
+        assert_eq!(code(&output), 2);
+        assert_ne!(stderr(&output), "");
+    }
+}
+
+#[test]
+fn privacy_checks_json_escaped_addresses() {
+    let root = workspace("hook-privacy-json-escapes", None);
+    let payload = event("WebSearch", "owner@example.test").replace('@', r"\u0040");
+    let output = hook_with(&root, "claude-code", &payload, &["--privacy"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let document: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(
+        document
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    assert!(!stdout(&output).contains("owner"));
+}
+
+#[test]
+fn privacy_records_both_outcomes_without_the_address() {
+    let root = workspace("hook-privacy-evidence", None);
+    let directory = root.join("evidence");
+    std::fs::create_dir(&directory).unwrap();
+    for body in ["ordinary request", "owner@example.test"] {
+        let output = hook_with(
+            &root,
+            "claude-code",
+            &event("WebSearch", body),
+            &["--privacy", "--junit", directory.to_str().unwrap()],
+        );
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+    }
+    let records: Vec<String> = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect();
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.contains("<failure"))
+            .count(),
+        1
+    );
+    for record in records {
+        assert!(record.contains("no-email-in-tool-arguments"));
+        assert!(!record.contains("owner"));
+        assert!(!record.contains("example.test"));
+    }
 }
 
 fn stdout(output: &Output) -> String {
