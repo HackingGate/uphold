@@ -1171,7 +1171,15 @@ pub(crate) struct PolicyFile {
 /// `host/owner/repo` and names no repository, and 84 policy files in one fleet
 /// had each written the same one-item list under the same comment to say so.
 /// A policy's own `foreign_hosts` extends this list; nothing replaces it.
-pub(crate) const FOREIGN_HOSTS_DEFAULT: &[&str] = &["claude.ai"];
+///
+/// `app.greptile.com` is the same case from a review bot. Its links are
+/// `<workspace>/<provider>/<owner>/<repo>/-/pull/N`, so the first two segments
+/// are a workspace and the word `github`, never a repository, and a workspace
+/// named for the organisation reads as a declared owner's repository on a host
+/// `gh` cannot ask: exit 2 for every pull request the bot commented on. The
+/// repository the link does name is the `owner/repo` after `github/`, which the
+/// declared-owner match finds in the text whichever host carries it.
+pub(crate) const FOREIGN_HOSTS_DEFAULT: &[&str] = &["app.greptile.com", "claude.ai"];
 
 /// Where a file this binary reads natively lives, in a spelling that survives
 /// being committed to a repository other people clone.

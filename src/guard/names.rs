@@ -1855,13 +1855,28 @@ mod tests {
         // to say it is not one. Quiet with no list, and still quiet under a
         // list that does not name it -- a declaration extends the built-in
         // list rather than starting from nothing.
-        let text = "see https://claude.ai/code/session-abc";
+        let text = "see https://claude.ai/code/session-abc and \
+                    https://app.greptile.com/acme/github/acme/widget/-/pull/1";
         assert!(unanswerable_names(text, &ForeignHosts::new(&[]).unwrap()).is_empty());
         let declared = ForeignHosts::new(&["example.test".to_owned()]).unwrap();
         assert!(unanswerable_names(text, &declared).is_empty());
         assert_eq!(
             unanswerable_names("https://other.test/acme/widget", &declared).len(),
             1
+        );
+    }
+
+    #[test]
+    fn a_quiet_review_bot_host_still_has_the_repository_it_links_named() {
+        // Quieting `app.greptile.com` drops its `<workspace>/github` pair, which
+        // is no repository. It must not drop the one the link is about: the
+        // `owner/repo` after `github/` is a declared owner's name in the text,
+        // and that is found and asked of GitHub whatever host it sits under.
+        let text = "https://app.greptile.com/acme/github/acme/secret-thing/-/pull/1";
+        assert!(unanswerable_names(text, &ForeignHosts::new(&[]).unwrap()).is_empty());
+        assert!(
+            named(text, &["acme".to_owned()], None)
+                .contains(&("acme".to_owned(), "secret-thing".to_owned()))
         );
     }
 
