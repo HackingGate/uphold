@@ -41,6 +41,16 @@ ignore = "0.4"
 
 # The engine under `grep-regex`, used directly where a pattern is matched
 # against a string already in memory rather than searched through a file.
+#
+# Also the Unicode property tables for `Default_Ignorable_Code_Point` (UAX #44)
+# and `Cf`, which decide what draws nothing. Chosen over `icu_properties`, which
+# carries the same property exactly but is absent from the tree and would bring
+# its provider, collections and zerovec crates for one boolean; and over
+# `unicode-general-category`, which is only a dev-dependency here and cannot
+# answer the question, because the default-ignorable set holds reserved code
+# points and fillers that are not `Cf`. Its tables trail the script table by a
+# release, which is fine for a property that rarely changes, and is why the
+# ideograph test reads `unicode-script` instead.
 regex = "1"
 # Read a tool call's strings through their percent-encoding (RFC 3986 section
 # 2.1) at `uphold hook`, so a URL carrying `%40` is judged as what it decodes to.
