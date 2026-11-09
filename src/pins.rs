@@ -586,7 +586,7 @@ fn canonical(value: &serde_json::Value) -> String {
 /// It orders lefthook `remotes:` refs only. Nothing else reads a lefthook ref;
 /// a pre-commit `rev:` has `prek update --check`, which orders by tag date
 /// rather than by version.
-fn version_key(tag: &str) -> (Vec<(u64, String)>, u64, String, u64) {
+fn version_key(tag: &str) -> (Vec<(u64, String)>, u64, Vec<PreIdentifier>, u64) {
     let trimmed = tag.trim_start_matches('v');
     let (trimmed, revision) = post_release(trimmed);
     // Semver's rule, and the reason it is here: a prerelease PRECEDES the
@@ -600,21 +600,73 @@ fn version_key(tag: &str) -> (Vec<(u64, String)>, u64, String, u64) {
     // a check earns a blanket opt-out, and a guard that is demonstrably wrong
     // once is a guard whose other findings get argued with.
     let (release, prerelease) = match trimmed.split_once('-') {
-        Some((release, prerelease)) => (release, Some(prerelease.to_owned())),
+        Some((release, prerelease)) => (release, Some(prerelease)),
         None => (trimmed, None),
     };
-    let rank = match (&prerelease, revision) {
+    let rank = match (prerelease, revision) {
         (Some(_), _) => 0,
         (None, None) => 1,
         (None, Some(_)) => 2,
     };
+    // `rank` before the prerelease so every prerelease of one version sorts
+    // under its release, and the prerelease then orders as Semantic Versioning
+    // 2.0.0 section 11 does (see `PreIdentifier`).
+    (
+        natural(release),
+        rank,
+        prerelease
+            .map(|text| text.split('.').map(PreIdentifier::from).collect())
+            .unwrap_or_default(),
+        revision.unwrap_or_default(),
+    )
+}
+
+/// One dot-separated prerelease identifier, ordered by Semantic Versioning
+/// 2.0.0 section 11 (<https://semver.org/spec/v2.0.0.html#spec-item-11>).
+///
+/// A digits-only identifier compares as a number and sorts below any other, so
+/// `beta.2` precedes `beta.11` where a string comparison put `11` first. A list
+/// that is a prefix of a longer one precedes it, which `Vec`'s ordering gives
+/// for free, so `alpha` < `alpha.1` < `beta`.
+///
+/// Semantic Versioning compares a mixed identifier such as `rc10` as plain ASCII, and that
+/// would leave `v1.0.0-rc10` below `v1.0.0-rc9`. Tags with no dot before the
+/// counter (`rc1`, `beta2`) are the common shape and are the ones the pins
+/// check reads, so a mixed identifier is split into text and number runs the way
+/// the release part is. That departs from the specification only for mixed
+/// identifiers that differ in a digit run, where the specification's answer is
+/// the one nobody means. The `semver` crate is not used for this because it
+/// rejects tags such as `v0.11.0.1-1` that `post_release` and the release part
+/// handle.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum PreIdentifier {
+    Numeric(u64),
+    Mixed(Vec<(u64, String)>),
+}
+
+impl From<&str> for PreIdentifier {
+    fn from(identifier: &str) -> Self {
+        // A digit run too long for u64 falls to the text arm and still sorts
+        // above every number that fits, which is the right side to err on.
+        match identifier.parse() {
+            Ok(number) if identifier.bytes().all(|byte| byte.is_ascii_digit()) => {
+                Self::Numeric(number)
+            }
+            _ => Self::Mixed(natural(identifier)),
+        }
+    }
+}
+
+/// Split text into digit runs, as numbers, and the text between them, so `v10`
+/// sorts above `v9`.
+fn natural(text: &str) -> Vec<(u64, String)> {
     let mut key = Vec::new();
     let mut digits = String::new();
-    let mut text = String::new();
-    for character in release.chars() {
+    let mut letters = String::new();
+    for character in text.chars() {
         if character.is_ascii_digit() {
-            if !text.is_empty() {
-                key.push((0, std::mem::take(&mut text)));
+            if !letters.is_empty() {
+                key.push((0, std::mem::take(&mut letters)));
             }
             digits.push(character);
         } else {
@@ -622,23 +674,16 @@ fn version_key(tag: &str) -> (Vec<(u64, String)>, u64, String, u64) {
                 key.push((digits.parse().unwrap_or(0), String::new()));
                 digits.clear();
             }
-            text.push(character);
+            letters.push(character);
         }
     }
     if !digits.is_empty() {
         key.push((digits.parse().unwrap_or(0), String::new()));
     }
-    if !text.is_empty() {
-        key.push((0, text));
+    if !letters.is_empty() {
+        key.push((0, letters));
     }
-    // `rank` before the prerelease text so every prerelease of one version
-    // sorts under its release, and `rc2` still sorts above `rc1`.
-    (
-        key,
-        rank,
-        prerelease.unwrap_or_default(),
-        revision.unwrap_or_default(),
-    )
+    key
 }
 
 /// Split off a trailing revision counter: `-1`, `-r1`, `.post1` or `_1`.
@@ -1257,6 +1302,26 @@ mod tests {
             tags,
             ["v1.0.0-rc1", "v1.0.0", "v1.0.0-9", "v1.0.0-10", "v1.0.1"],
         );
+    }
+
+    /// Prerelease identifiers order as Semantic Versioning 2.0.0 section 11.
+    ///
+    /// Compared as one string, `rc10` sorted below `rc9` and `beta.11` below
+    /// `beta.2`, so the newest tag a pin is checked against could be an older
+    /// candidate.
+    #[test]
+    fn prerelease_identifiers_compare_numerically() {
+        let ordered = [
+            ["v1.0.0-rc9", "v1.0.0-rc10"],
+            ["v1.0.0-beta.2", "v1.0.0-beta.11"],
+            ["v1.0.0-alpha", "v1.0.0-alpha.1"],
+            ["v1.0.0-alpha.1", "v1.0.0-beta"],
+            ["v1.0.0-alpha.1", "v1.0.0-alpha.beta"],
+            ["v1.0.0-rc.1", "v1.0.0"],
+        ];
+        for [lower, higher] in ordered {
+            assert!(version_key(lower) < version_key(higher), "{lower} {higher}");
+        }
     }
 
     /// The behaviour the numeric key was written for, unchanged.
