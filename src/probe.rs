@@ -820,10 +820,36 @@ pub(crate) fn on_path(command: &str) -> bool {
 }
 
 fn which(command: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
+    which_in(&std::env::var_os("PATH")?, command)
+}
+
+/// The first directory of `path` holding an executable file by this name.
+///
+/// A file that cannot run is skipped, as `execvp` and a shell skip it, so a
+/// scanner is reported present only when it can be started.
+fn which_in(path: &std::ffi::OsStr, command: &str) -> Option<PathBuf> {
+    std::env::split_paths(path)
         .map(|directory| directory.join(command))
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| executable_file(candidate))
+}
+
+/// Whether `path` is a regular file this process may execute, as `execvp`
+/// judges it: a directory never counts, and neither does a file whose execute
+/// bit the caller cannot use. Git uses `access(X_OK)` to discover hooks, and the
+/// PATH walks use it for the same reason -- any execute bit is insufficient, as
+/// an owner cannot borrow a group's or other's execute permission, and ACLs and
+/// directory permissions also affect access. One answer here, so the hook scan,
+/// the shim's walk and the probe's walk cannot disagree about it.
+#[cfg(unix)]
+pub(crate) fn executable_file(path: &Path) -> bool {
+    path.is_file() && rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok()
+}
+
+/// Off unix there is no execute bit to consult; a file is as runnable as it
+/// is present.
+#[cfg(not(unix))]
+pub(crate) fn executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 /// A command with git's own environment taken away.
@@ -1235,6 +1261,30 @@ mod tests {
     }
 
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn which_skips_a_file_that_cannot_run_and_finds_a_later_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = crate::fixture::scratch("probe-which");
+        let (plain, runnable, directory) = (
+            root.join("plain"),
+            root.join("runnable"),
+            root.join("directory"),
+        );
+        for dir in [&plain, &runnable] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("scanner"), "#!/bin/sh\n").unwrap();
+        }
+        std::fs::create_dir_all(directory.join("scanner")).unwrap();
+        std::fs::set_permissions(plain.join("scanner"), PermissionsExt::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(runnable.join("scanner"), PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let path = std::env::join_paths([&directory, &plain, &runnable]).unwrap();
+        assert_eq!(which_in(&path, "scanner"), Some(runnable.join("scanner")));
+        let without = std::env::join_paths([&directory, &plain]).unwrap();
+        assert_eq!(which_in(&without, "scanner"), None);
+    }
 
     #[test]
     fn a_destination_is_one_owner_one_slash_one_repository() {

@@ -5778,12 +5778,18 @@ pub(crate) fn run_without_policy(
 /// way back here is a shim of somebody else's, and the walk that returned it
 /// once says so and does not return it again. See `HANDED`.
 fn real_command(name: &str, own: Option<&Path>) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    real_command_in(&std::env::var_os("PATH")?, name, own)
+}
+
+/// `real_command` over a given PATH. A file that cannot run is passed over, as
+/// `execvp` and a shell pass it over: taking it would exec nothing and fail
+/// with "Permission denied" where the command a later directory holds works.
+fn real_command_in(path: &OsStr, name: &str, own: Option<&Path>) -> Option<PathBuf> {
     let ourselves = own.and_then(file_identity);
     let tried = handed_back(name).unwrap_or_default();
-    for directory in std::env::split_paths(&path) {
+    for directory in std::env::split_paths(path) {
         let candidate = directory.join(name);
-        if !candidate.is_file() {
+        if !crate::probe::executable_file(&candidate) {
             continue;
         }
         let identity = file_identity(&candidate);
@@ -5839,7 +5845,7 @@ fn real_command(name: &str, own: Option<&Path>) -> Option<PathBuf> {
 /// `--uninstall` would refuse to remove them, while every shimmed command fell
 /// through to whatever PATH resolved next with nothing reporting it. So the
 /// unresolved target is read when the resolved one cannot be. Nothing in the
-/// exec path changes: `real_command` requires `is_file()` before it asks, and a
+/// exec path changes: `real_command` requires an executable file before it asks, and a
 /// dangling link is not a file.
 pub(crate) fn lands_on_uphold(candidate: &Path) -> bool {
     std::fs::canonicalize(candidate)
@@ -8261,6 +8267,27 @@ mod tests {
         // And a name nothing on PATH spells has no real command at all, which
         // is what keeps the transparent path from running something else.
         assert_eq!(real_command("uphold-no-such-command-4b1f", None), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_walk_skips_a_file_that_cannot_run_and_finds_a_later_one() {
+        use std::os::unix::fs::PermissionsExt;
+        // Run as `S/git` with `N/git` a mode-644 file ahead of the real one,
+        // the walk used to stop at N and fail "Permission denied".
+        let root = crate::fixture::scratch("shim-not-executable");
+        let (plain, runnable) = (root.join("plain"), root.join("runnable"));
+        for dir in [&plain, &runnable] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("git"), "#!/bin/sh\n").unwrap();
+        }
+        std::fs::set_permissions(plain.join("git"), PermissionsExt::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(runnable.join("git"), PermissionsExt::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths([&plain, &runnable]).unwrap();
+        assert_eq!(
+            real_command_in(&path, "git", None),
+            Some(runnable.join("git"))
+        );
     }
 
     #[test]
