@@ -41,28 +41,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use globset::Glob;
-
 use super::Stage;
 use crate::config::Rule;
 use crate::error::{Fatal, Result};
 use crate::git;
-
-/// One `[rule.files]` glob, given ripgrep's meaning.
-///
-/// A glob with no slash matches a BASENAME anywhere in the tree -- `*.md` means
-/// every markdown file, not only the ones beside the config. globset does not
-/// assume that, and `*` does not cross a `/`, so the pattern has to say it.
-fn path_glob(pattern: &str) -> Result<globset::GlobMatcher> {
-    let anchored = if pattern.contains('/') {
-        pattern.to_owned()
-    } else {
-        format!("**/{pattern}")
-    };
-    Ok(Glob::new(&anchored)
-        .map_err(|error| Fatal::new(format!("{pattern:?} is not a path glob: {error}")))?
-        .compile_matcher())
-}
 
 /// Whether a blob is in scope for this rule, by `[rule.files]`.
 ///
@@ -84,41 +66,17 @@ pub(crate) fn in_file_scope(rule: &Rule, path: &str) -> Result<bool> {
     if !rule.reads_files() {
         return Ok(true);
     }
-    let files = rule.files();
-    // `include` names directory roots, and it was the one field of the three
-    // this function did not read -- so a guard scoped with `include` read the
-    // whole tree while its author had written down a smaller one. That is the
-    // same defect this function exists to fix, one field over. A root selects
-    // everything under it, which is what it means to the scan's walker.
-    if let Some(include) = &files.include {
-        let roots: Vec<&String> = include.iter().filter(|spec| spec.as_str() != ".").collect();
-        if !roots.is_empty()
-            && !roots.iter().any(|spec| {
-                let prefix = spec.trim_end_matches('/');
-                path == prefix || path.starts_with(&format!("{prefix}/"))
-            })
-        {
-            return Ok(false);
-        }
-    }
-    if !files.glob.is_empty() {
-        let mut selected = false;
-        for pattern in &files.glob {
-            if path_glob(pattern)?.is_match(path) {
-                selected = true;
-                break;
-            }
-        }
-        if !selected {
-            return Ok(false);
-        }
-    }
-    for pattern in &files.exclude {
-        if path_glob(pattern)?.is_match(path) {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    // The scan's own answer, asked about one path. `include`, `glob` and
+    // `exclude` were each re-read here with a glob built apart from the scan's,
+    // and the two parted on the one thing a glob is for: `*` crossed a `/` in
+    // this reader and not in the scan, so `src/*.md` selected `src/a/b.md` and
+    // an `exclude` of `docs/*.md` dropped `docs/sub/a.md`, which its author
+    // never named -- a file the guard then skipped without a word. One rule
+    // body means the guard cannot read `files.*` differently from the scan.
+    //
+    // The root is empty because a blob's path is already relative to the
+    // repository, and the override only uses the root to strip a prefix.
+    crate::selection::selects(Path::new(""), rule, Path::new(path))
 }
 
 /// One entry the operation is introducing: the path it arrived under, the
@@ -706,5 +664,29 @@ mod tests {
         assert!(in_file_scope(&rule, "docs/deep/nested.md").unwrap());
         assert!(in_file_scope(&rule, "README.md").unwrap());
         assert!(!in_file_scope(&rule, "src/main.rs").unwrap());
+    }
+
+    #[test]
+    fn a_star_does_not_cross_a_slash_in_glob_or_exclude() {
+        // The scan builds its globs with a literal separator; the guard did not,
+        // so `src/*.md` selected `src/a/b.md` and the two answered one question
+        // two ways.
+        let glob = rule_with_files("[files]\nglob = [\"src/*.md\"]\n");
+        assert!(in_file_scope(&glob, "src/b.md").unwrap());
+        assert!(!in_file_scope(&glob, "src/a/b.md").unwrap());
+        // An exclude that names one directory must not remove its children.
+        let exclude = rule_with_files("[files]\nexclude = [\"docs/*.md\"]\n");
+        assert!(!in_file_scope(&exclude, "docs/a.md").unwrap());
+        assert!(in_file_scope(&exclude, "docs/sub/a.md").unwrap());
+    }
+
+    #[test]
+    fn a_double_star_still_crosses_directories() {
+        let basename = rule_with_files("[files]\nglob = [\"*.md\"]\n");
+        assert!(in_file_scope(&basename, "a/b/c.md").unwrap());
+        let deep = rule_with_files("[files]\nglob = [\"**/x\"]\n");
+        assert!(in_file_scope(&deep, "x").unwrap());
+        assert!(in_file_scope(&deep, "a/b/x").unwrap());
+        assert!(!in_file_scope(&deep, "a/b/y").unwrap());
     }
 }
