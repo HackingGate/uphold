@@ -778,7 +778,7 @@ fn refuse_displaced_hooks(root: &Path, directory: &str) -> Result<()> {
         {
             continue;
         }
-        if path.is_file() && executable(&path) {
+        if crate::probe::executable_file(&path) {
             displaced.push(path.display().to_string());
         }
     }
@@ -793,19 +793,6 @@ fn refuse_displaced_hooks(root: &Path, directory: &str) -> Result<()> {
          and rerun `hooks --install`",
         displaced.join("\n  ")
     )))
-}
-
-/// Git uses `access(X_OK)` to discover hooks. Any execute bit is insufficient:
-/// an owner cannot borrow a group's or other's execute permission, and ACLs
-/// and directory permissions also affect access.
-#[cfg(unix)]
-fn executable(path: &Path) -> bool {
-    rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok()
-}
-
-#[cfg(not(unix))]
-fn executable(path: &Path) -> bool {
-    path.is_file()
 }
 
 /// `uphold hooks --install --check`: what is in the directory, against what
@@ -825,7 +812,7 @@ fn check(root: &Path, runner: &str, directory: &str, hooks_path: Option<&str>) -
             println!("  {directory}/{stage}: absent");
             continue;
         };
-        if !executable(&path) {
+        if !crate::probe::executable_file(&path) {
             wrong += 1;
             println!(
                 "  {directory}/{stage}: not executable, so git ignores it. \
