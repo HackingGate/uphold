@@ -1015,6 +1015,45 @@ fn find_workflow_dirs(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(found)
 }
 
+/// The manifests cargo-deny can be pointed at, and the reasons for the ones
+/// that could not be told apart from them.
+///
+/// Only crate and workspace roots count: a manifest with neither a `package`
+/// nor a `workspace` table -- a fragment, a template -- is not a thing
+/// cargo-deny can be pointed at. That is decided by parsing the TOML, not by
+/// matching a line, because `[package] # note`, `[ package ]` and
+/// `package.name = "x"` are all the same table to cargo and a text match
+/// drops them without a word, so cargo-deny never runs on that crate.
+///
+/// A manifest that is unreadable or not TOML is returned as a reason rather
+/// than skipped. Skipping it is the same silence by another road: the crate
+/// goes unjudged and the sweep still reports a clean count. Cargo would refuse
+/// it too, so it is named and the section says it could not look.
+fn deny_roots(manifests: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
+    let mut roots = Vec::new();
+    let mut unreadable = Vec::new();
+    for manifest in manifests {
+        let parsed = std::fs::read_to_string(&manifest)
+            .map_err(|error| error.to_string())
+            .and_then(|text| {
+                text.parse::<toml::Table>()
+                    .map_err(|error| error.to_string())
+            });
+        match parsed {
+            Ok(table) if table.contains_key("package") || table.contains_key("workspace") => {
+                roots.push(manifest);
+            }
+            Ok(_) => {}
+            Err(error) => unreadable.push(format!(
+                "{}: not read as a Cargo manifest, so it was not judged: {}",
+                manifest.display(),
+                first_said(&error)
+            )),
+        }
+    }
+    (roots, unreadable)
+}
+
 fn deny(root: &Path, scope: &Scope) -> Result<Section> {
     let config = root.join("deny.toml");
     if !config.is_file() {
@@ -1041,14 +1080,7 @@ fn deny(root: &Path, scope: &Scope) -> Result<Section> {
             found
         }
     };
-    // Only crate and workspace roots. A manifest declaring neither -- a
-    // fragment, a template -- is not a thing cargo-deny can be pointed at.
-    let crates = manifests.into_iter().filter(|manifest| {
-        std::fs::read_to_string(manifest)
-            .unwrap_or_default()
-            .lines()
-            .any(|line| line == "[workspace]" || line == "[package]")
-    });
+    let (crates, unreadable) = deny_roots(manifests);
     // A CRATE WITH NO LOCK OF ITS OWN IS NOT HANDED OVER BLIND. cargo-deny
     // resolves through `cargo metadata`, and pointed at a crate with no
     // Cargo.lock that cargo would use, cargo resolves a fresh one and writes
@@ -1061,7 +1093,9 @@ fn deny(root: &Path, scope: &Scope) -> Result<Section> {
     let mut parents = Parents::default();
     let mut run: Vec<PathBuf> = Vec::new();
     let mut through: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let mut unpinned: Vec<String> = Vec::new();
+    // A manifest that could not be read as TOML starts out among the crates
+    // nobody looked at, and travels the same two exits as an unpinned one.
+    let mut unpinned: Vec<String> = unreadable;
     for manifest in crates {
         if manifest.with_file_name("Cargo.lock").is_file() {
             run.push(manifest);
@@ -1994,8 +2028,8 @@ mod tempfile_guard {
 mod tests {
     use super::{
         DENY_FLOOR, Floor, GITLEAKS_DEFAULT, GITLEAKS_FOUND, GITLEAKS_VERSION, OSV_FLOOR, PRUNE,
-        Scope, VET_FLOOR, Version, ZIZMOR_FLOOR, against_floor, find_named, find_workflow_dirs,
-        gitleaks_could_not_look, interesting, parse_version, unscanned_ci,
+        Scope, VET_FLOOR, Version, ZIZMOR_FLOOR, against_floor, deny_roots, find_named,
+        find_workflow_dirs, gitleaks_could_not_look, interesting, parse_version, unscanned_ci,
     };
 
     /// Every floor, for the tests that hold them all to one rule.
@@ -2337,6 +2371,67 @@ mod tests {
             "{ci}"
         );
         assert!(ci.contains("must not miss one"), "{ci}");
+    }
+
+    /// A manifest cargo reads as a crate but a line match does not: a trailing
+    /// comment, trailing spaces, a spaced header, dotted keys, and the
+    /// workspace spelled the same ways. The old filter dropped each, so
+    /// cargo-deny silently never ran on them.
+    #[test]
+    fn a_crate_manifest_is_kept_however_valid_toml_spells_its_table() {
+        let root = crate::fixture::scratch("supply-deny-roots");
+        std::fs::create_dir_all(&root).unwrap();
+        let spellings = [
+            "[package] # note\nname = \"x\"\n",
+            "[package]   \nname = \"x\"\n",
+            "[ package ]\nname = \"x\"\n",
+            "package.name = \"x\"\n",
+            "[workspace] # note\nmembers = []\n",
+            "workspace.members = []\n",
+            "[package]\nname = \"x\"\n",
+        ];
+        let manifests: Vec<_> = spellings
+            .iter()
+            .enumerate()
+            .map(|(index, text)| {
+                let path = root.join(format!("{index}.toml"));
+                std::fs::write(&path, text).unwrap();
+                path
+            })
+            .collect();
+        let (kept, unreadable) = deny_roots(manifests.clone());
+        assert_eq!(kept, manifests);
+        assert!(unreadable.is_empty(), "{unreadable:?}");
+    }
+
+    /// A fragment declaring neither table stays out, quietly: it is not a
+    /// mistake, it is not a crate.
+    #[test]
+    fn a_manifest_with_neither_table_is_not_a_crate_root() {
+        let root = crate::fixture::scratch("supply-deny-fragment");
+        std::fs::create_dir_all(&root).unwrap();
+        let fragment = root.join("fragment.toml");
+        std::fs::write(&fragment, "[dependencies]\nserde = \"1\"\n").unwrap();
+        let (kept, unreadable) = deny_roots(vec![fragment]);
+        assert_eq!(kept, Vec::<std::path::PathBuf>::new());
+        assert!(unreadable.is_empty(), "{unreadable:?}");
+    }
+
+    /// A manifest that is not TOML is named, not dropped: dropping it left the
+    /// crate unjudged under a clean count.
+    #[test]
+    fn an_unparseable_manifest_is_reported_not_skipped() {
+        let root = crate::fixture::scratch("supply-deny-broken");
+        std::fs::create_dir_all(&root).unwrap();
+        let broken = root.join("broken.toml");
+        std::fs::write(&broken, "[package\nname = \"x\"\n").unwrap();
+        let (kept, unreadable) = deny_roots(vec![broken.clone()]);
+        assert_eq!(kept, Vec::<std::path::PathBuf>::new());
+        assert_eq!(unreadable.len(), 1);
+        assert!(
+            unreadable[0].contains(&broken.display().to_string()),
+            "{unreadable:?}"
+        );
     }
 
     /// What `fs::write` did to a path somebody reached first: followed the
