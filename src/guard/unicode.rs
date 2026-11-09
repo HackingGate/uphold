@@ -35,8 +35,10 @@
 //! choice.
 
 use std::collections::BTreeSet;
+use std::sync::OnceLock;
 
 use globset::{Glob, GlobMatcher};
+use regex::Regex;
 use unicode_script::{Script, UnicodeScript};
 use unicode_security::MixedScript;
 
@@ -103,36 +105,48 @@ pub(crate) fn parse_codepoint(token: &str) -> Result<char> {
 ///
 /// Shared with the commit-message guard, which bans everything this bans and
 /// more besides.
+///
+/// Read from the Unicode properties, because the set grows with every release:
+/// `Default_Ignorable_Code_Point` (UAX #44) names what a renderer is told to
+/// draw as nothing, reserved code points included, so a character assigned
+/// next year is covered the day `regex-syntax` carries it. `Cf` is added
+/// because the interlinear annotation marks and the Egyptian hieroglyph format
+/// controls are format characters that are not default-ignorable.
+///
+/// Two things are taken back out. A variation selector is default-ignorable
+/// but is decided by [`selector_is_earned`], where it can be a licence. And a
+/// handful of `Cf` characters are the prefix marks of Arabic, Syriac and
+/// Brahmi numbers, which draw a visible sign; they are format characters by
+/// category and not invisible by any reading.
 pub(crate) fn is_invisible(character: char) -> bool {
-    const NAMED: &[char] = &[
-        '\u{3164}', // HANGUL FILLER -- an invisible Lo
-        '\u{115F}', // HANGUL CHOSEONG FILLER
-        '\u{1160}', // HANGUL JUNGSEONG FILLER
-        '\u{FFA0}', // HALFWIDTH HANGUL FILLER
-        '\u{034F}', // COMBINING GRAPHEME JOINER -- an invisible Mn
-        '\u{17B4}', // KHMER VOWEL INHERENT AQ
-        '\u{17B5}', // KHMER VOWEL INHERENT AA
-        '\u{2800}', // BRAILLE PATTERN BLANK -- a graphic character with no glyph
-    ];
-    if NAMED.contains(&character) {
+    // A graphic character whose glyph is empty, so it is no property's member.
+    if character == '\u{2800}' {
         return true;
     }
-    let value = character as u32;
-    // Cf, the format characters. The ranges rather than a property lookup,
-    // because these are the ones that matter and they are stable.
+    if is_variation_selector(character) || is_visible_format(character) {
+        return false;
+    }
+    ignorable().is_match(character.encode_utf8(&mut [0; 4]))
+}
+
+/// The two properties as one pattern, compiled on first use.
+fn ignorable() -> &'static Regex {
+    static IGNORABLE: OnceLock<Regex> = OnceLock::new();
+    #[expect(
+        clippy::expect_used,
+        reason = "a literal pattern that compiles or does not, decided at the first call and not by any input"
+    )]
+    IGNORABLE.get_or_init(|| {
+        Regex::new(r"^[\p{Default_Ignorable_Code_Point}\p{Cf}]$").expect("a fixed pattern")
+    })
+}
+
+/// A `Cf` character that draws a sign: the number-prefix marks and the end of
+/// ayah, which a reader sees.
+const fn is_visible_format(character: char) -> bool {
     matches!(
-        value,
-        0x00AD                  // SOFT HYPHEN
-        | 0x061C                // ARABIC LETTER MARK
-        | 0x180E                // MONGOLIAN VOWEL SEPARATOR
-        | 0x200B..=0x200F       // zero width space .. right-to-left mark
-        | 0x202A..=0x202E       // the bidirectional overrides
-        | 0x2060..=0x2064       // word joiner .. invisible plus
-        | 0x2066..=0x206F       // the isolates and the deprecated formats
-        | 0xFEFF                // zero width no-break space
-        | 0xFFF9..=0xFFFB       // interlinear annotation
-        | 0x1D173..=0x1D17A     // musical formatting
-        | 0xE0000..=0xE007F // the tag characters
+        character as u32,
+        0x0600..=0x0605 | 0x06DD | 0x070F | 0x0890 | 0x0891 | 0x08E2 | 0x110BD | 0x110CD
     )
 }
 
@@ -176,17 +190,28 @@ const fn is_variation_selector(character: char) -> bool {
     )
 }
 
-const fn is_unified_ideograph(character: char) -> bool {
-    matches!(
+/// Whether a character is an ideograph proper, the base an ideographic
+/// variation selector may follow.
+///
+/// The Han script, read from `unicode-script` because the CJK extensions grow
+/// with Unicode (Extension I arrived in 15.0 and J in 17.0) and a range written
+/// here stops at the last one somebody knew. The script also holds characters
+/// that are not ideographs and for which the Ideographic Variation Database
+/// (<https://www.unicode.org/ivd/>) registers no sequence, so the blocks they
+/// sit in are taken back out: the radicals, the iteration mark and the numeral
+/// U+3005..U+3007, the Hangzhou numerals and the CJK symbols of U+3021..U+303C,
+/// and the Ideographic Symbols and Punctuation block. Those blocks are closed
+/// and hold nothing else, which is why they are written here and the
+/// ideographs are not. Every base the registry holds is in the remainder.
+///
+/// The general category would say the same without the ranges, but the tables
+/// `regex` carries lag the script table, and an ideograph the category does not
+/// yet know would be refused.
+fn is_unified_ideograph(character: char) -> bool {
+    !matches!(
         character as u32,
-        0x3400..=0x4DBF
-            | 0x4E00..=0x9FFF
-            | 0xF900..=0xFAFF
-            | 0x20000..=0x2A6DF
-            | 0x2A700..=0x2EBEF
-            | 0x2F800..=0x2FA1F
-            | 0x30000..=0x323AF
-    )
+        0x2E80..=0x2FDF | 0x3005..=0x3007 | 0x3021..=0x303C | 0x16FE0..=0x16FFF
+    ) && character.script() == Script::Han
 }
 
 /// Whether this position is the selector inside a keycap sequence.
@@ -812,6 +837,77 @@ mod tests {
             findings("\u{845B}\u{E0100}\n")
         );
         assert_eq!(findings("7\u{E0100}\n").len(), 1);
+    }
+
+    #[test]
+    fn an_ideographic_selector_follows_the_newest_extensions() {
+        // Extension I (2EBF0..2EE5D) and J (323B0..33479) are Han and are not in
+        // any range written by hand before them.
+        for base in ['\u{2EBF0}', '\u{2EE5D}', '\u{323B0}', '\u{33479}'] {
+            let text = format!("{base}\u{E0100}\n");
+            assert!(
+                findings(&text).is_empty(),
+                "{base:?}: {:?}",
+                findings(&text)
+            );
+        }
+    }
+
+    #[test]
+    fn an_ideographic_selector_is_not_earned_by_what_is_not_an_ideograph() {
+        for base in [
+            '\u{3005}',
+            '\u{3006}',
+            '\u{3007}',
+            '\u{2F00}',
+            '\u{16FE3}',
+            '7',
+        ] {
+            let text = format!("{base}\u{E0100}\n");
+            assert_eq!(findings(&text).len(), 1, "{base:?}");
+        }
+    }
+
+    #[test]
+    fn default_ignorable_code_points_the_old_ranges_missed_draw_nothing() {
+        for value in [
+            0x2065, 0xFFF0, 0xFFF8, 0x1BCA0, 0x1BCA3, 0x13430, 0x1343F, 0xE0080, 0xE00FF, 0xE01F0,
+            0xE0FFF,
+        ] {
+            let character = char::from_u32(value).unwrap();
+            assert!(is_invisible(character), "U+{value:04X}");
+            assert_eq!(
+                findings(&format!("a{character}b\n")).len(),
+                1,
+                "U+{value:04X}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_character_the_old_table_named_is_still_invisible() {
+        for value in [
+            0x3164, 0x115F, 0x1160, 0xFFA0, 0x034F, 0x17B4, 0x17B5, 0x2800, 0x00AD, 0x061C, 0x180E,
+            0x200B, 0x200F, 0x202A, 0x202E, 0x2060, 0x2064, 0x2066, 0x206F, 0xFEFF, 0xFFF9, 0xFFFB,
+            0x1D173, 0x1D17A, 0xE0000, 0xE007F,
+        ] {
+            assert!(
+                is_invisible(char::from_u32(value).unwrap()),
+                "U+{value:04X}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_format_character_that_draws_a_sign_stays_visible() {
+        for value in [
+            0x0600, 0x0605, 0x06DD, 0x070F, 0x0890, 0x0891, 0x08E2, 0x110BD, 0x110CD,
+        ] {
+            assert!(
+                !is_invisible(char::from_u32(value).unwrap()),
+                "U+{value:04X}"
+            );
+        }
     }
 
     #[test]
