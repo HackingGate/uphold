@@ -132,14 +132,32 @@ fn from_environment(root: &Path) -> Option<(String, Option<String>, Option<Strin
 /// by a person to see what it says, from sitting there forever waiting for a
 /// ref line that is never coming. Under a real hook stdin is a pipe and this is
 /// false.
+///
+/// A socket is the same case typed by an agent. A coding agent's shell tool
+/// hands the command a socket that stays open and never carries a byte, so a
+/// read waits for an end of file that does not come, and the call hangs at no
+/// CPU until the harness kills it. git starts a pre-push hook with a pipe, and
+/// the runners that consume that pipe export the push instead, so a socket
+/// never holds a ref line: it is not stdin to read.
 fn from_stdin() -> std::io::Result<String> {
     let input = std::io::stdin();
-    if input.is_terminal() {
+    if input.is_terminal() || is_socket(&input) {
         return Ok(String::new());
     }
     let mut buffer = String::new();
     input.lock().read_to_string(&mut buffer)?;
     Ok(buffer)
+}
+
+#[cfg(unix)]
+fn is_socket(input: &std::io::Stdin) -> bool {
+    rustix::fs::fstat(input)
+        .is_ok_and(|stat| rustix::fs::FileType::from_raw_mode(stat.st_mode).is_socket())
+}
+
+#[cfg(not(unix))]
+fn is_socket(_: &std::io::Stdin) -> bool {
+    false
 }
 
 /// The push context, from git if git supplied one and from the runner if not.
