@@ -165,9 +165,15 @@ schemars = { version = "1", features = ["derive"] }
 [target.'cfg(unix)'.dependencies]
 # Git discovers hooks with access(X_OK), which checks the caller's permission
 # class and ACLs. Use the same OS check through a safe API.
-rustix = { version = "1", features = ["fs"] }
+# `fstat` and `poll` tell a stdin socket nobody writes to from one carrying
+# ref lines, without a blocking read.
+rustix = { version = "1", features = ["event", "fs", "time"] }
 
 [dev-dependencies]
+# A child that reads a stdin which never ends is the failure under test, so the
+# test needs a deadline on it. `Child::wait_timeout`, the same wait assert_cmd
+# builds on, rather than a try_wait poll of our own.
+wait-timeout = "0.2"
 # Checks the committed schema against the 2020-12 metaschema and then runs
 # this repository's own policy files through it. A schema nothing validates
 # against is a claim; this is the standard's own test for it.
