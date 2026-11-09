@@ -132,16 +132,9 @@ fn from_environment(root: &Path) -> Option<(String, Option<String>, Option<Strin
 /// by a person to see what it says, from sitting there forever waiting for a
 /// ref line that is never coming. Under a real hook stdin is a pipe and this is
 /// false.
-///
-/// A socket is the same case typed by an agent. A coding agent's shell tool
-/// hands the command a socket that stays open and never carries a byte, so a
-/// read waits for an end of file that does not come, and the call hangs at no
-/// CPU until the harness kills it. git starts a pre-push hook with a pipe, and
-/// the runners that consume that pipe export the push instead, so a socket
-/// never holds a ref line: it is not stdin to read.
 fn from_stdin() -> std::io::Result<String> {
     let input = std::io::stdin();
-    if input.is_terminal() || is_socket(&input) {
+    if input.is_terminal() || silent_socket(&input)? {
         return Ok(String::new());
     }
     let mut buffer = String::new();
@@ -149,15 +142,56 @@ fn from_stdin() -> std::io::Result<String> {
     Ok(buffer)
 }
 
+/// How long a socket on stdin is given to show a first byte or its end.
+///
+/// A launcher that forwards ref lines writes them as it starts the command,
+/// so a socket that has shown neither in this time is one nobody writes to.
 #[cfg(unix)]
-fn is_socket(input: &std::io::Stdin) -> bool {
-    rustix::fs::fstat(input)
-        .is_ok_and(|stat| rustix::fs::FileType::from_raw_mode(stat.st_mode).is_socket())
+const SOCKET_WAIT: rustix::time::Timespec = rustix::time::Timespec {
+    tv_sec: 2,
+    tv_nsec: 0,
+};
+
+/// Whether stdin is a socket that carried nothing, and so is not read.
+///
+/// A coding agent's shell tool hands every command a socket that stays open
+/// and never carries a byte. Read to its end, it is a hang at no CPU until the
+/// harness kills the call. A socket is still a channel ref lines can arrive
+/// on: Node's `child_process` and Python's asyncio give a piped stdin as a
+/// socketpair, so a launcher written in either that forwards git's lines
+/// hands them over one. The socket is therefore waited on, not ignored: data
+/// or its end within `SOCKET_WAIT` is read as any stdin is, and silence is
+/// said on stderr, so the refusal that follows names its cause.
+///
+/// A descriptor that cannot be classified or waited on is an error and not a
+/// read: a silent socket that `fstat` could not see would hang the same way.
+#[cfg(unix)]
+fn silent_socket(input: &std::io::Stdin) -> std::io::Result<bool> {
+    use rustix::event::{PollFd, PollFlags, poll};
+
+    let stat = rustix::fs::fstat(input)?;
+    if !rustix::fs::FileType::from_raw_mode(stat.st_mode).is_socket() {
+        return Ok(false);
+    }
+    let mut descriptors = [PollFd::new(input, PollFlags::IN)];
+    let ready = loop {
+        match poll(&mut descriptors, Some(&SOCKET_WAIT)) {
+            Err(rustix::io::Errno::INTR) => {}
+            ready => break ready?,
+        }
+    };
+    if ready == 0 {
+        eprintln!(
+            "uphold: stdin is a socket that carried nothing in {}s, so it was read as no ref lines",
+            SOCKET_WAIT.tv_sec
+        );
+    }
+    Ok(ready == 0)
 }
 
 #[cfg(not(unix))]
-fn is_socket(_: &std::io::Stdin) -> bool {
-    false
+fn silent_socket(_: &std::io::Stdin) -> std::io::Result<bool> {
+    Ok(false)
 }
 
 /// The push context, from git if git supplied one and from the runner if not.

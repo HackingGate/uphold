@@ -1,11 +1,12 @@
-//! What a pre-push reader does with a stdin that is open and never carries a
-//! byte: the socket a coding agent's shell tool hands every command.
+//! What a pre-push reader does with a socket on stdin.
 //!
-//! git starts a pre-push hook with a pipe, so a socket never holds a ref line.
-//! Reading one waits for an end of file that does not come, and the command
-//! hangs at no CPU until the harness kills it, where the same run with a
-//! closed stdin refuses at once. Both commands that read git's ref lines are
-//! held to the closed-stdin answer.
+//! A coding agent's shell tool hands every command a socket that stays open
+//! and never carries a byte. Read to its end, it waits for an end of file that
+//! does not come, and the command hangs at no CPU until the harness kills it,
+//! where the same run with a closed stdin refuses at once. Both commands that
+//! read git's ref lines are held to the closed-stdin answer. A socket is still
+//! a channel ref lines can arrive on, from a launcher in Node or Python
+//! asyncio, so one that carries them is read as any stdin is.
 #![cfg(unix)]
 #![expect(
     clippy::let_underscore_must_use,
@@ -16,6 +17,8 @@
 
 mod support;
 
+use std::io::Write;
+use std::net::Shutdown;
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -27,6 +30,8 @@ use wait_timeout::ChildExt;
 /// Long enough for a debug build on a loaded runner to load a policy and
 /// refuse; a reader blocked on the socket never gets there at all.
 const DEADLINE: Duration = Duration::from_secs(60);
+
+const ZERO: &str = "0000000000000000000000000000000000000000";
 
 fn repository() -> PathBuf {
     let root = support::scratch("pre-push-stdin");
@@ -45,17 +50,24 @@ fn repository() -> PathBuf {
          hooks = [\"pre-push\"]\n",
     )
     .unwrap();
-    std::fs::write(root.join("a.txt"), "one\n").unwrap();
+    // A zero-width space: the pushed commit is one the guard refuses, so a
+    // ref line that reached it is exit 1, and one that was dropped is exit 2.
+    std::fs::write(root.join("a.txt"), "one\u{200b}\n").unwrap();
     support::git(&root, &["add", "-A"]);
     support::git(&root, &["commit", "-qm", "one", "--no-verify"]);
     root
 }
 
-/// Run `uphold ARGS` with a silent socket on stdin, and return its exit code
-/// and stderr. The writing end stays open until the child is done, so a child
-/// that reads stdin to the end never returns.
-fn on_a_silent_socket(root: &Path, args: &[&str]) -> (i32, String) {
-    let (held, handed) = UnixStream::pair().unwrap();
+/// Run `uphold ARGS` with a socket on stdin that carries `sent`, and return
+/// its exit code and stderr. With nothing to send, the writing end stays open
+/// until the child is done, so a child that reads stdin to the end never
+/// returns; what is sent is followed by its end, as a launcher's would be.
+fn on_a_socket(root: &Path, args: &[&str], sent: Option<&str>) -> (i32, String) {
+    let (mut held, handed) = UnixStream::pair().unwrap();
+    if let Some(sent) = sent {
+        held.write_all(sent.as_bytes()).unwrap();
+        held.shutdown(Shutdown::Write).unwrap();
+    }
     let mut child = Command::new(env!("CARGO_BIN_EXE_uphold"))
         .args(args)
         .current_dir(root)
@@ -88,16 +100,38 @@ fn on_a_silent_socket(root: &Path, args: &[&str]) -> (i32, String) {
 #[test]
 fn guard_at_pre_push_refuses_a_silent_socket_instead_of_waiting_on_it() {
     let root = repository();
-    let (code, stderr) = on_a_silent_socket(&root, &["guard", "--stage", "pre-push"]);
+    let (code, stderr) = on_a_socket(&root, &["guard", "--stage", "pre-push"], None);
     // 2: could-not-look, the answer a closed stdin gets.
     assert_eq!(code, 2, "{stderr}");
     assert!(stderr.contains("no ref line reached"), "{stderr}");
+    assert!(
+        stderr.contains("stdin is a socket that carried nothing"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn guard_at_pre_push_reads_ref_lines_a_socket_does_carry() {
+    let root = repository();
+    let output = support::git_command(&root)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    let pushed = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let line = format!("refs/heads/main {pushed} refs/heads/main {ZERO}\n");
+
+    let (code, stderr) = on_a_socket(&root, &["guard", "--stage", "pre-push"], Some(&line));
+    assert_eq!(code, 1, "{stderr}");
+    assert!(
+        stderr.contains("prevent-unusual-unicode-in-files"),
+        "{stderr}"
+    );
 }
 
 #[test]
 fn supply_chain_refuses_a_silent_socket_instead_of_waiting_on_it() {
     let root = repository();
-    let (code, stderr) = on_a_silent_socket(&root, &["supply-chain"]);
+    let (code, stderr) = on_a_socket(&root, &["supply-chain"], None);
     assert_eq!(code, 2, "{stderr}");
     assert!(stderr.contains("no push to scan"), "{stderr}");
 }
