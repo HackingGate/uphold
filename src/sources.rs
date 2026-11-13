@@ -269,7 +269,7 @@ fn running_os_identity() -> Vec<Needle> {
             push(
                 &mut needles,
                 &format!("hostname-segment ({segment})"),
-                Some(segment.clone()),
+                Some(segment),
                 true,
             );
         }
