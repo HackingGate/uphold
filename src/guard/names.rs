@@ -1572,7 +1572,7 @@ pub(crate) fn in_staged(request: &Request<'_>) -> Result<Option<Refusal>> {
             // off them points nowhere. The whole decoded blob is judged
             // instead -- wider than the diff on purpose, because what is lost
             // is the line and what is kept is the name.
-            scope::Decoded::Text(text) => sources.push((staged.path.clone(), text)),
+            scope::Decoded::Text(text) => sources.push((staged.path, text)),
             // No lines for a name to be written on.
             scope::Decoded::Binary => {}
             scope::Decoded::Unreadable(why) => {
