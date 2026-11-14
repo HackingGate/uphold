@@ -1378,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "uphold"
-version = "1.51.0"
+version = "1.52.0"
 dependencies = [
  "chrono",
  "clap",
