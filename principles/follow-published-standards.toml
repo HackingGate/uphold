@@ -13,7 +13,7 @@ does_not_mean = ["Implement the standard by hand; a maintained library that alre
 benefits = ["Interoperability with implementations the author never tested against.", "Reviewers check behavior against a specification instead of inferring it from code.", "Security analysis done on the standard applies to a conforming implementation."]
 costs = ["Standards are long, and the parts used must be read and tested.", "A standard can lag the need, or be heavier than a private format would be.", "A citation goes stale when the standard is superseded, so following one includes migrating off it."]
 failure_when_overapplied = ["A heavyweight standard is adopted for an internal exchange a two-field record would serve.", "Conformance is claimed by citing an RFC the code does not implement, and nothing tests the claim.", "A project waits for a standard that does not exist yet instead of documenting its own format.", "Every optional extension is implemented, enlarging the attack surface for features no peer uses."]
-conflicts_with = []
+conflicts_with = ["unix-composability"]
 related = ["robustness-principle", "reuse-maintained-components", "hyrums-law", "least-astonishment", "deprecation-discipline"]
 review_questions = ["Which standard specifies what this part reads, writes, or computes, is it cited by number and version where the code is, and has it been obsoleted or amended since?", "Which subset or profile of the standard is implemented, and what happens on input that uses the rest?", "Is conformance tested against the standard's own examples, test vectors, or conformance suite?", "Where this departs from the standard, is the departure written down, and which peers will it break?"]
 
