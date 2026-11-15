@@ -335,6 +335,11 @@ fn candidates(text: &str, owners: &OwnerMatchers) -> BTreeSet<(String, String)> 
             found.insert(owner.clone(), String::new());
         }
     }
+    for (owner, repo, matcher) in &owners.repos {
+        if matcher.is_match(text) {
+            found.insert(owner.clone(), repo.clone());
+        }
+    }
     found.into_names()
 }
 
@@ -406,6 +411,30 @@ struct OwnerMatchers {
     named: Vec<(String, Regex)>,
     /// A DECLARED private owner written on its own, with no repository after it.
     bare: Vec<(String, Regex)>,
+    /// A DECLARED private repository's name written on its own, with no owner
+    /// before it: `(owner, repo, pattern)`.
+    repos: Vec<(String, String, Regex)>,
+}
+
+/// A declared private repository's name, as a token of its own.
+///
+/// No other form reaches it. Every pattern above needs an owner, and a name
+/// written without one -- "the binary shipped as widget-cli" -- reads like any
+/// other word, so it is a candidate only where the operator declared the
+/// repository. The token boundary is wider than `\b` because `\b` stops at a
+/// hyphen: a declared `widget` must not match inside `widget-cli`. The
+/// preceding character is captured rather than looked behind, which this
+/// engine cannot do, and a `/` before the name is a boundary only after the
+/// declared owner: `owner/widget` with no host is this repository, and
+/// `someone-else/widget` is somebody else's. A
+/// trailing dot ends the token only where nothing follows it, so a full stop
+/// is a boundary and `widget.rs` is not.
+fn repo_token_pattern(owner: &str, repo: &str) -> std::result::Result<Regex, regex::Error> {
+    Regex::new(&format!(
+        r"(?i)(?:^|[^A-Za-z0-9._/-]|(?:^|[^A-Za-z0-9._/-]){}/){}(?:$|[^A-Za-z0-9_.-]|\.(?:$|[^A-Za-z0-9_-]))",
+        regex::escape(owner),
+        regex::escape(repo)
+    ))
 }
 
 impl OwnerMatchers {
@@ -430,7 +459,33 @@ impl OwnerMatchers {
         // the repository, followed by a name, is a sibling reference and not a
         // directory: nobody writes `acme/main.rs`.
         //
-        let mut owners: Vec<String> = private_owners.to_vec();
+        // A declared entry holding a slash is a private REPOSITORY, not an
+        // owner: its name is searched for on its own, and its owner is not
+        // thereby declared, because a private repository can sit under a
+        // public owner.
+        let mut repos: Vec<(String, String, Regex)> = Vec::new();
+        let mut declared: Vec<String> = Vec::new();
+        for entry in private_owners {
+            let Some((owner, repo)) = entry.split_once('/') else {
+                declared.push(entry.clone());
+                continue;
+            };
+            if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+                return Err(Fatal::new(format!(
+                    "private owner {entry:?}: an entry is an owner or an owner/repo, \
+                     and this is neither"
+                )));
+            }
+            let matcher = repo_token_pattern(owner, repo).map_err(|error| {
+                Fatal::new(format!(
+                    "private repository {entry:?}: no pattern can be built for that name \
+                     ({error})"
+                ))
+            })?;
+            repos.push((owner.to_owned(), repo.to_owned(), matcher));
+        }
+
+        let mut owners: Vec<String> = declared.clone();
         if let Some(own_owner) = own_owner
             && !owners
                 .iter()
@@ -464,7 +519,7 @@ impl OwnerMatchers {
             // fire on ordinary prose. The repository's own owner is
             // deliberately not in this half: its name is published by the
             // repository existing.
-            if private_owners.contains(&owner) {
+            if declared.contains(&owner) {
                 let alone = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(&owner))).map_err(
                     |error| {
                         Fatal::new(format!(
@@ -477,7 +532,7 @@ impl OwnerMatchers {
             }
             named.push((owner, matcher));
         }
-        Ok(Self { named, bare })
+        Ok(Self { named, bare, repos })
     }
 }
 
@@ -891,8 +946,9 @@ pub(crate) fn declared_owners(root: &Path, policy: &Policy, rule: &Rule) -> Resu
             "uphold: {}: the private-owner source produced nothing ({failure}), and \
              `private_owners_optional` allows that{declared_by}. Names in URL form, and \
              names under this repository's own owner, are still checked. NOT checked here: \
-             a bare `owner/repo` under an owner nothing declared, and a private \
-             organisation named on its own.",
+             a bare `owner/repo` under an owner nothing declared, a private \
+             organisation named on its own, and a declared private repository named without \
+             its owner.",
             rule.id,
         );
     }
@@ -943,7 +999,9 @@ fn answer(
     owner: &str,
     repo: &str,
 ) -> Resolved {
-    if private_owners.contains(&owner.to_lowercase()) {
+    if private_owners.contains(&owner.to_lowercase())
+        || private_owners.contains(&format!("{owner}/{repo}").to_lowercase())
+    {
         Resolved {
             visibility: Visibility::Private,
             canonical: None,
@@ -1712,6 +1770,67 @@ mod tests {
             canonical: canonical.map(str::to_owned),
             silence: None,
         }
+    }
+
+    #[test]
+    fn a_declared_repository_named_without_its_owner_is_a_candidate() {
+        let declared = vec!["acme/widget-cli".to_owned()];
+        for text in [
+            "Releases through v0.8.0 shipped the binary as widget-cli.\n",
+            "widget-cli\n",
+            "the (widget-cli) binary\n",
+            "see acme/widget-cli for the fix\n",
+        ] {
+            assert!(
+                named(text, &declared, None).contains(&("acme".into(), "widget-cli".into())),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_declared_repository_is_not_found_inside_a_longer_name() {
+        let declared = vec!["acme/widget".to_owned()];
+        for text in [
+            "widget-cli\n",
+            "src/widget.rs\n",
+            "mywidget\n",
+            "docs/widget\n",
+            "someone-else/widget\n",
+            "widget_test\n",
+        ] {
+            assert!(
+                !named(text, &declared, None).contains(&("acme".into(), "widget".into())),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_declared_repository_does_not_declare_its_owner() {
+        // A private repository can sit under a public owner, so the owner
+        // written on its own is not a finding the entry asked for.
+        let declared = vec!["acme/widget".to_owned()];
+        assert!(
+            !named("acme ships tools\n", &declared, None).contains(&("acme".into(), String::new()))
+        );
+    }
+
+    #[test]
+    fn a_declared_repository_is_private_without_a_lookup() {
+        let mut cache = BTreeMap::new();
+        let declared: BTreeSet<String> = ["acme/widget".to_owned()].into();
+        assert_eq!(
+            answer(&mut cache, &declared, "acme", "widget").visibility,
+            Visibility::Private
+        );
+        assert!(cache.is_empty(), "no forge was asked");
+    }
+
+    #[test]
+    fn an_entry_with_two_slashes_is_refused_as_config() {
+        assert!(OwnerMatchers::new(&["acme/widget/extra".to_owned()], None).is_err());
+        assert!(OwnerMatchers::new(&["/widget".to_owned()], None).is_err());
     }
 
     #[test]
