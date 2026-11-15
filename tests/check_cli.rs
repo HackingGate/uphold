@@ -1612,6 +1612,110 @@ fn a_malformed_decide_table_is_two() {
 }
 
 #[test]
+fn an_undeclared_specification_is_absent_from_the_json_report() {
+    let output = check(&decide_fixture(ORDERED), &["--json"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report.pointer("/decide/specification"), None, "{report}");
+    assert!(!stdout(&check(&decide_fixture(ORDERED), &[])).contains("specification"));
+}
+
+#[test]
+fn a_specification_in_this_repository_is_printed_and_reported() {
+    let root = decide_fixture(&format!(
+        "{ORDERED}\n[decide.specification]\npath = \"requirements\"\n"
+    ));
+    write(&root, "requirements/rulings.md", "`req~one~1`\n");
+    let output = check(&root, &[]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output)
+            .contains("specification for design rulings ([decide.specification]): requirements\n"),
+        "{}",
+        stdout(&output)
+    );
+    let json = check(&root, &["--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(
+        report.pointer("/decide/specification/path").unwrap(),
+        "requirements"
+    );
+    assert_eq!(report.pointer("/decide/specification/repository"), None);
+}
+
+#[test]
+fn a_specification_in_another_repository_names_it_and_its_latest_tag() {
+    let output = check(
+        &decide_fixture(&format!(
+            "{ORDERED}\n[decide.specification]\nrepository = \"example-org/docs\"\n\
+             path = \"requirements/\"\n"
+        )),
+        &["--json"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report.pointer("/decide/specification/repository").unwrap(),
+        "example-org/docs"
+    );
+    let printed = stdout(&check(
+        &decide_fixture(&format!(
+            "{ORDERED}\n[decide.specification]\nrepository = \"example-org/docs\"\n\
+             path = \"requirements/\"\n"
+        )),
+        &[],
+    ));
+    assert!(
+        printed.contains("requirements/ in example-org/docs, at its latest tag"),
+        "{printed}"
+    );
+}
+
+#[test]
+fn a_specification_missing_from_this_repository_is_one() {
+    let output = check(
+        &decide_fixture(&format!(
+            "{ORDERED}\n[decide.specification]\npath = \"requirements\"\n"
+        )),
+        &[],
+    );
+    assert_eq!(code(&output), 1, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("specification: \"requirements\" does not exist"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_malformed_specification_is_two() {
+    for (specification, says) in [
+        ("path = \" \"\n", "blank `path`"),
+        ("path = \"/etc/spec\"\n", "not relative"),
+        ("path = \"../docs\"\n", "not relative"),
+        (
+            "path = \"spec\"\nrepository = \"docs\"\n",
+            "not `owner/name`",
+        ),
+        (
+            "path = \"spec\"\nrepository = \"a/b/c\"\n",
+            "not `owner/name`",
+        ),
+        ("path = \"spec\"\nrev = \"v1\"\n", "rev"),
+        ("repository = \"example-org/docs\"\n", "path"),
+    ] {
+        let decide = format!("{ORDERED}\n[decide.specification]\n{specification}");
+        let output = check(&decide_fixture(&decide), &[]);
+        assert_eq!(code(&output), 2, "{decide}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains(says),
+            "{decide}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
 fn an_adopt_entry_with_a_why_prints_it_beside_the_id() {
     let output = check(
         &decide_fixture(

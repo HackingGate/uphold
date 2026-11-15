@@ -882,7 +882,7 @@ pub(crate) fn run(
     if let Some((base_root, base_policy)) = base {
         kept_from_base(&mut report, base_root, base_policy);
     }
-    decided(&mut report, &policy.decide)?;
+    decided(&mut report, root, &policy.decide)?;
     let measured = probe_revision
         .map(|revision| revision.and_then(|revision| crate::probe::measure(root, &revision)));
     for claim in &mut report.claims {
@@ -1320,6 +1320,19 @@ fn report_human(report: &Report) -> Result<Exit> {
             );
         }
     }
+    if let Some(specification) = &report.decide.specification {
+        match &specification.repository {
+            Some(repository) => println!(
+                "specification for design rulings ([decide.specification]): {} in {repository}, \
+                 at its latest tag",
+                specification.path
+            ),
+            None => println!(
+                "specification for design rulings ([decide.specification]): {}",
+                specification.path
+            ),
+        }
+    }
     Ok(report.verdict.exit())
 }
 
@@ -1342,9 +1355,21 @@ fn copied_field(entry: &Adopt, record: &catalog::Record) -> Option<&'static str>
 /// such a pair. An adopted conflict with no order is two answers to one
 /// question, which is the thing an order exists to remove; an order over
 /// records that do not conflict, or that this repository does not adopt,
-/// decides nothing and reads as though it did.
-fn decided(report: &mut Report, decide: &Decide) -> Result<()> {
+/// decides nothing and reads as though it did. A specification declared in
+/// this repository must exist: a ruling told to read it and finding nothing
+/// would rule as though none were declared.
+fn decided(report: &mut Report, root: &Path, decide: &Decide) -> Result<()> {
     let mut failures = Vec::new();
+    if let Some(specification) = &decide.specification
+        && specification.repository.is_none()
+        && !root.join(specification.path.trim()).exists()
+    {
+        failures.push(format!(
+            "specification: {:?} does not exist in this repository. Name the file or \
+             directory the specification lives in, or remove [decide.specification]",
+            specification.path
+        ));
+    }
     let known = catalog::ids()?.len();
     let mut adopted: BTreeMap<&str, &catalog::Record> = BTreeMap::new();
     for entry in &decide.adopt {

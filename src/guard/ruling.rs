@@ -365,6 +365,17 @@ Answered: inside a longer fence
     }
 
     #[test]
+    fn requirement_ids_after_the_last_quote_are_not_citations() {
+        let line = "Answered: (b). [x](https://github.com/HackingGate/uphold/blob/v1.0.0/principles/single-authoritative-source.toml#L8) \"one\"; specification: changes `req~ruled-decision~1`, removes `req~old~2`; precedent: none";
+        let found = cited(line);
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found.first().and_then(|citation| citation.quote),
+            Some("one")
+        );
+    }
+
+    #[test]
     fn a_link_to_another_repository_names_no_revision() {
         let found =
             cited("https://github.com/someone/else/blob/v1.0.0/principles/fail-fast.toml#L7 \"x\"");
