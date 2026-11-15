@@ -739,6 +739,81 @@ pub(crate) struct Decide {
     /// other in `conflicts_with`.
     #[serde(default)]
     pub order: Vec<Order>,
+    /// `[decide.specification]`: where this repository's specification lives,
+    /// read beside the adopted records so that a ruling cannot write a second,
+    /// conflicting copy of a fact the specification owns. Absent, a ruling
+    /// reads the records alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specification: Option<Specification>,
+}
+
+/// `[decide.specification]`: a path in this repository, or a path in another
+/// repository read at that repository's latest tag.
+///
+/// Only the location is declared. The specification's format is the
+/// repository's own, and its items are read and cited by the ruling, never
+/// parsed here.
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Specification {
+    /// A file or directory, relative to the repository root: this one's, or
+    /// `repository`'s when that is set. Never absolute, never through `..`.
+    pub path: String,
+    /// `owner/name` of the repository holding `path`, read at its latest tag.
+    /// Absent means this repository, read as checked out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+}
+
+impl Specification {
+    fn validate(&self) -> std::result::Result<(), String> {
+        let path = self.path.trim();
+        if path.is_empty() {
+            return Err(
+                "`[decide.specification]` has a blank `path`. Name the file or \
+                        directory the specification lives in"
+                    .to_owned(),
+            );
+        }
+        let relative = Path::new(path);
+        if relative.is_absolute()
+            || relative.components().any(|part| {
+                !matches!(
+                    part,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )
+            })
+        {
+            return Err(format!(
+                "`[decide.specification]` path {path:?} is not relative to the repository \
+                 root. Write it from the root, without a leading `/` or a `..`"
+            ));
+        }
+        if let Some(repository) = &self.repository {
+            let mut parts = repository.split('/');
+            let well_formed = matches!(
+                (parts.next(), parts.next(), parts.next()),
+                (Some(owner), Some(name), None) if is_slug_part(owner) && is_slug_part(name)
+            );
+            if !well_formed {
+                return Err(format!(
+                    "`[decide.specification]` repository {repository:?} is not `owner/name`"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One half of a forge `owner/name`: letters, digits, `-`, `_` and `.`, and
+/// not `.` or `..`, which no forge accepts as a name.
+fn is_slug_part(part: &str) -> bool {
+    !part.is_empty()
+        && part != "."
+        && part != ".."
+        && part
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 /// One `[decide] adopt` entry: a record id, written alone or as `{ id, why }`.
@@ -858,6 +933,9 @@ impl Decide {
                     ));
                 }
             }
+        }
+        if let Some(specification) = &self.specification {
+            specification.validate()?;
         }
         Ok(())
     }

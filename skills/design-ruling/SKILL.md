@@ -1,14 +1,18 @@
 ---
 name: design-ruling
-description: Answer the open questions in a repository's design issues from the uphold records that repository adopts under [decide], citing each record line at the pinned uphold revision with a quote, or escalate. Use when asked to rule on, answer or decide a design record's questions.
+description: Answer the open questions in a repository's design issues from the uphold records that repository adopts under [decide], checked against the specification it declares there, citing each record line at the pinned uphold revision with a quote and each requirement the answer changes, or escalate. Use when asked to rule on, answer or decide a design record's questions.
 ---
 
 # Design ruling
 
 A ruling answers one question in a design issue from the records the
-repository adopts, and from nothing else. The owner reviews which records are
-adopted and the order between two that conflict; everything else in a ruling
-must be traceable to them.
+repository adopts, and from nothing else. Where the repository declares a
+specification, the ruling also reads it: it never decides a question, but an
+answer that contradicts it must say what it changes there, so that the
+specification and the ruling never hold two copies of one fact. The owner
+reviews which records are adopted, the order between two that conflict, and
+where the specification lives; everything else in a ruling must be traceable
+to them.
 
 ## 1. Read what the repository rules by
 
@@ -20,8 +24,22 @@ Run `uphold check --json` from the repository root and read `decide`:
   record's scope, never a citation, and never a ground for an answer.
 - `order` is one `{prefer, over, why}` per adopted pair that conflicts.
 
+- `specification`, when present, is `{path, repository}`: where the
+  repository's specification lives. With no `repository` it is `path` in this
+  repository, read as checked out. With one, it is `path` in that `owner/name`
+  repository, read at its latest tag (`gh release view --repo <repository>`
+  or `git ls-remote --tags --sort=-v:refname`); record the tag, because the
+  answer cites it. Absent, rule from the records alone.
+
 If `uphold check` exits 1 with `design rulings refused ([decide])`, escalate
-every question: an adopted conflict with no order has two answers.
+every question: an adopted conflict with no order has two answers, and a
+declared specification that is not there cannot be checked against.
+
+Read the whole specification at that revision before ruling. Note the id of
+each item it holds (an [OpenFastTrace](https://github.com/itsallcode/openfasttrace)
+item's id is `<type>~<name>~<revision>`). If it is declared and cannot be
+read, or its repository has no tag, escalate every question; never rule as
+though none were declared.
 
 Find the uphold revision the repository pins: the `rev:` of the
 `HackingGate/uphold` entry in `.pre-commit-config.yaml`, or the `ref:` of that
@@ -48,6 +66,13 @@ out is an answer the records never see. Before ruling on a question:
    beside it.
 3. Write each added option under the question with the others, and say in
    the answer that it was added at ruling and why.
+4. Where a specification is declared, check each option against every item
+   in it. An option that contradicts an item must carry the change it would
+   make there: each item it changes or removes, by its id, with the new text
+   of a changed item. Write that change under the option when it is missing
+   and can be read off the option without guessing. An option whose change
+   cannot be written that way cannot be picked: if the records would decide
+   it, escalate the question as incomplete, naming the items it contradicts.
 
 ## 3. Rule on each question
 
@@ -80,6 +105,19 @@ Under the question, on its own line:
 ```text
 Answered: (a). [<id> L<n>](https://github.com/HackingGate/uphold/blob/<pinned rev>/principles/<id>.toml#L<n>) "<the item, exactly as on that line>"; precedent: <issue link, or none>
 ```
+
+Where the picked option changes the specification, name each item it changes
+after the last record quote and before the precedent, with the revision read
+(the tag, or `HEAD` for this repository's own):
+
+```text
+Answered: (b). [<id> L<n>](...) "<the item>"; specification at <tag>: changes `<item id>`, removes `<item id>`; precedent: <issue link, or none>
+```
+
+Write item ids in backticks, never in double quotes: `ruling-citations-resolve`
+reads the first double-quoted text after a record link as its quote. An answer
+that changes nothing in a declared specification says
+`specification at <tag>: unchanged`.
 
 Or, to escalate:
 

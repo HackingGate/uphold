@@ -71,6 +71,10 @@
             "$ref": "#/$defs/Order"
           },
           "type": "array"
+        },
+        "specification": {
+          "$ref": "#/$defs/Specification",
+          "description": "`[decide.specification]`: where this repository's specification lives,\nread beside the adopted records so that a ruling cannot write a second,\nconflicting copy of a fact the specification owns. Absent, a ruling\nreads the records alone."
         }
       },
       "type": "object"
@@ -629,6 +633,24 @@
       },
       "required": [
         "command"
+      ],
+      "type": "object"
+    },
+    "Specification": {
+      "additionalProperties": false,
+      "description": "`[decide.specification]`: a path in this repository, or a path in another\nrepository read at that repository's latest tag.\n\nOnly the location is declared. The specification's format is the\nrepository's own, and its items are read and cited by the ruling, never\nparsed here.",
+      "properties": {
+        "path": {
+          "description": "A file or directory, relative to the repository root: this one's, or\n`repository`'s when that is set. Never absolute, never through `..`.",
+          "type": "string"
+        },
+        "repository": {
+          "description": "`owner/name` of the repository holding `path`, read at its latest tag.\nAbsent means this repository, read as checked out.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
       ],
       "type": "object"
     },

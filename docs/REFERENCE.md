@@ -2875,7 +2875,9 @@ revision a `.pre-commit-config.yaml` or lefthook `remotes:` entry here pins for
 this repository; when the catalog there has no record `<id>`, or its file has no
 line `<n>`; and when the first double-quoted text after the link, before the
 next one, is missing or is not on that line as written. Every failing citation
-is listed.
+is listed. Requirement ids the answer changes in a declared specification
+(`[decide.specification]`) follow the last record quote, in backticks, and are
+not citations this rule reads.
 
 The labels are not read: a body with an `Answered:` line is checked whatever
 the issue is labelled, so `gh issue edit`, which does not say, is judged like
@@ -4948,6 +4950,24 @@ whose answer wins where the two disagree, `over` the one it wins over, and `why`
 the reason, for whoever reviews the order. `conflicts_with` is symmetric, so
 one order covers the pair whichever end lists it.
 
+A repository whose decisions are also written in a specification declares
+where it lives, so that a ruling reads it beside the records and an answer
+that contradicts it names what it changes there:
+
+```toml
+[decide.specification]
+path = "requirements/"              # relative to the repository root
+repository = "example-org/docs"     # optional; read at its latest tag
+```
+
+`path` is a file or directory. With no `repository` it is in this repository,
+read as checked out; with one it is in that `owner/name` repository, read at
+its latest tag. Only the location is declared: the specification's format is
+the repository's own, and uphold neither reads nor parses its items. The
+`design-ruling` skill reads it, escalates an option that contradicts an item
+without naming the change, and lists the item ids an answer changes on its
+`Answered:` line. A repository that declares none rules from the records alone.
+
 `uphold check` holds the table to the catalog this binary carries and prints
 the adopted list and its orders after the reconciled claims, so the review of
 what a repository rules by is one command:
@@ -4959,17 +4979,24 @@ adopted 3 record(s) for design rulings ([decide]):
   economy-of-mechanism
   order  defense-in-depth over economy-of-mechanism: A second control is ...
   order  unix-composability over defense-in-depth: Each layer is a separate ...
+specification for design rulings ([decide.specification]): requirements/ in example-org/docs, at its latest tag
 ```
+
+`uphold check --json` carries the same table as `decide`, with
+`decide.specification` absent where none is declared.
 
 Exit `1`, under `design rulings refused ([decide]):`, for an adopted id the
 catalog does not define or keeps only as deprecated, an adoption `why` that is
 the record's `summary` or `claim` copied, an adopted conflict with no
 order, an order naming a record the repository does not adopt, an order over two
-records that do not conflict, and a second order over a pair already ordered.
+records that do not conflict, a second order over a pair already ordered, and a
+specification with no `repository` whose `path` does not exist here.
 Exit `2`, at load and so from every command that reads the policy, for a table
 whose shape is wrong: an unknown key, an `order` missing `prefer`, `over` or
 `why` or holding a blank one, an id adopted twice, an adopt entry that is
 neither an id nor a table, an adopt table with a key other than `id` and
-`why` or a blank `why`, and `[decide]` in a bundled
+`why` or a blank `why`, a `[decide.specification]` with a key other than
+`path` and `repository`, a blank `path`, an absolute one or one through `..`,
+or a `repository` that is not `owner/name`, and `[decide]` in a bundled
 set or an `inherit.paths` file, since which records a repository rules by is
 that repository's own declaration. `uphold schema` describes the table.
