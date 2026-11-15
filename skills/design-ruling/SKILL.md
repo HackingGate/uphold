@@ -26,10 +26,11 @@ Run `uphold check --json` from the repository root and read `decide`:
 
 - `specification`, when present, is `{path, repository}`: where the
   repository's specification lives. With no `repository` it is `path` in this
-  repository, read as checked out. With one, it is `path` in that `owner/name`
-  repository, read at its latest tag (`gh release view --repo <repository>`
-  or `git ls-remote --tags --sort=-v:refname`); record the tag, because the
-  answer cites it. Absent, rule from the records alone.
+  repository, read at the checked-out commit. With one, it is `path` in that
+  `owner/name` repository at its latest tag, the first line of
+  `git ls-remote --tags --refs --sort=-v:refname https://github.com/<repository>`.
+  Record the commit id or tag, because the answer cites it. Absent, rule from
+  the records alone.
 
 If `uphold check` exits 1 with `design rulings refused ([decide])`, escalate
 every question: an adopted conflict with no order has two answers, and a
@@ -69,10 +70,9 @@ out is an answer the records never see. Before ruling on a question:
 4. Where a specification is declared, check each option against every item
    in it. An option that contradicts an item must carry the change it would
    make there: each item it changes or removes, by its id, with the new text
-   of a changed item. Write that change under the option when it is missing
-   and can be read off the option without guessing. An option whose change
-   cannot be written that way cannot be picked: if the records would decide
-   it, escalate the question as incomplete, naming the items it contradicts.
+   of a changed item. An option that contradicts an item and does not carry
+   that change cannot be picked: if the records would decide it, escalate the
+   question as incomplete, naming the items it contradicts.
 
 ## 3. Rule on each question
 
@@ -108,7 +108,7 @@ Answered: (a). [<id> L<n>](https://github.com/HackingGate/uphold/blob/<pinned re
 
 Where the picked option changes the specification, name each item it changes
 after the last record quote and before the precedent, with the revision read
-(the tag, or `HEAD` for this repository's own):
+(the tag, or the commit id for this repository's own):
 
 ```text
 Answered: (b). [<id> L<n>](...) "<the item>"; specification at <tag>: changes `<item id>`, removes `<item id>`; precedent: <issue link, or none>
@@ -138,5 +138,5 @@ the owner records the ruling.
 docs/REFERENCE.md, "Ruling controls". The ruler reads
 `{"document", "question", "options"}` on stdin and prints
 `{"answer", "citations"}`, `{"none", "citations"}` or `{"escalate"}`. The
-precedent step is not scored: the ruler is handed no issue history to find one
-in.
+precedent step and the specification check are not scored: the ruler is
+handed no issue history to find a precedent in, and no specification.
