@@ -62,8 +62,13 @@
 #     <this repository's owner>/<repo>      refused         refused
 #     <other owner>/<repo>, bare            refused         NOT SEEN
 #     an organization named on its own      refused         NOT SEEN
+#     a repository named without its owner  refused         NOT SEEN
 #
-# The bottom two need a declared owner because a bare `owner/repo` is otherwise
+# A line holding `owner/repo` declares that repository rather than its owner,
+# and is what the last row reads: a name written without its owner is otherwise
+# an ordinary word. List the names that are not ordinary words.
+#
+# The two rows above it need a declared owner because a bare `owner/repo` is otherwise
 # indistinguishable from a relative path, and treating every path in every
 # document as a name would be one forge lookup per path. Everything else reaches
 # the forge on its own. The second line is what makes the first safe to inherit

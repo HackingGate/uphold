@@ -1783,7 +1783,7 @@ enforced and is not.
 | `visibility_required` | the `no-private-repo-names` family | exit `2` rather than fall back to the forge when nothing has declared a visibility |
 | `private_owners` | the `no-private-repo-names` family | owners whose repositories are private regardless of what a forge says |
 | `private_owners_from` | the `no-private-repo-names` family | a command whose stdout is one private owner per line |
-| `private_owners_file` | the `no-private-repo-names` family | a file holding one private owner per line, as `xdg:<path>`, `home:<path>` or an absolute path, read with no shell |
+| `private_owners_file` | the `no-private-repo-names` family | a file holding one private owner, or one private `owner/repo`, per line, as `xdg:<path>`, `home:<path>` or an absolute path, read with no shell |
 | `public_repos` | the `no-private-repo-names` family | names treated as public without asking a forge |
 | `refuse_unknown` | the `no-private-repo-names` family | treat a name whose visibility could not be determined as private |
 | `foreign_hosts` | the `no-private-repo-names` family | host globs carrying no repository this rule needs resolved — replaces the top-level list for this rule, on top of the built-in one |
@@ -1834,7 +1834,10 @@ nothing to notice when they do.
 ### Where the owner list lives
 
 `private_owners_file` names a file this binary reads itself, one owner per
-line, `#` comments and blank lines dropped — the same reading
+line, or one `owner/repo` to declare that repository: its name is then refused
+where it is written without its owner, which no other form reads. Leave out a
+name that is an ordinary word, since every use of the word would match. `#`
+comments and blank lines are dropped — the same reading
 `private_owners_from` gives a command's stdout. Three spellings and no fourth:
 
 | spec | resolves to |
