@@ -510,7 +510,7 @@ const CORPUS: &[Case] = &[
             "The key used to sign the release is listed in gate-keys.\n",
             "All previously issued tokens stop being accepted.\n",
             "The relay accepts the previous version while a machine sends it.\n",
-            "Releases through v0.8.0 shipped the binary as term-cli.\n",
+            "Releases through v0.8.0 shipped the binary as example-cli.\n",
             "Since v0.6.0 every release carries a signature.\n",
         ],
     },
