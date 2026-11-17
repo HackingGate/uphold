@@ -901,6 +901,16 @@
         "visibility": "public"
       },
       {
+        "builtin": "questions-name-a-standard",
+        "command": {
+          "before": [
+            "gh"
+          ],
+          "scope": "always"
+        },
+        "id": "questions-name-a-standard"
+      },
+      {
         "builtin": "ruling-citations-resolve",
         "command": {
           "before": [

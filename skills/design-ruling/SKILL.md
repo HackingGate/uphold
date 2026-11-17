@@ -56,9 +56,15 @@ out is an answer the records never see. Before ruling on a question:
 
 1. Name the published standard each part of the question reads, writes,
    speaks or implements (an RFC, ISO, W3C or ECMA text, or the protocol the
-   design is modelled on), and the convention of the neighbouring tools. Where
-   an adopted record asks for conformance and no option conforms, add the
-   option that does.
+   design is modelled on), and the convention of the neighbouring tools. The
+   framer writes it under the question, before the options, on one line:
+   `Standard: <the standard, with a link>`, or
+   `Standard: none -- <why none fits>`. A question that lacks the line is not
+   ready to rule: write it first, from the standard you found, and
+   `questions-name-a-standard` refuses the body on `gh issue create` or
+   `gh issue edit` until every question under the questions heading carries
+   it. Where an adopted record asks for conformance and no option conforms,
+   add the option that does.
 2. Name the constraints every option shares: an existing field, structure or
    path kept as it is, a change kept small, compatibility with what was
    built. Keep a constraint only when an adopted record or the repository's
@@ -100,7 +106,9 @@ did not.
 
 ## 4. Write the answer
 
-Under the question, on its own line:
+Each question already carries its `Standard:` line from step 2.1; keep it, and
+correct it in the same edit where the ruling found a standard the framer did
+not name. Under the question, after its options, on its own line:
 
 ```text
 Answered: (a). [<id> L<n>](https://github.com/HackingGate/uphold/blob/<pinned rev>/principles/<id>.toml#L<n>) "<the item, exactly as on that line>"; precedent: <issue link, or none>
@@ -128,8 +136,8 @@ Answered: escalated -- <reason>
 The link's revision is the pin, never `main`. The quote follows its link and is
 copied from that line, because `ruling-citations-resolve` refuses the body when
 the line at that revision does not contain it. Publish with `gh issue edit` or
-`gh issue create` so that check runs. Do not change the issue's `ruling:` label:
-the owner records the ruling.
+`gh issue create` so that check and `questions-name-a-standard` run. Do not
+change the issue's `ruling:` label: the owner records the ruling.
 
 ## 5. Score the answer and its citations
 

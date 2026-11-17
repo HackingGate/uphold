@@ -27,6 +27,7 @@
 //! the answer, and the message says so.
 
 use std::collections::BTreeSet;
+use std::ops::Range;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -238,43 +239,62 @@ fn cited(line: &str) -> Vec<Citation<'_>> {
     citations
 }
 
+/// The questions sections of a body: for each heading whose title says
+/// "question", its level and the 0-based indices of the lines under it, up to
+/// the next heading at that level or above.
+///
+/// A heading below the questions heading's level stays inside its section
+/// whatever it says. Which lines are headings is the parser's answer
+/// ([`crate::markdown`]), so a `#` line in a code block is not one.
+pub(crate) fn question_sections(text: &str) -> Vec<(usize, Range<usize>)> {
+    let mut found = Vec::new();
+    let mut open: Option<(usize, usize)> = None;
+    for (line, level, title) in crate::markdown::headings(text) {
+        let index = usize::try_from(line)
+            .unwrap_or(usize::MAX)
+            .saturating_sub(1);
+        if open.is_some_and(|(questions, _)| level > questions) {
+            continue;
+        }
+        if let Some((questions, start)) = open.take() {
+            found.push((questions, start..index));
+        }
+        if title.to_lowercase().contains("question") {
+            open = Some((level, index + 1));
+        }
+    }
+    if let Some((questions, start)) = open {
+        found.push((questions, start..text.lines().count().max(start)));
+    }
+    found
+}
+
 /// The answer lines of a body: `Answered:` under a questions heading, outside
 /// code.
 ///
-/// A heading below the questions heading's level stays inside its section
-/// whatever it says. Which lines are code and which are headings is the
-/// parser's answer ([`crate::markdown`]), so a three-backtick example inside a
-/// four-backtick block stays inside it, and a `#` line in a block is not a
-/// heading.
+/// Which lines are code is the parser's answer, so a three-backtick example
+/// inside a four-backtick block stays inside it.
 fn answers(text: &str) -> Vec<&str> {
     let code = crate::markdown::code_lines(text);
-    let headings: std::collections::BTreeMap<u64, (usize, String)> =
-        crate::markdown::headings(text)
-            .into_iter()
-            .map(|(line, level, title)| (line, (level, title)))
-            .collect();
-    let mut under: Option<usize> = None;
+    let lines: Vec<&str> = text.lines().collect();
     let mut found = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        if code.get(index).copied().unwrap_or(false) {
-            continue;
-        }
-        if let Some((level, title)) = headings.get(&(index as u64 + 1)) {
-            if under.is_some_and(|questions| *level > questions) {
+    for (_, range) in question_sections(text) {
+        for index in range {
+            if code.get(index).copied().unwrap_or(false) {
                 continue;
             }
-            under = title.to_lowercase().contains("question").then_some(*level);
-            continue;
-        }
-        if under.is_some() && list_item(line.trim_start()).starts_with("Answered:") {
-            found.push(line);
+            if let Some(line) = lines.get(index).copied()
+                && list_item(line.trim_start()).starts_with("Answered:")
+            {
+                found.push(line);
+            }
         }
     }
     found
 }
 
 /// A line with one list marker taken off its front, if it opens with one.
-fn list_item(line: &str) -> &str {
+pub(crate) fn list_item(line: &str) -> &str {
     if let Some(rest) = ["- ", "* ", "+ "]
         .into_iter()
         .find_map(|marker| line.strip_prefix(marker))

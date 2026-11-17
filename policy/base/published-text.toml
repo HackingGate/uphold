@@ -171,6 +171,20 @@ builtin = "ruling-citations-resolve"
 command.before = ["gh"]
 command.scope = "always"
 
+# A design question names the published standard its parts read, write,
+# speak or implement, on a line `Standard: ` with a link, or says
+# `Standard: none -- <why none fits>`, so the ruling reads the same standard
+# the framer did. Read from the same questions heading as the rule above, and
+# from the text alone: a body with no questions heading passes, and the
+# forge is never asked how the issue is labelled. The whole body is judged,
+# so an issue filed before this rule is refused on its next edit until each
+# question carries the line, and nothing is judged that is not being
+# published. `gh` alone, and `command.scope = "always"`, as above.
+[rule.questions-name-a-standard]
+builtin = "questions-name-a-standard"
+command.before = ["gh"]
+command.scope = "always"
+
 # A citation of a numbered standard or an identifier -- an RFC, an
 # Internet-Draft, a BCP or STD, a CVE, a CWE, a GHSA, a DOI, an arXiv id, a
 # WCAG success criterion, a PEP, a Unicode report, an ISO or IEEE standard --

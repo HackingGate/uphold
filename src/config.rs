@@ -5558,6 +5558,7 @@ mod tests {
                 "no-published-host-identity",
                 "no-published-markers",
                 "no-published-private-repo-names",
+                "questions-name-a-standard",
                 "ruling-citations-resolve",
                 "unowned-forge-target",
             ],

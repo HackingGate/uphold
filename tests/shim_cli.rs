@@ -9738,6 +9738,128 @@ fn the_gh_seam_refuses_an_issue_body_whose_citation_does_not_resolve() {
     assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
 }
 
+// ── a design question names its standard ────────────────────────────
+
+const FRAMING_POLICY: &str = r#"
+[[shim]]
+command = "faux"
+match = ["issue:*"]
+text_flags = ["-b", "--body"]
+scope = "always"
+
+[rule.questions-name-a-standard]
+builtin = "questions-name-a-standard"
+
+[rule.questions-name-a-standard.command]
+before = ["faux"]
+"#;
+
+const FRAMING_RULE: &str = "questions-name-a-standard";
+
+/// A design body with two questions, each followed by `first` and `second`.
+fn framed(first: &str, second: &str) -> String {
+    format!(
+        "## Goal\n\nOne grant per row?\n\n## Questions\n\n### Q1. Grants\n\n{first}\n\n\
+         - (a) Keep several grants.\n- (b) One row per principal.\n\n### Q2. Expiry\n\n\
+         {second}\n\n- (a) Per grant.\n- (b) Per principal.\n\n## Done when\n\n- [ ] Held.\n"
+    )
+}
+
+const RBAC: &str = "Standard: role-based access control, \
+                    [ANSI/INCITS 359-2012](https://csrc.nist.gov/projects/role-based-access-control)";
+
+fn edited(body: &str, env: &[(&str, &str)]) -> Output {
+    let root = workspace(FRAMING_POLICY);
+    shim_with(&root, &["faux", "issue", "edit", "1", "--body", body], env)
+}
+
+#[test]
+fn a_body_whose_every_question_names_a_standard_reaches_the_command() {
+    for second in [
+        RBAC,
+        "Standard: none -- how long a grant lasts is this product's choice",
+    ] {
+        let output = edited(&framed(RBAC, second), &[]);
+        assert_eq!(code(&output), 0, "{second}\n{}", stderr(&output));
+        assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
+    }
+}
+
+#[test]
+fn each_question_that_names_no_standard_is_refused_and_nothing_runs() {
+    for (first, second, says) in [
+        (
+            "",
+            "",
+            ["line 7, \"### Q1. Grants\"", "line 14, \"### Q2. Expiry\""].as_slice(),
+        ),
+        (
+            RBAC,
+            "",
+            ["line 14, \"### Q2. Expiry\": has no `Standard:` line"].as_slice(),
+        ),
+        (
+            RBAC,
+            "Standard: ANSI/INCITS 359-2012",
+            ["has a `Standard:` line with no link"].as_slice(),
+        ),
+        (
+            RBAC,
+            "Standard: none",
+            ["has a `Standard:` line with no link"].as_slice(),
+        ),
+        (
+            RBAC,
+            "Standard: none -- ",
+            ["has a `Standard:` line with no link"].as_slice(),
+        ),
+        (
+            RBAC,
+            &format!("```text\n{RBAC}\n```"),
+            ["line 14"].as_slice(),
+        ),
+    ] {
+        let body = framed(first, second);
+        let output = edited(&body, &[]);
+        assert_eq!(code(&output), 1, "{body}\n{}", stderr(&output));
+        for said in says {
+            assert!(
+                stderr(&output).contains(said),
+                "{body}\n{}",
+                stderr(&output)
+            );
+        }
+        assert!(stderr(&output).contains("Standard: none -- <why none fits>"));
+        assert!(!stdout(&output).contains("faux ran"), "{}", stdout(&output));
+    }
+}
+
+#[test]
+fn a_body_with_no_questions_heading_reaches_the_command() {
+    let output = edited("## Goal\n\n1. Which?\n\nQ1. Which?\n", &[]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
+}
+
+#[test]
+fn a_questions_section_with_no_question_in_it_runs_and_says_it_was_not_checked() {
+    let output = edited("## Open questions\n\nWhether the cache is shared.\n", &[]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("This is not a pass."),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn uphold_allow_stands_the_framing_rule_down_for_one_invocation() {
+    let output = edited(&framed("", ""), &[("UPHOLD_ALLOW", FRAMING_RULE)]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
+}
+
 // ── citations link to what they cite ────────────────────────────────
 
 const CITATIONS_POLICY: &str = r#"

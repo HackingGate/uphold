@@ -626,7 +626,7 @@ it refuses** so the name predicts the rule list:
 | `unowned-push` | a push to an owner this repository has not named — **installs `pre-push`**, and refuses to run until the repository says who it is |
 | `private-names` | a private organization or repository named in a commit message, a staged diff, or the tracked tree of a **public** repository — **installs five stages**, and refuses to run until the repository says whether it is published |
 | `stale-visibility` | a policy declaring `private` over a repository the forge serves as **public** — **installs `pre-push` and `manual`**, and reaches the network. Refuses that one direction only; it can never confirm privacy |
-| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push — and, as `unowned-forge-target`, a `gh` invocation bound for a repository this workspace does not own, which refuses to run until the repository says who it is, and, as `no-empty-merge-subject`, a merge commit subject that is blank once the forge's ` (#N)` is taken off, at the shim, at the harness hook and over a message given to `--text` — see [a merge with no subject](#a-merge-with-no-subject) — and, as `ruling-citations-resolve`, an `Answered:` line citing a catalog line that does not resolve at the uphold revision the repository pins — see [a ruling's citations](#a-rulings-citations) — and, as `citations-linked`, a citation of an RFC, an Internet-Draft, a BCP or STD, a CVE, a CWE, a GHSA, a DOI, an arXiv id, a WCAG success criterion, a PEP, a Unicode report, an ISO or an IEEE standard that does not link to what it cites — see [citations of standards and identifiers](#citations-of-standards-and-identifiers). **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [the set's command ceiling](#what-a-bundled-set-may-install) |
+| `published-text` | host identity, refused markers and private names in the text a command is about to publish — a pull-request body, an issue title, a branch name in a push — and, as `unowned-forge-target`, a `gh` invocation bound for a repository this workspace does not own, which refuses to run until the repository says who it is, and, as `no-empty-merge-subject`, a merge commit subject that is blank once the forge's ` (#N)` is taken off, at the shim, at the harness hook and over a message given to `--text` — see [a merge with no subject](#a-merge-with-no-subject) — and, as `ruling-citations-resolve`, an `Answered:` line citing a catalog line that does not resolve at the uphold revision the repository pins — see [a ruling's citations](#a-rulings-citations) — and, as `questions-name-a-standard`, a design question under a questions heading with no `Standard:` line naming the published standard it follows, with a link, or why none fits — see [a design question's standard](#a-design-questions-standard) — and, as `citations-linked`, a citation of an RFC, an Internet-Draft, a BCP or STD, a CVE, a CWE, a GHSA, a DOI, an arXiv id, a WCAG success criterion, a PEP, a Unicode report, an ISO or an IEEE standard that does not link to what it cites — see [citations of standards and identifiers](#citations-of-standards-and-identifiers). **Installs no git hook**: its rules run at the shim seam (`gh`, `git push`), and it refuses to load until the repository has declared the `[[shim]]` tables itself — see [the set's command ceiling](#what-a-bundled-set-may-install) |
 | `prose-shapes` | four sentence shapes that carry nothing — a sentence announcing what the next one will say, a clause behind a dash restating the one in front of it, a hedge admitting no uncertainty, an objection nobody raised being answered. **Installs no git hook**: its rules run in `uphold scan` and at the shim seam (`gh`, `git push`), and like `published-text` it refuses to load until the repository has declared the `[[shim]]` tables itself. `UPHOLD_ALLOW=<rule-id>` is the waiver for the sentence a rule is wrong about |
 | `narrated-history` | a document's sentence narrating how something changed, in Markdown outside `adr` directories; the near misses it lets through are listed in the set's header. **Installs no git hook and no command**: it runs in `uphold scan` only, because a commit message and a pull-request body are where a change is narrated. A baseline entry excuses the one sentence it is wrong about |
 
@@ -1559,6 +1559,7 @@ stamped on it, the range about to be pushed.
 | `prevent-public-push` | a push to somewhere off the allow-list **and off the forge's own answer** — a GitHub destination the allow-list refused is put to `gh`, and a forge that could not be asked is exit `2` |
 | `prevent-unowned-target` | a **command** told to publish to a repository this workspace does not own. The same decision as the row above, reached from the shim seam instead of a hook — so it registers with `command.before` and never `git.hooks`, and a destination it could not resolve is exit `2`. Carried by `published-text` as `unowned-forge-target`, with `owner_required` and `command.scope = "always"` in the bundled declaration |
 | `ruling-citations-resolve` | an `Answered:` line, under a questions heading, citing a catalog line that is not at the uphold revision this repository pins, not in the catalog there, or not saying what the answer quotes. Text only, so it registers with `command.before`; a pin this binary's own catalog is not is exit `2`. Carried by `published-text`. See [A ruling's citations](#a-rulings-citations) |
+| `questions-name-a-standard` | a question, under a questions heading, with no line `Standard: ` carrying an `http(s)` link or `none -- <why none fits>`. Text only, so it registers with `command.before`; no link is fetched and no forge is asked, so there is no exit `2`. Carried by `published-text`. See [A design question's standard](#a-design-questions-standard) |
 | `citations-linked` | a citation of a numbered standard or an identifier in prose with no link, a link to another document of its family, or, for a cited section, a link that does not name it as far as the family's anchors allow. Text only, so it registers with `command.before`; no link is fetched, so there is no exit `2`. Carried by `published-text`. See [Citations of standards and identifiers](#citations-of-standards-and-identifiers) |
 | `prevent-actor-mismatch` | a `gh` **write** about to run as anybody but the GitHub App the rule's `actor` names: no token in reach, so `gh` would use the login it stores; a personal token by its prefix; or an installation token the forge says is another App's. Registers with `command.before = ["gh"]` and `command.scope = "always"`, and is opt in: no bundled set declares it. See [who a write runs as](#who-a-write-runs-as) |
 | `no-local-merge` | a merge that would make a merge commit |
@@ -2862,6 +2863,7 @@ used, linked at the uphold revision the repository pins, with the item quoted:
 ## Questions for the ruling
 
 1. **Edit without a label.** (a) or (b)?
+   Standard: none -- which forge call carries a label is this tool's choice
    Answered: (a). [unix-composability L18](https://github.com/HackingGate/uphold/blob/v1.36.0/principles/unix-composability.toml#L18) "Can a script or an agent do everything a person at a terminal can"
 ```
 
@@ -2889,6 +2891,50 @@ is the catalog at `v<its version>`. A citation at a pinned revision other than
 that, a branch or a commit included, is exit `2`, and so is a citation where
 nothing here pins uphold: whether it resolves cannot be read, and the cure is
 to run the uphold the repository pins.
+
+### A design question's standard
+
+A ruling picks among the options a question offers, so a question that names
+no standard leaves the ruler to find the one its parts follow, and options
+none of which conform are ruled on as though one did. The framer names it, on
+one line under the question:
+
+```text
+## Questions
+
+### Q1. One grant per row
+
+Standard: role-based access control, [ANSI/INCITS 359-2012](https://csrc.nist.gov/projects/role-based-access-control)
+
+- (a) ...
+```
+
+or `Standard: none -- <why none fits>`.
+
+`questions-name-a-standard`, in `published-text`, reads every body `gh`
+publishes, from the same questions sections as `ruling-citations-resolve`.
+Where a section has sub-headings, each one at the shallowest level among them
+opens a question. Where it has none, each top-level ordered-list item opens
+one, and so does each top-level bullet item or paragraph whose text opens
+`Q<n>` (bold or not), so option bullets such as `- (a)` are not questions. A
+question runs to the next one or to the end of the section; text before the
+first is in none. Each question is refused, exit `1`, unless a line in it,
+outside code and with at most one list marker taken off, opens `Standard:` and
+the rest of that line carries an `http` or `https` URL, inline or written out,
+or is `none --` followed by a reason. Every failing question is listed, by its
+line and its opening text.
+
+The labels are not read, as for `ruling-citations-resolve`: a body is judged
+on its text whatever the issue is labelled, and only the text being published
+is judged. The whole body is judged, so an issue filed before a repository
+pinned this rule passes until it is next edited, and that edit is refused
+until each of its questions carries the line. A section that holds text and no
+question in any of those shapes is not judged; the shim says so on stderr,
+`This is not a pass.`, and the command runs. A section with nothing in it
+holds nothing to judge. Whether the standard named is the right one is the
+ruler's question, not this rule's; `citations-linked` checks that a numbered
+standard's link is to that standard. `UPHOLD_ALLOW=questions-name-a-standard`
+stands the rule down for one invocation.
 
 ### Citations of standards and identifiers
 
