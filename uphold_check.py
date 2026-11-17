@@ -199,7 +199,7 @@ def engine(root: Path, *args: str) -> subprocess.CompletedProcess:
     reasons: list[str] = []
     for attempt in attempts:
         if expected is not None and attempt[0] != "cargo":
-            found = binary_version(attempt[0])
+            found = binary_version(attempt[0], root)
             if found != expected:
                 reasons.append(
                     f"{attempt[0]} is {found}, this checkout is {expected}"
@@ -230,17 +230,23 @@ def checkout_version(manifest: Path) -> str:
 
 
 @functools.cache
-def binary_version(binary: str) -> str:
+def binary_version(binary: str, root: Path) -> str:
     """What `binary --version` printed, or why it printed nothing usable.
 
-    Asked once per binary: `engine` is called for every mode and every test,
-    and the answer cannot change under one process.
+    Asked from `root`, the directory the command itself runs in, so a relative
+    PATH entry resolves to the same binary for the probe as for the run. Asked
+    once per binary and directory: `engine` is called for every mode and every
+    test, and the answer cannot change under one process.
     """
     try:
         answered = subprocess.run(
-            [binary, "--version"], capture_output=True, text=True, check=False
+            [binary, "--version"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
         )
-    except OSError as error:
+    except (OSError, UnicodeDecodeError) as error:
         return str(error)
     printed = answered.stdout.strip()
     if answered.returncode != 0 or not printed.startswith("uphold "):

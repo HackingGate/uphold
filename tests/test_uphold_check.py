@@ -783,6 +783,14 @@ class AnEngineOfAnotherVersion(unittest.TestCase):
         self.assertIn("is uphold 1.0.0, this checkout is uphold 2.0.0", message)
         self.assertIn("install uphold 2.0.0 on PATH", message)
 
+    def test_undecodable_version_output_is_passed_over(self):
+        self.checkout("2.0.0")
+        garbled = self.bin / "uphold"
+        garbled.write_text("#!/bin/sh\nprintf '\\377'\n")
+        garbled.chmod(0o755)
+        self.cargo()
+        self.assertEqual(self.ran(), "cargo-built")
+
     def test_outside_a_checkout_any_uphold_that_runs_is_taken(self):
         self.stub(self.bin / "uphold", "1.0.0", "stale-ran")
         self.assertEqual(self.ran(), "stale-ran")
