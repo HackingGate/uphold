@@ -187,7 +187,7 @@ wait-timeout = "0.2"
 # Checks the committed schema against the 2020-12 metaschema and then runs
 # this repository's own policy files through it. A schema nothing validates
 # against is a claim; this is the standard's own test for it.
-jsonschema = { version = "0.60", default-features = false }
+jsonschema = { version = "0.61", default-features = false }
 
 # `strip` is deliberately absent: stripping is a packaging step, and a stripped
 # binary with no build-id cannot be symbolicated from a core. `debug = 1` keeps
