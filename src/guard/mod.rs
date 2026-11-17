@@ -15,6 +15,7 @@
 
 pub(crate) mod actor;
 pub(crate) mod citations;
+pub(crate) mod framing;
 pub(crate) mod identity;
 pub(crate) mod merge;
 pub(crate) mod message;
@@ -119,6 +120,10 @@ pub(crate) const EVERY_BUILTIN: &[&str] = &[
     // carries: every catalog line an `Answered:` line cites must be at the
     // revision the repository pins and must say what the answer quotes.
     "ruling-citations-resolve",
+    // Text a design question is framed in, judged on its own lines: every
+    // question under a questions heading must name the published standard its
+    // parts follow, with a link, or say why none fits, before it is ruled on.
+    "questions-name-a-standard",
     // Text citing a numbered standard or an identifier, judged against a
     // table of families compiled in: each citation must link to the document
     // it names, and to the section where the family's anchors allow.
@@ -302,6 +307,7 @@ pub(crate) const TEXT_GUARDS: &[&str] = &[
     "prevent-unusual-unicode",
     "no-private-repo-names",
     "ruling-citations-resolve",
+    "questions-name-a-standard",
     "citations-linked",
     "text-guards",
     "text-literals",
@@ -653,6 +659,7 @@ pub(crate) fn text_refusal(
             single(names::in_text(root, policy, rule, destination, label, text))
         }
         "ruling-citations-resolve" => single(ruling::in_text(root, rule, label, text)),
+        "questions-name-a-standard" => single(Ok(framing::in_text(rule, label, text))),
         "citations-linked" => single(Ok(citations::in_text(rule, label, text))),
         // The consultations. `over_text` skips the meta guards, so the
         // recursion is one level deep by construction.
@@ -1005,7 +1012,7 @@ mod tests {
                 "{id} is in EVERY_BUILTIN with no dispatch arm"
             );
         }
-        assert_eq!(EVERY_BUILTIN.len(), 24);
+        assert_eq!(EVERY_BUILTIN.len(), 25);
     }
 
     #[test]

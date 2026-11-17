@@ -163,9 +163,74 @@ pub(crate) fn headings(text: &str) -> Vec<(u64, usize, String)> {
     found
 }
 
+/// What a top-level block of a document opens as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Block {
+    /// An item of an ordered list (`1.`, `1)`).
+    Ordered,
+    /// An item of a bullet list (`-`, `*`, `+`).
+    Bullet,
+    /// A paragraph.
+    Paragraph,
+}
+
+/// `(line, block)` for every list item and paragraph at the top level of the
+/// document, in document order: not inside another list item, nor inside a
+/// block quote. A paragraph inside a list item is the item's, and is not
+/// listed.
+pub(crate) fn top_level_blocks(text: &str) -> Vec<(u64, Block)> {
+    let lines = Lines::of(text);
+    let mut found = Vec::new();
+    // The open lists, innermost last: whether each is ordered.
+    let mut lists: Vec<bool> = Vec::new();
+    let mut quotes = 0_usize;
+    for (event, range) in Parser::new_ext(text, Options::empty()).into_offset_iter() {
+        let line = lines.index(range.start) as u64 + 1;
+        match event {
+            Event::Start(Tag::BlockQuote(_)) => quotes += 1,
+            Event::End(TagEnd::BlockQuote(_)) => quotes = quotes.saturating_sub(1),
+            Event::Start(Tag::List(first)) => lists.push(first.is_some()),
+            Event::End(TagEnd::List(_)) => {
+                lists.pop();
+            }
+            Event::Start(Tag::Item) if quotes == 0 && lists.len() == 1 => {
+                let ordered = lists.first().copied().unwrap_or(false);
+                found.push((
+                    line,
+                    if ordered {
+                        Block::Ordered
+                    } else {
+                        Block::Bullet
+                    },
+                ));
+            }
+            Event::Start(Tag::Paragraph) if quotes == 0 && lists.is_empty() => {
+                found.push((line, Block::Paragraph));
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_top_level_items_and_paragraphs_are_blocks() {
+        let text = "Lead\n\n1. One\n   - (a) nested\n2. Two\n\n- Bullet\n\n> 1. quoted\n\nTail\n";
+        assert_eq!(
+            top_level_blocks(text),
+            [
+                (1, Block::Paragraph),
+                (3, Block::Ordered),
+                (5, Block::Ordered),
+                (7, Block::Bullet),
+                (11, Block::Paragraph),
+            ]
+        );
+    }
 
     #[test]
     fn a_fence_and_an_indented_block_are_code_and_their_lines_are_numbered() {
