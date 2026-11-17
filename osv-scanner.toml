@@ -1,0 +1,9 @@
+# osv-scanner reads this file beside the lockfile it scans. It holds the same
+# one exception as deny.toml's [advisories] ignore, with the same reason and
+# removal date: chrono is unmaintained (informational, no vulnerability) and is
+# in the tree only through quick-junit, which has no chrono-free release yet.
+# Remove both when quick-junit drops chrono in a release.
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+ignoreUntil = 2027-02-17
+reason = "chrono unmaintained; only via quick-junit, which has no chrono-free release"
