@@ -2929,9 +2929,13 @@ on its text whatever the issue is labelled, and only the text being published
 is judged. The whole body is judged, so an issue filed before a repository
 pinned this rule passes until it is next edited, and that edit is refused
 until each of its questions carries the line. A section that holds text and no
-question in any of those shapes is not judged; the shim says so on stderr,
-`This is not a pass.`, and the command runs. A section with nothing in it
-holds nothing to judge. Whether the standard named is the right one is the
+question in any of those shapes, such as a bullet that does not open `Q<n>`,
+is not judged: the rule names the section count on stderr, says it judged
+nothing in them, and lets the command run, and its record for the invocation
+is a pass, because it found nothing to refuse in what it could read. This is
+one rule standing down on part of a body, not one of the
+[stand-downs](#the-stand-downs) of the seam, and the other rules still ran. A
+section with nothing in it holds nothing to judge. Whether the standard named is the right one is the
 ruler's question, not this rule's; `citations-linked` checks that a numbered
 standard's link is to that standard. `UPHOLD_ALLOW=questions-name-a-standard`
 stands the rule down for one invocation.

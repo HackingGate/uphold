@@ -76,7 +76,7 @@ pub(crate) fn in_text(rule: &Rule, label: &str, text: &str) -> Option<Refusal> {
         eprintln!(
             "uphold: {}: {label}: {} questions section(s) hold text and no question this rule \
              can find (a sub-heading, a numbered item, or a line opening `Q<n>`), so no \
-             `Standard:` line was checked there. This is not a pass.",
+             `Standard:` line was checked there: this rule judged nothing in them.",
             rule.id, framing.unread
         );
     }
@@ -270,6 +270,13 @@ mod tests {
             let body = format!("## Questions\n\n1. Which?\n   {line}\n");
             assert_eq!(unframed(&body).is_empty(), passes, "{line}");
         }
+    }
+
+    #[test]
+    fn a_long_opening_line_is_cut_in_the_report() {
+        let long = "x".repeat(90);
+        assert_eq!(shortened(&long), format!("{}...", "x".repeat(80)));
+        assert_eq!(shortened("Q1. Short"), "Q1. Short");
     }
 
     #[test]

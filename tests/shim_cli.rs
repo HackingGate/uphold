@@ -9847,7 +9847,7 @@ fn a_questions_section_with_no_question_in_it_runs_and_says_it_was_not_checked()
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
     assert!(
-        stderr(&output).contains("This is not a pass."),
+        stderr(&output).contains("this rule judged nothing in them"),
         "{}",
         stderr(&output)
     );
