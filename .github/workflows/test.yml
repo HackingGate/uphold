@@ -31,8 +31,11 @@ jobs:
   # (https://github.blog/changelog/2026-01-22-1-vcpu-linux-runner-now-generally-available-in-github-actions/).
   # The jobs that build the crate or measure coverage ran past it on its one
   # CPU, and the cancellations were read as runner flakes and rerun. They run on
-  # ubuntu-latest. runner-parity stays on slim: ubuntu-latest carries a Rust
-  # toolchain, and that job tests the runners' bootstrap with none on PATH.
+  # ubuntu-latest. runner-parity's pre-commit and prek legs stay on slim:
+  # ubuntu-latest carries a Rust toolchain, and those legs test the runners'
+  # bootstrap with none on PATH. Its lefthook leg is handed a toolchain and
+  # builds the crate `--release`, which ran past the slim limit too, so it runs
+  # on ubuntu-latest.
   # A push to main whose tree already passed this workflow runs nothing again.
   # A squash merge of an up-to-date pull request lands the tree its last run
   # tested, so the merge run repeated every job on identical content and added
@@ -421,7 +424,7 @@ jobs:
     needs: dedupe
     if: needs.dedupe.outputs.passed != 'true'
     name: consumer under ${{ matrix.tool }}
-    runs-on: ubuntu-slim
+    runs-on: ${{ matrix.tool == 'lefthook' && 'ubuntu-latest' || 'ubuntu-slim' }}
     strategy:
       fail-fast: false
       matrix:
