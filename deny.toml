@@ -21,10 +21,20 @@
 # enforces, because it cannot look inside the tool.
 
 [advisories]
-# The default is to deny anything the RustSec database reports. Nothing is
-# ignored here, and an ignore that appears later should carry the reason and the
-# date somebody expects to remove it.
+# The default is to deny anything the RustSec database reports. An ignore
+# carries the reason and the date somebody expects to remove it.
 yanked = "deny"
+ignore = [
+  # chrono is unmaintained (informational, no vulnerability). It is in the
+  # tree only through quick-junit 0.8.0, which every release still requires,
+  # and uphold's one direct use exists because quick-junit's timestamp setter
+  # takes a chrono type. junit-report, the other JUnit writer, cannot write
+  # properties, the skipped count or a suite without `hostname`. Remove this
+  # when quick-junit drops chrono in a release, and take that
+  # release along with dropping the direct `chrono` dependency; expected by
+  # 2027-02-17.
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; only via quick-junit, which has no chrono-free release" },
+]
 
 [licenses]
 # Permissive licences only, named one at a time rather than by a category, so
