@@ -2226,7 +2226,25 @@ A bypass also carries `allowed`: `id` when the rule's id was named in
   suite property `allowed=all`, so "ran unchecked" is a document and not an
   absence. Allure reads no suite properties; the machine reader does.
 - **`uphold guard --text` writes a document**, the same one a stage does, with
-  one testcase per rule consulted.
+  one testcase per rule consulted. Given `--repo OWNER/NAME`, a rule whose
+  scope does not hold there is the `scope=destination` skip, as at the shim.
+
+### Text bound for a named repository
+
+```sh
+uphold guard --text body.md --repo example-org/private-repo --junit out.xml
+```
+
+`--text` alone judges with every rule in scope, because it knows no
+destination: a body naming a private organization is refused even when it is
+going into that organization's own private repository. `--repo OWNER/NAME`
+names the GitHub repository it is going to, and each rule is judged as the shim
+judges `gh --repo OWNER/NAME`: under its own `command.scope`, or else the `gh`
+`[[shim]]` table's `scope` and `unresolved`, with the destination's own name
+exempt from the private-name checks. Visibility is asked of github.com through
+`gh`, so a repository `gh` cannot read is exit `2` unless the `gh` table says
+`unresolved = "run"`. A value that is not exactly `OWNER/NAME` is exit `2`.
+Destination ownership (`prevent-unowned-target`) is still not judged here.
 
 stdout and stderr are unchanged; the file is additive, and the exit code and the
 report on stderr are computed from the same list of outcomes the file is, so
@@ -3491,7 +3509,8 @@ supplied empty string still has one.
 The hook does not infer a destination host or repository from arbitrary tool
 argument names: a `[[hook]]` table points at them. Destination ownership
 (`prevent-unowned-target`) remains a command-adapter check; raw `scan --text`
-and `guard --text` input supplies no destination. A missing required argument
+and `guard --text` input supplies no destination (`guard --text --repo`
+names one for scopes and the private-name exemption, not for ownership). A missing required argument
 surface is an unread subject and exits `2`, rather than being treated as a
 call with no prose.
 
