@@ -714,6 +714,80 @@ class AnUnavailableEngine(unittest.TestCase):
             uphold_check.engine_suppliers(ROOT, strict=False)
 
 
+class AnEngineOfAnotherVersion(unittest.TestCase):
+    """Inside a checkout, only a binary of the checkout's version answers.
+
+    Issue 544: a `target/` removed by a cleanup fell through to a stale
+    `uphold` on PATH, and the suite failed 26 ways without naming it. Stub
+    binaries stand in for both, so this runs without a Rust toolchain.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.here = Path(self._directory.name) / "checkout"
+        self.bin = Path(self._directory.name) / "bin"
+        self.here.mkdir()
+        self.bin.mkdir()
+        self.addCleanup(uphold_check.binary_version.cache_clear)
+        self.addCleanup(uphold_check.checkout_version.cache_clear)
+        uphold_check.binary_version.cache_clear()
+        uphold_check.checkout_version.cache_clear()
+        for patch in (
+            mock.patch.object(uphold_check, "HERE", self.here),
+            mock.patch.dict(os.environ, {"PATH": str(self.bin)}),
+        ):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def stub(self, path: Path, version: str, says: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "#!/bin/sh\n"
+            f'if [ "$1" = --version ]; then echo "uphold {version}"; exit 0; fi\n'
+            f"echo {says}\n"
+        )
+        path.chmod(0o755)
+
+    def cargo(self) -> None:
+        cargo = self.bin / "cargo"
+        cargo.write_text("#!/bin/sh\necho cargo-built\n")
+        cargo.chmod(0o755)
+
+    def checkout(self, version: str) -> None:
+        (self.here / "Cargo.toml").write_text(
+            f'[package]\nname = "uphold"\nversion = "{version}"\n'
+        )
+
+    def ran(self) -> str:
+        return uphold_check.engine(self.here, "check").stdout.strip()
+
+    def test_a_stale_path_binary_is_passed_over_for_cargo(self):
+        self.checkout("2.0.0")
+        self.stub(self.bin / "uphold", "1.0.0", "stale-ran")
+        self.cargo()
+        self.assertEqual(self.ran(), "cargo-built")
+
+    def test_a_stale_build_is_passed_over_for_a_current_path_binary(self):
+        self.checkout("2.0.0")
+        self.stub(self.here / "target" / "release" / "uphold", "1.0.0", "stale-ran")
+        self.stub(self.bin / "uphold", "2.0.0", "current-ran")
+        self.assertEqual(self.ran(), "current-ran")
+
+    def test_with_nothing_current_the_one_error_names_both_versions(self):
+        self.checkout("2.0.0")
+        self.stub(self.bin / "uphold", "1.0.0", "stale-ran")
+        with self.assertRaises(uphold_check.CouldNotLook) as raised:
+            self.ran()
+        message = str(raised.exception)
+        self.assertIn("is uphold 1.0.0, this checkout is uphold 2.0.0", message)
+        self.assertIn("install uphold 2.0.0 on PATH", message)
+
+    def test_outside_a_checkout_any_uphold_that_runs_is_taken(self):
+        self.stub(self.bin / "uphold", "1.0.0", "stale-ran")
+        self.assertEqual(self.ran(), "stale-ran")
+
+
 class AnUnreadableDeclaration(unittest.TestCase):
     """`explicit-unknown`, claimed by `catalog-tests` in policy/upheld.toml.
 
