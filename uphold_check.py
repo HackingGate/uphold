@@ -163,7 +163,18 @@ def engine(root: Path, *args: str) -> subprocess.CompletedProcess:
 
     A binary that cannot be produced by any of the three is could-not-look. It
     is not a smaller answer or an older one; see the `explicit-unknown` record.
+
+    Inside a checkout, a found binary must also BE this checkout's version. A
+    `target/` removed by a disk cleanup used to fall through to whatever
+    `uphold` PATH held -- once a stale 1.18.0 under `.venv/bin` -- which
+    rejected today's arguments and turned the Python suite into 26 failures
+    that never named the binary. A binary of another version is passed over
+    for `cargo run`, which builds this checkout and so needs no asking.
+    Outside a checkout there is no `Cargo.toml` to compare with, and any
+    `uphold` that runs is taken, as before.
     """
+    manifest = HERE / "Cargo.toml"
+    expected = checkout_version(manifest) if manifest.is_file() else None
     attempts: list[list[str]] = []
     for built in (
         HERE / "target" / "release" / "uphold",
@@ -172,7 +183,7 @@ def engine(root: Path, *args: str) -> subprocess.CompletedProcess:
         if built.is_file():
             attempts.append([str(built), *args])
     attempts.append(["uphold", *args])
-    if (HERE / "Cargo.toml").is_file():
+    if expected is not None:
         attempts.append(
             [
                 "cargo",
@@ -187,6 +198,15 @@ def engine(root: Path, *args: str) -> subprocess.CompletedProcess:
 
     reasons: list[str] = []
     for attempt in attempts:
+        if expected is not None and attempt[0] != "cargo":
+            found = binary_version(attempt[0], root)
+            if found != expected:
+                reasons.append(
+                    f"{attempt[0]} is {found}, this checkout is {expected}"
+                    if found.startswith("uphold ")
+                    else f"{attempt[0]}: {found}"
+                )
+                continue
         try:
             return subprocess.run(
                 attempt, cwd=root, capture_output=True, text=True, check=False
@@ -196,8 +216,42 @@ def engine(root: Path, *args: str) -> subprocess.CompletedProcess:
     raise CouldNotLook(
         f"`uphold {' '.join(args)}` could not be run, so what this repository "
         f"enforces is unknown ({'; '.join(reasons)}). Build it with "
-        f"`cargo build --release`, or install it on PATH."
+        f"`cargo build --release`, or install {expected or 'it'} on PATH."
     )
+
+
+@functools.cache
+def checkout_version(manifest: Path) -> str:
+    """`uphold <version>`, as this checkout's binary prints it for `--version`."""
+    version = read_toml(manifest).get("package", {}).get("version")
+    if not isinstance(version, str):
+        raise CouldNotLook(f"{manifest}: no [package] version")
+    return f"uphold {version}"
+
+
+@functools.cache
+def binary_version(binary: str, root: Path) -> str:
+    """What `binary --version` printed, or why it printed nothing usable.
+
+    Asked from `root`, the directory the command itself runs in, so a relative
+    PATH entry resolves to the same binary for the probe as for the run. Asked
+    once per binary and directory: `engine` is called for every mode and every
+    test, and the answer cannot change under one process.
+    """
+    try:
+        answered = subprocess.run(
+            [binary, "--version"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, UnicodeDecodeError) as error:
+        return str(error)
+    printed = answered.stdout.strip()
+    if answered.returncode != 0 or not printed.startswith("uphold "):
+        return f"`--version` answered {printed or answered.stderr.strip() or 'nothing'}"
+    return printed
 
 
 @functools.cache
