@@ -1853,6 +1853,124 @@ fn a_write_into_a_private_repository_naming_another_passes() {
     );
 }
 
+/// `uphold guard --text FILE --repo OWNER/NAME`, against the stub forge.
+/// Here beside the hook's forge tests because it asks through the same scope
+/// answers, under the `gh` table's scope.
+fn guard_text(root: &Path, body: &str, repo: Option<&str>) -> (Output, String) {
+    std::fs::write(root.join("body.md"), body).unwrap();
+    let junit = root.join("text.xml");
+    let _ = std::fs::remove_file(&junit);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_uphold"));
+    command.args(["guard", "--text", "body.md", "--junit", "text.xml"]);
+    if let Some(repo) = repo {
+        command.args(["--repo", repo]);
+    }
+    let output = command
+        .current_dir(root)
+        .env_remove("GH_HOST")
+        .env_remove("GH_REPO")
+        .env_remove("UPHOLD_ALLOW")
+        .env("HOME", "/home/example-user")
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                root.join("bin").display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .output()
+        .unwrap();
+    let document = std::fs::read_to_string(&junit).unwrap_or_default();
+    (output, document)
+}
+
+/// The `<testcase>` element for `id`, open tag through close, or `""`.
+fn testcase<'a>(document: &'a str, id: &str) -> &'a str {
+    let open = format!("<testcase name=\"{id}\"");
+    let Some(start) = document.find(&open) else {
+        return "";
+    };
+    let rest = &document[start..];
+    let end = rest.find("</testcase>").map_or_else(
+        || rest.find("/>").map_or(rest.len(), |at| at + 2),
+        |at| at + 11,
+    );
+    &rest[..end]
+}
+
+#[test]
+fn guard_text_to_a_named_private_repository_stands_the_private_name_check_down() {
+    let root = publishing("guard-text-private", PUBLISHING_POLICY);
+    let (output, document) = guard_text(
+        &root,
+        "Refs example-org/other-private#1\n",
+        Some("example-org/private-repo"),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let case = testcase(&document, "no-published-private-repo-names");
+    assert!(case.contains("<skipped"), "{document}");
+    assert!(case.contains("destination"), "{case}");
+    let asked = std::fs::read_to_string(root.join("gh.asked")).unwrap();
+    assert!(
+        asked.contains("api repos/example-org/private-repo --jq .visibility --hostname github.com"),
+        "{asked}"
+    );
+}
+
+#[test]
+fn guard_text_to_a_named_public_repository_refuses_the_private_name() {
+    let root = publishing("guard-text-public", PUBLISHING_POLICY);
+    let (output, document) = guard_text(
+        &root,
+        "Refs example-org/other-private#1\n",
+        Some("example-user/public-repo"),
+    );
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        testcase(&document, "no-published-private-repo-names").contains("<failure"),
+        "{document}"
+    );
+}
+
+#[test]
+fn guard_text_to_a_repository_the_forge_cannot_answer_for_is_could_not_look() {
+    let root = publishing("guard-text-unknown", PUBLISHING_POLICY);
+    let (output, _) = guard_text(
+        &root,
+        "Refs example-org/other-private#1\n",
+        Some("someone-else/unknown"),
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no-published-private-repo-names"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn guard_text_without_a_repository_keeps_every_rule_in_scope_and_asks_no_forge() {
+    let root = publishing("guard-text-unnamed", PUBLISHING_POLICY);
+    let (output, document) = guard_text(&root, "Refs example-org/other-private#1\n", None);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        testcase(&document, "no-published-private-repo-names").contains("<failure"),
+        "{document}"
+    );
+    assert!(!root.join("gh.asked").exists());
+}
+
+#[test]
+fn guard_text_refuses_a_repository_that_is_not_owner_slash_name() {
+    let root = publishing("guard-text-malformed", PUBLISHING_POLICY);
+    for bad in ["example-org", "example-org/a/b", "../x", "example-org/"] {
+        let (output, _) = guard_text(&root, "plain\n", Some(bad));
+        assert_eq!(code(&output), 2, "{bad}: {}", stderr(&output));
+    }
+}
+
 /// The repository's own commit-message guard is not a rule any table scopes,
 /// so it judges a tool call as it judges the same body through `gh`: against
 /// this repository's declared visibility, wherever the text is going.

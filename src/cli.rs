@@ -162,6 +162,12 @@ pub(crate) struct Guard {
     /// Not with `--stage`: a text-only pass is not a stage's verdict.
     #[arg(long, value_name = "FILE|-", num_args = 0..=1, default_missing_value = "-")]
     pub(crate) text: Option<String>,
+    /// Where the `--text` is going: an `OWNER/NAME` on GitHub. Each rule is
+    /// judged under the scope the `gh` `[[shim]]` table gives it there, as the
+    /// shim judges `gh --repo OWNER/NAME`, and the destination's own name is
+    /// not a finding. Without it every rule is in scope.
+    #[arg(long, value_name = "OWNER/NAME", requires = "text")]
+    pub(crate) repo: Option<String>,
     /// Write what this run decided as `JUnit` XML, to this file or, if it is an
     /// existing directory, to one file per invocation in it.
     #[arg(long, value_name = "FILE|DIR")]

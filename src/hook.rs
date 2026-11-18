@@ -54,7 +54,7 @@
 //! none, is the pre-call judgment below, as it was before the gate existed.
 
 mod stop;
-mod table;
+pub(crate) mod table;
 
 pub(crate) use table::{Answers, Table, Written};
 

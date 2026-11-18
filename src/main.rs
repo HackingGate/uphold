@@ -549,6 +549,20 @@ fn scan_command(arguments: cli::Scan) -> Result<Exit> {
     Ok(exit)
 }
 
+/// `--repo`'s value: exactly `OWNER/NAME`, each half a name a forge path can
+/// hold, since it is put into one. Anything else is a destination nobody can
+/// ask about, and exit 2 rather than a guess.
+fn named_repository(named: &str) -> Result<String> {
+    match named.split_once('/') {
+        Some((owner, name)) if shim::name_segment(owner) && shim::name_segment(name) => {
+            Ok(named.to_owned())
+        }
+        _ => Err(Fatal::new(format!(
+            "--repo {named:?} is not OWNER/NAME, so where the text is going is unknown"
+        ))),
+    }
+}
+
 fn guard_command(arguments: cli::Guard) -> Result<Exit> {
     let cli::Guard {
         stage,
@@ -556,12 +570,14 @@ fn guard_command(arguments: cli::Guard) -> Result<Exit> {
         remote: remote_name,
         remote_url,
         text: text_source,
+        repo,
         junit: junit_flag,
     } = arguments;
 
     // Judged before a policy is read, so a value that names no usable file is
     // exit 2 whatever else is wrong with the run.
     let evidence = junit::requested(junit_flag.as_deref())?;
+    let repo = repo.map(|named| named_repository(&named)).transpose()?;
 
     let working = std::env::current_dir()?;
     let (root, policy_path) = discover(&working).ok_or_else(|| no_policy_here(&working))?;
@@ -594,6 +610,12 @@ fn guard_command(arguments: cli::Guard) -> Result<Exit> {
         // is asked, as a stage's is.
         let mut record = junit::Record::new(evidence, junit::Run::Text);
         record.open()?;
+        // Named, the destination is judged as the shim judges `gh --repo`:
+        // through the hook's scope answers, the one place a destination
+        // handed over outright is asked about. Unnamed, every rule is in scope.
+        let mut scoping = repo
+            .clone()
+            .map(|target| hook::table::Scoping::named(target, &policy.shims, &root));
         let judged = text::judged(
             &invocation::Invocation::text(
                 text::Seam::Guard,
@@ -603,8 +625,12 @@ fn guard_command(arguments: cli::Guard) -> Result<Exit> {
             ),
             &root,
             &policy,
-            None,
-            &mut |_| Ok(true),
+            repo.as_deref(),
+            &mut |rule| {
+                scoping
+                    .as_mut()
+                    .map_or(Ok(true), |scoping| scoping.holds(rule))
+            },
             &mut record.ledger,
         );
         let verdicts = match judged {

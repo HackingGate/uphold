@@ -354,7 +354,12 @@ impl Table {
 
 /// One tool call's scope answers, each predicate asked at most once: the
 /// hook's counterpart of the shim's `CommandContext`.
+///
+/// `uphold guard --text --repo` asks through the same answers, with the
+/// destination handed over outright: see [`Scoping::named`].
 pub(crate) struct Scoping<'a> {
+    /// The seam asking, as the reader typed it, for its messages.
+    seam: &'static str,
     table: Option<&'a Table>,
     /// The table's scope and `unresolved`, read once. See [`Table::answered`].
     answering: Option<(Scope, Unresolved)>,
@@ -374,12 +379,41 @@ impl<'a> Scoping<'a> {
         root: &'a Path,
     ) -> Self {
         Self {
+            seam: "uphold hook",
             table,
             answering: table.map(|table| table.answered(shims)),
             tool,
             input,
             root,
             destination: OnceCell::new(),
+            answers: BTreeMap::new(),
+        }
+    }
+
+    /// The answers for text bound for `target`, an `owner/repo` on GitHub the
+    /// caller named: `uphold guard --text --repo`.
+    ///
+    /// The `gh` `[[shim]]` table speaks for it, because `gh` is the command
+    /// that would carry this text there, and a scope is the table's, not the
+    /// seam's: a seam that judged a body for the same repository under some
+    /// other scope would be the same rule with two answers. No `gh` table is
+    /// the default scope, `always`, as it is at the shim for a command no
+    /// table names.
+    pub(crate) fn named(target: String, shims: &[Shim], root: &'a Path) -> Self {
+        let answering = shims
+            .iter()
+            .find(|shim| shim.command == "gh")
+            .map_or_else(Default::default, |shim| {
+                (shim.scope.clone(), shim.unresolved)
+            });
+        Self {
+            seam: "uphold guard --text",
+            table: None,
+            answering: Some(answering),
+            tool: "gh",
+            input: None,
+            root,
+            destination: OnceCell::from(Ok(target)),
             answers: BTreeMap::new(),
         }
     }
@@ -421,6 +455,17 @@ impl<'a> Scoping<'a> {
             .or_else(|| self.answering.as_ref().map(|(scope, _)| scope))
             .cloned();
         let answer = self.standing(scope.as_ref())?;
+        if self.table.is_none() && self.answering.is_some() {
+            return crate::shim::runs(answer, self.unresolved(), |why| {
+                format!(
+                    "{}: {why}, so whether rule {:?} applies could not be asked. A check that \
+                     could not look is not a check that passed. Make the repository readable to \
+                     `gh`, or write `unresolved = \"run\"` on the `gh` `[[shim]]` table to let \
+                     it through unchecked",
+                    self.seam, rule.id
+                )
+            });
+        }
         crate::shim::runs(answer, self.unresolved(), |why| {
             format!(
                 "uphold hook: {why}, so whether rule {:?} applies could not be asked. A check \
@@ -457,7 +502,7 @@ impl<'a> Scoping<'a> {
         }
         let answer = match scope {
             Some(Scope::Command { command }) => {
-                crate::shim::command_standing("uphold hook", command, self.root)?
+                crate::shim::command_standing(self.seam, command, self.root)?
             }
             // Not refused at load: the scope is right at the shim, and a policy
             // that loads at every other seam is not broken for this one's sake.
@@ -473,7 +518,7 @@ impl<'a> Scoping<'a> {
             },
         };
         if let (Standing::CouldNotTell(why), Unresolved::Run) = (&answer, self.unresolved()) {
-            crate::shim::ran_unchecked("uphold hook", why);
+            crate::shim::ran_unchecked(self.seam, why);
         }
         self.answers.insert(key, answer.clone());
         Ok(answer)
