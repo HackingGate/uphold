@@ -27,5 +27,6 @@ limits = ["Tests must define the correct business scope of sameness.", "Natural 
 [[sources]]
 title = "RFC 9110: HTTP Semantics"
 url = "https://www.rfc-editor.org/rfc/rfc9110.html"
+locator = "§9.2.2"
 type = "standard"
-notes = "Defines idempotent HTTP methods and the retry reasoning behind the property."
+notes = "Defines idempotent methods, PUT, DELETE and the safe methods, and says such a request can be repeated automatically after a communication failure, while a client SHOULD NOT automatically retry a non-idempotent request without knowing it is safe to."

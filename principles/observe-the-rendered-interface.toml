@@ -40,5 +40,6 @@ notes = "Screenshot assertions compare a rendered page or element against a stor
 [[sources]]
 title = "WCAG 2.2, Success Criterion 1.4.10 Reflow"
 url = "https://www.w3.org/WAI/WCAG22/Understanding/reflow.html"
+locator = "SC 1.4.10"
 type = "standard"
-notes = "Content can be presented at 320 CSS pixels wide without loss of information or two-dimensional scrolling, a property observable only by rendering at that width."
+notes = "Content can be presented without loss of information or scrolling in two dimensions at a width equivalent to 320 CSS pixels for vertically scrolling content, or a height of 256 CSS pixels for horizontally scrolling content, except parts that need two-dimensional layout."

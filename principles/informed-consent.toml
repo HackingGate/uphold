@@ -39,5 +39,6 @@ notes = "Practice-level statement for tools: confirm before doing anything dange
 [[sources]]
 title = "GDPR Article 7: Conditions for consent"
 url = "https://gdpr-info.eu/art-7-gdpr/"
+locator = "Art. 7(2), 7(3)"
 type = "standard"
-notes = "Legal articulation of the same structure, cited for the conditions rather than the jurisdiction: consent must be specific, informed, distinguishable from other matters, and as easy to withdraw as to give."
+notes = "Legal articulation of the same structure, cited for the conditions rather than the jurisdiction: a request for consent is clearly distinguishable from other matters (7(2)), the data subject is informed before giving consent, and withdrawing it is as easy as giving it (7(3)); Art. 4(11) defines consent as freely given, specific, informed and unambiguous."
