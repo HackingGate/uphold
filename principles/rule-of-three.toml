@@ -31,7 +31,7 @@ type = "documentation"
 notes = "Neutral statement of the rule and its usual justification: more instances show the pattern, and premature refactoring risks selecting a wrong abstraction that makes code worse as new requirements emerge."
 
 [[sources]]
-title = "Refactoring: Improving the Design of Existing Code"
-url = "https://martinfowler.com/books/refactoring.html"
+title = "Refactoring: Improving the Design of Existing Code, 1999"
+url = "https://archive.org/details/isbn_9780201485677"
 type = "book"
-notes = "Fowler attributes the rule to Don Roberts: the first time, just do it; the second time, wince at the duplication; the third time, refactor."
+notes = "Fowler, with Beck, Brant, Opdyke and Roberts; the first edition, borrowable from the Internet Archive. It popularised the rule and attributes it to Don Roberts, as the Wikipedia source above records; the book's own wording is not checked here."
