@@ -32,14 +32,16 @@ notes = "A public append-only transparency log for software signing events; entr
 [[sources]]
 title = "The Protection of Information in Computer Systems"
 url = "https://doi.org/10.1109/PROC.1975.9939"
+locator = "§I.A.3"
 type = "paper"
-notes = "States compromise recording: mechanisms that reliably record that a compromise occurred can be used in place of more elaborate mechanisms that completely prevent loss."
+notes = "States compromise recording, one of two further principles it gives beside the eight and says apply only imperfectly to computer systems: mechanisms that reliably record that a compromise of information has occurred can be used in place of more elaborate mechanisms that completely prevent loss."
 
 [[sources]]
 title = "Secure Audit Logs to Support Computer Forensics"
 url = "https://doi.org/10.1145/317087.317089"
+locator = "Abstract"
 type = "paper"
-notes = "Constructs logs whose entries an attacker who compromises the logging host cannot read or undetectably alter after the fact."
+notes = "Constructs logs whose entries made before the logging host's compromise are impossible for the attacker to read, and impossible to modify or destroy undetectably."
 
 [[sources]]
 title = "Event Sourcing"

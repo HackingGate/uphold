@@ -27,6 +27,7 @@ limits = ["A metric can measure size; whether the mechanism is small enough to v
 [[sources]]
 title = "The Protection of Information in Computer Systems"
 url = "https://doi.org/10.1109/PROC.1975.9939"
+locator = "§I.A.3(a)"
 type = "paper"
 notes = "States economy of mechanism: keep the design as simple and small as possible, because design and implementation errors that permit unwanted access are not noticed in normal use and need line-by-line inspection to find."
 

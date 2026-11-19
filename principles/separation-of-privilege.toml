@@ -27,8 +27,9 @@ limits = ["A tool can see that two conditions are checked; whether their holders
 [[sources]]
 title = "The Protection of Information in Computer Systems"
 url = "https://doi.org/10.1109/PROC.1975.9939"
+locator = "§I.A.3(e)"
 type = "paper"
-notes = "States separation of privilege: a protection mechanism that requires two keys is more robust and flexible than one that allows access on a single key."
+notes = "States separation of privilege: where feasible, a protection mechanism that requires two keys to unlock it is more robust and flexible than one that allows access to the presenter of only a single key."
 
 [[sources]]
 title = "NIST SP 800-53 Revision 5: Security and Privacy Controls for Information Systems and Organizations"

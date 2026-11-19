@@ -32,5 +32,6 @@ notes = "A formally verified microkernel whose access control is capability-base
 [[sources]]
 title = "The Protection of Information in Computer Systems"
 url = "https://doi.org/10.1109/PROC.1975.9939"
+locator = "§I.A.3(f)"
 type = "paper"
-notes = "Foundational security design principles including least privilege and complete mediation."
+notes = "Lists eight design principles, among them least privilege: every program and every user of the system should operate using the least set of privileges necessary to complete the job."

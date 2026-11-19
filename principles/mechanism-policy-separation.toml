@@ -27,5 +27,6 @@ limits = ["The correct seam depends on expected change and authority boundaries.
 [[sources]]
 title = "Hints for Computer System Design"
 url = "https://www.microsoft.com/en-us/research/publication/hints-for-computer-system-design/"
+locator = "§2.2, Leave it to the client"
 type = "paper"
-notes = "Classic systems design guidance on modularity, interfaces, and separation of concerns including policy and mechanism."
+notes = "An interface solves one problem and leaves the rest to the client, as monitors provide locking and signaling but leave the scheduling of waiting processes to the client; the paper makes the split without using the words policy and mechanism."

@@ -27,5 +27,6 @@ limits = ["The correct endpoint is a semantic boundary, not necessarily a networ
 [[sources]]
 title = "End-to-End Arguments in System Design"
 url = "https://web.mit.edu/Saltzer/www/publications/endtoend/endtoend.pdf"
+locator = "Introduction"
 type = "paper"
-notes = "Foundational statement of the end-to-end argument."
+notes = "Foundational statement of the end-to-end argument: a function can be completely and correctly implemented only with the knowledge and help of the application at the end points, so the communication system cannot provide it, though an incomplete version may help as a performance enhancement."
