@@ -27,11 +27,13 @@ limits = ["Whether the weaker form suffices depends on requirements a tool canno
 [[sources]]
 title = "The Rule of Least Power"
 url = "https://www.w3.org/2001/tag/doc/leastPower.html"
+locator = "§1 Language Power and Information Reuse"
 type = "essay"
 notes = "W3C Technical Architecture Group finding (2006), not a Recommendation. States the rule for Web languages: the less powerful the language, the more one can do with the data stored in it."
 
 [[sources]]
 title = "Principles of Design"
 url = "https://www.w3.org/DesignIssues/Principles.html"
+locator = "Principle of Least Power"
 type = "essay"
-notes = "Berners-Lee's earlier Design Issues note, listing least power beside simplicity, modular design, and tolerance."
+notes = "Berners-Lee's earlier Design Issues note (1998), listing the principle of least power beside simplicity, modular design, tolerance and decentralization; the 2006 finding was adapted from it."

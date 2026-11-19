@@ -40,10 +40,11 @@ notes = "Katz and Allen, R&D Management 12(1), 1982. The empirical origin of the
 title = "In Defense of Not-Invented-Here Syndrome"
 url = "https://www.joelonsoftware.com/2001/10/14/in-defense-of-not-invented-here-syndrome/"
 type = "essay"
-notes = "Spolsky, 2001. The counterweight this record's does_not_mean carries: when a function is the core of the business, build it yourself."
+notes = "Spolsky, 2001. The counterweight this record's does_not_mean carries: if it's a core business function, do it yourself, no matter what."
 
 [[sources]]
 title = "Our Software Dependency Problem"
 url = "https://research.swtch.com/deps"
+locator = "Inspect the dependency; Isolate the dependency; Upgrade the dependency"
 type = "essay"
-notes = "Cox, 2019. Argues for reuse while setting out how to inspect a dependency before adopting it, and how to keep it isolated and current afterwards; the costs side of this record."
+notes = "Cox, 2019. Sets out the risks of depending on others' code and how to inspect, test, abstract, isolate, upgrade and watch a dependency so it can be reused safely; the costs side of this record."

@@ -50,5 +50,6 @@ notes = "Places the acyclic dependencies principle among Martin's package coupli
 [[sources]]
 title = "Design Principles and Design Patterns"
 url = "https://web.archive.org/web/20150906155800/http://www.objectmentor.com/resources/articles/Principles_and_Patterns.pdf"
+locator = "The Acyclic Dependencies Principle (ADP)"
 type = "essay"
-notes = "Martin (2000), archived copy. States that the dependency structure between packages must be a directed acyclic graph and shows how a cycle forces packages to be released together."
+notes = "Martin (2000), archived copy. States that the dependencies between packages must not form cycles, and shows how one added cycle makes releasing a package require building and testing it with every package it now transitively depends on."

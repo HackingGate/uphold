@@ -29,4 +29,4 @@ limits = ["A tool cannot decide whether additional type complexity improves comp
 title = "Designing with types: Making illegal states unrepresentable"
 url = "https://fsharpforfunandprofit.com/posts/designing-with-types-making-illegal-states-unrepresentable/"
 type = "essay"
-notes = "A practical explanation of encoding domain constraints in types."
+notes = "Wlaschin (2013) encodes the rule 'a contact must have an email or a postal address' as a union type, so a contact with neither cannot be constructed; the phrase is borrowed from Yaron Minsky."

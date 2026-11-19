@@ -28,7 +28,7 @@ limits = ["No tool can enumerate consumers it cannot see.", "Which observed beha
 title = "Hyrum's Law"
 url = "https://www.hyrumslaw.com/"
 type = "essay"
-notes = "Hyrum Wright's own statement of the observation, drawn from large-scale changes to shared libraries."
+notes = "Hyrum Wright's own statement: with a sufficient number of users of an API, all observable behaviors of the system will be depended on by somebody, an observation he says grew out of library changes that broke far-off systems."
 
 [[sources]]
 title = "Software Engineering at Google, Chapter 1: What Is Software Engineering?"

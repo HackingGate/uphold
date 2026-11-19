@@ -27,12 +27,14 @@ limits = ["Whether two differently labelled fields carry the same fact is a judg
 [[sources]]
 title = "Nielsen Norman Group, Reduce Redundancy: Decrease Duplicated Design Decisions"
 url = "https://www.nngroup.com/articles/reduce-redundancydecrease-duplicated-design-decisions/"
+locator = "Simplicity; Good Redundancy: Alternative Navigation Paths"
 type = "essay"
-notes = "Showing the same link or information twice adds scanning cost and leaves people unsure whether the repeat is new; make the one copy prominent instead. A few cross-reference links are the exception."
+notes = "Duplicating a feature or link adds scanning and comprehension cost and leaves people working out whether the duplicate is new; make the one copy more prominent instead. A few cross-reference links as alternative navigation paths are the exception."
 
 [[sources]]
 title = "Nielsen Norman Group, 10 Usability Heuristics for User Interface Design"
 url = "https://www.nngroup.com/articles/ten-usability-heuristics/"
+locator = "8: Aesthetic and Minimalist Design"
 type = "essay"
 notes = "Heuristic 8, aesthetic and minimalist design: interfaces should not contain information that is irrelevant or rarely needed."
 

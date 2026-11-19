@@ -42,6 +42,7 @@ notes = "Where help mechanisms such as contact details or a self-help option are
 [[sources]]
 title = "Nielsen Norman Group, 10 Usability Heuristics for User Interface Design"
 url = "https://www.nngroup.com/articles/ten-usability-heuristics/"
+locator = "4: Consistency and Standards"
 type = "essay"
 notes = "Heuristic 4, consistency and standards: users should not have to wonder whether different words, situations or actions mean the same thing."
 

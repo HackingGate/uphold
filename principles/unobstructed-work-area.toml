@@ -35,8 +35,9 @@ notes = "When a user interface component receives keyboard focus, it is not enti
 [[sources]]
 title = "Nielsen Norman Group, Modal & Nonmodal Dialogs: When (& When Not) to Use Them"
 url = "https://www.nngroup.com/articles/modal-nonmodal-dialog/"
+locator = "Guidelines for Using Modal Dialogs; Consider Nonmodal Dialogs Instead"
 type = "essay"
-notes = "Modal dialogs interrupt the task and are for critical information or a decision; a nonmodal dialog or inline message lets the person keep working."
+notes = "Modal dialogs interrupt and demand an action, so they suit important warnings and information needed to continue the current process; nonmodal dialogs, or errors reported on the page next to where they occurred, let the person continue."
 
 [[sources]]
 title = "Apple Human Interface Guidelines, Alerts"

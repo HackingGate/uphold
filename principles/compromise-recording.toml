@@ -46,5 +46,6 @@ notes = "Constructs logs whose entries made before the logging host's compromise
 [[sources]]
 title = "Event Sourcing"
 url = "https://martinfowler.com/eaaDev/EventSourcing.html"
+locator = "How it Works"
 type = "essay"
-notes = "The append-only tactic: application state is captured as a sequence of events, so every change is retained and state can be rebuilt from the log."
+notes = "The append-only tactic: all changes to application state are stored as a sequence of events in a purely additive log, from which past states can be reconstructed."
