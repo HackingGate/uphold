@@ -140,6 +140,10 @@ const RECORDS: &[(&str, &str)] = &[
         include_str!("../principles/informed-consent.toml"),
     ),
     (
+        "lead-with-the-work",
+        include_str!("../principles/lead-with-the-work.toml"),
+    ),
+    (
         "least-astonishment",
         include_str!("../principles/least-astonishment.toml"),
     ),

@@ -1312,6 +1312,20 @@
       "path": "principles/defense-in-depth.toml"
     },
     {
+      "name": "Lead With the Work",
+      "key": "lead with the work",
+      "tokens": [
+        "lead",
+        "with",
+        "the",
+        "work"
+      ],
+      "field": "title",
+      "id": "lead-with-the-work",
+      "title": "Lead With the Work",
+      "path": "principles/lead-with-the-work.toml"
+    },
+    {
       "name": "Least Astonishment",
       "key": "least astonishment",
       "tokens": [
@@ -2624,6 +2638,21 @@
       "path": "principles/compromise-recording.toml"
     },
     {
+      "name": "The work, not the host",
+      "key": "the work not the host",
+      "tokens": [
+        "the",
+        "work",
+        "not",
+        "the",
+        "host"
+      ],
+      "field": "alias",
+      "id": "lead-with-the-work",
+      "title": "Lead With the Work",
+      "path": "principles/lead-with-the-work.toml"
+    },
+    {
       "name": "Three strikes and you refactor",
       "key": "three strikes and you refactor",
       "tokens": [
@@ -2637,6 +2666,19 @@
       "id": "rule-of-three",
       "title": "Rule of Three",
       "path": "principles/rule-of-three.toml"
+    },
+    {
+      "name": "Top tasks first",
+      "key": "top tasks first",
+      "tokens": [
+        "top",
+        "tasks",
+        "first"
+      ],
+      "field": "alias",
+      "id": "lead-with-the-work",
+      "title": "Lead With the Work",
+      "path": "principles/lead-with-the-work.toml"
     },
     {
       "name": "Treat logs as event streams",

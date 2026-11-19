@@ -101,6 +101,11 @@
       "misses": "Make `uphold --install` in src/install.rs print the path each new link points at beside \"linked\", in the line it already prints for every name."
     },
     {
+      "record": "lead-with-the-work",
+      "catches": "Make `uphold probe` in src/probe.rs open its report with a table of every hook runner it looked for on PATH and each one's version, and print each hook's verdict only after that table, so the first lines a person reads are the runners rather than which of their hooks can refuse.",
+      "misses": "Make the summary line `uphold probe` in src/probe.rs prints above the hooks' verdicts name the runner's version beside its command, keeping each hook's verdict on its own line under it."
+    },
+    {
       "record": "least-astonishment",
       "catches": "Make `uphold_check.py --review --check` rewrite REVIEW.md and AGENTS.md in place when they are stale and exit 0, printing nothing about the write, so someone who ran a command named check to look at the tree finds their working copy changed afterwards.",
       "misses": "Make `uphold_check.py --review --emit` print the absolute path of each file it writes, beside the name and line count it already prints."
