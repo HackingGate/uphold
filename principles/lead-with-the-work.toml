@@ -1,0 +1,38 @@
+id = "lead-with-the-work"
+title = "Lead With the Work"
+aliases = ["Suitability for the user's tasks", "Top tasks first", "The work, not the host"]
+kind = "heuristic"
+status = "seed"
+domains = ["interfaces", "socio-technical"]
+summary = "A home screen leads with the work the person comes back to resume or start, and the things that host or configure that work are properties of it, managed on pages of their own."
+claim = "A product's home screen leads with the objects of the person's task, the work they come back to resume or start, and shows the resources that host or configure that work as properties of it, with their management on pages of their own."
+problem = "A home screen organized by the system's own parts, such as its hosts, servers, environments or accounts, puts the person's work one or more steps behind a resource they must first pick. Every return costs a navigation through infrastructure to reach the thing they came for, and the screen spends its first view on facts the task rarely needs."
+rationale = "A person opens a product to do a task, and the home screen is the step every task passes through. When it is built from the task's objects, the most frequent action, resuming or starting the work, is the shortest; when it is built from the technology that carries the task, that structure is imposed on every visit. The host still matters, but as a choice made when the work starts and as a property shown with it."
+applies_when = ["A home screen, front page or first list a person sees after signing in is being designed or reviewed.", "The product holds both units of the person's work, such as sessions, documents, tasks or workspaces, and the resources that run or hold them, such as machines, servers or environments.", "The question is which object a home or list page is about, and which it shows only as a property."]
+does_not_mean = ["Hide or remove the resources; they keep a page of their own, reachable from the home screen.", "A product whose task is managing the resources themselves, such as a fleet or inventory console, must lead with something else; there the resources are the work.", "Every page leads with the work; a resource's own page is about that resource.", "Show every fact of the work on the home screen; what it leads with is not how much it holds."]
+benefits = ["Resuming or starting the work, the most frequent action, is the shortest path in the product.", "The resources' own pages are left to carry what only management needs.", "The home screen's first view goes to what the person came for."]
+costs = ["Which objects are the person's work is evidence to gather about the people using the product, not a fact available from the data model.", "A person who does manage the resources takes one more step to reach them.", "A product with several kinds of work must still choose which one leads."]
+failure_when_overapplied = ["A product whose people manage the resources is given a home screen of work they do not have.", "The resources lose their own page, and their management is scattered across the work's rows.", "A fact the person needs to choose where new work runs is moved off the screen where they start it."]
+conflicts_with = []
+related = ["least-astonishment", "fact-once-per-screen", "unobstructed-work-area"]
+review_questions = ["What does a person come back to this product to do, and which object is that task about?", "Does the home screen lead with that object, or with a resource the person must pick before reaching it?", "How many steps does it take to resume the work last used, and to start new work?", "Is each resource shown as a property of the work, with its management on a page of its own?"]
+
+[enforcement]
+level = "test"
+automatable = "partially"
+observable = ["The kind of item the first list on the home screen renders, in a component or story test.", "The number of actions from the home screen to resuming the most recently used item, in an end-to-end test."]
+checks = ["Render the home screen in a story and fail when its first list is not of the item kind the project names as its work.", "Fail an end-to-end test when resuming the most recently used item takes more than one action from the home screen."]
+limits = ["Which objects are the person's work is a judgment about the people who use the product and what they come to do.", "Whether a resource is shown as a property of the work or as the subject of the page depends on the rendered layout, not on a name in the code."]
+
+[[sources]]
+title = "ISO 9241-110:2020, Ergonomics of human-system interaction, Part 110: Interaction principles"
+url = "https://www.iso.org/standard/75258.html"
+locator = "§4.1"
+type = "standard"
+notes = "Suitability for the user's tasks: an interactive system is suitable for the user's tasks when it supports the users in the completion of their tasks, when the operating functions and the user-system interactions are based on the task characteristics rather than the technology chosen to perform the task."
+
+[[sources]]
+title = "Gerry McGovern, What Really Matters: Focusing on Top Tasks, A List Apart, 2015"
+url = "https://alistapart.com/article/what-really-matters-focusing-on-top-tasks/"
+type = "essay"
+notes = "Top tasks are the small set of tasks that matter most to the people a product serves; focus on them and defocus on the tiny tasks."

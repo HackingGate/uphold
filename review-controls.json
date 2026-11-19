@@ -101,6 +101,11 @@
       "misses": "Make `uphold --install` in src/install.rs print the path each new link points at beside \"linked\", in the line it already prints for every name."
     },
     {
+      "record": "lead-with-the-work",
+      "catches": "Move README.md's opening list of what uphold refuses, and the install line under it, below a new table of every module under src/ and what it implements, so the first screen a reader lands on is the code's layout rather than what they came to set up.",
+      "misses": "Add one sentence under README.md's opening list of what uphold refuses naming the hook managers it supports, keeping the list and the install line first."
+    },
+    {
       "record": "least-astonishment",
       "catches": "Make `uphold_check.py --review --check` rewrite REVIEW.md and AGENTS.md in place when they are stale and exit 0, printing nothing about the write, so someone who ran a command named check to look at the tree finds their working copy changed afterwards.",
       "misses": "Make `uphold_check.py --review --emit` print the absolute path of each file it writes, beside the name and line count it already prints."

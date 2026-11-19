@@ -319,6 +319,20 @@ An effect that is hard to reverse and falls outside what the invoked operation d
 - What does this do when no one is there to answer -- refuse, or proceed?
 - When the set of effects grows in a later version, what makes it ask again rather than reuse the old approval?
 
+## Lead With the Work
+A product's home screen leads with the objects of the person's task, the work they come back to resume or start, and shows the resources that host or configure that work as properties of it, with their management on pages of their own.
+
+**Applies when**
+- A home screen, front page or first list a person sees after signing in is being designed or reviewed.
+- The product holds both units of the person's work, such as sessions, documents, tasks or workspaces, and the resources that run or hold them, such as machines, servers or environments.
+- The question is which object a home or list page is about, and which it shows only as a property.
+
+**Ask**
+- What does a person come back to this product to do, and which object is that task about?
+- Does the home screen lead with that object, or with a resource the person must pick before reaching it?
+- How many steps does it take to resume the work last used, and to start new work?
+- Is each resource shown as a property of the work, with its management on a page of its own?
+
 ## Least Astonishment
 An operation should confine its effects to what its name and context already denote to the people who invoke it, and any effect beyond that must be visible at the point of use rather than discoverable only afterwards.
 
