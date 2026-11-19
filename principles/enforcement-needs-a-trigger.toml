@@ -27,8 +27,9 @@ limits = ["A tool can see that a trigger exists; it cannot tell whether the trig
 [[sources]]
 title = "My Philosophy on Alerting"
 url = "https://docs.google.com/document/d/199PqyG3UsyXlwieHaqbGiWVa8eMWi8zzAn0YfcApr8Q/preview"
+locator = "Summary; Introduction"
 type = "essay"
-notes = "Argues that a page must be actionable and real; a signal that cannot be acted on trains its readers to ignore the channel."
+notes = "Argues that every page should be urgent, important, actionable and real, that noisy alerts should be removed, and that alerts dumped into a list or channel are soon summarily ignored."
 
 [[sources]]
 title = "Your Sigma Rule Converts Cleanly and Still Never Fires"

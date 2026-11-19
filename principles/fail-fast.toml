@@ -28,4 +28,4 @@ limits = ["The correct choice between failure and degradation depends on product
 title = "Fail Fast"
 url = "https://www.martinfowler.com/ieeeSoftware/failFast.pdf"
 type = "essay"
-notes = "A concise articulation of detecting failures close to their source."
+notes = "Jim Shore, in the IEEE Software design column: a system that fails fast fails immediately and visibly when a problem occurs, instead of continuing and failing in strange ways later, which puts the failure close to the original problem."

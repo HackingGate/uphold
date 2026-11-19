@@ -46,7 +46,7 @@ notes = "Arkes and Blumer, Organizational Behavior and Human Decision Processes 
 title = "Choose Boring Technology"
 url = "https://boringtechnology.club/"
 type = "essay"
-notes = "McKinley, 2015. The counterweight this record's does_not_mean carries: a team has a limited budget for new technology, and each new kind of component has a cost beyond its features."
+notes = "McKinley's talk: a team gets a limited number of innovation tokens to spend, and each new technology choice comes with baggage beyond its features; adding it is easy, living with it is hard."
 
 [[sources]]
 title = "OWASP Top 10:2021 A06 Vulnerable and Outdated Components"

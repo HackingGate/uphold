@@ -27,8 +27,9 @@ limits = ["A tool can see that a prompt exists; it cannot see whether the text d
 [[sources]]
 title = "10 Usability Heuristics for User Interface Design"
 url = "https://www.nngroup.com/articles/ten-usability-heuristics/"
+locator = "1: Visibility of System Status; 3: User Control and Freedom"
 type = "essay"
-notes = "Visibility of system status and user control and freedom: the system should keep users informed about what is happening and support undo, exit, and refusal at the point of action."
+notes = "Visibility of system status and user control and freedom: the design should keep users informed about what is going on, and give them a clearly marked emergency exit from an unwanted action and support for undo and redo."
 
 [[sources]]
 title = "Command Line Interface Guidelines"

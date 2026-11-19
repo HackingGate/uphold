@@ -28,4 +28,4 @@ limits = ["Static dependencies do not reveal all semantic coupling.", "A tool ca
 title = "On the role of scientific thought"
 url = "https://www.cs.utexas.edu/~EWD/transcriptions/EWD04xx/EWD447.html"
 type = "essay"
-notes = "Dijkstra articulates separation of concerns as a method for reasoning."
+notes = "Dijkstra calls the separation of concerns, focusing on one aspect while knowing the others are irrelevant to it, the only available technique for effective ordering of one's thoughts."
