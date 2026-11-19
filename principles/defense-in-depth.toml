@@ -27,5 +27,6 @@ limits = ["Counting controls does not establish independence.", "The quality and
 [[sources]]
 title = "NIST SP 800-160 Volume 1 Revision 1"
 url = "https://csrc.nist.gov/pubs/sp/800/160/v1/r1/final"
+locator = "Appendix E.9, Defense In Depth"
 type = "standard"
-notes = "Systems security engineering guidance for trustworthy and resilient systems."
+notes = "Principle E.9: loss is prevented or minimized by employing multiple coordinated mechanisms, on three pillars: multiple lines of defense along loss scenario sequences, no reliance on a single defensive element, and successive barriers diverse in nature, technical, operational and organizational."

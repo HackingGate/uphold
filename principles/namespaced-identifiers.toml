@@ -29,13 +29,13 @@ limits = ["Which names outside tooling reads is a fact about the readers, which 
 title = "D-Bus Specification: Valid Names"
 url = "https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-names"
 type = "standard"
-notes = "Well-known bus names and interface names are reverse-domain names, so that two publishers' names cannot collide."
+notes = "Interface names and well-known bus names should start with the author's reversed DNS domain name, and the glossary defines a namespace as what prevents collisions between new interfaces and bus names."
 
 [[sources]]
 title = "The Java Language Specification, Java SE 21: 6.1 Declarations"
 url = "https://docs.oracle.com/javase/specs/jls/se21/html/jls-6.html#jls-6.1"
 type = "standard"
-notes = "The package naming convention: a package name begins with the publisher's Internet domain name in reverse order."
+notes = "A suggested package naming convention: a package name begins with the publisher's Internet domain name, reversed component by component."
 
 [[sources]]
 title = "Logging (Apple unified logging)"

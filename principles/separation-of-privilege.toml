@@ -33,5 +33,6 @@ notes = "States separation of privilege: a protection mechanism that requires tw
 [[sources]]
 title = "NIST SP 800-53 Revision 5: Security and Privacy Controls for Information Systems and Organizations"
 url = "https://doi.org/10.6028/NIST.SP.800-53r5"
+locator = "AC-5"
 type = "standard"
-notes = "Control AC-5, Separation of Duties, is the organizational form: duties are divided so that no single individual can complete a sensitive function alone."
+notes = "Control AC-5, Separation of Duties, is the organizational form: duties of individuals requiring separation are identified and access authorizations support them, dividing functions among different individuals or roles to reduce the risk of malevolent activity without collusion."

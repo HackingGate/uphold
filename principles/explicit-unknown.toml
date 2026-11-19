@@ -27,11 +27,13 @@ limits = ["A tool can see that an unknown state exists; it cannot tell whether t
 [[sources]]
 title = "Specification for the Extensible Configuration Checklist Description Format (XCCDF)"
 url = "https://csrc.nist.gov/pubs/ir/7275/r4/upd1/final"
+locator = "§6.6.4.2 Table 26; §7.3.2 Table 40"
 type = "standard"
-notes = "Defines rule-result values that keep pass, fail, error, unknown, notapplicable, notchecked, notselected, informational and fixed as separate outcomes rather than a boolean. Its scoring rule excludes notapplicable and notchecked from the denominator and leaves error and unknown inside it, so a check that could not run counts against the score and never for it."
+notes = "Defines rule-result values that keep pass, fail, error, unknown, notapplicable, notchecked, notselected, informational and fixed as separate outcomes rather than a boolean. Its default scoring model leaves notapplicable, notchecked, informational and notselected out of the count and keeps error and unknown inside it, so a check that could not run counts against the score and never for it."
 
 [[sources]]
 title = "Static Analysis Results Interchange Format (SARIF)"
 url = "https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html"
+locator = "§3.27.9, §3.27.10"
 type = "standard"
-notes = "Separates a result's kind (pass, fail, notApplicable, informational, review, open) from its severity level, so an uninspected condition is representable."
+notes = "Separates a result's kind (pass, fail, open, notApplicable, informational, review) from its severity level; open records that a rule was evaluated with too little information to decide whether a problem exists, so an undecided condition is representable."

@@ -43,11 +43,13 @@ notes = "Explains where two supposedly identical artifacts differ, recursing int
 [[sources]]
 title = "Reproducible Builds: Definitions"
 url = "https://reproducible-builds.org/docs/definition/"
+locator = "When is a build reproducible?"
 type = "standard"
-notes = "A build is reproducible when, given the same source, build environment, and build instructions, any party can recreate bit-by-bit identical copies of the specified artifacts."
+notes = "A build is reproducible if, given the same source code, build environment and build instructions, any party can recreate bit-by-bit identical copies of all specified artifacts."
 
 [[sources]]
 title = "SOURCE_DATE_EPOCH specification"
 url = "https://reproducible-builds.org/specs/source-date-epoch/"
+locator = "Specification, SOURCE_DATE_EPOCH"
 type = "standard"
-notes = "Shows the standard resolution of the tension with provenance: a timestamp is not stripped but made a named input, set from the source rather than the clock."
+notes = "A timestamp is not stripped but made a named input: build processes MUST use SOURCE_DATE_EPOCH for embedded timestamps in place of the current time, and its value depends only on the source and SHOULD be the source's last modification time."

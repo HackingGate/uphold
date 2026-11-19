@@ -28,14 +28,16 @@ limits = ["Whether two pages are of the same kind, and so owe the same frame, is
 [[sources]]
 title = "WCAG 2.2, Success Criterion 3.2.3 Consistent Navigation"
 url = "https://www.w3.org/WAI/WCAG22/Understanding/consistent-navigation.html"
+locator = "SC 3.2.3"
 type = "standard"
-notes = "Navigational mechanisms repeated on multiple pages occur in the same relative order each time they are repeated."
+notes = "Navigational mechanisms repeated on multiple web pages within a set of web pages occur in the same relative order each time they are repeated, unless a change is initiated by the user."
 
 [[sources]]
 title = "WCAG 2.2, Success Criterion 3.2.6 Consistent Help"
 url = "https://www.w3.org/WAI/WCAG22/Understanding/consistent-help.html"
+locator = "SC 3.2.6"
 type = "standard"
-notes = "Help mechanisms repeated on multiple pages occur in the same order relative to other page content."
+notes = "Where help mechanisms such as contact details or a self-help option are repeated on multiple web pages within a set of web pages, they occur in the same order relative to other page content; the criterion does not require help to be offered."
 
 [[sources]]
 title = "Nielsen Norman Group, 10 Usability Heuristics for User Interface Design"

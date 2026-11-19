@@ -39,8 +39,9 @@ notes = "Treats deprecation as a managed process with owners, migration tooling,
 [[sources]]
 title = "Semantic Versioning 2.0.0"
 url = "https://semver.org/"
+locator = "Item 7; FAQ, How should I handle deprecating functionality?"
 type = "standard"
-notes = "Encodes compatibility in the version number: a major increment for incompatible changes, minor for compatible additions, patch for compatible fixes, and a deprecation announced in a minor release before removal in a major one."
+notes = "Encodes compatibility in the version number: a major increment for incompatible changes, minor for compatible additions, patch for compatible fixes. Item 7 requires a minor increment when functionality is marked deprecated, and the FAQ advises at least one minor release carrying the deprecation before removal in a major one."
 
 [[sources]]
 title = "Software Engineering at Google, Chapter 21: Dependency Management"
@@ -51,5 +52,6 @@ notes = "Argues that a semantic version is a lossy estimate of compatibility, wh
 [[sources]]
 title = "OWASP Top 10:2021 A06 Vulnerable and Outdated Components"
 url = "https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/"
+locator = "Description; How to Prevent"
 type = "standard"
-notes = "The consumer's side of deprecation: a component left unsupported, out of date, or carrying known vulnerabilities is a risk the consumer owns, and the remedy it gives is a continuous inventory and an update process."
+notes = "The consumer's side of deprecation: software is likely vulnerable when a component it uses is unsupported or out of date, and the prevention given is a patch management process with a continuous inventory of component versions and an ongoing plan for applying updates."

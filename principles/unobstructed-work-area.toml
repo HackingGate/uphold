@@ -28,8 +28,9 @@ limits = ["Whether an element covers the content depends on the layout and the w
 [[sources]]
 title = "WCAG 2.2, Success Criterion 2.4.11 Focus Not Obscured (Minimum)"
 url = "https://www.w3.org/WAI/WCAG22/Understanding/focus-not-obscured-minimum.html"
+locator = "SC 2.4.11"
 type = "standard"
-notes = "When a component receives keyboard focus, it is not entirely hidden by content the author created, such as a sticky banner or a non-modal dialog."
+notes = "When a user interface component receives keyboard focus, it is not entirely hidden by author-created content, such as a sticky header, sticky footer or non-modal dialog; partial obscuring is allowed."
 
 [[sources]]
 title = "Nielsen Norman Group, Modal & Nonmodal Dialogs: When (& When Not) to Use Them"
