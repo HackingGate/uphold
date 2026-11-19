@@ -40,4 +40,4 @@ notes = "The mechanical refactoring: functions whose bodies differ only by a lit
 title = "Anti-pattern"
 url = "https://en.wikipedia.org/wiki/Anti-pattern"
 type = "documentation"
-notes = "Catalogues combinatorial explosion as the named failure -- entities differing only in the combination of parameters they handle. That name describes the growth at scale; the constraint here also binds the first copy, before there is an explosion to point at."
+notes = "Defines an anti-pattern as a common but counterproductive solution to some class of problem; this record names one such pattern. The article does not catalogue combinatorial explosion."

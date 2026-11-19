@@ -32,13 +32,14 @@ type = "practice"
 notes = "Wiggins, 2011. A program never concerns itself with routing or storing its output stream; the execution environment captures and routes it."
 
 [[sources]]
-title = "Logging (Apple unified logging)"
-url = "https://developer.apple.com/documentation/os/logging"
+title = "Apple, Generating Log Messages from Your Code (unified logging)"
+url = "https://developer.apple.com/documentation/os/generating-log-messages-from-your-code"
 type = "documentation"
-notes = "The platform facility on macOS and iOS: the system stores, rotates and serves the log, read with Console or `log show`, and keeps lower levels in memory only."
+notes = "The platform facility on macOS and iOS: the system stores every message in memory first, writes the more severe levels to an on-disk store it purges when the store exceeds a predefined size, keeps debug and info messages in memory only by default, and serves them to Console and the log tool."
 
 [[sources]]
 title = "systemd-journald.service"
 url = "https://www.freedesktop.org/software/systemd/man/latest/systemd-journald.service.html"
+locator = "Description; Access Control"
 type = "documentation"
-notes = "The journal collects the logs of every service and user unit, with retention, rotation and access control set once for the host."
+notes = "The journal collects the output of service units and the host's other log sources, removes the oldest archived files to limit disk use as journald.conf sets, and grants read access through the systemd-journal group and file ACLs."

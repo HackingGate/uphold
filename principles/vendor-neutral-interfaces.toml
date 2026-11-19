@@ -29,7 +29,7 @@ limits = ["Which providers count as vendors is a list the project keeps and no c
 title = "sshd(8), AUTHORIZED_KEYS FILE FORMAT"
 url = "https://man.openbsd.org/sshd#AUTHORIZED_KEYS_FILE_FORMAT"
 type = "documentation"
-notes = "A published, line-oriented key format many tools read from a file or standard input, whatever service issued the keys."
+notes = "Defines a published, line-oriented key format, one key per line with optional options, key type, base64 key and comment, which sshd reads from the files AuthorizedKeysFile names."
 
 [[sources]]
 title = "The Twelve-Factor App: IV. Backing services"

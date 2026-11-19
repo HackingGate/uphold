@@ -34,8 +34,9 @@ notes = "The more your tests resemble the way your software is used, the more co
 [[sources]]
 title = "Playwright, Visual comparisons"
 url = "https://playwright.dev/docs/test-snapshots"
+locator = "Introduction"
 type = "documentation"
-notes = "Screenshot assertions compare a rendered page or element against a stored baseline."
+notes = "Screenshot assertions generate reference screenshots on the first run and compare later runs against them."
 
 [[sources]]
 title = "WCAG 2.2, Success Criterion 1.4.10 Reflow"

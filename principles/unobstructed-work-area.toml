@@ -43,4 +43,4 @@ notes = "Modal dialogs interrupt and demand an action, so they suit important wa
 title = "Apple Human Interface Guidelines, Alerts"
 url = "https://developer.apple.com/design/human-interface-guidelines/alerts"
 type = "documentation"
-notes = "An alert interrupts the person and is reserved for important information that affects them, with a choice where one is needed."
+notes = "Use alerts sparingly: they give people important information but interrupt the current task, so each should offer only essential information and useful actions."

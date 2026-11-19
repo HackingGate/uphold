@@ -33,8 +33,9 @@ notes = "Strathern, European Review 1997. Source of the common phrasing 'when a 
 [[sources]]
 title = "Goodhart's law"
 url = "https://en.wikipedia.org/wiki/Goodhart%27s_law"
+locator = "Generalization"
 type = "documentation"
-notes = "Neutral reference tracing Goodhart's original 1975 statement about monetary aggregates and its later generalizations."
+notes = "Neutral reference giving Goodhart's 1975 statement on UK monetary policy, that any observed statistical regularity will tend to collapse once pressure is placed upon it for control purposes, and its later generalizations, including Strathern's phrasing."
 
 [[sources]]
 title = "Assessing the impact of planned social change"

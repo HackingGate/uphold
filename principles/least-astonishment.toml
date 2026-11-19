@@ -39,5 +39,6 @@ notes = "Language design report that argues from the principle of least astonish
 [[sources]]
 title = "Command Line Interface Guidelines"
 url = "https://clig.dev/"
+locator = "Philosophy, Consistency across programs; Output"
 type = "documentation"
-notes = "Modern restatement for tools: be unsurprising, keep behavior consistent with sibling commands, and do not perform effects the invocation did not imply."
+notes = "Modern restatement for tools: follow patterns that already exist, and make actions that cross the boundary of the program's internal world explicit; it warns that assuming what the user meant is dangerous when the action modifies state. It does not use the phrase least astonishment."

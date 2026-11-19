@@ -38,7 +38,7 @@ type = "standard"
 notes = "A suggested package naming convention: a package name begins with the publisher's Internet domain name, reversed component by component."
 
 [[sources]]
-title = "Logging (Apple unified logging)"
-url = "https://developer.apple.com/documentation/os/logging"
+title = "Apple, Generating Log Messages from Your Code (unified logging)"
+url = "https://developer.apple.com/documentation/os/generating-log-messages-from-your-code"
 type = "documentation"
-notes = "A log's subsystem is a reverse-DNS identifier, by which `log show` and Console filter one program's messages."
+notes = "Each log object carries a subsystem string, in reverse-DNS notation such as com.example.myapp, and a category, which people use to filter out unrelated messages."
