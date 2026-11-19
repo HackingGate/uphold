@@ -27,11 +27,13 @@ limits = ["A tool can list shared components; whether their consumers are distin
 [[sources]]
 title = "The Protection of Information in Computer Systems"
 url = "https://doi.org/10.1109/PROC.1975.9939"
+locator = "§I.A.3(g)"
 type = "paper"
 notes = "States least common mechanism: minimize the amount of mechanism common to more than one user and depended on by all users, since every shared mechanism is a potential information path between users."
 
 [[sources]]
 title = "A Note on the Confinement Problem"
 url = "https://doi.org/10.1145/362375.362389"
+locator = "Confinement rules"
 type = "paper"
-notes = "Names covert channels: a program can leak information through shared resources such as load or storage state that were never designed to carry it."
+notes = "Names covert channels, those not intended for information transfer at all, such as a service's effect on the system load, beside storage and legitimate channels as the ways a confined program can leak."

@@ -27,5 +27,6 @@ limits = ["A private symbol is not proof of information hiding.", "The volatilit
 [[sources]]
 title = "On the Criteria To Be Used in Decomposing Systems into Modules"
 url = "https://doi.org/10.1145/361598.361623"
+locator = "Conclusion"
 type = "paper"
-notes = "Parnas distinguishes decomposition by processing steps from decomposition by hidden design decisions."
+notes = "Parnas contrasts decomposition by processing steps, as from a flowchart, with decomposition in which each module hides from the others a difficult design decision or one likely to change."

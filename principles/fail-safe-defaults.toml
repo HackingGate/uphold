@@ -27,5 +27,6 @@ limits = ["A tool can see that a default denies; it cannot see whether denial is
 [[sources]]
 title = "The Protection of Information in Computer Systems"
 url = "https://doi.org/10.1109/PROC.1975.9939"
+locator = "§I.A.3(b)"
 type = "paper"
 notes = "States fail-safe defaults: base access decisions on permission rather than exclusion."

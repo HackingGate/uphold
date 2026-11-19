@@ -27,5 +27,6 @@ limits = ["A tool can see the paths present in the tree; it cannot see the path 
 [[sources]]
 title = "The Protection of Information in Computer Systems"
 url = "https://doi.org/10.1109/PROC.1975.9939"
+locator = "§I.A.3(c)"
 type = "paper"
 notes = "States complete mediation as one of eight design principles: every access to every object must be checked for authority."

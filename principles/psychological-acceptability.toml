@@ -27,6 +27,7 @@ limits = ["A tool can count bypasses; it cannot tell an unreasonable control fro
 [[sources]]
 title = "The Protection of Information in Computer Systems"
 url = "https://doi.org/10.1109/PROC.1975.9939"
+locator = "§I.A.3(h)"
 type = "paper"
 notes = "States psychological acceptability: the human interface must be designed for ease of use so users routinely and automatically apply the protection correctly."
 

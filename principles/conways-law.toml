@@ -27,11 +27,13 @@ limits = ["Ownership files and commit history only approximate communication str
 [[sources]]
 title = "How Do Committees Invent?"
 url = "https://www.melconway.com/Home/Committees_Paper.html"
+locator = "Relating the Two"
 type = "paper"
 notes = "Conway, Datamation, April 1968, from the author's site. Argues for a homomorphism from the designing organization's communication structure to the structure of the system it produces."
 
 [[sources]]
 title = "Exploring the duality between product and organizational architectures: A test of the mirroring hypothesis"
 url = "https://doi.org/10.1016/j.respol.2012.04.011"
+locator = "Abstract"
 type = "paper"
-notes = "MacCormack, Rusnak, and Baldwin, Research Policy 2012. Empirical test comparing loosely and tightly coupled organizations; the mirroring hypothesis is the testable generalization of Conway's observation."
+notes = "MacCormack, Rusnak, and Baldwin, Research Policy 2012. Pairs products built by tightly-coupled software firms with products built by loosely-coupled communities and finds strong evidence that the loosely-coupled organizations develop more modular designs; the paper traces the mirroring hypothesis it tests to Conway."
