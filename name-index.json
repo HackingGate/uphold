@@ -2596,22 +2596,6 @@
       "path": "principles/unobstructed-work-area.toml"
     },
     {
-      "name": "Suitability for the user's tasks",
-      "key": "suitability for the user s tasks",
-      "tokens": [
-        "suitability",
-        "for",
-        "the",
-        "user",
-        "s",
-        "tasks"
-      ],
-      "field": "alias",
-      "id": "lead-with-the-work",
-      "title": "Lead With the Work",
-      "path": "principles/lead-with-the-work.toml"
-    },
-    {
       "name": "System of Record",
       "key": "system of record",
       "tokens": [

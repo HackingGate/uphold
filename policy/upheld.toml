@@ -352,8 +352,8 @@ misses = "Make `uphold --install` in src/install.rs print the path each new link
 
 [[review.control]]
 record = "lead-with-the-work"
-catches = "Move README.md's opening list of what uphold refuses, and the install line under it, below a new table of every module under src/ and what it implements, so the first screen a reader lands on is the code's layout rather than what they came to set up."
-misses = "Add one sentence under README.md's opening list of what uphold refuses naming the hook managers it supports, keeping the list and the install line first."
+catches = "Make `uphold probe` in src/probe.rs open its report with a table of every hook runner it looked for on PATH and each one's version, and print each hook's verdict only after that table, so the first lines a person reads are the runners rather than which of their hooks can refuse."
+misses = "Make the summary line `uphold probe` in src/probe.rs prints above the hooks' verdicts name the runner's version beside its command, keeping each hook's verdict on its own line under it."
 
 [[review.control]]
 record = "least-astonishment"

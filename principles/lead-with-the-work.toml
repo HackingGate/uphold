@@ -1,6 +1,6 @@
 id = "lead-with-the-work"
 title = "Lead With the Work"
-aliases = ["Suitability for the user's tasks", "Top tasks first", "The work, not the host"]
+aliases = ["Top tasks first", "The work, not the host"]
 kind = "heuristic"
 status = "seed"
 domains = ["interfaces", "socio-technical"]
@@ -20,8 +20,8 @@ review_questions = ["What does a person come back to this product to do, and whi
 [enforcement]
 level = "test"
 automatable = "partially"
-observable = ["The kind of item the first list on the home screen renders, in a component or story test.", "The number of actions from the home screen to resuming the most recently used item, in an end-to-end test."]
-checks = ["Render the home screen in a story and fail when its first list is not of the item kind the project names as its work.", "Fail an end-to-end test when resuming the most recently used item takes more than one action from the home screen."]
+observable = ["The kind of item the first list in the home screen's main content renders, past any shared navigation, in a component or story test.", "The pages and pickers on the path from the home screen to resuming the most recently used item, in an end-to-end test."]
+checks = ["Render the home screen in a story and fail when the first list in its main content, past any shared navigation, is not of the item kind the project names as its work.", "Fail an end-to-end test when resuming the most recently used item from the home screen passes through a page or picker whose subject is a resource rather than that item."]
 limits = ["Which objects are the person's work is a judgment about the people who use the product and what they come to do.", "Whether a resource is shown as a property of the work or as the subject of the page depends on the rendered layout, not on a name in the code."]
 
 [[sources]]
