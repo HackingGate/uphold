@@ -27,8 +27,9 @@ limits = ["A tool cannot read the model a user brought with them, so it cannot r
 [[sources]]
 title = "The Art of Unix Programming, Rule of Least Surprise"
 url = "http://www.catb.org/~esr/writings/taoup/html/ch01s06.html"
+locator = "Rule of Least Surprise"
 type = "book"
-notes = "States the rule in interface terms: in interface design, always do the least surprising thing, and read 'least surprising' relative to the user's prior knowledge rather than the designer's."
+notes = "States the rule in interface terms: in interface design, always do the least surprising thing, and the easiest programs to use are those that most effectively connect to the user's pre-existing knowledge."
 
 [[sources]]
 title = "The Design of the REXX Language"

@@ -34,5 +34,6 @@ notes = "Defines a published, line-oriented key format, one key per line with op
 [[sources]]
 title = "The Twelve-Factor App: IV. Backing services"
 url = "https://12factor.net/backing-services"
+locator = "IV. Backing services"
 type = "practice"
-notes = "Wiggins, 2011. A deploy swaps a resource without changes to the code, because the program treats each as an attached resource named by configuration."
+notes = "Wiggins. A deploy can swap a local resource for one managed by a third party without any change to the app's code, because only the resource handle in the config needs to change."

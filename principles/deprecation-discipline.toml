@@ -33,6 +33,7 @@ notes = "Derives the next version number and release notes from structured commi
 [[sources]]
 title = "Software Engineering at Google, Chapter 15: Deprecation"
 url = "https://abseil.io/resources/swe-book/html/ch15.html"
+locator = "Types of Deprecation; Managing the Deprecation Process"
 type = "book"
 notes = "Treats deprecation as a managed process with owners, migration tooling, and deadlines, and distinguishes advisory from compulsory deprecation."
 
@@ -46,6 +47,7 @@ notes = "Encodes compatibility in the version number: a major increment for inco
 [[sources]]
 title = "Software Engineering at Google, Chapter 21: Dependency Management"
 url = "https://abseil.io/resources/swe-book/html/ch21.html"
+locator = "The Limitations of SemVer"
 type = "book"
 notes = "Argues that a semantic version is a lossy estimate of compatibility, which is why the record keeps version signalling and completed removal together."
 

@@ -34,11 +34,13 @@ notes = "Argues that every page should be urgent, important, actionable and real
 [[sources]]
 title = "Your Sigma Rule Converts Cleanly and Still Never Fires"
 url = "https://ridgelinecyber.com/blog/detection-passes-every-check-still-never-fires/"
+locator = "The benchmark; The one check that catches it"
 type = "practice"
-notes = "Reports that 13 percent of deployed detection rules are broken and can never fire, while showing a green status and counting as coverage; proposes a fixture the rule must match as the separating test."
+notes = "Reports, citing CardinalOps's June 2025 analysis of more than 13,000 detection rules, that 13 percent of deployed rules are broken and will never fire while showing a green status and counting as coverage; proposes running the rule against a concrete event as the separating test."
 
 [[sources]]
 title = "Monitoring Distributed Systems"
 url = "https://sre.google/sre-book/monitoring-distributed-systems/"
+locator = "Tying These Principles Together"
 type = "book"
-notes = "Site Reliability Engineering, chapter 6. Carries the same argument into rule design: every rule that pages must require intelligent action."
+notes = "Site Reliability Engineering, chapter 6. Carries the same argument into rule design: every page should be actionable, and every page response should require intelligence; a page that merits only a robotic response should not be a page."

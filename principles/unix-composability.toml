@@ -27,8 +27,9 @@ limits = ["Coherence and appropriate granularity are design judgments.", "A smal
 [[sources]]
 title = "The Art of Unix Programming — Basics of the Unix Philosophy"
 url = "http://www.catb.org/esr/writings/taoup/html/ch01s06.html"
+locator = "Rule of Composition"
 type = "book"
-notes = "A widely cited synthesis of Unix design traditions and composability."
+notes = "States the Rule of Composition: design programs to be connected with other programs, which Unix tradition serves with simple, textual, stream-oriented, device-independent formats."
 
 [[sources]]
 title = "Command Line Interface Guidelines - Interactivity"

@@ -27,5 +27,6 @@ limits = ["A machine cannot decide whether the reduced service remains genuinely
 [[sources]]
 title = "Site Reliability Engineering"
 url = "https://sre.google/sre-book/table-of-contents/"
+locator = "Chapters 21 and 22"
 type = "book"
-notes = "Production reliability practices including handling overload, failures, and service objectives."
+notes = "The book's chapters Handling Overload (21) and Addressing Cascading Failures (22) are the ones this record draws on."

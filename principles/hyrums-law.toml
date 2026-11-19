@@ -33,5 +33,6 @@ notes = "Hyrum Wright's own statement: with a sufficient number of users of an A
 [[sources]]
 title = "Software Engineering at Google, Chapter 1: What Is Software Engineering?"
 url = "https://abseil.io/resources/swe-book/html/ch01.html"
+locator = "Time and Change, Hyrum's Law"
 type = "book"
-notes = "Places the law under time and change: the longer a system lives and the more users it has, the more of its incidental behavior becomes load-bearing."
+notes = "Places the law under time and change: with a sufficient number of users of an API, all observable behaviors of the system will be depended on by somebody, and given enough time and users even the most innocuous change will break something."

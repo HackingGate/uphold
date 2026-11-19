@@ -28,8 +28,9 @@ limits = ["Whether an event the program sends is kept is the host's configuratio
 [[sources]]
 title = "The Twelve-Factor App: XI. Logs"
 url = "https://12factor.net/logs"
+locator = "XI. Logs"
 type = "practice"
-notes = "Wiggins, 2011. A program never concerns itself with routing or storing its output stream; the execution environment captures and routes it."
+notes = "Wiggins. A twelve-factor app never concerns itself with routing or storage of its output stream; the execution environment captures each process's stream and routes it to its destinations."
 
 [[sources]]
 title = "Apple, Generating Log Messages from Your Code (unified logging)"
