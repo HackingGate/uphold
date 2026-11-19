@@ -34,7 +34,7 @@ notes = "Chapter 6, General-Purpose Modules are Deeper. Argues that a somewhat g
 title = "Parameterize Function"
 url = "https://refactoring.com/catalog/parameterizeFunction.html"
 type = "practice"
-notes = "The mechanical refactoring: functions whose bodies differ only by a literal are replaced by one function taking that literal as an argument."
+notes = "The mechanical refactoring, shown by example: two functions differing only in a literal factor are replaced by one function taking the factor as a parameter."
 
 [[sources]]
 title = "Anti-pattern"

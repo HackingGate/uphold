@@ -27,5 +27,6 @@ limits = ["Telemetry presence does not prove diagnostic usefulness.", "Unknown f
 [[sources]]
 title = "Site Reliability Engineering — Monitoring Distributed Systems"
 url = "https://sre.google/sre-book/monitoring-distributed-systems/"
+locator = "The Four Golden Signals"
 type = "book"
-notes = "Operational guidance on signals, monitoring, and diagnosis."
+notes = "Chapter 6 names latency, traffic, errors and saturation as the four golden signals to measure first for a user-facing system."

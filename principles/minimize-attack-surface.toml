@@ -33,6 +33,7 @@ notes = "Static analysis of GitHub Actions workflows; its excessive-permissions 
 [[sources]]
 title = "Attack Surface Analysis Cheat Sheet"
 url = "https://cheatsheetseries.owasp.org/cheatsheets/Attack_Surface_Analysis_Cheat_Sheet.html"
+locator = "Defining the Attack Surface of an Application"
 type = "practice"
 notes = "Defines the attack surface as the paths in and out of a system and the data and code protecting them, and describes identifying, mapping, and tracking changes to it."
 

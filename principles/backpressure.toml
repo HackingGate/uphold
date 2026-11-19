@@ -28,4 +28,4 @@ limits = ["A tool cannot choose the correct admission priority or business shedd
 title = "Reactive Streams"
 url = "https://www.reactive-streams.org/"
 type = "specification"
-notes = "Defines asynchronous stream processing with non-blocking backpressure."
+notes = "An initiative to provide a standard for asynchronous stream processing with non-blocking back pressure."
