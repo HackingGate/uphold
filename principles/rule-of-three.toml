@@ -28,7 +28,7 @@ limits = ["A clone detector sees textual similarity, not whether the copies shar
 title = "Rule of three (computer programming)"
 url = "https://en.wikipedia.org/wiki/Rule_of_three_(computer_programming)"
 type = "documentation"
-notes = "Neutral statement of the rule and its usual justification: extraction from fewer instances tends to produce the wrong abstraction."
+notes = "Neutral statement of the rule and its usual justification: more instances show the pattern, and premature refactoring risks selecting a wrong abstraction that makes code worse as new requirements emerge."
 
 [[sources]]
 title = "Refactoring: Improving the Design of Existing Code"

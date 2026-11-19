@@ -35,10 +35,11 @@ notes = "Once a versioned package has been released, the contents of that versio
 title = "git-tag, On Re-tagging"
 url = "https://git-scm.com/docs/git-tag#_on_re_tagging"
 type = "documentation"
-notes = "Changing a tag that others have fetched means each of them has to be told to update it; the documentation advises taking a new tag name instead."
+notes = "Changing a tag that others have fetched means telling each of them to fetch it again; the documentation calls using a different name the sane thing."
 
 [[sources]]
 title = "GitHub Docs, Immutable releases"
 url = "https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/immutable-releases"
+locator = "What immutable releases protect"
 type = "documentation"
-notes = "The platform's setting that locks a published release's tag and assets against change."
+notes = "The platform's setting under which a published release's assets and associated Git tag cannot be changed; its title and notes stay editable."

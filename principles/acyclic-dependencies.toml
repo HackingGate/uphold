@@ -38,6 +38,7 @@ notes = "Checks declared contracts, such as layers and independence, over a Pyth
 [[sources]]
 title = "Acyclic dependencies principle"
 url = "https://en.wikipedia.org/wiki/Acyclic_dependencies_principle"
+locator = "Cycle breaking strategies"
 type = "documentation"
 notes = "Neutral statement of the principle and the usual ways to break a cycle: dependency inversion or a new shared unit."
 
@@ -45,7 +46,7 @@ notes = "Neutral statement of the principle and the usual ways to break a cycle:
 title = "Package principles"
 url = "https://en.wikipedia.org/wiki/Package_principles"
 type = "documentation"
-notes = "Places the acyclic dependencies principle among Martin's package coupling principles, beside the stable dependencies and stable abstractions principles."
+notes = "A short general article on organizing classes into packages by cohesion and by coupling between packages, citing Martin's work on package granularity; it does not list the individual principles."
 
 [[sources]]
 title = "Design Principles and Design Patterns"

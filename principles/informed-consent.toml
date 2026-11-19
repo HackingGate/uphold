@@ -34,8 +34,9 @@ notes = "Visibility of system status and user control and freedom: the design sh
 [[sources]]
 title = "Command Line Interface Guidelines"
 url = "https://clig.dev/"
+locator = "Arguments and flags; Interactivity"
 type = "documentation"
-notes = "Practice-level statement for tools: confirm before doing anything dangerous, offer a dry run, and require an explicit flag rather than assuming agreement when there is no terminal."
+notes = "Practice-level statement for tools: confirm before doing anything dangerous, prompting when interactive and requiring -f or --force otherwise; offer -n or --dry-run to describe the changes without making them; and when stdin is not a terminal, skip prompting and require the flags."
 
 [[sources]]
 title = "GDPR Article 7: Conditions for consent"

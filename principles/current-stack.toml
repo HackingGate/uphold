@@ -51,5 +51,6 @@ notes = "McKinley's talk: a team gets a limited number of innovation tokens to s
 [[sources]]
 title = "OWASP Top 10:2021 A06 Vulnerable and Outdated Components"
 url = "https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/"
+locator = "Description; How to Prevent"
 type = "documentation"
-notes = "Names unsupported, out-of-date, and unmaintained components as a security risk, and a missing process for keeping versions current as the cause."
+notes = "Names unsupported, out-of-date and unmaintained components as conditions that make software likely vulnerable, beside not knowing the versions in use and not upgrading in a timely fashion, and prescribes a patch management process."
