@@ -360,6 +360,10 @@ pub(crate) fn question_sections(text: &str) -> Vec<(usize, Range<usize>)> {
 /// follows it, up to the next heading at that level or above. A record holds
 /// one decision, so the span is one question: its `Standard:` line sits with
 /// the options, and its `Answered:` line under the outcome.
+///
+/// A `Considered Options` heading inside a questions section belongs to that
+/// section's question, as a body that holds MADR's sections per question
+/// writes it, and is read there and not again here.
 pub(crate) fn decision_sections(text: &str) -> Vec<(usize, Range<usize>)> {
     let headings: Vec<(usize, usize, String)> = crate::markdown::headings(text)
         .into_iter()
@@ -369,9 +373,12 @@ pub(crate) fn decision_sections(text: &str) -> Vec<(usize, Range<usize>)> {
         })
         .collect();
     let end_of_text = text.lines().count();
+    let questions = question_sections(text);
     let mut found = Vec::new();
     for (at, (index, level, title)) in headings.iter().enumerate() {
-        if title != "considered options" {
+        if title != "considered options"
+            || questions.iter().any(|(_, section)| section.contains(index))
+        {
             continue;
         }
         let mut rest = headings

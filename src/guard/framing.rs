@@ -326,4 +326,12 @@ mod tests {
                     ## Decision Outcome\n\n### Confirmation\n\n- [ ] t\n";
         assert_eq!(unframed(bare), [5]);
     }
+
+    #[test]
+    fn options_held_under_a_question_are_that_question_s_and_not_a_second_one() {
+        let body = "## Questions\n\n### Q1. Which?\n\nStandard: none -- project policy\n\n\
+                    #### Considered Options\n\n- (a) one\n\n#### Decision Outcome\n\nAnswered: (a)\n";
+        assert_eq!(read(body), Framing::default());
+        assert_eq!(decision_sections(body), []);
+    }
 }
