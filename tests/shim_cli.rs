@@ -9697,6 +9697,28 @@ fn each_citation_that_does_not_resolve_is_refused_and_nothing_runs() {
 }
 
 #[test]
+fn a_madr_record_is_read_from_its_options_through_its_outcome() {
+    let root = ruling_workspace(Some(&carried()));
+    let record = |quote: &str| {
+        format!(
+            "## Context and Problem Statement\n\nx\n\n## Considered Options\n\n\
+             Standard: none -- ours\n\n- (a) one\n- (b) two\n\n## Decision Outcome\n\n\
+             Answered: (a). [fail-fast claim](https://github.com/HackingGate/uphold/blob/HEAD/principles/fail-fast.toml) \"{quote}\"\n\n\
+             ### Confirmation\n\n- [ ] a test\n"
+        )
+    };
+    let output = filed(&root, &record("not in any item"));
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("\"Decision Outcome\": "),
+        "{}",
+        stderr(&output)
+    );
+    let output = filed(&root, &record("fail-fast"));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
 fn a_pin_whose_catalog_this_binary_does_not_carry_is_exit_two() {
     let root = ruling_workspace(Some("v0.0.1"));
     let output = filed(&root, &ruling("fail-fast", "fail-fast"));
