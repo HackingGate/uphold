@@ -671,8 +671,11 @@ run = [
 ]
 
 # The records this repository's design questions are answered from: the ones
-# its own code and docs already argue from by id, and the three its rulings on
-# the harness hooks turned on. Each order follows a choice this repository has
+# its own code and docs already argue from by id, the three its rulings on
+# the harness hooks turned on, and follow-published-standards, because every
+# design question here already names the standard it reads (the `Standard:`
+# line `questions-name-a-standard` holds) and no adopted record could rule on
+# whether to conform to it. Each order follows a choice this repository has
 # already made, named in its `why`.
 [decide]
 adopt = [
@@ -686,6 +689,7 @@ adopt = [
   "complete-mediation",
   "fail-safe-defaults",
   "economy-of-mechanism",
+  "follow-published-standards",
 ]
 
 [[decide.order]]
