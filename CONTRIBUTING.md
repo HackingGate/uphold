@@ -76,9 +76,11 @@ the policy file, and the two forms the note names are checked as well. See
 ## Where a decision goes
 
 A proposal that benefits from design discussion can use a GitHub issue in the
-[Design record](.github/ISSUE_TEMPLATE/design.md) shape: the proposed decision
-in the body, and the research in a comment that carries the version, date and
-evidence of each claim. A Design record carries exactly
+[Design record](.github/ISSUE_TEMPLATE/design.md) shape, a
+[MADR 4.0](https://adr.github.io/madr/) record holding one decision: a design
+with several questions is filed as several records that link each other. The
+proposed decision is in the body, and the research in a comment that carries
+the version, date and evidence of each claim. A Design record carries exactly
 one status label, a [MADR 4.0](https://adr.github.io/madr/) status. The
 template files it with `design:proposed`, and the ruling is recorded by
 replacing that label with `design:accepted` or `design:rejected`; a later

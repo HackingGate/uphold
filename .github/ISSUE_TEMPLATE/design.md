@@ -1,67 +1,83 @@
 ---
 name: Design record
-about: A ruling on what uphold will build -- what is chosen, what is rejected and why, and the pull requests that carry it
+about: One decision on what uphold will build, as a MADR 4.0 record -- the options considered, the one chosen and why, and how it is confirmed
 title: "Design: "
 labels: design, design:proposed
 assignees: ''
 ---
 
 <!--
-Seven headings, in the same place in every record, so a reader who opens the
-tenth one finds each answer where the first one put it. Nothing refuses a
-filing with a heading left blank: an empty heading is a question the next
-reader can see was not answered. Delete a heading only when it does not apply,
-rather than leaving a prompt standing in for an answer, and delete this comment.
+A MADR 4.0 record (https://adr.github.io/madr/, template/adr-template.md at
+tag 4.0.0), one decision per issue. A design with several questions is filed
+as several issues, each linking the others under More Information. MADR's
+front-matter status is the issue's `design:` label, and its date and
+decision-makers are the issue's history, so the body carries no front matter.
+
+The headings are MADR's, in MADR's order. Delete one marked optional only
+when it does not apply, rather than leaving a prompt standing in for an
+answer, and delete this comment.
 
 The research behind the decision goes in a comment on this issue, not in the
 body: every option considered, with its version, the date it was read, and the
-evidence for each claim. The body states the ruling; the comment is what it
-was ruled on.
+evidence for each claim. The body states the decision; the comment is what it
+was decided on.
 -->
 
-## Goal
-
-<!-- One paragraph: what changes for a repository that runs uphold. -->
-
-## Today
+## Context and Problem Statement
 
 <!--
 What exists, with the file or command output that shows it and the revision it
-was read at.
+was read at. Then the problem, as the one question this record decides.
 -->
 
-## Decision
+## Decision Drivers
+
+<!-- Optional. The forces the choice answers to, one bullet each. -->
+
+## Considered Options
 
 <!--
-What is chosen, in bold. Then each rejected option in one clause: what it is
-and why it lost. Link the research comment from here.
+The first line names the published standard the options read, write, speak
+or implement, with a link, or says why none fits:
+`Standard: none -- <why>`. `questions-name-a-standard` refuses the body
+without it. Then one lettered option per bullet, the first "As today" where
+something exists.
 -->
 
-## Design
+Standard:
+
+- (a) As today:
+- (b)
+
+## Decision Outcome
 
 <!--
-The mechanism: which rule kind, set, seam or command carries it, and what
-it reads. Where a picture carries more than the prose, draw it as a fenced
-```mermaid block; GitHub renders it in the issue.
+The ruling's `Answered:` line, written by the design-ruling skill from the
+records `[decide]` adopts. `ruling-citations-resolve` checks its citations.
+The owner records the ruling by moving the `design:` label.
 -->
 
-## Plan
+### Consequences
+
+<!-- Optional. "Good, because ...", "Bad, because ...", one bullet each. -->
+
+### Confirmation
 
 <!--
-Numbered, one pull request per item, smallest first. Each item names what it
-stands on -- the existing library, or the engine feature (a rule kind, a
-bundled set, a seam) -- so nothing is written by hand where one of those
-already does the job.
--->
-
-## Done when
-
-<!--
-A checklist a reviewer can tick from the tree alone. Each item names the test
+A task list a reviewer can tick from the tree alone. Each item names the test
 or the rule that holds the decision once it is merged; a decision with neither
 is prose, and prose has no condition on which to fail.
 -->
 
-## Open
+- [ ]
 
-<!-- What is still unverified, deferred, or left to watch. -->
+## Pros and Cons of the Options
+
+<!-- Optional. One sub-heading per option, with its arguments. -->
+
+## More Information
+
+<!--
+Optional. The plan, one pull request per item, smallest first, each naming
+what it stands on; the related design issues; what is left to watch.
+-->

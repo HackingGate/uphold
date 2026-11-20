@@ -2894,8 +2894,13 @@ may name the field for a reader; it is not read.
 
 `ruling-citations-resolve`, in `published-text`, reads every body `gh`
 publishes. An answer is a line opening `Answered:`, optionally as a list item,
-under a heading whose title contains "question" and before the next heading at
-that level or above, outside a code fence. Each link on it to
+outside a code fence, either under a heading whose title contains "question"
+and before the next heading at that level or above, or in a
+[MADR 4.0](https://adr.github.io/madr/) record's decision: from its
+`Considered Options` heading through the `Decision Outcome` heading at the
+same level after it, up to the next heading at that level or above. A MADR
+record holds one decision, so that span is one question, and its answer sits
+under `Decision Outcome`. Each link on it to
 `principles/<id>.toml` -- a URL, a Markdown link target, or a bare path with a
 `#` fragment -- is refused, exit `1`, when it is not
 `https://github.com/HackingGate/uphold/blob/HEAD/principles/<id>.toml`. A link
@@ -2943,8 +2948,10 @@ Standard: role-based access control, [ANSI/INCITS 359-2012](https://csrc.nist.go
 or `Standard: none -- <why none fits>`.
 
 `questions-name-a-standard`, in `published-text`, reads every body `gh`
-publishes, from the same questions sections as `ruling-citations-resolve`.
-Where a section has sub-headings, each one at the shallowest level among them
+publishes, from the same sections as `ruling-citations-resolve`. A MADR 4.0
+record's decision is one question, opened at its `Considered Options` heading,
+and its `Standard:` line sits with the options. In a questions section,
+where the section has sub-headings, each one at the shallowest level among them
 opens a question. Where it has none, each top-level ordered-list item opens
 one, and so does each top-level bullet item or paragraph whose text opens
 `Q<n>` (bold or not), so option bullets such as `- (a)` are not questions. A

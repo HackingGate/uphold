@@ -23,8 +23,10 @@
 //! and the question is re-ruled before the body is published again.
 //!
 //! WHICH TEXT IS AN ANSWER. A line that opens `Answered:`, optionally as a list
-//! item, under a heading whose title says "question", and outside a code
-//! fence. The marker is the subject, so no forge is asked how the issue is
+//! item, outside a code fence, under a heading whose title says "question", or
+//! in a [MADR 4.0](https://adr.github.io/madr/) record's one decision: the
+//! `Considered Options` section and the `Decision Outcome` after it
+//! ([`decision_sections`]). The marker is the subject, so no forge is asked how the issue is
 //! labelled and a body with no such line passes without a pin being read.
 //!
 //! WHICH ITEM. Any string the record's TOML holds, its `claim`, an element of
@@ -352,6 +354,40 @@ pub(crate) fn question_sections(text: &str) -> Vec<(usize, Range<usize>)> {
     found
 }
 
+/// The one decision of each [MADR 4.0](https://adr.github.io/madr/) record in a
+/// body: the 0-based line of its `Considered Options` heading, and the lines
+/// from there through the `Decision Outcome` heading at the same level that
+/// follows it, up to the next heading at that level or above. A record holds
+/// one decision, so the span is one question: its `Standard:` line sits with
+/// the options, and its `Answered:` line under the outcome.
+pub(crate) fn decision_sections(text: &str) -> Vec<(usize, Range<usize>)> {
+    let headings: Vec<(usize, usize, String)> = crate::markdown::headings(text)
+        .into_iter()
+        .filter_map(|(line, level, title)| {
+            let index = usize::try_from(line).ok()?.checked_sub(1)?;
+            Some((index, level, title.trim().to_lowercase()))
+        })
+        .collect();
+    let end_of_text = text.lines().count();
+    let mut found = Vec::new();
+    for (at, (index, level, title)) in headings.iter().enumerate() {
+        if title != "considered options" {
+            continue;
+        }
+        let mut rest = headings
+            .iter()
+            .skip(at + 1)
+            .filter(|(_, other, _)| other <= level);
+        let mut end = rest.next();
+        if end.is_some_and(|(_, other, next)| other == level && next == "decision outcome") {
+            end = rest.next();
+        }
+        let end = end.map_or(end_of_text, |(next, _, _)| *next);
+        found.push((*index, index + 1..end.max(index + 1)));
+    }
+    found
+}
+
 /// The answer lines of a body: `Answered:` under a questions heading, outside
 /// code, each named by the question it answers -- the nearest heading above it
 /// inside the section, or its line number where the section has none.
@@ -363,7 +399,11 @@ fn answers(text: &str) -> Vec<Answer<'_>> {
     let headings = crate::markdown::headings(text);
     let lines: Vec<&str> = text.lines().collect();
     let mut found = Vec::new();
-    for (_, range) in question_sections(text) {
+    let sections = question_sections(text)
+        .into_iter()
+        .map(|(_, range)| range)
+        .chain(decision_sections(text).into_iter().map(|(_, range)| range));
+    for range in sections {
         for index in range.clone() {
             if code.get(index).copied().unwrap_or(false) {
                 continue;
@@ -465,6 +505,31 @@ Answered: inside a longer fence
                 .collect::<Vec<_>>(),
             ["Answered: (a)", "- Answered: (b)", "Answered: (c)"]
         );
+    }
+
+    #[test]
+    fn a_madr_record_is_one_decision_from_its_options_through_its_outcome() {
+        let body = "## Context and Problem Statement\n\nAnswered: not here\n\n\
+                    ## Considered Options\n\nStandard: none -- x\n\n- (a) one\n- (b) two\n\n\
+                    ## Decision Outcome\n\nAnswered: (a)\n\n### Consequences\n\n- Good\n\n\
+                    ### Confirmation\n\n- [ ] a test\n\n## More Information\n\nAnswered: after\n";
+        let spans = decision_sections(body);
+        assert_eq!(spans.len(), 1);
+        let named: Vec<(String, &str)> = answers(body)
+            .into_iter()
+            .map(|answer| (answer.question, answer.line))
+            .collect();
+        assert_eq!(
+            named,
+            [(String::from("\"Decision Outcome\""), "Answered: (a)")]
+        );
+    }
+
+    #[test]
+    fn options_with_no_outcome_after_them_end_at_the_next_section() {
+        let body = "## Considered Options\n\n- (a)\n\n## More Information\n\nAnswered: x\n";
+        assert_eq!(decision_sections(body), [(0, 1..4)]);
+        assert!(answers(body).is_empty());
     }
 
     #[test]

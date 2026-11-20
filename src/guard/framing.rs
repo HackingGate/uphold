@@ -15,8 +15,11 @@
 //!
 //! or `Standard: none -- <why none fits>`.
 //!
-//! WHICH TEXT IS A QUESTION. The section under a heading whose title says
-//! "question", as `ruling-citations-resolve` reads it. Where the section has
+//! WHICH TEXT IS A QUESTION. A [MADR 4.0](https://adr.github.io/madr/)
+//! record's one decision, from its `Considered Options` heading through its
+//! `Decision Outcome`, is one question, opened at that heading. Otherwise, the
+//! section under a heading whose title says "question", as
+//! `ruling-citations-resolve` reads it. Where the section has
 //! sub-headings, each sub-heading at the shallowest level among them opens a
 //! question. Where it has none, each top-level item of an ordered list opens
 //! one, and so does each top-level bullet item or paragraph whose text opens
@@ -43,7 +46,7 @@ use regex::Regex;
 
 use crate::config::Rule;
 use crate::guard::Refusal;
-use crate::guard::ruling::{list_item, question_sections};
+use crate::guard::ruling::{decision_sections, list_item, question_sections};
 use crate::markdown::Block;
 
 /// A question opened by its number: `Q1`, `**Q2.**`.
@@ -102,6 +105,12 @@ fn read(text: &str) -> Framing {
     let headings = crate::markdown::headings(text);
     let blocks = crate::markdown::top_level_blocks(text);
     let mut framing = Framing::default();
+    let decisions = decision_sections(text)
+        .into_iter()
+        .map(|(opens, span)| Question { opens, lines: span });
+    for question in decisions {
+        judge(&question, &code, &lines, &mut framing);
+    }
     for (level, section) in question_sections(text) {
         let inside = |line: u64| {
             usize::try_from(line)
@@ -146,29 +155,34 @@ fn read(text: &str) -> Framing {
             lines: *opens_on..opens.get(at + 1).copied().unwrap_or(section.end),
         });
         for question in questions {
-            let standards: Vec<&str> = question
-                .lines
-                .clone()
-                .filter(|index| !code.get(*index).copied().unwrap_or(false))
-                .filter_map(|index| lines.get(index))
-                .filter_map(|line| list_item(line.trim_start()).strip_prefix("Standard:"))
-                .collect();
-            let failure = if standards.is_empty() {
-                "has no `Standard:` line"
-            } else if standards.iter().any(|rest| names_a_standard(rest)) {
-                continue;
-            } else {
-                "has a `Standard:` line with no link, and it is not `none -- <why none fits>`"
-            };
-            let title = lines.get(question.opens).map_or("", |line| line.trim());
-            framing.unframed.push(format!(
-                "- line {}, {:?}: {failure}",
-                question.opens + 1,
-                shortened(title)
-            ));
+            judge(&question, &code, &lines, &mut framing);
         }
     }
     framing
+}
+
+/// Record one question that names no standard, or says nothing on one.
+fn judge(question: &Question, code: &[bool], lines: &[&str], framing: &mut Framing) {
+    let standards: Vec<&str> = question
+        .lines
+        .clone()
+        .filter(|index| !code.get(*index).copied().unwrap_or(false))
+        .filter_map(|index| lines.get(index))
+        .filter_map(|line| list_item(line.trim_start()).strip_prefix("Standard:"))
+        .collect();
+    let failure = if standards.is_empty() {
+        "has no `Standard:` line"
+    } else if standards.iter().any(|rest| names_a_standard(rest)) {
+        return;
+    } else {
+        "has a `Standard:` line with no link, and it is not `none -- <why none fits>`"
+    };
+    let title = lines.get(question.opens).map_or("", |line| line.trim());
+    framing.unframed.push(format!(
+        "- line {}, {:?}: {failure}",
+        question.opens + 1,
+        shortened(title)
+    ));
 }
 
 /// Whether the rest of a `Standard:` line names a standard by link, or says
@@ -301,5 +315,15 @@ mod tests {
             Framing::default(),
             "an empty section holds nothing to judge"
         );
+    }
+
+    #[test]
+    fn a_madr_record_is_one_question_framed_under_its_options() {
+        let framed = "## Considered Options\n\nStandard: none -- ours\n\n- (a)\n- (b)\n\n\
+                      ## Decision Outcome\n\nAnswered: (a)\n";
+        assert_eq!(read(framed), Framing::default());
+        let bare = "## Context and Problem Statement\n\nx\n\n## Considered Options\n\n- (a)\n- (b)\n\n\
+                    ## Decision Outcome\n\n### Confirmation\n\n- [ ] t\n";
+        assert_eq!(unframed(bare), [5]);
     }
 }

@@ -65,8 +65,9 @@ out is an answer the records never see. Before ruling on a question:
    `Standard: none -- <why none fits>`. A question that lacks the line is not
    ready to rule: write it first, from the standard you found, and
    `questions-name-a-standard` refuses the body on `gh issue create` or
-   `gh issue edit` until every question under the questions heading carries
-   it. Where an adopted record asks for conformance and no option conforms,
+   `gh issue edit` until every question carries it. In a
+   [MADR 4.0](https://adr.github.io/madr/) record the one question is the
+   record's decision, and the line opens `## Considered Options`. Where an adopted record asks for conformance and no option conforms,
    add the option that does.
 2. Name the constraints every option shares: an existing field, structure or
    path kept as it is, a change kept small, compatibility with what was
@@ -85,7 +86,8 @@ out is an answer the records never see. Before ruling on a question:
 
 ## 3. Rule on each question
 
-For each question under the issue's questions heading:
+For each question under the issue's questions heading, or for the one
+decision of a MADR 4.0 record:
 
 1. Strip any "(recommended)" from the options and read them in no particular
    order. Which option the proposer prefers is not evidence.
@@ -112,7 +114,8 @@ did not.
 
 Each question already carries its `Standard:` line from step 2.1; keep it, and
 correct it in the same edit where the ruling found a standard the framer did
-not name. Under the question, after its options, on its own line:
+not name. Under the question, after its options, on its own line -- in a MADR
+4.0 record, under `## Decision Outcome`:
 
 ```text
 Answered: (a). [<id> <field>](https://github.com/HackingGate/uphold/blob/HEAD/principles/<id>.toml) "<the item, exactly as the record says it>"; precedent: <issue link, or none>
