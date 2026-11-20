@@ -50,16 +50,17 @@ use crate::error::{Fatal, Result};
 use crate::guard::Refusal;
 
 /// A link into the catalog: a URL or Markdown link target, then
-/// `principles/<id>.toml`, then any fragment. A bare path is a citation only
-/// with a fragment, as the line-numbered form wrote it, so that a relative,
-/// foreign or old-form link is found and refused rather than passed over,
-/// while a file named in prose is not read as one.
+/// `principles/<id>.toml`, then whatever follows it up to a delimiter -- a
+/// fragment, a query, another extension. A bare path is a citation only with
+/// a fragment, as the line-numbered form wrote it, so that a relative,
+/// foreign, old-form or suffixed link is found and refused rather than passed
+/// over, while a file named in prose is not read as one.
 static CITATION: OnceLock<Regex> = OnceLock::new();
 
 fn citation_pattern() -> &'static Regex {
     CITATION.get_or_init(|| {
         crate::engine::literal_pattern(
-            r#"(https?://[^\s()<>\[\]"]*?/|\]\([^\s()<>\[\]"]*?)?principles/([a-z0-9][a-z0-9-]*)\.toml(#[^\s()<>\[\]"]*)?"#,
+            r#"(https?://[^\s()<>\[\]"]*?/|\]\([^\s()<>\[\]"]*?)?principles/([a-z0-9][a-z0-9-]*)\.toml([^\s()<>\[\]"]*)"#,
         )
     })
 }
@@ -91,8 +92,9 @@ struct Citation<'a> {
     /// The revision in `github.com/<this repository>/blob/<rev>/`; `None`
     /// where the link is not to this repository's blob view.
     rev: Option<&'a str>,
-    /// The `#...` after the file name, as the line-numbered form wrote it.
-    fragment: Option<&'a str>,
+    /// What follows `.toml` in the link: empty in the one form this rule
+    /// accepts, `#L<n>` in the line-numbered form.
+    suffix: &'a str,
     id: &'a str,
     quote: Option<&'a str>,
 }
@@ -157,25 +159,37 @@ fn record_link(id: &str) -> String {
 /// What is wrong with one citation of a record whose file at the pin is
 /// `source`, or `None`.
 fn judge(citation: &Citation<'_>, source: Option<&str>, pin: &str) -> Option<String> {
-    match (citation.rev, citation.fragment) {
-        (Some(NO_REVISION), None) => {}
-        (Some(rev), _) if rev != NO_REVISION || citation.fragment.is_some() => {
-            let line = citation
-                .fragment
-                .map(|fragment| format!(" and {fragment}"))
-                .unwrap_or_default();
+    let to_write = record_link(citation.id);
+    match citation.rev {
+        None => {
             return Some(format!(
-                "names the revision {rev}{line}, a copy of the pin the hook configuration \
-                 already states. Link {} and keep the quote",
-                record_link(citation.id)
+                "not a link to {to_write}, so a reader cannot follow it to the record"
             ));
         }
-        _ => {
+        Some(rev) if rev != NO_REVISION || citation.suffix.starts_with("#L") => {
+            let rev = if rev == NO_REVISION {
+                String::new()
+            } else {
+                format!(" the revision {rev}")
+            };
+            let line = if citation.suffix.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", citation.suffix)
+            };
             return Some(format!(
-                "not a link to {}, so a reader cannot follow it to the record",
-                record_link(citation.id)
+                "names{rev}{line}, a copy of the pin the hook configuration already \
+                 states. Link {to_write} and keep the quote"
             ));
         }
+        Some(_) if !citation.suffix.is_empty() => {
+            return Some(format!(
+                "carries {:?} after the record's file name. Link {to_write} with nothing \
+                 after it",
+                citation.suffix
+            ));
+        }
+        Some(_) => {}
     }
     let Some(source) = source else {
         return Some(format!(
@@ -256,7 +270,17 @@ fn pinned_revision(root: &Path, rule: &str, carried: &str) -> Result<String> {
 /// The citations on one answer line, each with the first quote after it and
 /// before the next citation.
 fn cited(line: &str) -> Vec<Citation<'_>> {
-    let found: Vec<regex::Captures<'_>> = citation_pattern().captures_iter(line).collect();
+    // A file named in prose is no citation, and it does not end the window in
+    // which the citation before it looks for its quote.
+    let found: Vec<regex::Captures<'_>> = citation_pattern()
+        .captures_iter(line)
+        .filter(|captures| {
+            captures.get(1).is_some()
+                || captures
+                    .get(3)
+                    .is_some_and(|suffix| suffix.as_str().starts_with('#'))
+        })
+        .collect();
     let mut citations = Vec::new();
     for (index, captures) in found.iter().enumerate() {
         let (Some(whole), Some(id)) = (captures.get(0), captures.get(2)) else {
@@ -268,10 +292,7 @@ fn cited(line: &str) -> Vec<Citation<'_>> {
                 .strip_prefix("](")
                 .unwrap_or(prefix.as_str())
         });
-        let fragment = captures.get(3).map(|fragment| fragment.as_str());
-        if prefix.is_none() && fragment.is_none() {
-            continue;
-        }
+        let suffix = captures.get(3).map_or("", |suffix| suffix.as_str());
         let end = found
             .get(index + 1)
             .and_then(|next| next.get(0))
@@ -293,7 +314,7 @@ fn cited(line: &str) -> Vec<Citation<'_>> {
         citations.push(Citation {
             link: written,
             rev,
-            fragment,
+            suffix,
             id: id.as_str(),
             quote,
         });
@@ -468,7 +489,7 @@ Answered: inside a longer fence
         assert_eq!(found.first().and_then(|c| c.quote), Some("one"));
         assert_eq!(found.get(1).and_then(|c| c.rev), None);
         assert_eq!(found.get(1).map(|c| c.id), Some("least-power"));
-        assert_eq!(found.get(1).and_then(|c| c.fragment), Some("#L3"));
+        assert_eq!(found.get(1).map(|c| c.suffix), Some("#L3"));
         assert_eq!(found.get(1).and_then(|c| c.quote), Some("two"));
     }
 
@@ -478,6 +499,28 @@ Answered: inside a longer fence
         let relative = citation("Answered: (a). [x](../principles/fail-fast.toml) \"y\"");
         assert_eq!(relative.rev, None);
         assert_eq!(relative.link, "../principles/fail-fast.toml");
+    }
+
+    #[test]
+    fn a_file_named_in_prose_does_not_end_the_quote_window() {
+        let line = format!("Answered: (a). [x]({LINK}), see principles/least-power.toml, \"one\"");
+        let found = cited(&line);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found.first().and_then(|c| c.quote), Some("one"));
+    }
+
+    #[test]
+    fn a_link_with_anything_after_the_file_name_is_refused() {
+        for (link, says) in [
+            (format!("{LINK}.bak"), "after the record's file name"),
+            (format!("{LINK}?plain=1"), "after the record's file name"),
+            (format!("{LINK}?plain=1#L8"), "after the record's file name"),
+        ] {
+            let line = format!("Answered: (a). [x]({link}) \"Stop early.\"");
+            let failure =
+                judge(&citation(&line), Some("claim = \"Stop early.\"\n"), "v1").expect("refused");
+            assert!(failure.contains(says), "{link}: {failure}");
+        }
     }
 
     #[test]
