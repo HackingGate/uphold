@@ -2,7 +2,7 @@
 name: Design record
 about: A ruling on what uphold will build -- what is chosen, what is rejected and why, and the pull requests that carry it
 title: "Design: "
-labels: design, ruling:pending
+labels: design, design:proposed
 assignees: ''
 ---
 

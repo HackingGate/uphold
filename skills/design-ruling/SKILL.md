@@ -37,8 +37,10 @@ every question: an adopted conflict with no order has two answers, and a
 declared specification that is not there cannot be checked against.
 
 Read the whole specification at that revision before ruling. Note the id of
-each item it holds (an [OpenFastTrace](https://github.com/itsallcode/openfasttrace)
-item's id is `<type>~<name>~<revision>`). If it is declared and cannot be
+each item it holds, as the specification's own tooling names it: for example
+an [OpenFastTrace](https://github.com/itsallcode/openfasttrace) item's
+`<type>~<name>~<revision>`, or a [Duvet](https://github.com/awslabs/duvet)
+requirement's file and section heading. If it is declared and cannot be
 read, or its repository has no tag, escalate every question; never rule as
 though none were declared.
 
@@ -98,8 +100,9 @@ For each question under the issue's questions heading:
 5. Where no option meets the goal the records state, answer that none does,
    and cite the line that states the goal.
 6. Name the closest ruled precedent: an earlier design issue labelled
-   `ruling:accepted` whose `Answered:` line cites the same record items. None:
-   say so.
+   `design:accepted`, or `ruling:accepted` where the repository still carries
+   that label, whose `Answered:` line cites the same record items. None: say
+   so.
 
 Run the ruling three times, independently, with the options in a different
 order each time. All three must give the same answer, or escalate and say they
@@ -143,7 +146,8 @@ holds it at the pin, an exact substring of one string, because
 pin contains it. That refusal on a later edit means the item changed in a bump:
 re-rule the question it names before publishing again. Publish with `gh issue edit` or
 `gh issue create` so that check and `questions-name-a-standard` run. Do not
-change the issue's `ruling:` label: the owner records the ruling.
+change the issue's status label (`design:proposed`, or `ruling:pending` where
+the repository still carries it): the owner records the ruling.
 
 ## 5. Score the answer and its citations
 
