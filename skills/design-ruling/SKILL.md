@@ -1,6 +1,6 @@
 ---
 name: design-ruling
-description: Answer the open questions in a repository's design issues from the uphold records that repository adopts under [decide], checked against the specification it declares there, citing each record line at the pinned uphold revision with a quote and each requirement the answer changes, or escalate. Use when asked to rule on, answer or decide a design record's questions.
+description: Answer the open questions in a repository's design issues from the uphold records that repository adopts under [decide], checked against the specification it declares there, citing each record item by a link to the record and a quote of the item, and each requirement the answer changes, or escalate. Use when asked to rule on, answer or decide a design record's questions.
 ---
 
 # Design ruling
@@ -46,8 +46,9 @@ Find the uphold revision the repository pins: the `rev:` of the
 `HackingGate/uphold` entry in `.pre-commit-config.yaml`, or the `ref:` of that
 remote in `lefthook.yml`. Read each adopted record as
 `principles/<id>.toml` at that revision, with `uphold --version` matching it.
-A different binary carries a different catalog, and its line numbers are not
-the ones the citations will be checked against.
+A different binary carries a different catalog, and its items are not the ones
+the quotes will be checked against. The answer never repeats the revision: the
+hook configuration states it once.
 
 ## 2. Check the options
 
@@ -90,14 +91,14 @@ For each question under the issue's questions heading:
    applies: escalate, saying which part of the question no record covers.
 3. Where two applicable records conflict, the `order` between them decides.
    No order for that pair: escalate.
-4. Pick the option the applicable records decide. Cite every record line the
+4. Pick the option the applicable records decide. Cite every record item the
    decision rests on: a `claim`, an `applies_when`, a `does_not_mean`, a
    `review_questions` item. Where a record's source decides it, cite the
    source's `locator` or URL fragment too.
 5. Where no option meets the goal the records state, answer that none does,
    and cite the line that states the goal.
 6. Name the closest ruled precedent: an earlier design issue labelled
-   `ruling:accepted` whose `Answered:` line cites the same record lines. None:
+   `ruling:accepted` whose `Answered:` line cites the same record items. None:
    say so.
 
 Run the ruling three times, independently, with the options in a different
@@ -111,7 +112,7 @@ correct it in the same edit where the ruling found a standard the framer did
 not name. Under the question, after its options, on its own line:
 
 ```text
-Answered: (a). [<id> L<n>](https://github.com/HackingGate/uphold/blob/<pinned rev>/principles/<id>.toml#L<n>) "<the item, exactly as on that line>"; precedent: <issue link, or none>
+Answered: (a). [<id> <field>](https://github.com/HackingGate/uphold/blob/HEAD/principles/<id>.toml) "<the item, exactly as the record says it>"; precedent: <issue link, or none>
 ```
 
 Where the picked option changes the specification, name each item it changes
@@ -119,7 +120,7 @@ after the last record quote and before the precedent, with the revision read
 (the tag, or the commit id for this repository's own):
 
 ```text
-Answered: (b). [<id> L<n>](...) "<the item>"; specification at <tag>: changes `<item id>`, removes `<item id>`; precedent: <issue link, or none>
+Answered: (b). [<id> <field>](...) "<the item>"; specification at <tag>: changes `<item id>`, removes `<item id>`; precedent: <issue link, or none>
 ```
 
 Write item ids in backticks, never in double quotes: `ruling-citations-resolve`
@@ -133,9 +134,14 @@ Or, to escalate:
 Answered: escalated -- <reason>
 ```
 
-The link's revision is the pin, never `main`. The quote follows its link and is
-copied from that line, because `ruling-citations-resolve` refuses the body when
-the line at that revision does not contain it. Publish with `gh issue edit` or
+The link names no revision and no line: its revision segment is `HEAD`, and
+which catalog the quote is read in is the pin. `<field>` is the key the item
+sits under (`claim`, `applies_when`, ...), for a reader; the check does not
+read it. The quote follows its link and is copied from the item as the record
+holds it at the pin, an exact substring of one string, because
+`ruling-citations-resolve` refuses the body when no item of that record at the
+pin contains it. That refusal on a later edit means the item changed in a bump:
+re-rule the question it names before publishing again. Publish with `gh issue edit` or
 `gh issue create` so that check and `questions-name-a-standard` run. Do not
 change the issue's `ruling:` label: the owner records the ruling.
 

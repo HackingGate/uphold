@@ -1,24 +1,36 @@
-//! `ruling-citations-resolve` -- does each catalog line an answer cites say
-//! what the answer quotes, at the revision this repository pins?
+//! `ruling-citations-resolve` -- does each catalog item an answer cites still
+//! say what the answer quotes, in the catalog this repository pins?
 //!
 //! A design question is answered from the records a repository adopts, and
-//! the answer cites each record by line, linked at the uphold revision the
-//! repository pins, with a quote of the item it used:
+//! the answer cites each record by its id, linked to the record's file with
+//! no revision and no line, with a quote of the item it used:
 //!
 //! ```text
-//! Answered: (a). [unix-composability L18](https://github.com/HackingGate/uphold/blob/v1.36.0/principles/unix-composability.toml#L18) "Can a script or an agent do everything a person at a terminal can"
+//! Answered: (a). [unix-composability review_questions](https://github.com/HackingGate/uphold/blob/HEAD/principles/unix-composability.toml) "Can a script or an agent do everything a person at a terminal can"
 //! ```
 //!
-//! Every part of that can be wrong without anything looking wrong: a link at
-//! a revision the repository does not run, a record id that is not in the
-//! catalog there, a line past the end of the file, or a quote that was on line
-//! 18 two releases ago. A reader who follows the link finds out; this finds
-//! out first.
+//! The quote identifies the item, as the exact text of a
+//! [W3C Web Annotation TextQuoteSelector](https://www.w3.org/TR/annotation-model/#text-quote-selector)
+//! does, and not its position: the item is found wherever it is in the
+//! record, so a bump that only moves it needs no edit to the body. Which
+//! catalog the quote is read in is the pin, written once in the hook
+//! configuration. A link that names a revision or
+//! a line again is refused, because that copy of the pin goes stale on the
+//! next bump while the body still reads as current.
+//!
+//! A quote no item of its record holds at the pin is refused, and the refusal
+//! names the question that holds it: the text the ruling rested on changed,
+//! and the question is re-ruled before the body is published again.
 //!
 //! WHICH TEXT IS AN ANSWER. A line that opens `Answered:`, optionally as a list
 //! item, under a heading whose title says "question", and outside a code
 //! fence. The marker is the subject, so no forge is asked how the issue is
 //! labelled and a body with no such line passes without a pin being read.
+//!
+//! WHICH ITEM. Any string the record's TOML holds, its `claim`, an element of
+//! `applies_when` or `does_not_mean`, a source's `locator`, read as parsed, so
+//! a quote never spans TOML syntax. The link text may name the field for a
+//! reader; it is not read.
 //!
 //! WHICH CATALOG. The one compiled into this binary, which is the catalog of
 //! exactly one tag, `v<version>`. A pin naming any other revision is a
@@ -37,20 +49,22 @@ use crate::config::Rule;
 use crate::error::{Fatal, Result};
 use crate::guard::Refusal;
 
-/// A link into the catalog: any URL prefix, then `principles/<id>.toml#L<n>`.
-/// The prefix is optional so that a relative or foreign link is found and
-/// refused rather than passed over.
+/// A link into the catalog: a URL or Markdown link target, then
+/// `principles/<id>.toml`, then any fragment. A bare path is a citation only
+/// with a fragment, as the line-numbered form wrote it, so that a relative,
+/// foreign or old-form link is found and refused rather than passed over,
+/// while a file named in prose is not read as one.
 static CITATION: OnceLock<Regex> = OnceLock::new();
 
 fn citation_pattern() -> &'static Regex {
     CITATION.get_or_init(|| {
         crate::engine::literal_pattern(
-            r#"(?:https?://[^\s()<>\[\]"]*?/)?principles/([a-z0-9][a-z0-9-]*)\.toml#L([0-9]+)"#,
+            r#"(https?://[^\s()<>\[\]"]*?/|\]\([^\s()<>\[\]"]*?)?principles/([a-z0-9][a-z0-9-]*)\.toml(#[^\s()<>\[\]"]*)?"#,
         )
     })
 }
 
-/// The prefix a citation must carry: this repository's blob view at one rev.
+/// The prefix a link must carry: this repository's blob view, at a revision.
 static BLOB: OnceLock<Regex> = OnceLock::new();
 
 fn blob_pattern() -> &'static Regex {
@@ -66,15 +80,28 @@ fn quote_pattern() -> &'static Regex {
     QUOTE.get_or_init(|| crate::engine::literal_pattern(r#""([^"]+)"|“([^”]+)”"#))
 }
 
+/// The revision segment a link carries in place of one: GitHub's name for the
+/// default branch, which states no revision of its own.
+const NO_REVISION: &str = "HEAD";
+
 /// One citation, as an answer wrote it.
 #[derive(Debug)]
 struct Citation<'a> {
     link: &'a str,
-    /// `None` where the link is not `github.com/<this repository>/blob/<rev>/`.
+    /// The revision in `github.com/<this repository>/blob/<rev>/`; `None`
+    /// where the link is not to this repository's blob view.
     rev: Option<&'a str>,
+    /// The `#...` after the file name, as the line-numbered form wrote it.
+    fragment: Option<&'a str>,
     id: &'a str,
-    line: &'a str,
     quote: Option<&'a str>,
+}
+
+/// One answer line, with the question it answers.
+#[derive(Debug)]
+struct Answer<'a> {
+    question: String,
+    line: &'a str,
 }
 
 /// Judge one piece of published text. `None` where every citation resolves,
@@ -85,16 +112,23 @@ pub(crate) fn in_text(
     label: &str,
     text: &str,
 ) -> Result<Option<Refusal>> {
-    let citations: Vec<Citation<'_>> = answers(text).into_iter().flat_map(cited).collect();
-    if citations.is_empty() {
+    let cited: Vec<(String, Citation<'_>)> = answers(text)
+        .into_iter()
+        .flat_map(|answer| {
+            cited(answer.line)
+                .into_iter()
+                .map(move |citation| (answer.question.clone(), citation))
+        })
+        .collect();
+    if cited.is_empty() {
         return Ok(None);
     }
-    let pinned = pinned_revisions(root, &rule.id)?;
     let carried = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let pin = pinned_revision(root, &rule.id, &carried)?;
     let mut failures = Vec::new();
-    for citation in &citations {
-        if let Some(failure) = judge(citation, &pinned, &carried, &rule.id)? {
-            failures.push(format!("- {}: {failure}", citation.link));
+    for (question, citation) in &cited {
+        if let Some(failure) = judge(citation, crate::catalog::source(citation.id), &pin) {
+            failures.push(format!("- {question}: {}: {failure}", citation.link));
         }
     }
     if failures.is_empty() {
@@ -103,82 +137,88 @@ pub(crate) fn in_text(
     Ok(Some(Refusal {
         id: rule.id.clone(),
         report: format!(
-            "{label}: {} citation(s) of the catalog do not resolve at the uphold revision \
-             this repository pins ({}):\n{}\n\nLink each record line at the pinned revision \
-             and quote the item as that line says it, so a reader who follows the link finds \
-             what the answer used.",
+            "{label}: {} citation(s) of the catalog do not resolve in the uphold catalog \
+             this repository pins ({pin}):\n{}\n\nLink each record as {} with no line, and \
+             quote the item as the record says it. Where the record no longer says it, \
+             re-rule that question before publishing the body.",
             failures.len(),
-            pinned.into_iter().collect::<Vec<_>>().join(", "),
-            failures.join("\n")
+            failures.join("\n"),
+            record_link("<id>"),
         ),
     }))
 }
 
-/// What is wrong with one citation, or `None`. `Err` only where the catalog
-/// at the pinned revision is not the one this binary carries.
-fn judge(
-    citation: &Citation<'_>,
-    pinned: &BTreeSet<String>,
-    carried: &str,
-    rule: &str,
-) -> Result<Option<String>> {
-    let Some(rev) = citation.rev else {
-        let (owner, name) = crate::check::upstream_slug().unwrap_or(("", ""));
-        return Ok(Some(format!(
-            "not a link to https://github.com/{owner}/{name}/blob/<rev>/, so it names no \
-             revision of the catalog"
-        )));
-    };
-    if !pinned.contains(rev) {
-        return Ok(Some(format!(
-            "cites the catalog at {rev}, and this repository pins {}",
-            pinned.iter().cloned().collect::<Vec<_>>().join(", ")
-        )));
-    }
-    if rev != carried {
-        return Err(Fatal::new(format!(
-            "rule {rule:?}: this repository pins uphold at {rev}, and this binary carries the \
-             catalog of {carried}, so whether a citation resolves there cannot be read here. \
-             Nothing was published; run the uphold the repository pins"
-        )));
-    }
-    let Some(source) = crate::catalog::source(citation.id) else {
-        return Ok(Some(format!(
-            "{rev} has no record {:?} in its catalog",
-            citation.id
-        )));
-    };
-    let Some(cited) = citation
-        .line
-        .parse::<usize>()
-        .ok()
-        .and_then(|number| number.checked_sub(1))
-        .and_then(|index| source.lines().nth(index))
-    else {
-        return Ok(Some(format!(
-            "principles/{}.toml at {rev} has {} line(s), and the link is to line {}",
-            citation.id,
-            source.lines().count(),
-            citation.line
-        )));
-    };
-    let Some(quote) = citation.quote else {
-        return Ok(Some(String::from(
-            "carries no quote. Follow the link with the item it cites, in double quotes",
-        )));
-    };
-    if !cited.contains(quote) {
-        return Ok(Some(format!(
-            "line {} of principles/{}.toml at {rev} does not say {quote:?}",
-            citation.line, citation.id
-        )));
-    }
-    Ok(None)
+/// The one link form a citation takes for record `id`.
+fn record_link(id: &str) -> String {
+    let (owner, name) = crate::check::upstream_slug().unwrap_or(("", ""));
+    format!("https://github.com/{owner}/{name}/blob/{NO_REVISION}/principles/{id}.toml")
 }
 
-/// Every revision of this repository a hook configuration in the tree pins.
-/// None is exit 2: a citation's revision can only be judged against one.
-fn pinned_revisions(root: &Path, rule: &str) -> Result<BTreeSet<String>> {
+/// What is wrong with one citation of a record whose file at the pin is
+/// `source`, or `None`.
+fn judge(citation: &Citation<'_>, source: Option<&str>, pin: &str) -> Option<String> {
+    match (citation.rev, citation.fragment) {
+        (Some(NO_REVISION), None) => {}
+        (Some(rev), _) if rev != NO_REVISION || citation.fragment.is_some() => {
+            let line = citation
+                .fragment
+                .map(|fragment| format!(" and {fragment}"))
+                .unwrap_or_default();
+            return Some(format!(
+                "names the revision {rev}{line}, a copy of the pin the hook configuration \
+                 already states. Link {} and keep the quote",
+                record_link(citation.id)
+            ));
+        }
+        _ => {
+            return Some(format!(
+                "not a link to {}, so a reader cannot follow it to the record",
+                record_link(citation.id)
+            ));
+        }
+    }
+    let Some(source) = source else {
+        return Some(format!(
+            "{pin} has no record {:?} in its catalog",
+            citation.id
+        ));
+    };
+    let Some(quote) = citation.quote else {
+        return Some(String::from(
+            "carries no quote. Follow the link with the item it cites, in double quotes",
+        ));
+    };
+    if !items(source).iter().any(|item| item.contains(quote)) {
+        return Some(format!(
+            "no item of principles/{}.toml at {pin} says {quote:?}: the text this answer \
+             rested on changed, so re-rule this question",
+            citation.id
+        ));
+    }
+    None
+}
+
+/// Every string a record's TOML holds, at any depth, as parsed.
+fn items(source: &str) -> Vec<String> {
+    fn walk(value: &toml::Value, found: &mut Vec<String>) {
+        match value {
+            toml::Value::String(text) => found.push(text.clone()),
+            toml::Value::Array(values) => values.iter().for_each(|item| walk(item, found)),
+            toml::Value::Table(table) => table.values().for_each(|item| walk(item, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    if let Ok(table) = toml::from_str::<toml::Table>(source) {
+        table.values().for_each(|value| walk(value, &mut found));
+    }
+    found
+}
+
+/// The one revision of this repository the hook configuration here pins, which
+/// must be the one whose catalog this binary carries. No pin, or a pin at any
+/// other revision, is exit 2: what the catalog says there cannot be read here.
+fn pinned_revision(root: &Path, rule: &str, carried: &str) -> Result<String> {
     let (owner, name) = crate::check::upstream_slug().unwrap_or(("", ""));
     let pinned: BTreeSet<String> = crate::pins::read_pins(root)?
         .pins
@@ -193,11 +233,24 @@ fn pinned_revisions(root: &Path, rule: &str) -> Result<BTreeSet<String>> {
     if pinned.is_empty() {
         return Err(Fatal::new(format!(
             "rule {rule:?}: this text cites uphold's catalog, and no hook configuration here \
-             pins {owner}/{name}, so the revision a citation must be at cannot be read. \
+             pins {owner}/{name}, so the catalog a citation must resolve in cannot be read. \
              Nothing was published; pin uphold, or run this where it is pinned"
         )));
     }
-    Ok(pinned)
+    let other: Vec<&str> = pinned
+        .iter()
+        .map(String::as_str)
+        .filter(|rev| *rev != carried)
+        .collect();
+    if !other.is_empty() {
+        return Err(Fatal::new(format!(
+            "rule {rule:?}: this repository pins uphold at {}, and this binary carries the \
+             catalog of {carried}, so whether a citation resolves there cannot be read here. \
+             Nothing was published; run the uphold the repository pins",
+            other.join(", ")
+        )));
+    }
+    Ok(carried.to_owned())
 }
 
 /// The citations on one answer line, each with the first quote after it and
@@ -206,11 +259,19 @@ fn cited(line: &str) -> Vec<Citation<'_>> {
     let found: Vec<regex::Captures<'_>> = citation_pattern().captures_iter(line).collect();
     let mut citations = Vec::new();
     for (index, captures) in found.iter().enumerate() {
-        let (Some(whole), Some(id), Some(number)) =
-            (captures.get(0), captures.get(1), captures.get(2))
-        else {
+        let (Some(whole), Some(id)) = (captures.get(0), captures.get(2)) else {
             continue;
         };
+        let prefix = captures.get(1).map(|prefix| {
+            prefix
+                .as_str()
+                .strip_prefix("](")
+                .unwrap_or(prefix.as_str())
+        });
+        let fragment = captures.get(3).map(|fragment| fragment.as_str());
+        if prefix.is_none() && fragment.is_none() {
+            continue;
+        }
         let end = found
             .get(index + 1)
             .and_then(|next| next.get(0))
@@ -220,19 +281,20 @@ fn cited(line: &str) -> Vec<Citation<'_>> {
             .captures(after)
             .and_then(|quoted| quoted.get(1).or_else(|| quoted.get(2)))
             .map(|quoted| quoted.as_str());
-        let prefix = line.get(whole.start()..id.start()).unwrap_or("");
-        let prefix = prefix.strip_suffix("principles/").unwrap_or(prefix);
-        let rev = blob_pattern().captures(prefix).and_then(|blob| {
-            let (owner, name) = crate::check::upstream_slug()?;
-            let same = blob.get(1)?.as_str().eq_ignore_ascii_case(owner)
-                && blob.get(2)?.as_str().eq_ignore_ascii_case(name);
-            same.then(|| blob.get(3).map(|rev| rev.as_str())).flatten()
-        });
+        let rev = prefix
+            .and_then(|prefix| blob_pattern().captures(prefix))
+            .and_then(|blob| {
+                let (owner, name) = crate::check::upstream_slug()?;
+                let same = blob.get(1)?.as_str().eq_ignore_ascii_case(owner)
+                    && blob.get(2)?.as_str().eq_ignore_ascii_case(name);
+                same.then(|| blob.get(3).map(|rev| rev.as_str())).flatten()
+            });
+        let written = whole.as_str().strip_prefix("](").unwrap_or(whole.as_str());
         citations.push(Citation {
-            link: whole.as_str(),
+            link: written,
             rev,
+            fragment,
             id: id.as_str(),
-            line: number.as_str(),
             quote,
         });
     }
@@ -270,24 +332,39 @@ pub(crate) fn question_sections(text: &str) -> Vec<(usize, Range<usize>)> {
 }
 
 /// The answer lines of a body: `Answered:` under a questions heading, outside
-/// code.
+/// code, each named by the question it answers -- the nearest heading above it
+/// inside the section, or its line number where the section has none.
 ///
 /// Which lines are code is the parser's answer, so a three-backtick example
 /// inside a four-backtick block stays inside it.
-fn answers(text: &str) -> Vec<&str> {
+fn answers(text: &str) -> Vec<Answer<'_>> {
     let code = crate::markdown::code_lines(text);
+    let headings = crate::markdown::headings(text);
     let lines: Vec<&str> = text.lines().collect();
     let mut found = Vec::new();
     for (_, range) in question_sections(text) {
-        for index in range {
+        for index in range.clone() {
             if code.get(index).copied().unwrap_or(false) {
                 continue;
             }
-            if let Some(line) = lines.get(index).copied()
-                && list_item(line.trim_start()).starts_with("Answered:")
-            {
-                found.push(line);
+            let Some(line) = lines.get(index).copied() else {
+                continue;
+            };
+            if !list_item(line.trim_start()).starts_with("Answered:") {
+                continue;
             }
+            let question = headings
+                .iter()
+                .filter_map(|(number, _, title)| {
+                    let at = usize::try_from(*number).ok()?.checked_sub(1)?;
+                    (range.contains(&at) && at < index).then_some(title)
+                })
+                .next_back()
+                .map_or_else(
+                    || format!("line {}", index + 1),
+                    |title| format!("{title:?}"),
+                );
+            found.push(Answer { question, line });
         }
     }
     found
@@ -315,6 +392,12 @@ pub(crate) fn list_item(line: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LINK: &str = "https://github.com/HackingGate/uphold/blob/HEAD/principles/fail-fast.toml";
+
+    fn citation(line: &str) -> Citation<'_> {
+        cited(line).into_iter().next().expect("one citation")
+    }
 
     #[test]
     fn only_answer_lines_under_a_questions_heading_are_read() {
@@ -355,50 +438,142 @@ Answered: inside a longer fence
 ````
 ";
         assert_eq!(
-            answers(body).into_iter().map(str::trim).collect::<Vec<_>>(),
+            answers(body)
+                .into_iter()
+                .map(|answer| answer.line.trim())
+                .collect::<Vec<_>>(),
             ["Answered: (a)", "- Answered: (b)", "Answered: (c)"]
         );
     }
 
     #[test]
+    fn an_answer_is_named_by_the_heading_of_its_question() {
+        let body = "## Questions\n\n### Q1. What identifies an item?\n\n- (a) x\n\nAnswered: (a)\n\n\
+                    ## Questions for the ruling\n\n1. Which?\n   Answered: (b)\n";
+        let named: Vec<String> = answers(body)
+            .into_iter()
+            .map(|answer| answer.question)
+            .collect();
+        assert_eq!(named, ["\"Q1. What identifies an item?\"", "line 12"]);
+    }
+
+    #[test]
     fn each_citation_takes_the_quote_after_it_and_before_the_next() {
-        let line = "Answered: (a). [x](https://github.com/HackingGate/uphold/blob/v1.0.0/principles/fail-fast.toml#L7) \"one\" and principles/least-power.toml#L3 \"two\"";
-        let found = cited(line);
+        let line = format!(
+            "Answered: (a). [x]({LINK}) \"one\" and principles/least-power.toml#L3 \"two\""
+        );
+        let found = cited(&line);
         assert_eq!(found.len(), 2);
-        assert_eq!(
-            found.first().and_then(|citation| citation.rev),
-            Some("v1.0.0")
-        );
-        assert_eq!(
-            found.first().and_then(|citation| citation.quote),
-            Some("one")
-        );
-        assert_eq!(found.get(1).and_then(|citation| citation.rev), None);
-        assert_eq!(
-            found.get(1).map(|citation| citation.id),
-            Some("least-power")
-        );
-        assert_eq!(
-            found.get(1).and_then(|citation| citation.quote),
-            Some("two")
-        );
+        assert_eq!(found.first().and_then(|c| c.rev), Some(NO_REVISION));
+        assert_eq!(found.first().and_then(|c| c.quote), Some("one"));
+        assert_eq!(found.get(1).and_then(|c| c.rev), None);
+        assert_eq!(found.get(1).map(|c| c.id), Some("least-power"));
+        assert_eq!(found.get(1).and_then(|c| c.fragment), Some("#L3"));
+        assert_eq!(found.get(1).and_then(|c| c.quote), Some("two"));
+    }
+
+    #[test]
+    fn a_file_named_in_prose_is_not_a_citation_and_a_relative_link_is() {
+        assert!(cited("Answered: (a); the change is to principles/fail-fast.toml").is_empty());
+        let relative = citation("Answered: (a). [x](../principles/fail-fast.toml) \"y\"");
+        assert_eq!(relative.rev, None);
+        assert_eq!(relative.link, "../principles/fail-fast.toml");
     }
 
     #[test]
     fn requirement_ids_after_the_last_quote_are_not_citations() {
-        let line = "Answered: (b). [x](https://github.com/HackingGate/uphold/blob/v1.0.0/principles/single-authoritative-source.toml#L8) \"one\"; specification: changes `req~ruled-decision~1`, removes `req~old~2`; precedent: none";
-        let found = cited(line);
-        assert_eq!(found.len(), 1);
-        assert_eq!(
-            found.first().and_then(|citation| citation.quote),
-            Some("one")
+        let line = format!(
+            "Answered: (b). [x]({LINK}) \"one\"; specification: changes `req~ruled-decision~1`, \
+             removes `req~old~2`; precedent: none"
         );
+        let found = cited(&line);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found.first().and_then(|c| c.quote), Some("one"));
     }
 
     #[test]
     fn a_link_to_another_repository_names_no_revision() {
         let found =
-            cited("https://github.com/someone/else/blob/v1.0.0/principles/fail-fast.toml#L7 \"x\"");
-        assert_eq!(found.first().map(|citation| citation.rev), Some(None));
+            citation("https://github.com/someone/else/blob/HEAD/principles/fail-fast.toml \"x\"");
+        assert_eq!(found.rev, None);
+        assert!(
+            judge(&found, Some("claim = \"x\"\n"), "v1.0.0")
+                .is_some_and(|failure| failure.contains("not a link to"))
+        );
+    }
+
+    /// A record at two revisions, the second with lines added above the
+    /// cited item: a citation by quote resolves at both, unedited.
+    #[test]
+    fn a_cited_item_that_only_moved_still_resolves() {
+        let before =
+            "id = \"fail-fast\"\nclaim = \"Stop early.\"\napplies_when = [\"A check fails.\"]\n";
+        let after = "id = \"fail-fast\"\ntitle = \"Fail Fast\"\nsummary = \"New.\"\n\
+                     claim = \"Stop early.\"\napplies_when = [\"Another case.\", \"A check fails.\"]\n";
+        let line = format!("Answered: (a). [fail-fast applies_when]({LINK}) \"A check fails.\"");
+        let found = citation(&line);
+        assert_eq!(judge(&found, Some(before), "v1.0.0"), None);
+        assert_eq!(judge(&found, Some(after), "v1.1.0"), None);
+    }
+
+    /// The quoted item's text changed between revisions: refused, and told
+    /// to re-rule.
+    #[test]
+    fn a_cited_item_whose_text_changed_is_refused_for_a_re_ruling() {
+        let after = "id = \"fail-fast\"\napplies_when = [\"A check fails loudly.\"]\n";
+        let line = format!("Answered: (a). [x]({LINK}) \"A check fails.\"");
+        let failure = judge(&citation(&line), Some(after), "v1.1.0").expect("refused");
+        assert!(failure.contains("re-rule this question"), "{failure}");
+    }
+
+    #[test]
+    fn items_are_read_as_parsed_strings_at_any_depth() {
+        let source = "claim = \"One.\"\napplies_when = [\"Two \\\"quoted\\\".\"]\n\
+                      [[sources]]\nlocator = \"§4.2.4\"\n";
+        let mut found = items(source);
+        found.sort();
+        assert_eq!(found, ["One.", "Two \"quoted\".", "§4.2.4"]);
+    }
+
+    #[test]
+    fn a_link_that_names_a_revision_or_a_line_is_refused_as_a_copy_of_the_pin() {
+        for link in [
+            "https://github.com/HackingGate/uphold/blob/v1.56.0/principles/fail-fast.toml#L8",
+            "https://github.com/HackingGate/uphold/blob/v1.56.0/principles/fail-fast.toml",
+            "https://github.com/HackingGate/uphold/blob/HEAD/principles/fail-fast.toml#L8",
+        ] {
+            let line = format!("Answered: (a). [x]({link}) \"Stop early.\"");
+            let failure = judge(
+                &citation(&line),
+                Some("claim = \"Stop early.\"\n"),
+                "v1.56.0",
+            )
+            .expect("refused");
+            assert!(failure.contains("a copy of the pin"), "{link}: {failure}");
+        }
+    }
+
+    /// The answer form the design-ruling skill writes is the one this rule
+    /// resolves.
+    #[test]
+    fn the_skill_writes_the_citation_form_this_rule_reads() {
+        let skill = include_str!("../../skills/design-ruling/SKILL.md");
+        let template = skill
+            .lines()
+            .find(|line| line.starts_with("Answered: (a). ["))
+            .expect("the skill's answer template");
+        let line = template
+            .replace("<id>", "fail-fast")
+            .replace("<field>", "claim")
+            .replace("<the item, exactly as the record says it>", "Stop early.");
+        let found = cited(&line);
+        assert_eq!(found.len(), 1, "{line}");
+        assert_eq!(
+            found
+                .first()
+                .and_then(|c| judge(c, Some("claim = \"Stop early.\"\n"), "v1")),
+            None,
+            "{line}"
+        );
     }
 }

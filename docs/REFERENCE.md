@@ -1558,7 +1558,7 @@ stamped on it, the range about to be pushed.
 | `no-private-repo-names-in-files` | the same, anywhere in what is being introduced — content, **path names**, and at a push the **commit messages** the push publishes |
 | `prevent-public-push` | a push to somewhere off the allow-list **and off the forge's own answer** — a GitHub destination the allow-list refused is put to `gh`, and a forge that could not be asked is exit `2` |
 | `prevent-unowned-target` | a **command** told to publish to a repository this workspace does not own. The same decision as the row above, reached from the shim seam instead of a hook — so it registers with `command.before` and never `git.hooks`, and a destination it could not resolve is exit `2`. Carried by `published-text` as `unowned-forge-target`, with `owner_required` and `command.scope = "always"` in the bundled declaration |
-| `ruling-citations-resolve` | an `Answered:` line, under a questions heading, citing a catalog line that is not at the uphold revision this repository pins, not in the catalog there, or not saying what the answer quotes. Text only, so it registers with `command.before`; a pin this binary's own catalog is not is exit `2`. Carried by `published-text`. See [A ruling's citations](#a-rulings-citations) |
+| `ruling-citations-resolve` | an `Answered:` line, under a questions heading, citing a record by a link that names a revision or a line, a record not in the catalog this repository pins, or a quote no item of the record holds there. Text only, so it registers with `command.before`; a pin this binary's own catalog is not is exit `2`. Carried by `published-text`. See [A ruling's citations](#a-rulings-citations) |
 | `questions-name-a-standard` | a question, under a questions heading, with no line `Standard: ` carrying an `http(s)` link or `none -- <why none fits>`. Text only, so it registers with `command.before`; no link is fetched and no forge is asked, so there is no exit `2`. Carried by `published-text`. See [A design question's standard](#a-design-questions-standard) |
 | `citations-linked` | a citation of a numbered standard or an identifier in prose with no link, a link to another document of its family, or, for a cited section, a link that does not name it as far as the family's anchors allow. Text only, so it registers with `command.before`; no link is fetched, so there is no exit `2`. Carried by `published-text`. See [Citations of standards and identifiers](#citations-of-standards-and-identifiers) |
 | `prevent-actor-mismatch` | a `gh` **write** about to run as anybody but the GitHub App the rule's `actor` names: no token in reach, so `gh` would use the login it stores; a personal token by its prefix; or an installation token the forge says is another App's. Registers with `command.before = ["gh"]` and `command.scope = "always"`, and is opt in: no bundled set declares it. See [who a write runs as](#who-a-write-runs-as) |
@@ -2874,28 +2874,40 @@ the hook as the harness's `deny` document, naming the tool and the key.
 ### A ruling's citations
 
 A design question is answered from the records a repository adopts (`[decide]`
-in its policy), and the answer cites each record line it
-used, linked at the uphold revision the repository pins, with the item quoted:
+in its policy), and the answer cites each record it used by a link to the
+record's file, with no revision and no line, and the item quoted:
 
 ```text
 ## Questions for the ruling
 
 1. **Edit without a label.** (a) or (b)?
    Standard: none -- which forge call carries a label is this tool's choice
-   Answered: (a). [unix-composability L18](https://github.com/HackingGate/uphold/blob/v1.36.0/principles/unix-composability.toml#L18) "Can a script or an agent do everything a person at a terminal can"
+   Answered: (a). [unix-composability review_questions](https://github.com/HackingGate/uphold/blob/HEAD/principles/unix-composability.toml) "Can a script or an agent do everything a person at a terminal can"
 ```
+
+The quote identifies the item by its exact text, as a
+[W3C Web Annotation TextQuoteSelector](https://www.w3.org/TR/annotation-model/#text-quote-selector)'s
+`exact` does, not by its position, and which catalog it is read in is the pin
+the hook configuration already states. A bump that only moves an item, or
+changes other items, needs no edit to the bodies that cite it. The link text
+may name the field for a reader; it is not read.
 
 `ruling-citations-resolve`, in `published-text`, reads every body `gh`
 publishes. An answer is a line opening `Answered:`, optionally as a list item,
 under a heading whose title contains "question" and before the next heading at
 that level or above, outside a code fence. Each link on it to
-`principles/<id>.toml#L<n>` is refused, exit `1`, when it is not
-`https://github.com/HackingGate/uphold/blob/<rev>/...`; when `<rev>` is not a
-revision a `.pre-commit-config.yaml` or lefthook `remotes:` entry here pins for
-this repository; when the catalog there has no record `<id>`, or its file has no
-line `<n>`; and when the first double-quoted text after the link, before the
-next one, is missing or is not on that line as written. Every failing citation
-is listed. Requirement ids the answer changes in a declared specification
+`principles/<id>.toml` -- a URL, a Markdown link target, or a bare path with a
+`#` fragment -- is refused, exit `1`, when it is not
+`https://github.com/HackingGate/uphold/blob/HEAD/principles/<id>.toml`. A link
+at a revision or a line, the form earlier releases wrote, is refused as a copy of the
+pin, and the message names the link to write. It is refused as well when the
+catalog has no record `<id>`, and when the first double-quoted text after the
+link, before the next one, is missing or is in no string the record's TOML
+holds, as parsed. That last refusal means the text the answer rested on
+changed: the question is re-ruled before the body is published again. Every
+failing citation is listed under the question that holds it, named by the
+nearest heading above the answer, or by its line where the section has none.
+Requirement ids the answer changes in a declared specification
 (`[decide.specification]`) follow the last record quote, in backticks, and are
 not citations this rule reads.
 
@@ -2905,10 +2917,11 @@ the issue is labelled, so `gh issue edit`, which does not say, is judged like
 a pin being read, and so does an answer that links no record.
 
 The catalog checked against is the one compiled into the running binary, which
-is the catalog at `v<its version>`. A citation at a pinned revision other than
-that, a branch or a commit included, is exit `2`, and so is a citation where
-nothing here pins uphold: whether it resolves cannot be read, and the cure is
-to run the uphold the repository pins.
+is the catalog at `v<its version>`. Every revision a `.pre-commit-config.yaml`
+or lefthook `remotes:` entry here pins for this repository must be that one; a
+pin at any other revision, a branch or a commit included, is exit `2`, and so
+is a citation where nothing here pins uphold: whether it resolves cannot be
+read, and the cure is to run the uphold the repository pins.
 
 ### A design question's standard
 
