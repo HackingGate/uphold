@@ -9616,12 +9616,19 @@ fn carried() -> String {
     format!("v{}", env!("CARGO_PKG_VERSION"))
 }
 
-/// An issue body answering one question with one citation.
-fn ruling(rev: &str, id: &str, line: &str, quote: &str) -> String {
+/// An issue body answering one question with one citation of `id`, quoting
+/// `quote`, linked by `link` (the record link with no revision when `None`).
+fn ruling(id: &str, quote: &str) -> String {
+    cites(
+        &format!("https://github.com/HackingGate/uphold/blob/HEAD/principles/{id}.toml"),
+        id,
+        quote,
+    )
+}
+
+fn cites(link: &str, id: &str, quote: &str) -> String {
     format!(
-        "## Questions for the ruling\n\n1. Which?\n   Answered: (a). \
-         [{id} L{line}](https://github.com/HackingGate/uphold/blob/{rev}/principles/{id}.toml#L{line}) \
-         \"{quote}\"\n"
+        "## Questions for the ruling\n\n### Q1. Which?\n\nAnswered: (a). [{id} claim]({link}) \"{quote}\"\n"
     )
 }
 
@@ -9630,9 +9637,9 @@ fn filed(root: &Path, body: &str) -> Output {
 }
 
 #[test]
-fn a_citation_that_resolves_at_the_pinned_revision_reaches_the_command() {
+fn a_citation_that_resolves_at_the_pin_reaches_the_command() {
     let root = ruling_workspace(Some(&carried()));
-    let output = filed(&root, &ruling(&carried(), "fail-fast", "1", "fail-fast"));
+    let output = filed(&root, &ruling("fail-fast", "fail-fast"));
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(stdout(&output).contains("faux ran"), "{}", stdout(&output));
 }
@@ -9649,29 +9656,32 @@ fn each_citation_that_does_not_resolve_is_refused_and_nothing_runs() {
     let rev = carried();
     for (body, says) in [
         (
-            ruling("v0.0.1", "fail-fast", "1", "fail-fast"),
-            "this repository pins",
+            cites(
+                &format!(
+                    "https://github.com/HackingGate/uphold/blob/{rev}/principles/fail-fast.toml#L1"
+                ),
+                "fail-fast",
+                "fail-fast",
+            ),
+            "a copy of the pin",
         ),
         (
-            ruling(&rev, "no-such-record", "1", "x"),
+            ruling("no-such-record", "x"),
             "has no record \"no-such-record\"",
         ),
         (
-            ruling(&rev, "fail-fast", "9999", "x"),
-            "the link is to line 9999",
+            ruling("fail-fast", "not in any item"),
+            "\"Q1. Which?\": https://github.com/HackingGate/uphold/blob/HEAD/principles/fail-fast.toml: \
+             no item of principles/fail-fast.toml",
         ),
         (
-            ruling(&rev, "fail-fast", "1", "not on that line"),
-            "does not say \"not on that line\"",
-        ),
-        (
-            ruling(&rev, "fail-fast", "1", "fail-fast").replace(" \"fail-fast\"", ""),
+            ruling("fail-fast", "fail-fast").replace(" \"fail-fast\"", ""),
             "carries no quote",
         ),
         (
-            ruling(&rev, "fail-fast", "1", "fail-fast")
+            ruling("fail-fast", "fail-fast")
                 .replace("HackingGate/uphold/blob", "someone/fork/blob"),
-            "names no revision",
+            "not a link to",
         ),
     ] {
         let root = ruling_workspace(Some(&rev));
@@ -9689,7 +9699,7 @@ fn each_citation_that_does_not_resolve_is_refused_and_nothing_runs() {
 #[test]
 fn a_pin_whose_catalog_this_binary_does_not_carry_is_exit_two() {
     let root = ruling_workspace(Some("v0.0.1"));
-    let output = filed(&root, &ruling("v0.0.1", "fail-fast", "1", "fail-fast"));
+    let output = filed(&root, &ruling("fail-fast", "fail-fast"));
     assert_eq!(code(&output), 2, "{}", stderr(&output));
     assert!(
         stderr(&output).contains("run the uphold the repository pins"),
@@ -9702,7 +9712,7 @@ fn a_pin_whose_catalog_this_binary_does_not_carry_is_exit_two() {
 #[test]
 fn a_citation_where_nothing_pins_uphold_is_exit_two() {
     let root = ruling_workspace(None);
-    let output = filed(&root, &ruling(&carried(), "fail-fast", "1", "fail-fast"));
+    let output = filed(&root, &ruling("fail-fast", "fail-fast"));
     assert_eq!(code(&output), 2, "{}", stderr(&output));
     assert!(
         stderr(&output).contains("no hook configuration here pins"),
@@ -9717,19 +9727,19 @@ fn the_gh_seam_refuses_an_issue_body_whose_citation_does_not_resolve() {
     let policy = RULING_POLICY.replace("\"faux\"", "\"gh\"");
     std::fs::write(root.join("policy/principles.toml"), policy).unwrap();
     std::os::unix::fs::symlink(root.join("bin/faux"), root.join("bin/gh")).unwrap();
-    let body = ruling(&carried(), "fail-fast", "1", "not on that line");
+    let body = ruling("fail-fast", "not in any item");
     let output = shim(
         &root,
         &["gh", "issue", "create", "--title", "t", "--body", &body],
     );
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("do not resolve at the uphold revision"),
+        stderr(&output).contains("re-rule that question"),
         "{}",
         stderr(&output)
     );
     assert!(!stdout(&output).contains("faux ran"), "{}", stdout(&output));
-    let body = ruling(&carried(), "fail-fast", "1", "fail-fast");
+    let body = ruling("fail-fast", "fail-fast");
     let output = shim(
         &root,
         &["gh", "issue", "create", "--title", "t", "--body", &body],

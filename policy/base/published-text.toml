@@ -156,9 +156,9 @@ owner_required = true
 command.before = ["gh"]
 command.scope = "always"
 
-# A design ruling's answer cites the records it was decided from, each by line
-# at the uphold revision this repository pins, with a quote of the item it
-# used. The text is what is checked: a body with no `Answered:` line under a
+# A design ruling's answer cites the records it was decided from, each by a
+# link to the record with no revision or line, and a quote of the item it
+# used, resolved in the catalog this repository pins. The text is what is checked: a body with no `Answered:` line under a
 # questions heading passes without a pin being read, so the forge is never
 # asked how an issue is labelled -- `gh issue edit` does not say. `gh` alone:
 # an issue or pull-request body is where a ruling is published.
