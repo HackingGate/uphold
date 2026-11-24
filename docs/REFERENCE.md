@@ -4453,6 +4453,21 @@ the file's — and with none of the three the run waits without limit. A hook ki
 failure rather than a silent green. `timeout_seconds = 0` is refused wherever
 it is written.
 
+A superproject's hooks read its mounts, and a throwaway worktree has none: a
+hook that reads a submodule goes red there for that reason alone, which the
+report calls refusing everything. `submodules = "checkout"` at the top of
+`policy/hooks.toml` gives the worktree each submodule at the commit HEAD pins,
+as a detached `git worktree` of your own checkout of that submodule, so nothing
+is fetched and the objects are borrowed. Each is removed with the probe. A
+submodule you have not checked out is exit `2`, with the
+`git submodule update --init` that fixes it. Leaving the field out probes
+without submodules. `"checkout"` is the only value.
+
+```toml
+# policy/hooks.toml, in a repository that pins others
+submodules = "checkout"
+```
+
 Fixtures are staged in the throwaway worktree the moment they are planted, so
 a rule that reads **tracked** files sees every plant — a probe is never
 invisible to the scan it drives. This includes fixtures matched by `.gitignore`.

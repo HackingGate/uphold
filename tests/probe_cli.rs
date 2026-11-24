@@ -1029,3 +1029,91 @@ fn committing_a_changed_probe_snapshot_cannot_hide_mutation_between_controls() {
             .contains("changed the probe revision")
     );
 }
+
+/// A superproject whose one hook reads a file inside a submodule, as the
+/// hooks of a repository that pins others do.
+fn superproject(probes: &str) -> PathBuf {
+    let root = repository("");
+    support::submodule(&root, "member", &[("member.txt", "the member's content\n")]);
+    std::fs::write(root.join("policy/hooks.toml"), probes).unwrap();
+    support::git(&root, &["add", "-A"]);
+    support::git(&root, &["commit", "-qm", "pin the member", "--no-verify"]);
+    root
+}
+
+/// Refuses a MARKER, and refuses everything when the member is absent: the
+/// hook that cannot read a mount it needs goes red for that reason alone.
+const READS_THE_MEMBER: &str = "test -f member/member.txt || { echo 'member missing'; exit 1; }\n\
+     grep -q MARKER sample.txt && exit 1\nexit 0";
+
+#[test]
+fn checked_out_submodules_are_in_the_throwaway_worktree() {
+    let root = superproject(&format!("submodules = \"checkout\"\n{ONE_PROBE}"));
+    let stub = runner(READS_THE_MEMBER);
+
+    let output = probe(&root, Some(&stub));
+    assert_eq!(code(&output), 0, "{}", text(&output));
+    assert!(
+        text(&output).contains("refuses its fixture, accepts a clean one"),
+        "{}",
+        text(&output)
+    );
+    // The member's throwaway worktree is gone with the probe's.
+    let listed = support::git_command(&root.join("member"))
+        .args(["worktree", "list", "--porcelain"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&listed.stdout)
+            .matches("worktree ")
+            .count(),
+        1,
+        "{}",
+        String::from_utf8_lossy(&listed.stdout)
+    );
+}
+
+#[test]
+fn without_the_field_a_hook_reading_a_submodule_refuses_everything() {
+    // The default stays what it was: no submodules, so the same hook refuses
+    // the clean fixture too, and the report says so.
+    let root = superproject(ONE_PROBE);
+    let stub = runner(READS_THE_MEMBER);
+
+    let output = probe(&root, Some(&stub));
+    assert_eq!(code(&output), 1, "{}", text(&output));
+    assert!(
+        text(&output).contains("refused the clean fixture"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn a_submodule_the_operator_has_not_checked_out_is_refused() {
+    let root = superproject(&format!("submodules = \"checkout\"\n{ONE_PROBE}"));
+    support::git(&root, &["submodule", "deinit", "-q", "--force", "member"]);
+    let stub = runner(READS_THE_MEMBER);
+
+    let output = probe(&root, Some(&stub));
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    assert!(
+        text(&output).contains("git submodule update --init member"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn a_submodules_value_other_than_checkout_is_refused_at_load() {
+    let root = repository(&format!("submodules = \"clone\"\n{ONE_PROBE}"));
+    let stub = runner("exit 0");
+
+    let output = probe(&root, Some(&stub));
+    assert_eq!(code(&output), 2, "{}", text(&output));
+    assert!(
+        text(&output).contains("the only value"),
+        "{}",
+        text(&output)
+    );
+}
