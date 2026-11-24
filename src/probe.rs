@@ -59,6 +59,13 @@ struct ProbeFile {
     /// every probe that does not carry its own. See [`Probe::timeout_seconds`].
     #[serde(default)]
     timeout_seconds: Option<u64>,
+    /// `"checkout"`: give the throwaway worktree each submodule this checkout
+    /// has, at the commit HEAD pins, as a detached worktree of the operator's
+    /// own submodule checkout. A superproject's hooks read its mounts, and
+    /// without them a probe there measures the missing mount instead of the
+    /// rule. Absent means none, which costs nothing.
+    #[serde(default)]
+    submodules: Option<String>,
     /// The waivers `hooks --identity` reads. Named here so this file can hold
     /// both without `deny_unknown_fields` refusing the other one's table.
     #[serde(default, rename = "waive")]
@@ -231,7 +238,11 @@ pub(crate) fn measure(root: &Path, revision: &str) -> Result<Vec<Evidence>> {
             "repository revision changed after reconciliation began; behavioral evidence would describe a different configuration",
         ));
     }
-    let (probes, file_timeout) = probes(root)?;
+    let Declared {
+        probes,
+        timeout: file_timeout,
+        submodules,
+    } = probes(root)?;
     let declarations = declarations(root)?;
     if probes.is_empty() {
         return Ok(Vec::new());
@@ -269,7 +280,7 @@ pub(crate) fn measure(root: &Path, revision: &str) -> Result<Vec<Evidence>> {
             ));
             continue;
         };
-        let worktree = Worktree::at_revision(root, revision)?;
+        let worktree = Worktree::at_revision(root, revision, submodules)?;
         let result = drive(
             &worktree,
             runner,
@@ -408,7 +419,11 @@ pub(crate) fn snapshot(root: &Path) -> Result<String> {
 
 /// `uphold probe`
 pub(crate) fn run(root: &Path, runner: Option<&str>, timeout: Option<u64>) -> Result<Exit> {
-    let (probes, file_timeout) = probes(root)?;
+    let Declared {
+        probes,
+        timeout: file_timeout,
+        submodules,
+    } = probes(root)?;
     let runner = runner.map_or_else(|| detect(root), Runner::named)?;
 
     // Only the ids the CHOSEN runner can be asked for. A repository carrying
@@ -451,7 +466,7 @@ pub(crate) fn run(root: &Path, runner: Option<&str>, timeout: Option<u64>) -> Re
         return Ok(Exit::Clean);
     }
 
-    let worktree = Worktree::at(root)?;
+    let worktree = Worktree::at(root, submodules)?;
     let mut results: Vec<(String, Verdict)> = Vec::new();
     for probe in &probes {
         // The nearest declaration wins: the flag is one operator's answer for
@@ -885,14 +900,17 @@ struct Worktree {
     root: PathBuf,
     path: PathBuf,
     revision: String,
+    /// The submodule worktrees checked out inside it, as (the operator's
+    /// checkout, the path inside the throwaway), removed before it is.
+    mounts: Vec<(PathBuf, PathBuf)>,
 }
 
 impl Worktree {
-    fn at(root: &Path) -> Result<Self> {
-        Self::at_revision(root, "HEAD")
+    fn at(root: &Path, submodules: bool) -> Result<Self> {
+        Self::at_revision(root, "HEAD", submodules)
     }
 
-    fn at_revision(root: &Path, revision: &str) -> Result<Self> {
+    fn at_revision(root: &Path, revision: &str, submodules: bool) -> Result<Self> {
         let path = std::env::temp_dir().join(format!("uphold-probe-{}", std::process::id()));
         drop(std::fs::remove_dir_all(&path));
         let output = detached("git", root)
@@ -907,11 +925,75 @@ impl Worktree {
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
-        Ok(Self {
+        let mut worktree = Self {
             root: root.to_path_buf(),
             path,
             revision: revision.to_owned(),
-        })
+            mounts: Vec::new(),
+        };
+        if submodules {
+            worktree.check_out_submodules()?;
+        }
+        Ok(worktree)
+    }
+
+    /// Each gitlink in the throwaway index, checked out at the commit it pins
+    /// as a detached worktree of the operator's own checkout of that
+    /// submodule. A worktree rather than a clone: it borrows the objects the
+    /// operator already has, fetches nothing, and is removed with the probe.
+    /// A submodule the operator has not checked out is a refusal, in the
+    /// shape `scan` refuses one: a probe that runs without part of what its
+    /// hooks read has measured the absence, not the rule.
+    fn check_out_submodules(&mut self) -> Result<()> {
+        let listed = detached("git", &self.path)
+            .args(["ls-files", "--stage", "-z"])
+            .output()?;
+        if !listed.status.success() {
+            return Err(Fatal::new(format!(
+                "could not list the throwaway worktree's index: {}",
+                String::from_utf8_lossy(&listed.stderr).trim()
+            )));
+        }
+        let index = String::from_utf8_lossy(&listed.stdout).into_owned();
+        for entry in index.split('\0') {
+            let Some((meta, mount)) = entry.split_once('\t') else {
+                continue;
+            };
+            let mut fields = meta.split(' ');
+            if fields.next() != Some("160000") {
+                continue;
+            }
+            let Some(commit) = fields.next() else {
+                continue;
+            };
+            let source = self.root.join(mount);
+            if !crate::git::is_checked_out(&source) {
+                return Err(Fatal::new(format!(
+                    "the repository pinned at {mount} is not checked out, so the probe \
+                     cannot give its throwaway worktree the submodules `submodules = \
+                     \"checkout\"` asks for. Run `git submodule update --init {mount}`"
+                )));
+            }
+            let target = self.path.join(mount);
+            // No lazy fetch: a partial clone missing the pinned commit's
+            // blobs is a setup error here, never a silent download.
+            let added = detached("git", &source)
+                .env("GIT_NO_LAZY_FETCH", "1")
+                .args(["worktree", "add", "--detach", "--quiet"])
+                .arg(&target)
+                .arg(commit)
+                .output()?;
+            // Owned before the result is read: git keeps a worktree whose
+            // post-checkout hook failed, and `Drop` must still remove it.
+            self.mounts.push((source, target));
+            if !added.status.success() {
+                return Err(Fatal::new(format!(
+                    "could not check out {mount} at {commit} in the throwaway worktree: {}",
+                    String::from_utf8_lossy(&added.stderr).trim()
+                )));
+            }
+        }
+        Ok(())
     }
 
     const fn path(&self) -> &PathBuf {
@@ -1082,6 +1164,14 @@ impl Drop for Worktree {
         // Both, and neither is checked: this runs while unwinding as well as
         // on the ordinary path, and a probe that panicked while reporting a
         // finding must not also panic on the way out and bury it.
+        for (source, target) in self.mounts.iter().rev() {
+            drop(
+                detached("git", source)
+                    .args(["worktree", "remove", "--force"])
+                    .arg(target)
+                    .output(),
+            );
+        }
         drop(
             detached("git", &self.root)
                 .args(["worktree", "remove", "--force"])
@@ -1093,10 +1183,21 @@ impl Drop for Worktree {
     }
 }
 
-fn probes(root: &Path) -> Result<(Vec<Probe>, Option<u64>)> {
+/// What `policy/hooks.toml` declares for the probe reader.
+struct Declared {
+    probes: Vec<Probe>,
+    timeout: Option<u64>,
+    submodules: bool,
+}
+
+fn probes(root: &Path) -> Result<Declared> {
     let path = root.join(PROBES);
     if !path.is_file() {
-        return Ok((Vec::new(), None));
+        return Ok(Declared {
+            probes: Vec::new(),
+            timeout: None,
+            submodules: false,
+        });
     }
     let text = read_to_string(&path)?;
     let parsed: ProbeFile = toml::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
@@ -1218,7 +1319,24 @@ fn probes(root: &Path) -> Result<(Vec<Probe>, Option<u64>)> {
              be measured",
         ));
     }
-    Ok((parsed.probes, parsed.timeout_seconds))
+    let submodules = match parsed.submodules.as_deref() {
+        None => false,
+        Some("checkout") => true,
+        Some(other) => {
+            return Err(Fatal::at(
+                &path,
+                format!(
+                    "`submodules = {other:?}` at the top of this file; the only value is \
+                     \"checkout\", and leaving the field out probes without submodules"
+                ),
+            ));
+        }
+    };
+    Ok(Declared {
+        probes: parsed.probes,
+        timeout: parsed.timeout_seconds,
+        submodules,
+    })
 }
 
 fn is_fixture_path(value: &str) -> bool {
