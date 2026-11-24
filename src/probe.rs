@@ -975,18 +975,23 @@ impl Worktree {
                 )));
             }
             let target = self.path.join(mount);
+            // No lazy fetch: a partial clone missing the pinned commit's
+            // blobs is a setup error here, never a silent download.
             let added = detached("git", &source)
+                .env("GIT_NO_LAZY_FETCH", "1")
                 .args(["worktree", "add", "--detach", "--quiet"])
                 .arg(&target)
                 .arg(commit)
                 .output()?;
+            // Owned before the result is read: git keeps a worktree whose
+            // post-checkout hook failed, and `Drop` must still remove it.
+            self.mounts.push((source, target));
             if !added.status.success() {
                 return Err(Fatal::new(format!(
                     "could not check out {mount} at {commit} in the throwaway worktree: {}",
                     String::from_utf8_lossy(&added.stderr).trim()
                 )));
             }
-            self.mounts.push((source, target));
         }
         Ok(())
     }

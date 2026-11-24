@@ -48,7 +48,7 @@ const WAIVERS: &str = "policy/hooks.toml";
 #[serde(deny_unknown_fields)]
 struct Waivers {
     #[serde(default, rename = "waive")]
-    waivers: Vec<Waiver>,
+    entries: Vec<Waiver>,
     /// The fixtures `uphold probe` reads. Named here so that one file can hold
     /// both without either reader refusing the other's table.
     ///
@@ -61,6 +61,11 @@ struct Waivers {
     /// it.
     #[serde(default, rename = "probe")]
     _probes: Vec<toml::Value>,
+    /// The probe reader's top-level settings, named for the same reason.
+    #[serde(default, rename = "timeout_seconds")]
+    _timeout: Option<toml::Value>,
+    #[serde(default, rename = "submodules")]
+    _submodules: Option<toml::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -396,7 +401,7 @@ fn waivers(root: &Path) -> Result<Vec<Waiver>> {
     }
     let text = crate::error::read_to_string(&path)?;
     let parsed: Waivers = toml::from_str(&text).map_err(|error| Fatal::at(&path, error))?;
-    for waiver in &parsed.waivers {
+    for waiver in &parsed.entries {
         if waiver.reason.trim().is_empty() {
             return Err(Fatal::at(
                 &path,
@@ -426,7 +431,7 @@ fn waivers(root: &Path) -> Result<Vec<Waiver>> {
             }
         }
     }
-    Ok(parsed.waivers)
+    Ok(parsed.entries)
 }
 
 /// Is this finding waived, and by which waiver?

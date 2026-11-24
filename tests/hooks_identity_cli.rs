@@ -310,7 +310,7 @@ fn one_file_holds_both_features_and_each_reader_tolerates_the_other() {
     std::fs::create_dir_all(&from).unwrap();
     waivers(
         &from,
-        "[[waive]]\nid = \"ruff-check\"\nfindings = [\"forked\"]\nreason = \"two answers about two languages\"\n\n[[probe]]\nid = \"ruff-check\"\npath = \"probe/fixture.py\"\nrefuses = \"x=1\\n\"\n",
+        "timeout_seconds = 60\nsubmodules = \"checkout\"\n\n[[waive]]\nid = \"ruff-check\"\nfindings = [\"forked\"]\nreason = \"two answers about two languages\"\n\n[[probe]]\nid = \"ruff-check\"\npath = \"probe/fixture.py\"\nrefuses = \"x=1\\n\"\n",
     );
     let one = repository(&workspace, "one", PINNED);
     let two = repository(&workspace, "two", PINNED);
