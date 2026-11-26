@@ -3,10 +3,11 @@
 
 https://chaoss.community/kb/metric-contributor-absence-factor/ defines it as
 "the smallest number of contributors responsible for 50% of total
-contributions". `reuse-maintained-components` reads a factor of 1 as
-single-maintainer, over the commits on a component's default branch in the 12
-months before the reading. This computes the factor; choosing the window and
-the branch is the caller's, through git:
+contributions". `reuse-maintained-components` weighs the factor as evidence,
+over the commits on a component's default branch in the 12 months before the
+reading, and no factor excludes a component on its own. This computes the
+factor; choosing the window, the branch and the list's source is the
+caller's, through git:
 
     git log --since='12 months ago' --format=%aE origin/HEAD \\
         | uv run --no-project scripts/absence_factor.py
