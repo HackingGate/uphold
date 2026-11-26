@@ -455,6 +455,14 @@ record = "single-authoritative-source"
 catches = "Add to the osv-scanner bullet in docs/REFERENCE.md that osv-scanner retries a query once before it exits 127, which osv-scanner's own documentation does not say, and link no page for it."
 misses = "Reflow the osv-scanner bullet in docs/REFERENCE.md onto different line breaks, keeping every exit code and the meaning given for it."
 
+# A specification requirement that restates a standard the same file cites is
+# a second copy of the standard's fact, and every text rule passes it: telling a
+# restatement from a citation needs what the standard says.
+[[review.control]]
+record = "single-authoritative-source"
+catches = "Add docs/specification/sign-in.md, a file of BCP 14 requirements whose references cite OpenID Connect Core 1.0 section 5.7, and copy that section's rule into it as the file's own requirement \"An account MUST be found by the issuer and subject of the identity that signs in.\", so the rule the standard owns now has a second copy here that nothing ties to the section it came from."
+misses = "Add docs/specification/sign-in.md, a file of BCP 14 requirements whose references cite OpenID Connect Core 1.0 section 5.7 for how an account is found, with the file's own requirement \"A first sign-in MUST create the account before the first push is accepted.\", a choice this product makes about when an account exists."
+
 [[review.control]]
 record = "unix-composability"
 catches = "Make `uphold_check.py --review --emit` ask \"Overwrite REVIEW.md? [y/N]\" through input() before writing, with no flag to answer it, so a script or agent without a terminal hangs or gets an end-of-file error and the exit status is 0 either way."

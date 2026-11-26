@@ -206,6 +206,11 @@
       "misses": "Reflow the osv-scanner bullet in docs/REFERENCE.md onto different line breaks, keeping every exit code and the meaning given for it."
     },
     {
+      "record": "single-authoritative-source",
+      "catches": "Add docs/specification/sign-in.md, a file of BCP 14 requirements whose references cite OpenID Connect Core 1.0 section 5.7, and copy that section's rule into it as the file's own requirement \"An account MUST be found by the issuer and subject of the identity that signs in.\", so the rule the standard owns now has a second copy here that nothing ties to the section it came from.",
+      "misses": "Add docs/specification/sign-in.md, a file of BCP 14 requirements whose references cite OpenID Connect Core 1.0 section 5.7 for how an account is found, with the file's own requirement \"A first sign-in MUST create the account before the first push is accepted.\", a choice this product makes about when an account exists."
+    },
+    {
       "record": "unix-composability",
       "catches": "Make `uphold_check.py --review --emit` ask \"Overwrite REVIEW.md? [y/N]\" through input() before writing, with no flag to answer it, so a script or agent without a terminal hangs or gets an end-of-file error and the exit status is 0 either way.",
       "misses": "Make `uphold_check.py --review --emit` print a one-line summary of the files it wrote to stderr, leaving the files written and the exit status as they are."
