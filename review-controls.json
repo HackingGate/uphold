@@ -1,6 +1,11 @@
 {
   "controls": [
     {
+      "record": "axiomatic-design",
+      "catches": "Make `[review].max_lines` in policy/upheld.toml also set how many times `uphold_check.py --review --drive` runs each control, so the ceiling on the compiled document's length and the drive's sample size are one key, and raising the sample to steady a score loosens the ceiling.",
+      "misses": "Reword the message over_budget in scripts/review.py returns so it names the `[review].max_lines` key it read, leaving the ceiling, what it bounds and when it refuses unchanged."
+    },
+    {
       "record": "complete-mediation",
       "catches": "Make src/shim/destination.rs stop asking whether a `gh issue create --repo other-owner/their-repo` destination is owned, leaving the ownership decision only in the pre-push path through prevent_public_push in src/guard/push.rs.",
       "misses": "Reword the phrase src/guard/push.rs prints for the command seam from \"this command would publish to\" to \"this command would send text to\", leaving the decision it reaches unchanged."
