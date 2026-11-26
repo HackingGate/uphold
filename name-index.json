@@ -135,6 +135,18 @@
       "path": "principles/minimize-attack-surface.toml"
     },
     {
+      "name": "Axiomatic Design",
+      "key": "axiomatic design",
+      "tokens": [
+        "axiomatic",
+        "design"
+      ],
+      "field": "title",
+      "id": "axiomatic-design",
+      "title": "Axiomatic Design",
+      "path": "principles/axiomatic-design.toml"
+    },
+    {
       "name": "Backpressure",
       "key": "backpressure",
       "tokens": [
@@ -1166,6 +1178,30 @@
       "id": "immutable-releases",
       "title": "Immutable Releases",
       "path": "principles/immutable-releases.toml"
+    },
+    {
+      "name": "Independence Axiom",
+      "key": "independence axiom",
+      "tokens": [
+        "independence",
+        "axiom"
+      ],
+      "field": "alias",
+      "id": "axiomatic-design",
+      "title": "Axiomatic Design",
+      "path": "principles/axiomatic-design.toml"
+    },
+    {
+      "name": "Information Axiom",
+      "key": "information axiom",
+      "tokens": [
+        "information",
+        "axiom"
+      ],
+      "field": "alias",
+      "id": "axiomatic-design",
+      "title": "Axiomatic Design",
+      "path": "principles/axiomatic-design.toml"
     },
     {
       "name": "Information Hiding",
@@ -2594,6 +2630,19 @@
       "id": "unobstructed-work-area",
       "title": "Unobstructed Work Area",
       "path": "principles/unobstructed-work-area.toml"
+    },
+    {
+      "name": "Suh's axioms",
+      "key": "suh s axioms",
+      "tokens": [
+        "suh",
+        "s",
+        "axioms"
+      ],
+      "field": "alias",
+      "id": "axiomatic-design",
+      "title": "Axiomatic Design",
+      "path": "principles/axiomatic-design.toml"
     },
     {
       "name": "System of Record",

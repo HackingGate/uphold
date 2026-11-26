@@ -1,0 +1,39 @@
+id = "axiomatic-design"
+title = "Axiomatic Design"
+aliases = ["Independence Axiom", "Information Axiom", "Suh's axioms"]
+kind = "principle"
+status = "seed"
+domains = ["architecture"]
+summary = "Map each functional requirement to the design parameter that satisfies it, keep the requirements independently satisfiable, and among the designs that do, prefer the one most likely to meet them."
+claim = "Each functional requirement should be satisfiable by adjusting its design parameter without affecting the other requirements, directly or in a stated order, and among alternative designs that meet this condition the one with the highest probability of satisfying its requirements is the better."
+problem = "A design is judged by its parts and their imports while two requirements quietly depend on one design choice. Tuning that choice to meet one requirement moves the other, so each fix reopens the last, and alternatives are compared by taste because nobody wrote down which requirement each part is there to satisfy."
+rationale = "When each requirement has a parameter that moves it alone, or a known order in which the parameters can be fixed one at a time, the requirements can be met and later changed without iterating over all of them together. A coupled design has no such order, so every adjustment is a search. Once independence holds, the remaining choice between designs is the one with less uncertainty of meeting its requirements, which is a property of the evidence about each design rather than of its size."
+applies_when = ["Two or more requirements of a component are met by settings, fields, keys or code paths a change can adjust.", "A change makes one parameter serve two requirements, so meeting one moves the other.", "Alternative designs are being compared and each can be stated as which parameter meets which requirement.", "Some parameters can be set only after others, and that order is not written down."]
+does_not_mean = ["Restate the separation of concerns between modules; this record is about requirements and the parameters that meet them, and a design of separate modules can still couple two requirements through one shared parameter.", "Require a written requirement-to-parameter matrix for every change; write one where the design's complexity warrants it, as evidence for review.", "Treat a declared matrix as proof; whether an entry is right, and whether the stated order can be followed, needs evidence a matrix does not carry.", "Compare designs by size, line count or document length; the information axiom compares probabilities of meeting the requirements, and where those cannot be estimated it does not decide.", "Prefer the most likely design among coupled ones; the information axiom ranks only designs that already meet the independence axiom."]
+benefits = ["A requirement can be met or changed without reopening the others.", "Where an order of adjustment exists, it is written once and followed, instead of rediscovered by trial.", "Alternatives are compared by what each must achieve rather than by how each is built."]
+costs = ["Stating requirements and parameters precisely enough to map them takes effort before the design is chosen.", "Probabilities of meeting a requirement are rarely measured in software, so the second axiom often cannot be applied.", "Identifying what one parameter affects requires domain knowledge no tool supplies."]
+failure_when_overapplied = ["Every change carries a ceremonial matrix nobody checks, and the matrix becomes the deliverable.", "A shared parameter that couples two requirements on purpose, because they must move together, is split into two that then drift.", "Guessed probabilities are compared as though they were measured, and the guess decides."]
+conflicts_with = []
+related = ["separation-of-concerns", "high-cohesion-low-coupling", "information-hiding", "acyclic-dependencies", "mechanism-policy-separation"]
+review_questions = ["Which requirements does this change touch, and which parameter is each met by?", "Does one parameter now serve two requirements, so adjusting it for one moves the other?", "Where one parameter must be set before another, is that order written where the next person changing it will read it?", "When alternatives were compared, what evidence says each is likely to meet the requirements, and were only designs with independent requirements compared?"]
+
+[enforcement]
+level = "review"
+automatable = "partially"
+rung = ["syntax"]
+observable = ["A declared requirement-to-parameter matrix in a design record.", "A configuration key or field read by code that serves two named requirements."]
+checks = ["Check a declared matrix for shape: square, and lower triangular in the stated adjustment order or diagonal.", "Flag a change that makes one configuration key read by two features whose requirements are named apart."]
+limits = ["Whether a matrix entry is true, and whether a stated order can be followed, needs evidence about the design that a check cannot read.", "Probabilities of meeting a requirement cannot be derived from the source; they come from tests, measurements or field experience.", "Which requirements a parameter affects is a judgment of domain knowledge, not a fact in the code."]
+
+[[sources]]
+title = "General Axiomatic Design Concepts"
+url = "https://web.mit.edu/axiom/www/introduction.shtml"
+locator = "Axiom 1 The Independence Axiom; Axiom 2 The Information Axiom"
+type = "documentation"
+notes = "MIT Axiomatic Design Group, read 2026-11-26. States the two axioms, calls designs that fail the first coupled and those that satisfy it uncoupled or decoupled, notes that the order of adjusting parameters in a decoupled design matters, and applies the second axiom among designs that satisfy the first."
+
+[[sources]]
+title = "The Principles of Design"
+url = "https://openlibrary.org/isbn/0195043456"
+type = "book"
+notes = "Suh, Oxford University Press, 1990. The book the axioms are stated in; cited by the MIT page, not independently inspected here."

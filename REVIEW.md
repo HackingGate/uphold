@@ -26,6 +26,21 @@ Everything below is a constraint whose remainder is a judgment. For each, the
 claim is what it asserts, the scope says when it binds, and the questions are
 what to ask of a change.
 
+## Axiomatic Design
+Each functional requirement should be satisfiable by adjusting its design parameter without affecting the other requirements, directly or in a stated order, and among alternative designs that meet this condition the one with the highest probability of satisfying its requirements is the better.
+
+**Applies when**
+- Two or more requirements of a component are met by settings, fields, keys or code paths a change can adjust.
+- A change makes one parameter serve two requirements, so meeting one moves the other.
+- Alternative designs are being compared and each can be stated as which parameter meets which requirement.
+- Some parameters can be set only after others, and that order is not written down.
+
+**Ask**
+- Which requirements does this change touch, and which parameter is each met by?
+- Does one parameter now serve two requirements, so adjusting it for one moves the other?
+- Where one parameter must be set before another, is that order written where the next person changing it will read it?
+- When alternatives were compared, what evidence says each is likely to meet the requirements, and were only designs with independent requirements compared?
+
 ## Complete Mediation
 Authority must be verified on every access to a protected object or effect, on every path that can reach it, and not only on the path the designer had in mind.
 

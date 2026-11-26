@@ -34,6 +34,10 @@ const RECORDS: &[(&str, &str)] = &[
         include_str!("../principles/acyclic-dependencies.toml"),
     ),
     (
+        "axiomatic-design",
+        include_str!("../principles/axiomatic-design.toml"),
+    ),
+    (
         "backpressure",
         include_str!("../principles/backpressure.toml"),
     ),
