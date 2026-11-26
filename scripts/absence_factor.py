@@ -23,9 +23,20 @@ with no commits, is `unknown: <why>` on stderr and exit 2: no commits in
 the window says nothing about who maintains the component, so it is never
 reported as a factor.
 
-CHAOSS's own tools (GrimoireLab, Augur) compute this metric as services over a
-collected history; for one count over a list git already prints, they are a
-deployment against a dozen lines.
+This is written by hand because, as of the reading on 2026-11-26, no
+maintained tool computes the factor:
+
+- elek/bus-factor computes the same count, its "pony factor", but has made
+  one release, v1.0.0, in 2020.
+- git-fame and gitinspector report each author's share, not the factor.
+- Truck-Factor and truckfactor compute a file-ownership metric, not this one.
+- OpenSSF Scorecard reports no per-author concentration.
+- CHAOSS's GrimoireLab is a service over a collected history, and Augur is
+  archived.
+
+Every input line is counted as an author, and that includes automation and
+agent accounts. Which accounts count is the caller's choice of input, made
+before the count. This script does not make it.
 """
 
 from __future__ import annotations
