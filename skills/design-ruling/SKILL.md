@@ -91,8 +91,12 @@ decision of a MADR 4.0 record:
 
 1. Strip any "(recommended)" from the options and read them in no particular
    order. Which option the proposer prefers is not evidence.
-2. Find the adopted records whose `applies_when` holds for the question. None
-   applies: escalate, saying which part of the question no record covers.
+2. Find the adopted records whose `applies_when` holds for the question. Where
+   the question is whether the repository takes an entry into a set it curates,
+   such as a catalog record or a rule, and its written instructions state the
+   criteria for that, those criteria are grounds too: cite them as
+   `<file> "<exact quote>"`. None applies: escalate, saying which part of the
+   question no record or criterion covers.
 3. Where two applicable records conflict, the `order` between them decides.
    No order for that pair: escalate.
 4. Pick the option the applicable records decide. Cite every record item the

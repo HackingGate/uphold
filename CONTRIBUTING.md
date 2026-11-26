@@ -312,6 +312,11 @@ An entry will normally be rejected when it is:
 - coupled to a transient framework API;
 - an enforcement proposal that cannot observe the claimed property.
 
+An entry that makes part of another record's claim is a record of its own only
+where it makes a claim no record makes. It links that record in `related` and
+does not restate the part they share; an entry that makes no claim of its own
+extends the record it repeats, as a source or a review question.
+
 ## Review standard
 
 Review the semantic record before the prose. Ask whether the claim, scope,
