@@ -517,7 +517,7 @@ Do not hand-roll a function that a maintained component already provides at adeq
 - Which maintained library, standard-library module, or tool already does what this code does, and why was it not used?
 - If one was rejected, is the reason written beside the code: poor fit, size against the need, licence, or maintenance?
 - Which inputs and platforms has the hand-rolled form been run on, and which has the maintained component met that this one has not?
-- Is the chosen component maintained, judged by its release history, open advisories, and dependents, and who updates it here?
+- Is the chosen component maintained, judged by its release history, open advisories, dependents, and its Contributor Absence Factor over the commits on its default branch in the 12 months before the reading, stated with that window and the date it was read, and who updates it here?
 
 ## Optimize for Reversible Decisions
 For uncertain, noncritical choices, favor designs and commitments whose consequences can be observed and reversed at acceptable cost before scaling them.
